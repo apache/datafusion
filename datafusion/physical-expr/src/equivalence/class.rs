@@ -20,10 +20,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use super::projection::ProjectionTargets;
 use super::ProjectionMapping;
 use crate::expressions::Literal;
 use crate::physical_expr::add_offset_to_expr;
+use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -590,6 +590,11 @@ impl EquivalenceGroup {
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
+        // Literals don't need to be projected
+        if expr.as_any().downcast_ref::<Literal>().is_some() {
+            return Some(Arc::clone(expr));
+        }
+
         // The given expression is not inside the mapping, so we try to project
         // indirectly using equivalence classes.
         for (targets, eq_class) in aug_mapping.values() {

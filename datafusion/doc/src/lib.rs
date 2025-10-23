@@ -19,7 +19,15 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+mod udaf;
+mod udf;
+mod udwf;
+
+pub use udaf::aggregate_doc_sections;
+pub use udf::scalar_doc_sections;
+pub use udwf::window_doc_sections;
 
 mod udaf;
 mod udf;

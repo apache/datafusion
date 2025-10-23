@@ -87,9 +87,7 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
-        Ok(Int32)
+        Ok(DataType::Int32)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -186,6 +184,8 @@ mod tests {
         test_ascii!(Some(String::from("a")), Ok(Some(97)));
         test_ascii!(Some(String::from("")), Ok(Some(0)));
         test_ascii!(Some(String::from("🚀")), Ok(Some(128640)));
+        test_ascii!(Some(String::from("\n")), Ok(Some(10)));
+        test_ascii!(Some(String::from("\t")), Ok(Some(9)));
         test_ascii!(None, Ok(None));
         Ok(())
     }

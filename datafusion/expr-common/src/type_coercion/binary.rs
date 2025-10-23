@@ -327,6 +327,16 @@ impl<'a> BinaryTypeCoercer<'a> {
 
 // TODO Move the rest inside of BinaryTypeCoercer
 
+fn is_decimal(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Decimal32(..)
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Decimal256(..)
+    )
+}
+
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
 fn math_decimal_coercion(
     lhs_type: &DataType,
@@ -356,6 +366,15 @@ fn math_decimal_coercion(
         | (Decimal128(_, _), Decimal128(_, _))
         | (Decimal256(_, _), Decimal256(_, _)) => {
             Some((lhs_type.clone(), rhs_type.clone()))
+        }
+        // Cross-variant decimal coercion - choose larger variant with appropriate precision/scale
+        (lhs, rhs)
+            if is_decimal(lhs)
+                && is_decimal(rhs)
+                && std::mem::discriminant(lhs) != std::mem::discriminant(rhs) =>
+        {
+            let coerced_type = get_wider_decimal_type_cross_variant(lhs_type, rhs_type)?;
+            Some((coerced_type.clone(), coerced_type))
         }
         // Unlike with comparison we don't coerce to a decimal in the case of floating point
         // numbers, instead falling back to floating point arithmetic instead
@@ -847,6 +866,7 @@ pub fn comparison_coercion_numeric(
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| dictionary_comparison_coercion_numeric(lhs_type, rhs_type, true))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion_as_numeric(lhs_type, rhs_type))
@@ -953,19 +973,90 @@ pub fn binary_numeric_coercion(
 pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
+    // Prefer decimal data type over floating point for comparison operation
     match (lhs_type, rhs_type) {
-        // Prefer decimal data type over floating point for comparison operation
-        (Decimal128(_, _), Decimal128(_, _)) => {
+        // Same decimal types
+        (lhs_type, rhs_type)
+            if is_decimal(lhs_type)
+                && is_decimal(rhs_type)
+                && std::mem::discriminant(lhs_type)
+                    == std::mem::discriminant(rhs_type) =>
+        {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
-        (Decimal128(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal128(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
-        (Decimal256(_, _), Decimal256(_, _)) => {
-            get_wider_decimal_type(lhs_type, rhs_type)
+        // Mismatched decimal types
+        (lhs_type, rhs_type)
+            if is_decimal(lhs_type)
+                && is_decimal(rhs_type)
+                && std::mem::discriminant(lhs_type)
+                    != std::mem::discriminant(rhs_type) =>
+        {
+            get_wider_decimal_type_cross_variant(lhs_type, rhs_type)
         }
-        (Decimal256(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal256(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
+        // Decimal + non-decimal types
+        (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _), _) => {
+            get_common_decimal_type(lhs_type, rhs_type)
+        }
+        (_, Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)) => {
+            get_common_decimal_type(rhs_type, lhs_type)
+        }
         (_, _) => None,
+    }
+}
+/// Handle cross-variant decimal widening by choosing the larger variant
+fn get_wider_decimal_type_cross_variant(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    let (p1, s1) = match lhs_type {
+        Decimal32(p, s) => (*p, *s),
+        Decimal64(p, s) => (*p, *s),
+        Decimal128(p, s) => (*p, *s),
+        Decimal256(p, s) => (*p, *s),
+        _ => return None,
+    };
+
+    let (p2, s2) = match rhs_type {
+        Decimal32(p, s) => (*p, *s),
+        Decimal64(p, s) => (*p, *s),
+        Decimal128(p, s) => (*p, *s),
+        Decimal256(p, s) => (*p, *s),
+        _ => return None,
+    };
+
+    // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+    let s = s1.max(s2);
+    let range = (p1 as i8 - s1).max(p2 as i8 - s2);
+    let required_precision = (range + s) as u8;
+
+    // Choose the larger variant between the two input types, while making sure we don't overflow the precision.
+    match (lhs_type, rhs_type) {
+        (Decimal32(_, _), Decimal64(_, _)) | (Decimal64(_, _), Decimal32(_, _))
+            if required_precision <= DECIMAL64_MAX_PRECISION =>
+        {
+            Some(Decimal64(required_precision, s))
+        }
+        (Decimal32(_, _), Decimal128(_, _))
+        | (Decimal128(_, _), Decimal32(_, _))
+        | (Decimal64(_, _), Decimal128(_, _))
+        | (Decimal128(_, _), Decimal64(_, _))
+            if required_precision <= DECIMAL128_MAX_PRECISION =>
+        {
+            Some(Decimal128(required_precision, s))
+        }
+        (Decimal32(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal32(_, _))
+        | (Decimal64(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal64(_, _))
+        | (Decimal128(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal128(_, _))
+            if required_precision <= DECIMAL256_MAX_PRECISION =>
+        {
+            Some(Decimal256(required_precision, s))
+        }
+        _ => None,
     }
 }
 
@@ -976,7 +1067,15 @@ fn get_common_decimal_type(
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match decimal_type {
-        Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) => {
+        Decimal32(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal32(other_type)?;
+            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        }
+        Decimal64(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal64(other_type)?;
+            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        }
+        Decimal128(_, _) => {
             let other_decimal_type = coerce_numeric_type_to_decimal128(other_type)?;
             get_wider_decimal_type(decimal_type, &other_decimal_type)
         }
@@ -988,7 +1087,7 @@ fn get_common_decimal_type(
     }
 }
 
-/// Returns a `DataType::Decimal128` that can store any value from either
+/// Returns a decimal [`DataType`] variant that can store any value from either
 /// `lhs_decimal_type` and `rhs_decimal_type`
 ///
 /// The result decimal type is `(max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2))`.
@@ -1209,14 +1308,14 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
 }
 
 fn create_decimal32_type(precision: u8, scale: i8) -> DataType {
-    DataType::Decimal128(
+    DataType::Decimal32(
         DECIMAL32_MAX_PRECISION.min(precision),
         DECIMAL32_MAX_SCALE.min(scale),
     )
 }
 
 fn create_decimal64_type(precision: u8, scale: i8) -> DataType {
-    DataType::Decimal128(
+    DataType::Decimal64(
         DECIMAL64_MAX_PRECISION.min(precision),
         DECIMAL64_MAX_SCALE.min(scale),
     )
@@ -1255,6 +1354,38 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
     }
 }
 
+/// Generic coercion rules for Dictionaries: the type that both lhs and rhs
+/// can be casted to for the purpose of a computation.
+///
+/// Not all operators support dictionaries, if `preserve_dictionaries` is true
+/// dictionaries will be preserved if possible.
+///
+/// The `coerce_fn` parameter determines which comparison coercion function to use
+/// for comparing the dictionary value types.
+fn dictionary_comparison_coercion_generic(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_dictionaries: bool,
+    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (
+            Dictionary(_lhs_index_type, lhs_value_type),
+            Dictionary(_rhs_index_type, rhs_value_type),
+        ) => coerce_fn(lhs_value_type, rhs_value_type),
+        (d @ Dictionary(_, value_type), other_type)
+        | (other_type, d @ Dictionary(_, value_type))
+            if preserve_dictionaries && value_type.as_ref() == other_type =>
+        {
+            Some(d.clone())
+        }
+        (Dictionary(_index_type, value_type), _) => coerce_fn(value_type, rhs_type),
+        (_, Dictionary(_index_type, value_type)) => coerce_fn(lhs_type, value_type),
+        _ => None,
+    }
+}
+
 /// Coercion rules for Dictionaries: the type that both lhs and rhs
 /// can be casted to for the purpose of a computation.
 ///
@@ -1265,26 +1396,31 @@ fn dictionary_comparison_coercion(
     rhs_type: &DataType,
     preserve_dictionaries: bool,
 ) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-    match (lhs_type, rhs_type) {
-        (
-            Dictionary(_lhs_index_type, lhs_value_type),
-            Dictionary(_rhs_index_type, rhs_value_type),
-        ) => comparison_coercion(lhs_value_type, rhs_value_type),
-        (d @ Dictionary(_, value_type), other_type)
-        | (other_type, d @ Dictionary(_, value_type))
-            if preserve_dictionaries && value_type.as_ref() == other_type =>
-        {
-            Some(d.clone())
-        }
-        (Dictionary(_index_type, value_type), _) => {
-            comparison_coercion(value_type, rhs_type)
-        }
-        (_, Dictionary(_index_type, value_type)) => {
-            comparison_coercion(lhs_type, value_type)
-        }
-        _ => None,
-    }
+    dictionary_comparison_coercion_generic(
+        lhs_type,
+        rhs_type,
+        preserve_dictionaries,
+        comparison_coercion,
+    )
+}
+
+/// Coercion rules for Dictionaries with numeric preference: similar to
+/// [`dictionary_comparison_coercion`] but uses [`comparison_coercion_numeric`]
+/// which prefers numeric types over strings when both are present.
+///
+/// This is used by [`comparison_coercion_numeric`] to maintain consistent
+/// numeric-preferring semantics when dealing with dictionary types.
+fn dictionary_comparison_coercion_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_dictionaries: bool,
+) -> Option<DataType> {
+    dictionary_comparison_coercion_generic(
+        lhs_type,
+        rhs_type,
+        preserve_dictionaries,
+        comparison_coercion_numeric,
+    )
 }
 
 /// Coercion rules for string concat.

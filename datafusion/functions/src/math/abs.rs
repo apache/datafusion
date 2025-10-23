@@ -21,8 +21,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array,
+    ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
@@ -98,6 +98,8 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
         | DataType::UInt64 => Ok(|input: &ArrayRef| Ok(Arc::clone(input))),
 
         // Decimal types
+        DataType::Decimal32(_, _) => Ok(make_decimal_abs_function!(Decimal32Array)),
+        DataType::Decimal64(_, _) => Ok(make_decimal_abs_function!(Decimal64Array)),
         DataType::Decimal128(_, _) => Ok(make_decimal_abs_function!(Decimal128Array)),
         DataType::Decimal256(_, _) => Ok(make_decimal_abs_function!(Decimal256Array)),
 
@@ -162,6 +164,12 @@ impl ScalarUDFImpl for AbsFunc {
             DataType::UInt16 => Ok(DataType::UInt16),
             DataType::UInt32 => Ok(DataType::UInt32),
             DataType::UInt64 => Ok(DataType::UInt64),
+            DataType::Decimal32(precision, scale) => {
+                Ok(DataType::Decimal32(precision, scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                Ok(DataType::Decimal64(precision, scale))
+            }
             DataType::Decimal128(precision, scale) => {
                 Ok(DataType::Decimal128(precision, scale))
             }

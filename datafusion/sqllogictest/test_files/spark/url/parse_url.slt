@@ -70,8 +70,108 @@ SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'U
 ----
 userinfo
 
-statement error parse_url expects 2 or 3 arguments, but got 1
-SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string);
+query T
+SELECT parse_url('https://example.com/a?x=1', 'QUERY', 'x');
+----
+1
+
+query T
+SELECT parse_url('https://example.com/a?x=1', 'query', 'x');
+----
+NULL
+
+query T
+SELECT parse_url('www.example.com/path?x=1', 'HOST');
+----
+NULL
+
+query T
+SELECT parse_url('www.example.com/path?x=1', 'host');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com/?a=1', 'QUERY', 'b');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com/?a=1', 'query', 'b');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com/path#frag', 'REF');
+----
+frag
+
+query T
+SELECT parse_url('https://example.com/path#frag', 'ref');
+----
+NULL
+
+query T
+SELECT parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO');
+----
+user:pwd
+
+query T
+SELECT parse_url('ftp://user:pwd@ftp.example.com:21/files', 'userinfo');
+----
+NULL
+
+query T
+SELECT parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST');
+----
+[2001:db8::2]
+
+query T
+SELECT parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'host');
+----
+NULL
+
+query T
+SELECT parse_url('notaurl', 'HOST');
+----
+NULL
+
+query T
+SELECT parse_url('notaurl', 'host');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com', 'PATH');
+----
+(empty)
+
+query T
+SELECT parse_url('https://example.com', 'path');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL');
+----
+https
+
+query T
+SELECT parse_url('https://example.com/a/b?x=1&y=2#frag', 'protocol');
+----
+NULL
+
+query T
+SELECT parse_url('https://ex.com/?Tag=ok', 'QUERY', 'tag');
+----
+NULL
+
+query T
+SELECT parse_url('https://ex.com/?Tag=ok', 'query', 'tag');
+----
+NULL
 
 statement error 'parse_url' does not support zero arguments
 SELECT parse_url();
+
+query error DataFusion error: Execution error: The url is invalid: inva lid://spark\.apache\.org/path\?query=1\. Use `try_parse_url` to tolerate invalid URL and return NULL instead\. SQLSTATE: 22P02
+SELECT parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');

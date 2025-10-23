@@ -182,6 +182,11 @@ impl FunctionArgs {
                         "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
                     )
                 }
+                FunctionArgumentClause::JsonReturningClause(jr) => {
+                    return not_impl_err!(
+                        "Calling {name}: JSON RETURNING clause not supported in function arguments: {jr}"
+                    )
+                },
             }
         }
 
