@@ -70,7 +70,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::disk_manager::RefCountedTempFile;
-use datafusion_execution::SendableRecordBatchStream;
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 
 use super::in_progress_spill_file::InProgressSpillFile;
 use super::spill_manager::SpillManager;
@@ -162,8 +162,8 @@ impl SpillPool {
     pub fn reader(
         pool: Arc<Mutex<Self>>,
         spill_manager: Arc<SpillManager>,
-    ) -> SpillPoolStream {
-        SpillPoolStream::new(pool, spill_manager)
+    ) -> SendableRecordBatchStream {
+        Box::pin(SpillPoolStream::new(pool, spill_manager))
     }
 
     /// Spills a batch to the pool, rotating files when necessary.
@@ -284,7 +284,7 @@ impl Drop for SpillPool {
 /// for the writer to complete more files.
 ///
 /// The stream ends (`Poll::Ready(None)`) when the pool is finalized and all data has been read.
-pub struct SpillPoolStream {
+struct SpillPoolStream {
     /// Shared reference to the spill pool
     spill_pool: Arc<Mutex<SpillPool>>,
     /// SpillManager for creating streams from spill files
@@ -384,7 +384,7 @@ impl futures::Stream for SpillPoolStream {
     }
 }
 
-impl datafusion_execution::RecordBatchStream for SpillPoolStream {
+impl RecordBatchStream for SpillPoolStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -437,7 +437,9 @@ mod tests {
     }
 
     /// Helper to collect all batches from a stream
-    async fn collect_batches(mut stream: SpillPoolStream) -> Result<Vec<RecordBatch>> {
+    async fn collect_batches(
+        mut stream: SendableRecordBatchStream,
+    ) -> Result<Vec<RecordBatch>> {
         let mut batches = Vec::new();
         while let Some(result) = stream.next().await {
             batches.push(result?);

@@ -39,7 +39,7 @@ use crate::repartition::distributor_channels::{
 };
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
-use crate::spill::spill_pool::{SpillPool, SpillPoolStream};
+use crate::spill::spill_pool::SpillPool;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
@@ -1246,7 +1246,7 @@ struct RepartitionStream {
     spill_pool: Arc<Mutex<SpillPool>>,
 
     /// Infinite stream for reading from the spill pool
-    spill_stream: SpillPoolStream,
+    spill_stream: SendableRecordBatchStream,
 
     /// Flag indicating all inputs have finished
     all_inputs_finished: bool,
@@ -1380,7 +1380,7 @@ struct PerPartitionStream {
     spill_pool: Arc<Mutex<SpillPool>>,
 
     /// Infinite stream for reading from the spill pool
-    spill_stream: SpillPoolStream,
+    spill_stream: SendableRecordBatchStream,
 
     /// Flag indicating input partition has finished
     input_finished: bool,
