@@ -32,7 +32,7 @@ pub trait DataTypeExt {
     /// Convert the type to field ref with nullable type and "" name
     ///
     /// Concise wrapper around [`DataTypeExt::into_nullable_field`] that
-    /// constructs a [`FieldRef`]
+    /// constructs a [`FieldRef`].
     fn into_nullable_field_ref(self) -> FieldRef;
 }
 

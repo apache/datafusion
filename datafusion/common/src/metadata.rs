@@ -50,7 +50,7 @@ impl ScalarAndMetadata {
         (self.value, self.metadata)
     }
 
-    /// Cast this literal's storage type
+    /// Cast this values's storage type
     ///
     /// This operation assumes that if the underlying [ScalarValue] can be casted
     /// to a given type that any extension type represented by the metadata is also

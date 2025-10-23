@@ -278,6 +278,8 @@ pub struct CreateExternalTableNode {
 pub struct PrepareNode {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
+    /// We serialize both the data types and the fields for compatibility with
+    /// older versions (newer versions populate both).
     #[prost(message, repeated, tag = "2")]
     pub data_types: ::prost::alloc::vec::Vec<super::datafusion_common::ArrowType>,
     #[prost(message, optional, boxed, tag = "3")]
@@ -653,6 +655,8 @@ pub struct Wildcard {
 pub struct PlaceholderNode {
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
+    /// We serialize the data type, metadata, and nullability separately to maintain
+    /// compatibility with older versions
     #[prost(message, optional, tag = "2")]
     pub data_type: ::core::option::Option<super::datafusion_common::ArrowType>,
     #[prost(bool, optional, tag = "3")]
