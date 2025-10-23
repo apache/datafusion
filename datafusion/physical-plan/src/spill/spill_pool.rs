@@ -75,18 +75,6 @@ use datafusion_execution::SendableRecordBatchStream;
 use super::in_progress_spill_file::InProgressSpillFile;
 use super::spill_manager::SpillManager;
 
-/// A single spill file containing one or more record batches.
-struct SpillFile {
-    /// The temp file handle (auto-deletes when dropped)
-    file: RefCountedTempFile,
-}
-
-impl SpillFile {
-    fn new(file: RefCountedTempFile) -> Self {
-        Self { file }
-    }
-}
-
 /// A pool of spill files that manages batch-level spilling with FIFO semantics.
 ///
 /// Batches are written sequentially to files, with automatic rotation when the
@@ -101,7 +89,7 @@ pub struct SpillPool {
     /// Maximum size in bytes before rotating to a new file
     max_file_size_bytes: usize,
     /// Queue of spill files (front = oldest, back = newest)
-    files: VecDeque<SpillFile>,
+    files: VecDeque<RefCountedTempFile>,
     /// Current file being written to (if any)
     current_write_file: Option<InProgressSpillFile>,
     /// Size of current write file in bytes (estimated)
@@ -110,8 +98,7 @@ pub struct SpillPool {
     current_batch_count: usize,
     /// SpillManager for creating files and tracking metrics
     spill_manager: Arc<SpillManager>,
-    /// Schema for batches (kept for potential validation in debug builds)
-    #[allow(dead_code)]
+    /// Schema for batches (used by SpillPoolStream to implement RecordBatchStream)
     schema: SchemaRef,
     /// Wakers to notify when new data is available for readers
     wakers: Vec<Waker>,
@@ -266,9 +253,8 @@ impl SpillPool {
             let finished_file = file.finish()?;
 
             if let Some(temp_file) = finished_file {
-                // Create SpillFile and add to queue
-                let spill_file = SpillFile::new(temp_file);
-                self.files.push_back(spill_file);
+                // Add to queue
+                self.files.push_back(temp_file);
             }
 
             // Reset write state
@@ -370,9 +356,8 @@ impl futures::Stream for SpillPoolStream {
             // Only read from completed files in the queue
             let mut pool = self.spill_pool.lock();
 
-            if let Some(spill_file) = pool.files.pop_front() {
+            if let Some(file) = pool.files.pop_front() {
                 // We have a completed file to read
-                let file = spill_file.file;
                 drop(pool); // Release lock before creating stream
 
                 match self.spill_manager.read_spill_as_stream(file, None) {
