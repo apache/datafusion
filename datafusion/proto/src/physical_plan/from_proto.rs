@@ -28,28 +28,27 @@ use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::file_format::csv::CsvSink;
-use datafusion::datasource::file_format::json::JsonSink;
+use arrow::datatypes::Schema;
+use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile};
+use datafusion_datasource_csv::file_format::CsvSink;
+use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
-use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
-};
-use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::WindowFunctionDefinition;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::expressions::{
+use datafusion_datasource_parquet::file_format::ParquetSink;
+use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_execution::{FunctionRegistry, TaskContext};
+use datafusion_expr::WindowFunctionDefinition;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion_physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion::prelude::SessionContext;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
+use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
 
 use crate::convert_required;
@@ -76,7 +75,7 @@ impl From<&protobuf::PhysicalColumn> for Column {
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_expr(
     proto: &protobuf::PhysicalSortExprNode,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<PhysicalSortExpr> {
@@ -103,7 +102,7 @@ pub fn parse_physical_sort_expr(
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_exprs(
     proto: &[protobuf::PhysicalSortExprNode],
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Vec<PhysicalSortExpr>> {
@@ -125,7 +124,7 @@ pub fn parse_physical_sort_exprs(
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_window_expr(
     proto: &protobuf::PhysicalWindowExprNode,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn WindowExpr>> {
@@ -140,11 +139,9 @@ pub fn parse_physical_window_expr(
         .as_ref()
         .map(|wf| wf.clone().try_into())
         .transpose()
-        .map_err(|e| DataFusionError::Internal(format!("{e}")))?
+        .map_err(|e| internal_datafusion_err!("{e}"))?
         .ok_or_else(|| {
-            DataFusionError::Internal(
-                "Missing required field 'window_frame' in protobuf".to_string(),
-            )
+            internal_datafusion_err!("Missing required field 'window_frame' in protobuf")
         })?;
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
@@ -177,7 +174,7 @@ pub fn parse_physical_window_expr(
         &partition_by,
         &order_by,
         Arc::new(window_frame),
-        &extended_schema,
+        extended_schema,
         proto.ignore_nulls,
         proto.distinct,
         None,
@@ -186,7 +183,7 @@ pub fn parse_physical_window_expr(
 
 pub fn parse_physical_exprs<'a, I>(
     protos: I,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
@@ -210,7 +207,7 @@ where
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -364,11 +361,8 @@ pub fn parse_physical_expr(
             let scalar_fun_def = Arc::clone(&udf);
 
             let args = parse_physical_exprs(&e.args, ctx, input_schema, codec)?;
-            let config_options =
-                match ctx.state().execution_props().config_options.as_ref() {
-                    Some(config_options) => Arc::clone(config_options),
-                    None => Arc::new(ConfigOptions::default()),
-                };
+
+            let config_options = Arc::clone(ctx.session_config().options());
 
             Arc::new(
                 ScalarFunctionExpr::new(
@@ -419,21 +413,19 @@ pub fn parse_physical_expr(
 
 fn parse_required_physical_expr(
     expr: Option<&protobuf::PhysicalExprNode>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     field: &str,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.map(|e| parse_physical_expr(e, ctx, input_schema, codec))
         .transpose()?
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!("Missing required field {field:?}"))
-        })
+        .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
 }
 
 pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Option<Partitioning>> {
@@ -453,7 +445,7 @@ pub fn parse_protobuf_hash_partitioning(
 
 pub fn parse_protobuf_partitioning(
     partitioning: Option<&protobuf::Partitioning>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Option<Partitioning>> {
@@ -491,7 +483,7 @@ pub fn parse_protobuf_file_scan_schema(
 
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
@@ -526,14 +518,17 @@ pub fn parse_protobuf_file_scan_config(
     // Remove partition columns from the schema after recreating table_partition_cols
     // because the partition columns are not in the file. They are present to allow
     // the partition column types to be reconstructed after serde.
-    let file_schema = Arc::new(Schema::new(
-        schema
-            .fields()
-            .iter()
-            .filter(|field| !table_partition_cols.contains(field))
-            .cloned()
-            .collect::<Vec<_>>(),
-    ));
+    let file_schema = Arc::new(
+        Schema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !table_partition_cols.contains(field))
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+        .with_metadata(schema.metadata.clone()),
+    );
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {

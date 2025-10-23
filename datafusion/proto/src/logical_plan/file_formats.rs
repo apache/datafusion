@@ -17,21 +17,18 @@
 
 use std::sync::Arc;
 
-use datafusion::{
-    config::{CsvOptions, JsonOptions},
-    datasource::file_format::{
-        arrow::ArrowFormatFactory, csv::CsvFormatFactory, json::JsonFormatFactory,
-        FileFormatFactory,
-    },
-    prelude::SessionContext,
-};
+use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
+use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_err, not_impl_err, parsers::CompressionTypeVariant, DataFusionError,
+    exec_datafusion_err, exec_err, not_impl_err, parsers::CompressionTypeVariant,
     TableReference,
 };
+use datafusion_datasource::file_format::FileFormatFactory;
+use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
+use datafusion_datasource_csv::file_format::CsvFormatFactory;
+use datafusion_datasource_json::file_format::JsonFormatFactory;
+use datafusion_execution::TaskContext;
 use prost::Message;
-
-use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
 
 use super::LogicalExtensionCodec;
 
@@ -165,7 +162,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -183,15 +180,15 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+        _ctx: &TaskContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion_catalog::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_catalog::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -200,10 +197,10 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
     fn try_decode_file_format(
         &self,
         buf: &[u8],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to decode CsvOptionsProto: {e:?}"))
+            exec_datafusion_err!("Failed to decode CsvOptionsProto: {e:?}")
         })?;
         let options: CsvOptions = (&proto).into();
         Ok(Arc::new(CsvFormatFactory {
@@ -227,9 +224,9 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
             options: Some(options),
         });
 
-        proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode CsvOptions: {e:?}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|e| exec_datafusion_err!("Failed to encode CsvOptions: {e:?}"))?;
 
         Ok(())
     }
@@ -272,7 +269,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -290,15 +287,15 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+        _ctx: &TaskContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion_catalog::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_catalog::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -307,12 +304,10 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
     fn try_decode_file_format(
         &self,
         buf: &[u8],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = JsonOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to decode JsonOptionsProto: {e:?}"
-            ))
+            exec_datafusion_err!("Failed to decode JsonOptionsProto: {e:?}")
         })?;
         let options: JsonOptions = (&proto).into();
         Ok(Arc::new(JsonFormatFactory {
@@ -330,18 +325,16 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         {
             json_factory.options.clone().unwrap_or_default()
         } else {
-            return Err(DataFusionError::Execution(
-                "Unsupported FileFormatFactory type".to_string(),
-            ));
+            return exec_err!("Unsupported FileFormatFactory type");
         };
 
         let proto = JsonOptionsProto::from_factory(&JsonFormatFactory {
             options: Some(options),
         });
 
-        proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode JsonOptions: {e:?}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|e| exec_datafusion_err!("Failed to encode JsonOptions: {e:?}"))?;
 
         Ok(())
     }
@@ -357,11 +350,10 @@ mod parquet {
         ParquetOptions as ParquetOptionsProto,
         TableParquetOptions as TableParquetOptionsProto,
     };
-
-    use datafusion::{
-        config::{ParquetColumnOptions, ParquetOptions, TableParquetOptions},
-        datasource::file_format::parquet::ParquetFormatFactory,
+    use datafusion_common::config::{
+        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     };
+    use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
     impl TableParquetOptionsProto {
         fn from_factory(factory: &ParquetFormatFactory) -> Self {
@@ -599,7 +591,7 @@ mod parquet {
             &self,
             _buf: &[u8],
             _inputs: &[datafusion_expr::LogicalPlan],
-            _ctx: &SessionContext,
+            _ctx: &TaskContext,
         ) -> datafusion_common::Result<datafusion_expr::Extension> {
             not_impl_err!("Method not implemented")
         }
@@ -617,8 +609,8 @@ mod parquet {
             _buf: &[u8],
             _table_ref: &TableReference,
             _schema: arrow::datatypes::SchemaRef,
-            _ctx: &SessionContext,
-        ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>>
+            _ctx: &TaskContext,
+        ) -> datafusion_common::Result<Arc<dyn datafusion_catalog::TableProvider>>
         {
             not_impl_err!("Method not implemented")
         }
@@ -626,7 +618,7 @@ mod parquet {
         fn try_encode_table_provider(
             &self,
             _table_ref: &TableReference,
-            _node: Arc<dyn datafusion::datasource::TableProvider>,
+            _node: Arc<dyn datafusion_catalog::TableProvider>,
             _buf: &mut Vec<u8>,
         ) -> datafusion_common::Result<()> {
             not_impl_err!("Method not implemented")
@@ -635,16 +627,14 @@ mod parquet {
         fn try_decode_file_format(
             &self,
             buf: &[u8],
-            _ctx: &SessionContext,
+            _ctx: &TaskContext,
         ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
             let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Failed to decode TableParquetOptionsProto: {e:?}"
-                ))
+                exec_datafusion_err!("Failed to decode TableParquetOptionsProto: {e:?}")
             })?;
             let options: TableParquetOptions = (&proto).into();
             Ok(Arc::new(
-                datafusion::datasource::file_format::parquet::ParquetFormatFactory {
+                datafusion_datasource_parquet::file_format::ParquetFormatFactory {
                     options: Some(options),
                 },
             ))
@@ -655,16 +645,14 @@ mod parquet {
             buf: &mut Vec<u8>,
             node: Arc<dyn FileFormatFactory>,
         ) -> datafusion_common::Result<()> {
-            use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+            use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
             let options = if let Some(parquet_factory) =
                 node.as_any().downcast_ref::<ParquetFormatFactory>()
             {
                 parquet_factory.options.clone().unwrap_or_default()
             } else {
-                return Err(DataFusionError::Execution(
-                    "Unsupported FileFormatFactory type".to_string(),
-                ));
+                return exec_err!("Unsupported FileFormatFactory type");
             };
 
             let proto = TableParquetOptionsProto::from_factory(&ParquetFormatFactory {
@@ -672,9 +660,7 @@ mod parquet {
             });
 
             proto.encode(buf).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Failed to encode TableParquetOptionsProto: {e:?}"
-                ))
+                exec_datafusion_err!("Failed to encode TableParquetOptionsProto: {e:?}")
             })?;
 
             Ok(())
@@ -693,7 +679,7 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -711,15 +697,15 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+        _ctx: &TaskContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion_catalog::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_catalog::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -728,7 +714,7 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
     fn try_decode_file_format(
         &self,
         __buf: &[u8],
-        __ctx: &SessionContext,
+        __ctx: &TaskContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         Ok(Arc::new(ArrowFormatFactory::new()))
     }
@@ -751,7 +737,7 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -769,15 +755,15 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _cts: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+        _cts: &TaskContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion_catalog::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_catalog::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -786,7 +772,7 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
     fn try_decode_file_format(
         &self,
         __buf: &[u8],
-        __ctx: &SessionContext,
+        __ctx: &TaskContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         Ok(Arc::new(ArrowFormatFactory::new()))
     }

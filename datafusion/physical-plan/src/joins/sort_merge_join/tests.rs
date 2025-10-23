@@ -1315,6 +1315,38 @@ async fn join_left_mark() -> Result<()> {
 }
 
 #[tokio::test]
+async fn join_right_mark() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 2, 3]),
+        ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the right
+        ("c1", &vec![7, 8, 8, 9]),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20, 30, 40]),
+        ("b1", &vec![4, 4, 5, 6]), // 5 is double on the left
+        ("c2", &vec![60, 70, 80, 90]),
+    );
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let (_, batches) = join_collect(left, right, on, RightMark).await?;
+    // The output order is important as SMJ preserves sortedness
+    assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+-------+
+            | a2 | b1 | c2 | mark  |
+            +----+----+----+-------+
+            | 10 | 4  | 60 | true  |
+            | 20 | 4  | 70 | true  |
+            | 30 | 5  | 80 | true  |
+            | 40 | 6  | 90 | false |
+            +----+----+----+-------+
+            "#);
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_with_duplicated_column_names() -> Result<()> {
     let left = build_table(
         ("a", &vec![1, 2, 3]),
@@ -1736,7 +1768,7 @@ async fn overallocation_single_batch_no_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = vec![
-        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
     ];
 
     // Disable DiskManager to prevent spilling
@@ -1817,7 +1849,7 @@ async fn overallocation_multi_batch_no_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = vec![
-        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
     ];
 
     // Disable DiskManager to prevent spilling
@@ -1877,7 +1909,7 @@ async fn overallocation_single_batch_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = [
-        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
     ];
 
     // Enable DiskManager to allow spilling
@@ -1981,7 +2013,7 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = [
-        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+        Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
     ];
 
     // Enable DiskManager to allow spilling

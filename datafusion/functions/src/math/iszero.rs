@@ -36,6 +36,14 @@ use crate::utils::make_scalar_function;
     doc_section(label = "Math Functions"),
     description = "Returns true if a given number is +0.0 or -0.0 otherwise returns false.",
     syntax_example = "iszero(numeric_expression)",
+    sql_example = r#"```sql
+> SELECT iszero(0);
++------------+
+| iszero(0)  |
++------------+
+| true       |
++------------+
+```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

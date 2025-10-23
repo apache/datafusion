@@ -28,7 +28,7 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{DataFusionError, JoinType, ScalarValue};
+use datafusion_common::{exec_datafusion_err, DataFusionError, JoinType, ScalarValue};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::operator::Operator::{Divide, Eq, Gt, Modulo};
@@ -783,7 +783,7 @@ async fn stream_yields(
                 Ok(Pending) => Yielded::ReadyOrPending,
                 Ok(Ready(Ok(_))) => Yielded::ReadyOrPending,
                 Ok(Ready(Err(e))) => Yielded::Err(e),
-                Err(_) => Yielded::Err(DataFusionError::Execution("join error".into())),
+                Err(_) => Yielded::Err(exec_datafusion_err!("join error")),
             }
         },
         _ = tokio::time::sleep(Duration::from_secs(10)) => {

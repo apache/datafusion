@@ -308,10 +308,6 @@ jobs:
     name: cargo test datafusion-cli (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
-    # should be uncommented once https://github.com/apache/datafusion/pull/16644 is merged
-    # and cache should be added
-    # container:
-    #  image: amd64/rust
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
@@ -319,6 +315,11 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
@@ -352,6 +353,19 @@ jobs:
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
+      - name: Remove unnecessary preinstalled software
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          apt-get clean
+          rm -rf /__t/CodeQL
+          rm -rf /__t/PyPy
+          rm -rf /__t/Java_Temurin-Hotspot_jdk
+          rm -rf /__t/Python
+          rm -rf /__t/go
+          rm -rf /__t/Ruby
+          echo "Disk space after cleanup:"
+          df -h
       - name: Run examples
         run: |
           # test datafusion-sql examples
@@ -411,14 +425,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@0aa4f22591557b744fe31e55dbfcdfea74a073f7  # v2
+        uses: taiki-e/install-action@2cdf2d81f4edfc3b41d5ddf56083c70b48ac2475  # v2.62.35
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
-          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox
-          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
+          # debuginfo=none because CI tests weren't completing successfully after this upstream PR:
+          # https://github.com/wasm-bindgen/wasm-bindgen/pull/4635
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C debuginfo=none' wasm-pack test --headless --firefox
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C debuginfo=none' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
@@ -532,22 +548,6 @@ jobs:
   #        run: |
   #          export PATH=$PATH:$HOME/d/protoc/bin
   #          cargo test --lib --tests --bins --features avro,json,backtrace
-
-  # Commenting out intel mac build as so few users would ever use it
-  # Details: https://github.com/apache/datafusion/issues/13846
-  #  macos:
-  #    name: cargo test (macos)
-  #    runs-on: macos-latest
-  #    steps:
-  #      - uses: actions/checkout@v4
-  #        with:
-  #          submodules: true
-  #          fetch-depth: 1
-  #      - name: Setup Rust toolchain
-  #        uses: ./.github/actions/setup-macos-builder
-  #      - name: Run tests (excluding doctests)
-  #        shell: bash
-  #        run: cargo test run --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace
 
   macos-aarch64:
     name: cargo test (macos-aarch64)
@@ -723,7 +723,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
         with:
           node-version: "20"
       - name: Check if configs.md has been modified
@@ -752,7 +752,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@0aa4f22591557b744fe31e55dbfcdfea74a073f7  # v2
+        uses: taiki-e/install-action@2cdf2d81f4edfc3b41d5ddf56083c70b48ac2475  # v2.62.35
         with:
           tool: cargo-msrv
 
@@ -794,7 +794,7 @@ jobs:
     name: Spell Check with Typos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           persist-credentials: false
-      - uses: crate-ci/typos@v1
+      - uses: crate-ci/typos@80c8a4945eec0f6d464eaf9e65ed98ef085283d1  # v1.38.1

@@ -101,7 +101,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// let df_schema = DFSchema::from_unqualified_fields(vec![
 ///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
 /// ].into(),HashMap::new()).unwrap();
-/// let schema = Schema::from(df_schema);
+/// let schema: &Schema = df_schema.as_arrow();
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -594,7 +594,7 @@ impl DFSchema {
         &self,
         arrow_schema: &Schema,
     ) -> Result<()> {
-        let self_arrow_schema: Schema = self.into();
+        let self_arrow_schema = self.as_arrow();
         self_arrow_schema
             .fields()
             .iter()
@@ -747,7 +747,8 @@ impl DFSchema {
     }
 
     /// Returns true of two [`DataType`]s are semantically equal (same
-    /// name and type), ignoring both metadata and nullability, and decimal precision/scale.
+    /// name and type), ignoring both metadata and nullability, decimal precision/scale,
+    /// and timezone time units/timezones.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
     pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
@@ -814,6 +815,10 @@ impl DFSchema {
                 DataType::Decimal256(_l_precision, _l_scale),
                 DataType::Decimal256(_r_precision, _r_scale),
             ) => true,
+            (
+                DataType::Timestamp(_l_time_unit, _l_timezone),
+                DataType::Timestamp(_r_time_unit, _r_timezone),
+            ) => true,
             _ => dt1 == dt2,
         }
     }
@@ -871,7 +876,7 @@ impl DFSchema {
             .zip(self.inner.fields().iter())
             .map(|(qualifier, field)| (qualifier.as_ref(), field))
     }
-    /// Print schema in tree format
+    /// Returns a tree-like string representation of the schema.
     ///
     /// This method formats the schema
     /// with a tree-like structure showing field names, types, and nullability.
@@ -891,12 +896,12 @@ impl DFSchema {
     ///     HashMap::new()
     /// ).unwrap();
     ///
-    /// assert_eq!(schema.print_schema_tree().to_string(),
+    /// assert_eq!(schema.tree_string().to_string(),
     /// r#"root
     ///  |-- id: int32 (nullable = false)
     ///  |-- name: utf8 (nullable = true)"#);
     /// ```
-    pub fn print_schema_tree(&self) -> impl Display + '_ {
+    pub fn tree_string(&self) -> impl Display + '_ {
         let mut result = String::from("root\n");
 
         for (qualifier, field) in self.iter() {
@@ -1081,22 +1086,6 @@ fn format_simple_data_type(data_type: &DataType) -> String {
     }
 }
 
-impl From<DFSchema> for Schema {
-    /// Convert DFSchema into a Schema
-    fn from(df_schema: DFSchema) -> Self {
-        let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
-    }
-}
-
-impl From<&DFSchema> for Schema {
-    /// Convert DFSchema reference into a Schema
-    fn from(df_schema: &DFSchema) -> Self {
-        let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
-    }
-}
-
 /// Allow DFSchema to be converted into an Arrow `&Schema`
 impl AsRef<Schema> for DFSchema {
     fn as_ref(&self) -> &Schema {
@@ -1129,14 +1118,12 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        dfschema.check_names()?;
+        // Without checking names, because schema here may have duplicate field names.
+        // For example, Partial AggregateMode will generate duplicate field names from
+        // state_fields.
+        // See <https://github.com/apache/datafusion/issues/17715>
+        // dfschema.check_names()?;
         Ok(dfschema)
-    }
-}
-
-impl From<DFSchema> for SchemaRef {
-    fn from(df_schema: DFSchema) -> Self {
-        SchemaRef::new(df_schema.into())
     }
 }
 
@@ -1429,10 +1416,8 @@ mod tests {
     #[test]
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let arrow_schema: Schema = schema.into();
-        let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-        Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }";
-        assert_eq!(expected, arrow_schema.to_string());
+        let arrow_schema = schema.as_arrow();
+        insta::assert_snapshot!(arrow_schema, @r#"Field { name: "c0", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }"#);
         Ok(())
     }
 
@@ -1829,6 +1814,15 @@ mod tests {
             &DataType::Decimal256(2, 1),
         ));
 
+        // Any two timestamp types should match
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                Some("UTC".into())
+            ),
+            &DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
+        ));
+
         // Test lists
 
         // Succeeds if both have the same element type, disregards names and nullability
@@ -1986,7 +1980,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2008,7 +2002,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2046,7 +2040,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
         insta::assert_snapshot!(output, @r"
         root
          |-- id: int32 (nullable = false)
@@ -2062,7 +2056,7 @@ mod tests {
     #[test]
     fn test_print_schema_empty() {
         let schema = DFSchema::empty();
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
         insta::assert_snapshot!(output, @r###"root"###);
     }
 
@@ -2135,7 +2129,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2178,7 +2172,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2217,7 +2211,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2359,7 +2353,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2434,7 +2428,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
