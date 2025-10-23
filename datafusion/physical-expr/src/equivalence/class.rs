@@ -20,10 +20,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use super::projection::ProjectionTargets;
 use super::ProjectionMapping;
 use crate::expressions::Literal;
 use crate::physical_expr::add_offset_to_expr;
+use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
