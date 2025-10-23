@@ -150,7 +150,7 @@ impl ProjectionExprs {
     }
 
     pub fn from_indices(indices: &[usize], schema: &SchemaRef) -> Self {
-        let projection_exprs = indices.into_iter().map(|&i| {
+        let projection_exprs = indices.iter().map(|&i| {
             let field = schema.field(i);
             ProjectionExpr {
                 expr: Arc::new(Column::new(field.name(), i)),
@@ -192,7 +192,7 @@ impl ProjectionExprs {
     ///
     /// ```rust
     /// use std::sync::Arc;
-    /// use datafusion_physical_expr::projection::{Projection, ProjectionExpr};
+    /// use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionExpr};
     /// use datafusion_physical_expr::expressions::{Column, BinaryExpr, Literal};
     /// use datafusion_common::{Result, ScalarValue};
     /// use datafusion_expr::Operator;
@@ -200,7 +200,7 @@ impl ProjectionExprs {
     /// fn main() -> Result<()> {
     ///     // Example from the docstring:
     ///     // Base projection: SELECT c@2 AS x, b@1 AS y, a@0 AS z
-    ///     let base = Projection::new(vec![
+    ///     let base = ProjectionExprs::new(vec![
     ///         ProjectionExpr {
     ///             expr: Arc::new(Column::new("c", 2)),
     ///             alias: "x".to_string(),
@@ -216,7 +216,7 @@ impl ProjectionExprs {
     ///     ]);
     ///
     ///     // Top projection: SELECT x@0 + 1 AS c1, y@1 + z@2 AS c2
-    ///     let top = Projection::new(vec![
+    ///     let top = ProjectionExprs::new(vec![
     ///         ProjectionExpr {
     ///             expr: Arc::new(BinaryExpr::new(
     ///                 Arc::new(Column::new("x", 0)),
@@ -276,8 +276,8 @@ impl ProjectionExprs {
         self.exprs
             .iter()
             .flat_map(|e| collect_columns(&e.expr).into_iter().map(|col| col.index()))
-            .dedup()
             .sorted_unstable()
+            .dedup()
             .collect_vec()
     }
 

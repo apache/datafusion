@@ -177,8 +177,11 @@ pub struct FileScanConfig {
     pub file_groups: Vec<FileGroup>,
     /// Table constraints
     pub constraints: Constraints,
-    /// Columns on which to project the data. Indexes that are higher than the
-    /// number of columns of `file_schema` refer to `table_partition_cols`.
+    /// Physical expressions defining the projection to apply when reading data.
+    ///
+    /// Each expression in the projection can reference columns from both the file
+    /// schema and table partition columns. If `None`, all columns from the table
+    /// schema are projected.
     pub projection: Option<ProjectionExprs>,
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
@@ -263,7 +266,7 @@ pub struct FileScanConfigBuilder {
     table_schema: TableSchema,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
-    projection: Option<Vec<usize>>,
+    projection_indices: Option<Vec<usize>>,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
@@ -296,7 +299,7 @@ impl FileScanConfigBuilder {
             file_compression_type: None,
             new_lines_in_values: None,
             limit: None,
-            projection: None,
+            projection_indices: None,
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
@@ -326,7 +329,7 @@ impl FileScanConfigBuilder {
     /// Set the columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub fn with_projection(mut self, indices: Option<Vec<usize>>) -> Self {
-        self.projection = indices;
+        self.projection_indices = indices;
         self
     }
 
@@ -439,7 +442,7 @@ impl FileScanConfigBuilder {
             table_schema,
             file_source,
             limit,
-            projection,
+            projection_indices: projection,
             constraints,
             file_groups,
             statistics,
@@ -494,7 +497,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             file_compression_type: Some(config.file_compression_type),
             new_lines_in_values: Some(config.new_lines_in_values),
             limit: config.limit,
-            projection: config.projection.map(|p| p.ordered_column_indices()),
+            projection_indices: config.projection.map(|p| p.ordered_column_indices()),
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
@@ -827,13 +830,12 @@ impl FileScanConfig {
         let fields = self.file_schema().fields();
 
         self.projection.as_ref().map(|p| {
-            let column_indicies = p.ordered_column_indices();
+            let column_indices = p.ordered_column_indices();
 
-            column_indicies
+            column_indices
                 .iter()
-                .filter_map(|&col_i| {
-                    (col_i < fields.len()).then(|| self.file_schema().field(col_i).name())
-                })
+                .filter(|&&col_i| col_i < fields.len())
+                .map(|&col_i| self.file_schema().field(col_i).name())
                 .cloned()
                 .collect::<Vec<_>>()
         })
