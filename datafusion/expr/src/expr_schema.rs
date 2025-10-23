@@ -310,9 +310,7 @@ impl ExprSchemable for Expr {
                 )
                 .map(|(_, nullable)| nullable),
             Expr::ScalarVariable(field, _) => Ok(field.is_nullable()),
-            Expr::TryCast { .. }
-            | Expr::Unnest(_)
-            | Expr::Placeholder(_) => Ok(true),
+            Expr::TryCast { .. } | Expr::Unnest(_) | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -460,9 +458,9 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => {
                 Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
             }
-            Expr::ScalarVariable(field, _) => Ok(Arc::new(
-                field.as_ref().clone().with_name(&schema_name),
-            )),
+            Expr::ScalarVariable(field, _) => {
+                Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
+            }
             Expr::Literal(l, metadata) => {
                 let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
                 if let Some(metadata) = metadata {

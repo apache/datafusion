@@ -42,7 +42,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let field = self
                 .context_provider
                 .get_variable_field(&var_names)
-                .or_else(|| self.context_provider.get_variable_type(&var_names).map(|ty| Arc::new(Field::new("", ty, true))))
+                .or_else(|| {
+                    self.context_provider
+                        .get_variable_type(&var_names)
+                        .map(|ty| Arc::new(Field::new("", ty, true)))
+                })
                 .ok_or_else(|| {
                     plan_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
@@ -117,7 +121,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let field = self
                 .context_provider
                 .get_variable_field(&var_names)
-                .or_else(|| self.context_provider.get_variable_type(&var_names).map(|ty| Arc::new(Field::new("", ty, true))))
+                .or_else(|| {
+                    self.context_provider
+                        .get_variable_type(&var_names)
+                        .map(|ty| Arc::new(Field::new("", ty, true)))
+                })
                 .ok_or_else(|| {
                     exec_datafusion_err!("variable {var_names:?} has no type information")
                 })?;

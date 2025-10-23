@@ -110,9 +110,8 @@ pub trait ContextProvider {
     /// provide richer information (such as nullability or extension metadata)
     /// should override this method.
     fn get_variable_field(&self, variable_names: &[String]) -> Option<FieldRef> {
-        self.get_variable_type(variable_names).map(|data_type| {
-            Arc::new(Field::new("", data_type, true)) as FieldRef
-        })
+        self.get_variable_type(variable_names)
+            .map(|data_type| Arc::new(Field::new("", data_type, true)) as FieldRef)
     }
 
     /// Return overall configuration options
