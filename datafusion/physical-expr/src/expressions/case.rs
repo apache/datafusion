@@ -124,11 +124,10 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
-fn create_filter(predicate: &BooleanArray, optimize: bool) -> FilterPredicate {
+fn create_filter(predicate: &BooleanArray) -> FilterPredicate {
     let mut filter_builder = FilterBuilder::new(predicate);
-    if optimize {
-        filter_builder = filter_builder.optimize();
-    }
+    // Always optimize the filter since we use them multiple times.
+    filter_builder = filter_builder.optimize();
     filter_builder.build()
 }
 
@@ -371,8 +370,6 @@ impl CaseExpr {
     ///     [ELSE result]
     /// END
     fn case_when_with_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let optimize_filters = batch.num_columns() > 1;
-
         let return_type = self.data_type(&batch.schema())?;
         let mut result_builder = ResultBuilder::new(&return_type, batch.num_rows());
 
@@ -401,7 +398,7 @@ impl CaseExpr {
             if let Some(e) = self.else_expr() {
                 let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
 
-                let nulls_filter = create_filter(&base_nulls, optimize_filters);
+                let nulls_filter = create_filter(&base_nulls);
                 let nulls_batch = filter_record_batch(&remainder_batch, &nulls_filter)?;
                 let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
                 let nulls_value = expr.evaluate(&nulls_batch)?;
@@ -414,7 +411,7 @@ impl CaseExpr {
             }
 
             // Remove the null rows from the remainder batch
-            let not_null_filter = create_filter(&not(&base_nulls)?, optimize_filters);
+            let not_null_filter = create_filter(&not(&base_nulls)?);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &not_null_filter)?);
             remainder_rows = filter_array(&remainder_rows, &not_null_filter)?;
@@ -451,7 +448,7 @@ impl CaseExpr {
             // Filter the remainder batch based on the 'when' value
             // This results in a batch containing only the rows that need to be evaluated
             // for the current branch
-            let then_filter = create_filter(&when_value, optimize_filters);
+            let then_filter = create_filter(&when_value);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
@@ -469,7 +466,7 @@ impl CaseExpr {
 
             // Prepare the next when branch (or the else branch)
             let next_selection = not(&when_value)?;
-            let next_filter = create_filter(&next_selection, optimize_filters);
+            let next_filter = create_filter(&next_selection);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
@@ -496,8 +493,6 @@ impl CaseExpr {
     ///      [ELSE result]
     /// END
     fn case_when_no_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let optimize_filters = batch.num_columns() > 1;
-
         let return_type = self.data_type(&batch.schema())?;
         let mut result_builder = ResultBuilder::new(&return_type, batch.num_rows());
 
@@ -533,7 +528,7 @@ impl CaseExpr {
             // Filter the remainder batch based on the 'when' value
             // This results in a batch containing only the rows that need to be evaluated
             // for the current branch
-            let then_filter = create_filter(&when_value, optimize_filters);
+            let then_filter = create_filter(&when_value);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
@@ -551,7 +546,7 @@ impl CaseExpr {
 
             // Prepare the next when branch (or the else branch)
             let next_selection = not(&when_value)?;
-            let next_filter = create_filter(&next_selection, optimize_filters);
+            let next_filter = create_filter(&next_selection);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
