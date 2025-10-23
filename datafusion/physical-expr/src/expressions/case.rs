@@ -197,11 +197,7 @@ fn filter_array(
 /// ```
 fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
     let data_refs = values.iter().collect();
-    let mut mutable = MutableArrayData::new(
-        data_refs,
-        true,
-        indices.len(),
-    );
+    let mut mutable = MutableArrayData::new(data_refs, true, indices.len());
 
     // This loop extends the mutable array by taking slices from the partial results.
     //
@@ -213,9 +209,7 @@ fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
 
         // Determine the length of the slice to take.
         let mut end_row_ix = start_row_ix + 1;
-        while end_row_ix < indices.len()
-            && indices[end_row_ix] == array_ix
-        {
+        while end_row_ix < indices.len() && indices[end_row_ix] == array_ix {
             end_row_ix += 1;
         }
 
@@ -286,7 +280,11 @@ impl ResultBuilder {
     ///
     /// If `value` is an array, the values from the array and the indices from `row_indices` will be
     /// processed pairwise. The lengths of `value` and `row_indices` must match.
-    fn add_branch_result(&mut self, row_indices: &ArrayRef, value: ColumnarValue) -> Result<()> {
+    fn add_branch_result(
+        &mut self,
+        row_indices: &ArrayRef,
+        value: ColumnarValue,
+    ) -> Result<()> {
         match value {
             ColumnarValue::Array(a) => {
                 assert_eq!(a.len(), row_indices.len());
@@ -358,7 +356,10 @@ impl ResultBuilder {
                 }
                 _ => {
                     // Merge into a single array.
-                    Ok(ColumnarValue::Array(merge(&self.partial_results, &self.partial_result_indices)?))
+                    Ok(ColumnarValue::Array(merge(
+                        &self.partial_results,
+                        &self.partial_result_indices,
+                    )?))
                 }
             },
         }
