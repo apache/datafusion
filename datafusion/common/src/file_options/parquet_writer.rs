@@ -402,9 +402,11 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
+    use crate::config::{
+        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
+        ParquetOptions,
+    };
     #[cfg(feature = "parquet_encryption")]
-    use crate::encryption::map_encryption_to_config_encryption;
     use parquet::{
         basic::Compression,
         file::properties::{
@@ -538,10 +540,9 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
-        #[cfg(feature = "parquet_encryption")]
-        let fep = map_encryption_to_config_encryption(props.file_encryption_properties());
-        #[cfg(not(feature = "parquet_encryption"))]
-        let fep = None;
+        let fep = props
+            .file_encryption_properties()
+            .map(ConfigFileEncryptionProperties::from);
 
         #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {

@@ -268,7 +268,7 @@ FROM (
 ) t
 GROUP BY 1
 ----
-Timestamp(Millisecond, Some("UTC")) 2014-08-27T14:00:00Z 131072
+Timestamp(ms, "UTC") 2014-08-27T14:00:00Z 131072
 
 # Test config listing_table_ignore_subdirectory:
 
@@ -689,7 +689,7 @@ LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
 query TTT
 describe int96_from_spark
 ----
-a Timestamp(Nanosecond, None) YES
+a Timestamp(ns) YES
 
 # Note that the values are read as nanosecond precision
 query P
@@ -718,7 +718,7 @@ LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
 query TTT
 describe int96_from_spark;
 ----
-a Timestamp(Millisecond, None) YES
+a Timestamp(ms) YES
 
 # Per https://github.com/apache/parquet-testing/blob/6e851ddd768d6af741c7b15dc594874399fc3cff/data/int96_from_spark.md?plain=1#L37
 # these values should be
@@ -742,7 +742,7 @@ select * from int96_from_spark
 9999-12-31T03:00:00
 2024-12-30T23:00:00
 NULL
-ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(Millisecond, None)
+ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(ms)
 
 # Cleanup / reset default setting
 statement ok
