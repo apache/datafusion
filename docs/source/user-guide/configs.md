@@ -278,7 +278,7 @@ SET datafusion.optimizer.<configuration_name>
 
 Example
 
-``` sql
+```sql
 SET datafusion.optimizer.prefer_hash_join = false;
 ```
 
