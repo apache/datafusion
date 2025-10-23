@@ -74,7 +74,7 @@ enum RepartitionBatch {
     /// Batch held in memory (counts against memory reservation)
     Memory(RecordBatch),
     /// Marker indicating a batch was spilled to the partition's SpillPool
-    /// The actual batch can be retrieved via SpillPool::pop_batch()
+    /// The actual batch can be retrieved by reading from the SpillPoolStream
     Spilled,
 }
 
@@ -110,7 +110,7 @@ struct ConsumingInputStreamsState {
     /// Key is the partition number.
     channels: HashMap<usize, PartitionChannels>,
 
-    /// Helper that ensures that that background job is killed once it is no longer needed.
+    /// Helper that ensures that background jobs are killed once they are no longer needed.
     abort_helper: Arc<Vec<SpawnedTask<()>>>,
 }
 
@@ -622,7 +622,7 @@ impl RepartitionExec {
         &self.cache.partitioning
     }
 
-    /// Get preserve_order flag of the RepartitionExecutor
+    /// Get preserve_order flag of the RepartitionExec
     /// `true` means `SortPreservingRepartitionExec`, `false` means `RepartitionExec`
     pub fn preserve_order(&self) -> bool {
         self.preserve_order
@@ -1085,7 +1085,7 @@ impl RepartitionExec {
     /// Pulls data from the specified input plan, feeding it to the
     /// output partitions based on the desired partitioning
     ///
-    /// txs hold the output sending channels for each output partition
+    /// `output_channels` holds the output sending channels for each output partition
     async fn pull_from_input(
         mut stream: SendableRecordBatchStream,
         mut output_channels: HashMap<usize, OutputChannel>,

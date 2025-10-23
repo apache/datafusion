@@ -34,20 +34,30 @@
 //! # Usage Example
 //!
 //! ```ignore
+//! use std::sync::Arc;
+//! use parking_lot::Mutex;
+//!
 //! let pool = SpillPool::new(
 //!     100 * 1024 * 1024,  // 100MB max per file
 //!     spill_manager,
 //!     schema,
 //! );
+//! let pool = Arc::new(Mutex::new(pool));
 //!
 //! // Spill batches - automatically rotates files when size limit reached
-//! pool.push_batch(batch1)?;
-//! pool.push_batch(batch2)?;
-//! pool.flush()?;  // Finalize current file
+//! {
+//!     let mut pool = pool.lock();
+//!     pool.push_batch(batch1)?;
+//!     pool.push_batch(batch2)?;
+//!     pool.flush()?;  // Finalize current file
+//!     pool.finalize(); // Signal no more writes
+//! }
 //!
-//! // Read back in FIFO order
-//! let batch = pool.pop_batch()?.unwrap();  // Returns batch1
-//! let batch = pool.pop_batch()?.unwrap();  // Returns batch2
+//! // Read back in FIFO order using a stream
+//! let mut stream = SpillPool::reader(pool, spill_manager);
+//! let batch1 = stream.next().await.unwrap()?;  // Returns batch1
+//! let batch2 = stream.next().await.unwrap()?;  // Returns batch2
+//! // stream.next() returns None after finalize
 //! ```
 
 use std::collections::VecDeque;
@@ -147,7 +157,7 @@ impl SpillPool {
         self.finalized
     }
 
-    /// Creates an infinite stream reader for this pool.
+    /// Creates a stream reader for this pool.
     ///
     /// The stream automatically handles file rotation and can read concurrently
     /// while writes continue to the pool. When the stream catches up to the writer,
@@ -160,7 +170,8 @@ impl SpillPool {
     ///
     /// # Returns
     ///
-    /// An infinite `SpillPoolStream` that never ends until dropped
+    /// A `SpillPoolStream` that returns batches in FIFO order and ends when the pool
+    /// is finalized and all data has been read
     pub fn reader(
         pool: Arc<Mutex<Self>>,
         spill_manager: Arc<SpillManager>,
@@ -280,13 +291,13 @@ impl Drop for SpillPool {
     }
 }
 
-/// An infinite stream that reads from a SpillPool.
+/// A stream that reads from a SpillPool in FIFO order.
 ///
 /// The stream automatically handles file rotation and reads from completed files.
 /// When no completed files are available, it returns `Poll::Pending` and waits
 /// for the writer to complete more files.
 ///
-/// The stream never ends (`Poll::Ready(None)`) until it is dropped.
+/// The stream ends (`Poll::Ready(None)`) when the pool is finalized and all data has been read.
 pub struct SpillPoolStream {
     /// Shared reference to the spill pool
     spill_pool: Arc<Mutex<SpillPool>>,
