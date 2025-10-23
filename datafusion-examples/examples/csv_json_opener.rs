@@ -69,7 +69,7 @@ async fn csv_opener() -> Result<()> {
 
     let config = CsvSource::new(true, b',', b'"')
         .with_comment(Some(b'#'))
-        .with_schema(TableSchema::new(schema, vec![]))
+        .with_schema(TableSchema::from_file_schema(schema))
         .with_batch_size(8192)
         .with_projection(&scan_config);
 
