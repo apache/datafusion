@@ -29,7 +29,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
-    pub(super) fn sql_identifier_to_expr(
+    pub(crate) fn sql_identifier_to_expr(
         &self,
         id: Ident,
         schema: &DFSchema,

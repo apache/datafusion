@@ -25,7 +25,9 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, FieldMetadata, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{
+    Alias, FieldMetadata, PlannedReplaceSelectItem, ScalarFunction, Sort as SortExpr,
+};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -44,8 +46,9 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp,
+    and, binary_expr, lit, when, DmlStatement, ExplainOption, Expr, ExprSchemable,
+    Operator, RecursiveQuery, ScalarUDF, Statement, TableProviderFilterPushDown,
+    TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
@@ -53,6 +56,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_datafusion_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
@@ -1492,6 +1496,303 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
             .map(Self::new)
+    }
+
+    pub fn pivot(
+        self,
+        aggregate_functions: Vec<Expr>,
+        value_column: Vec<Column>,
+        value_source: Vec<Expr>,
+        default_on_null: Option<Vec<Expr>>,
+    ) -> Result<Self> {
+        match default_on_null {
+            Some(default_values) if default_values.len() != aggregate_functions.len() => {
+                return plan_err!("Number of default values must match the number of aggregate functions");
+            }
+            _ => {}
+        }
+        let mut used_columns = HashSet::new();
+        used_columns.extend(value_column.iter().cloned());
+        for agg in aggregate_functions.iter() {
+            expr_to_columns(agg, &mut used_columns)?;
+        }
+
+        let used_columns = used_columns
+            .iter()
+            .map(|c| c.name.clone())
+            .collect::<HashSet<_>>();
+
+        // Extract group by columns (all columns not involved in aggregation or pivot)
+        let schema = self.schema();
+
+        let group_by_columns = schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                if used_columns.contains(f.name()) {
+                    None // Skip columns that are used in aggregation or pivot
+                } else {
+                    Some(Expr::Column(Column::from_name(f.name())))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Create filtered aggregate expressions for each value in value_source
+        let mut aggr_exprs = Vec::new();
+
+        for value in &value_source {
+            let (value, value_alias) =
+                if let Expr::Alias(Alias { expr, name, .. }) = value {
+                    (expr.as_ref(), name)
+                } else {
+                    (value, &value.to_string())
+                };
+            let condition = match value_column.len() {
+                0 => return plan_err!("Pivot requires at least one value column"),
+                1 => binary_expr(
+                    Expr::Column(value_column[0].clone()),
+                    Operator::IsNotDistinctFrom,
+                    value.clone(),
+                ),
+                _ => {
+                    let Expr::ScalarFunction(ScalarFunction { func, args }) = value
+                    else {
+                        return plan_err!("Pivot value must be struct(literals) if multiple value columns are provided");
+                    };
+                    if func.name() != "struct" {
+                        return plan_err!("Pivot value must be struct(literals) if multiple value columns are provided");
+                    }
+                    if args.len() != value_column.len() {
+                        return plan_err!(
+                            "Pivot value list length must match value column count"
+                        );
+                    }
+                    let mut condition: Option<Expr> = None;
+                    for (idx, col) in value_column.iter().enumerate() {
+                        let single_condition = binary_expr(
+                            Expr::Column(col.clone()),
+                            Operator::IsNotDistinctFrom,
+                            args[idx].clone(),
+                        );
+                        condition = match condition {
+                            None => Some(single_condition),
+                            Some(prev) => Some(and(prev, single_condition)),
+                        };
+                    }
+                    match condition {
+                        None => {
+                            return plan_err!("Pivot value condition cannot be empty")
+                        }
+                        Some(cond) => cond,
+                    }
+                }
+            };
+
+            for (i, agg_func) in aggregate_functions.iter().enumerate() {
+                let (expr, name, metadata) = match agg_func {
+                    Expr::Alias(Alias {
+                        expr,
+                        name,
+                        metadata,
+                        ..
+                    }) if matches!(expr.as_ref(), Expr::AggregateFunction(_)) => {
+                        (expr.as_ref(), name, metadata)
+                    }
+                    Expr::AggregateFunction(_) => {
+                        (agg_func, &agg_func.to_string(), &None)
+                    }
+                    _ => {
+                        return plan_err!(
+                            "Pivot aggregate function must be either an alias or an aggregate function expression, but got: {agg_func:?}"
+                        );
+                    }
+                };
+                let expr = expr
+                    .clone()
+                    .transform(|nested_expr| match &nested_expr {
+                        Expr::AggregateFunction(func) => {
+                            let filter = match &func.params.filter {
+                                Some(filter) => {
+                                    and(filter.as_ref().clone(), condition.clone())
+                                }
+                                None => condition.clone(),
+                            };
+                            let mut func = func.clone();
+                            func.params.filter = Some(Box::new(filter));
+                            Ok(Transformed::yes(Expr::AggregateFunction(func)))
+                        }
+                        _ => Ok(Transformed::no(nested_expr)),
+                    })?
+                    .data;
+
+                let expr = match default_on_null.as_ref() {
+                    Some(default_values) => {
+                        when(expr.clone().is_null(), default_values[i].clone())
+                            .otherwise(expr)?
+                    }
+                    None => expr,
+                };
+                let pivot_col_name = format!(
+                    "{}_{}",
+                    value_alias.replace("\"", "").replace("'", ""),
+                    name
+                );
+                aggr_exprs
+                    .push(expr.alias_with_metadata(pivot_col_name, metadata.clone()));
+            }
+        }
+
+        let aggregate_plan = self.aggregate(group_by_columns, aggr_exprs)?;
+
+        Ok(aggregate_plan)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn unpivot(
+        self,
+        value_column_names: Vec<String>,
+        name_column: String,
+        unpivot_columns: Vec<(Vec<String>, Option<String>)>,
+        id_columns: Option<Vec<String>>,
+        include_nulls: bool,
+        named_struct_fn: &Arc<ScalarUDF>,
+        make_array_fn: &Arc<ScalarUDF>,
+        get_field_fn: &Arc<ScalarUDF>,
+    ) -> Result<Self> {
+        let schema = self.schema();
+        let num_value_columns = value_column_names.len();
+
+        // Validate that all unpivot columns have the same number of columns
+        for (cols, _) in &unpivot_columns {
+            if cols.len() != num_value_columns {
+                return plan_err!(
+                    "All unpivot columns must have {} column(s), but found {}",
+                    num_value_columns,
+                    cols.len()
+                );
+            }
+        }
+
+        // Get the list of columns that should be preserved (not unpivoted)
+        let unpivot_col_set: HashSet<String> = unpivot_columns
+            .iter()
+            .flat_map(|(cols, _)| cols.iter().cloned())
+            .collect();
+
+        let preserved_columns: Vec<Expr> = if let Some(id_columns) = id_columns {
+            id_columns
+                .iter()
+                .map(|col| Expr::Column(Column::from_name(col)))
+                .collect()
+        } else {
+            schema
+                .iter()
+                .filter_map(|(q, f)| {
+                    if !unpivot_col_set.contains(f.name()) {
+                        Some(Expr::Column(Column::new(q.cloned(), f.name())))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // Build array of structs: array[struct(name_val, col1_val, col2_val, ...), ...]
+        let mut struct_exprs = Vec::new();
+
+        for (col_names, alias_opt) in unpivot_columns {
+            // Build struct fields: [name_literal, name_column_name, value1, value1_name, value2, value2_name, ...]
+            let mut struct_fields = Vec::new();
+
+            // Add name field
+            let name_value = alias_opt.unwrap_or_else(|| col_names[0].clone());
+            struct_fields.push(lit(name_column.clone()));
+            struct_fields.push(lit(name_value));
+
+            // Add value fields
+            for (i, col_name) in col_names.iter().enumerate() {
+                struct_fields.push(lit(value_column_names[i].clone()));
+                struct_fields.push(Expr::Column(Column::from_qualified_name(col_name)));
+            }
+
+            // Create struct expression
+            let struct_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(named_struct_fn),
+                struct_fields,
+            ));
+
+            struct_exprs.push(struct_expr);
+        }
+
+        let unpivot_array_column = "__unpivot_array";
+
+        // Create array expression
+        let array_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::clone(make_array_fn),
+            struct_exprs,
+        ))
+        .alias(unpivot_array_column);
+
+        // Project: preserved_columns + array
+        let mut projection = preserved_columns.clone();
+        projection.push(array_expr);
+
+        let plan = self.project(projection)?.build()?;
+
+        // Unnest the array
+        let plan = LogicalPlanBuilder::from(plan)
+            .unnest_column(Column::from_name(unpivot_array_column))?
+            .build()?;
+
+        // Extract fields from the unnested struct
+        let mut final_projection = preserved_columns.clone();
+        final_projection.push(
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(get_field_fn),
+                vec![
+                    Expr::Column(Column::from_name(unpivot_array_column)),
+                    lit(name_column.clone()),
+                ],
+            ))
+            .alias(&name_column),
+        );
+
+        // Add value columns from struct fields
+        for value_col_name in &value_column_names {
+            final_projection.push(
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    Arc::clone(get_field_fn),
+                    vec![
+                        Expr::Column(Column::from_name(unpivot_array_column)),
+                        lit(value_col_name.clone()),
+                    ],
+                ))
+                .alias(value_col_name),
+            );
+        }
+
+        let mut plan_builder =
+            LogicalPlanBuilder::from(plan).project(final_projection)?;
+
+        // Add filter to exclude NULLs if needed
+        if !include_nulls {
+            // Create a condition that checks if any of the value columns is NOT NULL
+            let mut not_null_condition: Option<Expr> = None;
+            for value_col_name in &value_column_names {
+                let is_not_null =
+                    Expr::Column(Column::from_name(value_col_name)).is_not_null();
+                not_null_condition = match not_null_condition {
+                    None => Some(is_not_null),
+                    Some(prev) => Some(prev.or(is_not_null)),
+                };
+            }
+
+            if let Some(condition) = not_null_condition {
+                plan_builder = plan_builder.filter(condition)?;
+            }
+        }
+
+        Ok(plan_builder)
     }
 }
 

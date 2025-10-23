@@ -6479,3 +6479,333 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_dataframe_pivot() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create a test table for pivot
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("category", DataType::Utf8, false),
+        Field::new("value", DataType::Int32, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["A", "B", "A", "B", "C"])),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+        ],
+    )?;
+
+    ctx.register_batch("pivot_test", batch)?;
+    let df = ctx.table("pivot_test").await?;
+
+    // Pivot the DataFrame so each unique category becomes a column
+    let pivoted = df.pivot(
+        vec![sum(col("value"))],
+        vec![datafusion_common::Column::from_name("category")],
+        vec![lit("A"), lit("B"), lit("C")],
+        None,
+    )?;
+
+    let results = pivoted.collect().await?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r###"
+    +--------------------+--------------------+--------------------+
+    | Utf8(A)_sum(value) | Utf8(B)_sum(value) | Utf8(C)_sum(value) |
+    +--------------------+--------------------+--------------------+
+    | 4                  | 6                  | 5                  |
+    +--------------------+--------------------+--------------------+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_pivot_with_default() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("category", DataType::Utf8, false),
+        Field::new("value", DataType::Int32, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+            Arc::new(StringArray::from(vec!["A", "B", "A", "C"])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+        ],
+    )?;
+
+    ctx.register_batch("pivot_default_test", batch)?;
+    let df = ctx.table("pivot_default_test").await?;
+
+    // Pivot with default values
+    let pivoted = df.pivot(
+        vec![sum(col("value"))],
+        vec![datafusion_common::Column::from_name("category")],
+        vec![lit("A"), lit("B"), lit("C")],
+        Some(vec![lit(0)]),
+    )?;
+
+    let results = pivoted.collect().await?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r###"
+    +----+--------------------+--------------------+--------------------+
+    | id | Utf8(A)_sum(value) | Utf8(B)_sum(value) | Utf8(C)_sum(value) |
+    +----+--------------------+--------------------+--------------------+
+    | 1  | 10                 | 20                 | 0                  |
+    | 2  | 30                 | 0                  | 40                 |
+    +----+--------------------+--------------------+--------------------+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_unpivot() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create a test table for unpivot
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("jan", DataType::Int32, true),
+        Field::new("feb", DataType::Int32, true),
+        Field::new("mar", DataType::Int32, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(vec![100, 110])),
+            Arc::new(Int32Array::from(vec![200, 210])),
+            Arc::new(Int32Array::from(vec![300, 310])),
+        ],
+    )?;
+
+    ctx.register_batch("unpivot_test", batch)?;
+    let df = ctx.table("unpivot_test").await?;
+
+    // Unpivot jan, feb, mar into month/value columns
+    let unpivoted = df.unpivot(
+        vec!["value".to_string()],
+        "month".to_string(),
+        vec![
+            (vec!["jan".to_string()], Some("jan".to_string())),
+            (vec!["feb".to_string()], Some("feb".to_string())),
+            (vec!["mar".to_string()], Some("mar".to_string())),
+        ],
+        Some(vec!["id".to_string()]),
+        false,
+    )?;
+
+    let results = unpivoted
+        .sort(vec![
+            col("id").sort(true, true),
+            col("month").sort(true, true),
+        ])?
+        .collect()
+        .await?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r###"
+    +----+-------+-------+
+    | id | month | value |
+    +----+-------+-------+
+    | 1  | feb   | 200   |
+    | 1  | jan   | 100   |
+    | 1  | mar   | 300   |
+    | 2  | feb   | 210   |
+    | 2  | jan   | 110   |
+    | 2  | mar   | 310   |
+    +----+-------+-------+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_unpivot_with_nulls() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("col1", DataType::Int32, true),
+        Field::new("col2", DataType::Int32, true),
+        Field::new("col3", DataType::Int32, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])),
+            Arc::new(Int32Array::from(vec![Some(20), Some(25), None])),
+            Arc::new(Int32Array::from(vec![None, Some(35), Some(40)])),
+        ],
+    )?;
+
+    ctx.register_batch("unpivot_nulls_test", batch)?;
+    let df = ctx.table("unpivot_nulls_test").await?;
+
+    // Test with include_nulls = false (default behavior)
+    let unpivoted = df.clone().unpivot(
+        vec!["value".to_string()],
+        "column".to_string(),
+        vec![
+            (vec!["col1".to_string()], Some("col1".to_string())),
+            (vec!["col2".to_string()], Some("col2".to_string())),
+            (vec!["col3".to_string()], Some("col3".to_string())),
+        ],
+        Some(vec!["id".to_string()]),
+        false, // exclude nulls
+    )?;
+
+    let results = unpivoted
+        .sort(vec![
+            col("id").sort(true, true),
+            col("column").sort(true, true),
+        ])?
+        .collect()
+        .await?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r###"
+    +----+--------+-------+
+    | id | column | value |
+    +----+--------+-------+
+    | 1  | col1   | 10    |
+    | 1  | col2   | 20    |
+    | 2  | col2   | 25    |
+    | 2  | col3   | 35    |
+    | 3  | col1   | 30    |
+    | 3  | col3   | 40    |
+    +----+--------+-------+
+    "###
+    );
+
+    // Test with include_nulls = true
+    let unpivoted_with_nulls = df.unpivot(
+        vec!["value".to_string()],
+        "column".to_string(),
+        vec![
+            (vec!["col1".to_string()], Some("col1".to_string())),
+            (vec!["col2".to_string()], Some("col2".to_string())),
+            (vec!["col3".to_string()], Some("col3".to_string())),
+        ],
+        Some(vec!["id".to_string()]),
+        true, // include nulls
+    )?;
+
+    let results_with_nulls = unpivoted_with_nulls
+        .sort(vec![
+            col("id").sort(true, true),
+            col("column").sort(true, true),
+        ])?
+        .collect()
+        .await?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&results_with_nulls),
+        @r###"
+    +----+--------+-------+
+    | id | column | value |
+    +----+--------+-------+
+    | 1  | col1   | 10    |
+    | 1  | col2   | 20    |
+    | 1  | col3   |       |
+    | 2  | col1   |       |
+    | 2  | col2   | 25    |
+    | 2  | col3   | 35    |
+    | 3  | col1   | 30    |
+    | 3  | col2   |       |
+    | 3  | col3   | 40    |
+    +----+--------+-------+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_unpivot_multiple_values() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("q1_sales", DataType::Int32, true),
+        Field::new("q1_profit", DataType::Int32, true),
+        Field::new("q2_sales", DataType::Int32, true),
+        Field::new("q2_profit", DataType::Int32, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(vec![100, 200])),
+            Arc::new(Int32Array::from(vec![10, 20])),
+            Arc::new(Int32Array::from(vec![150, 250])),
+            Arc::new(Int32Array::from(vec![15, 25])),
+        ],
+    )?;
+
+    ctx.register_batch("unpivot_multi_test", batch)?;
+    let df = ctx.table("unpivot_multi_test").await?;
+
+    // Unpivot with multiple value columns
+    let unpivoted = df.unpivot(
+        vec!["sales".to_string(), "profit".to_string()],
+        "quarter".to_string(),
+        vec![
+            (
+                vec!["q1_sales".to_string(), "q1_profit".to_string()],
+                Some("Q1".to_string()),
+            ),
+            (
+                vec!["q2_sales".to_string(), "q2_profit".to_string()],
+                Some("Q2".to_string()),
+            ),
+        ],
+        Some(vec!["id".to_string()]),
+        false,
+    )?;
+
+    let results = unpivoted
+        .sort(vec![
+            col("id").sort(true, true),
+            col("quarter").sort(true, true),
+        ])?
+        .collect()
+        .await?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r###"
+    +----+---------+-------+--------+
+    | id | quarter | sales | profit |
+    +----+---------+-------+--------+
+    | 1  | Q1      | 100   | 10     |
+    | 1  | Q2      | 150   | 15     |
+    | 2  | Q1      | 200   | 20     |
+    | 2  | Q2      | 250   | 25     |
+    +----+---------+-------+--------+
+    "###
+    );
+
+    Ok(())
+}
