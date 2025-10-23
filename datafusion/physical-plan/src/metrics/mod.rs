@@ -78,6 +78,29 @@ pub struct Metric {
     /// To which partition of an operators output did this metric
     /// apply? If `None` then means all partitions.
     partition: Option<usize>,
+
+    metric_type: MetricType,
+}
+
+/// Categorizes metrics so the display layer can choose the desired verbosity.
+///
+/// # How is it used:
+/// The `datafusion.explain.analyze_level` configuration controls which category is shown.
+/// - When set to `dev`, all metrics with type `MetricType::Summary` or `MetricType::DEV`
+///   will be shown.
+/// - When set to `summary`, only metrics with type `MetricType::Summary` are shown.
+///
+/// # Difference from `EXPLAIN ANALYZE VERBOSE`:  
+/// The `VERBOSE` keyword controls whether per-partition metrics are shown (when specified),  
+/// or aggregated metrics are displayed (when omitted).  
+/// In contrast, the `analyze_level` configuration determines which categories or
+/// levels of metrics are displayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MetricType {
+    /// Common metrics for high-level insights (answering which operator is slow)
+    SUMMARY,
+    /// For deep operator-level introspection for developers
+    DEV,
 }
 
 impl Display for Metric {
@@ -122,6 +145,7 @@ impl Metric {
             value,
             labels: vec![],
             partition,
+            metric_type: MetricType::DEV,
         }
     }
 
@@ -136,7 +160,14 @@ impl Metric {
             value,
             labels,
             partition,
+            metric_type: MetricType::DEV,
         }
+    }
+
+    /// Set the type for this metric. Defaults to [`MetricType::DEV`]
+    pub fn with_type(mut self, metric_type: MetricType) -> Self {
+        self.metric_type = metric_type;
+        self
     }
 
     /// Add a new label to this metric
@@ -163,6 +194,11 @@ impl Metric {
     /// Return a reference to the partition
     pub fn partition(&self) -> Option<usize> {
         self.partition
+    }
+
+    /// Return the metric type (verbosity level) associated with this metric
+    pub fn metric_type(&self) -> MetricType {
+        self.metric_type
     }
 }
 
@@ -286,7 +322,8 @@ impl MetricsSet {
                 .or_insert_with(|| {
                     // accumulate with no partition
                     let partition = None;
-                    let mut accum = Metric::new(metric.value().new_empty(), partition);
+                    let mut accum = Metric::new(metric.value().new_empty(), partition)
+                        .with_type(metric.metric_type());
                     accum.value_mut().aggregate(metric.value());
                     accum
                 });
@@ -322,6 +359,21 @@ impl MetricsSet {
             .filter(|m| !m.value.is_timestamp())
             .collect::<Vec<_>>();
 
+        Self { metrics }
+    }
+
+    /// Returns a new derived `MetricsSet` containing only metrics whose
+    /// [`MetricType`] appears in `allowed`.
+    pub fn filter_by_metric_types(self, allowed: &[MetricType]) -> Self {
+        if allowed.is_empty() {
+            return Self { metrics: vec![] };
+        }
+
+        let metrics = self
+            .metrics
+            .into_iter()
+            .filter(|metric| allowed.contains(&metric.metric_type()))
+            .collect::<Vec<_>>();
         Self { metrics }
     }
 }

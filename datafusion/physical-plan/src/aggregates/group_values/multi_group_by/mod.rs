@@ -1250,6 +1250,16 @@ fn supported_type(data_type: &DataType) -> bool {
     )
 }
 
+///Shows how many `null`s there are in an array
+enum Nulls {
+    /// All array items are `null`s
+    All,
+    /// There are both `null`s and non-`null`s in the array items
+    Some,
+    /// There are no `null`s in the array items
+    None,
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc};

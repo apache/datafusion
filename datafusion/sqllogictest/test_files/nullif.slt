@@ -174,3 +174,39 @@ query T
 SELECT NULLIF(arrow_cast('a', 'Utf8View'), null);
 ----
 a
+
+# Test with dictionary-encoded strings
+# This tests the fix for: "Dictionary(UInt32, Utf8) and Utf8 is not comparable"
+statement ok
+CREATE TABLE dict_test_base(
+  col1 TEXT,
+  col2 TEXT
+) as VALUES
+  ('foo', 'bar'),
+  ('bar', 'bar'),
+  ('baz', 'bar')
+;
+
+# Dictionary cast with string literal
+query T rowsort
+SELECT NULLIF(arrow_cast(col1, 'Dictionary(Int32, Utf8)'), 'bar') FROM dict_test_base;
+----
+NULL
+baz
+foo
+
+# String with dictionary cast
+query T rowsort
+SELECT NULLIF(col2, arrow_cast(col1, 'Dictionary(Int32, Utf8)')) FROM dict_test_base;
+----
+NULL
+bar
+bar
+
+# Both as dictionaries
+query T rowsort
+SELECT NULLIF(arrow_cast(col1, 'Dictionary(Int32, Utf8)'), arrow_cast('bar', 'Dictionary(Int32, Utf8)')) FROM dict_test_base;
+----
+NULL
+baz
+foo

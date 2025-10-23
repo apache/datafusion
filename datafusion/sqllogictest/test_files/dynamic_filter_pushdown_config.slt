@@ -1,0 +1,339 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for dynamic filter pushdown configuration options
+# - enable_topk_dynamic_filter_pushdown (for TopK dynamic filters)
+# - enable_join_dynamic_filter_pushdown (for Join dynamic filters)
+# - enable_dynamic_filter_pushdown (controls both)
+
+# Setup: Create parquet test files
+statement ok
+CREATE TABLE test_data(id INT, value INT, name VARCHAR) AS VALUES
+(1, 100, 'a'),
+(2, 200, 'b'),
+(3, 300, 'c'),
+(4, 400, 'd'),
+(5, 500, 'e'),
+(6, 600, 'f'),
+(7, 700, 'g'),
+(8, 800, 'h'),
+(9, 900, 'i'),
+(10, 1000, 'j');
+
+statement ok
+CREATE TABLE join_left(id INT, data VARCHAR) AS VALUES
+(1, 'left1'),
+(2, 'left2'),
+(3, 'left3'),
+(4, 'left4'),
+(5, 'left5');
+
+statement ok
+CREATE TABLE join_right(id INT, info VARCHAR) AS VALUES
+(1, 'right1'),
+(3, 'right3'),
+(5, 'right5');
+
+# Copy data to parquet files
+query I
+COPY test_data TO 'test_files/scratch/dynamic_filter_pushdown_config/test_data.parquet' STORED AS PARQUET;
+----
+10
+
+query I
+COPY join_left TO 'test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet' STORED AS PARQUET;
+----
+5
+
+query I
+COPY join_right TO 'test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet' STORED AS PARQUET;
+----
+3
+
+# Create external tables from parquet files
+statement ok
+CREATE EXTERNAL TABLE test_parquet(id INT, value INT, name VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/test_data.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE left_parquet(id INT, data VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE right_parquet(id INT, info VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet';
+
+# Test 1: TopK dynamic filter pushdown with Parquet
+query TT
+EXPLAIN SELECT * FROM test_parquet ORDER BY value DESC LIMIT 3;
+----
+logical_plan
+01)Sort: test_parquet.value DESC NULLS FIRST, fetch=3
+02)--TableScan: test_parquet projection=[id, value, name]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[value@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/test_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Disable TopK dynamic filter pushdown
+statement ok
+SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = false;
+
+query TT
+EXPLAIN SELECT * FROM test_parquet ORDER BY value DESC LIMIT 3;
+----
+logical_plan
+01)Sort: test_parquet.value DESC NULLS FIRST, fetch=3
+02)--TableScan: test_parquet projection=[id, value, name]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[value@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/test_data.parquet]]}, projection=[id, value, name], file_type=parquet
+
+# Re-enable for next tests
+statement ok
+SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
+# Test 2: Join dynamic filter pushdown with Parquet
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, l.data, r.info
+02)--Inner Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Disable Join dynamic filter pushdown
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
+
+# Without Join filter, HashJoin should NOT have filter=DynamicFilter
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, l.data, r.info
+02)--Inner Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+
+# Re-enable for next tests
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+# Test 3: Test independent control
+
+# Disable TopK, keep Join enabled
+statement ok
+SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = false;
+
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+# Join should still have dynamic filter
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, l.data, r.info
+02)--Inner Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Enable TopK, disable Join
+statement ok
+SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
+
+# Join should NOT have dynamic filter
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, l.data, r.info
+02)--Inner Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+
+# Test 4: Backward compatibility
+
+# First, set both new configs to specific values
+statement ok
+SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+statement ok
+set datafusion.catalog.information_schema = true
+
+# Setting the config should override both
+statement ok
+SET datafusion.optimizer.enable_dynamic_filter_pushdown = false;
+
+# Verify both configs are now false
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_topk_dynamic_filter_pushdown';
+----
+false
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_join_dynamic_filter_pushdown';
+----
+false
+
+statement ok
+set datafusion.catalog.information_schema = false
+
+# Join should NOT have dynamic filter
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, l.data, r.info
+02)--Inner Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
+
+# Re-enable
+statement ok
+SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+statement ok
+set datafusion.catalog.information_schema = true
+
+# Verify both configs are now true
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_topk_dynamic_filter_pushdown';
+----
+true
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_join_dynamic_filter_pushdown';
+----
+true
+
+statement ok
+set datafusion.catalog.information_schema = false
+
+# Join should have dynamic filter again
+query TT
+EXPLAIN SELECT l.*, r.info
+FROM left_parquet l
+INNER JOIN right_parquet r ON l.id = r.id;
+----
+logical_plan
+01)Projection: l.id, l.data, r.info
+02)--Inner Join: l.id = r.id
+03)----SubqueryAlias: l
+04)------TableScan: left_parquet projection=[id, data]
+05)----SubqueryAlias: r
+06)------TableScan: right_parquet projection=[id, info]
+physical_plan
+01)ProjectionExec: expr=[id@1 as id, data@2 as data, info@0 as info]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[info@1, id@2, data@3]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Cleanup
+
+statement ok
+DROP TABLE test_data;
+
+statement ok
+DROP TABLE join_left;
+
+statement ok
+DROP TABLE join_right;
+
+statement ok
+DROP TABLE test_parquet;
+
+statement ok
+DROP TABLE left_parquet;
+
+statement ok
+DROP TABLE right_parquet;
+
+# Reset configs to defaults
+statement ok
+SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+statement ok
+SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
