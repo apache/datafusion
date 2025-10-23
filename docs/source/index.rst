@@ -122,6 +122,7 @@ To get started, see
    user-guide/sql/index
    user-guide/configs
    user-guide/explain-usage
+   user-guide/metrics
    user-guide/faq
 
 .. _toc.library-user-guide:
