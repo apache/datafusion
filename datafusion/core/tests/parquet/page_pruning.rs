@@ -72,6 +72,7 @@ async fn get_parquet_exec(
         partition_values: vec![],
         range: None,
         statistics: None,
+        distribution_statistics: None,
         extensions: None,
         metadata_size_hint: None,
     };
