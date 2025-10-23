@@ -424,30 +424,30 @@ async fn select_columns_duplicated_names_from_different_qualifiers() -> Result<(
         .join(t2, JoinType::Left, &["t1.c1"], &["t2.c1"], None)?
         .join(t3, JoinType::Left, &["t1.c1"], &["t3.c1"], None)?;
     assert_snapshot!(
-        batches_to_string(&join_res.clone().collect().await.unwrap()),
+        batches_to_sort_string(&join_res.clone().collect().await.unwrap()),
         @r"
     +----+----+----+
     | c1 | c1 | c1 |
     +----+----+----+
-    | d  |    | d  |
+    | b  | b  |    |
+    | b  | b  |    |
     | c  |    |    |
-    | b  | b  |    |
-    | b  | b  |    |
+    | d  |    | d  |
     +----+----+----+
     "
     );
 
     let select_res = join_res.select_columns(&["c1"])?;
     assert_snapshot!(
-        batches_to_string(&select_res.clone().collect().await.unwrap()),
+        batches_to_sort_string(&select_res.clone().collect().await.unwrap()),
         @r"
     +----+----+----+
     | c1 | c1 | c1 |
     +----+----+----+
-    | d  |    | d  |
+    | b  | b  |    |
+    | b  | b  |    |
     | c  |    |    |
-    | b  | b  |    |
-    | b  | b  |    |
+    | d  |    | d  |
     +----+----+----+
     "
     );
@@ -611,28 +611,28 @@ async fn drop_columns_duplicated_names_from_different_qualifiers() -> Result<()>
         .join(t2, JoinType::LeftMark, &["c1"], &["c1"], None)?
         .join(t3, JoinType::LeftMark, &["c1"], &["c1"], None)?;
     assert_snapshot!(
-        batches_to_string(&join_res.clone().collect().await.unwrap()),
+        batches_to_sort_string(&join_res.clone().collect().await.unwrap()),
         @r"
     +----+-------+-------+
     | c1 | mark  | mark  |
     +----+-------+-------+
+    | b  | true  | false |
     | c  | false | false |
     | d  | false | true  |
-    | b  | true  | false |
     +----+-------+-------+
     "
     );
 
     let drop_res = join_res.drop_columns(&["mark"])?;
     assert_snapshot!(
-        batches_to_string(&drop_res.clone().collect().await.unwrap()),
+        batches_to_sort_string(&drop_res.clone().collect().await.unwrap()),
         @r"
     +----+
     | c1 |
     +----+
+    | b  |
     | c  |
     | d  |
-    | b  |
     +----+
     "
     );
