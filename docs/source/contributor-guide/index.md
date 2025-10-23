@@ -181,7 +181,7 @@ Commenting on the PR will remove the `stale` label.
 DataFusion has the following policy for AI-assisted PRs:
 
 - The PR author should **understand the core ideas** behind the implementation **end-to-end**, and is able to defend the design and code during review.
-- **Calls out unknowns and assumptions**. Missing some corners in a AI-generated solution is fine (e.g. not sure API call X is working for edge case Y), pointing it out can help the review focus)
+- **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. You should comment on these cases and point them out to reviewers so that they can use their knowledge of the codebase to clear up any concerns. For example, you might comment "calling this function here seems to work but I'm not familiar with how it works internally, I wonder if there's a race condition if it is called concurrently".
 
 ### Why fully AI-generated PRs without understanding are not helpful
 
