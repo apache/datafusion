@@ -125,6 +125,14 @@ impl From<&[ProjectionExpr]> for ProjectionExprs {
     }
 }
 
+impl FromIterator<ProjectionExpr> for ProjectionExprs {
+    fn from_iter<T: IntoIterator<Item = ProjectionExpr>>(exprs: T) -> Self {
+        Self {
+            exprs: exprs.into_iter().collect::<Vec<_>>(),
+        }
+    }
+}
+
 impl AsRef<[ProjectionExpr]> for ProjectionExprs {
     fn as_ref(&self) -> &[ProjectionExpr] {
         &self.exprs
@@ -132,8 +140,25 @@ impl AsRef<[ProjectionExpr]> for ProjectionExprs {
 }
 
 impl ProjectionExprs {
-    pub fn new(exprs: Vec<ProjectionExpr>) -> Self {
-        Self { exprs }
+    pub fn new<I>(exprs: I) -> Self
+    where
+        I: IntoIterator<Item = ProjectionExpr>,
+    {
+        Self {
+            exprs: exprs.into_iter().collect::<Vec<_>>(),
+        }
+    }
+
+    pub fn from_indices(indices: &[usize], schema: &SchemaRef) -> Self {
+        let projection_exprs = indices.into_iter().map(|&i| {
+            let field = schema.field(i);
+            ProjectionExpr {
+                expr: Arc::new(Column::new(field.name(), i)),
+                alias: field.name().clone(),
+            }
+        });
+
+        Self::from_iter(projection_exprs)
     }
 
     /// Returns an iterator over the projection expressions
@@ -251,9 +276,23 @@ impl ProjectionExprs {
         self.exprs
             .iter()
             .flat_map(|e| collect_columns(&e.expr).into_iter().map(|col| col.index()))
-            .sorted_unstable()
             .dedup()
+            .sorted_unstable()
             .collect_vec()
+    }
+
+    /// Extract the ordered column indices for a column-only projection.
+    pub fn ordered_column_indices(&self) -> Vec<usize> {
+        self.exprs
+            .iter()
+            .map(|e| {
+                e.expr
+                    .as_any()
+                    .downcast_ref::<Column>()
+                    .expect("Expected column reference in projection")
+                    .index()
+            })
+            .collect()
     }
 
     /// Project a schema according to this projection.

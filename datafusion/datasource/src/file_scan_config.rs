@@ -44,18 +44,20 @@ use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::{expressions::Column, utils::reassign_expr_columns};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::projection::ProjectionExpr;
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
+};
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     filter_pushdown::FilterPushdownPropagation,
     metrics::ExecutionPlanMetricsSet,
-    projection::{all_alias_free_columns, new_projections_for_columns},
     DisplayAs, DisplayFormatType,
 };
 use std::{
@@ -177,7 +179,7 @@ pub struct FileScanConfig {
     pub constraints: Constraints,
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
-    pub projection: Option<Vec<usize>>,
+    pub projection: Option<ProjectionExprs>,
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
@@ -317,10 +319,14 @@ impl FileScanConfigBuilder {
         self
     }
 
+    pub fn table_schema(&self) -> &SchemaRef {
+        self.table_schema.table_schema()
+    }
+
     /// Set the columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
-    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
-        self.projection = projection;
+    pub fn with_projection(mut self, indices: Option<Vec<usize>>) -> Self {
+        self.projection = indices;
         self
     }
 
@@ -455,6 +461,10 @@ impl FileScanConfigBuilder {
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
 
+        let projection = projection.as_ref().map(|indices| {
+            ProjectionExprs::from_indices(indices, table_schema.table_schema())
+        });
+
         FileScanConfig {
             object_store_url,
             table_schema,
@@ -484,7 +494,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             file_compression_type: Some(config.file_compression_type),
             new_lines_in_values: Some(config.new_lines_in_values),
             limit: config.limit,
-            projection: config.projection,
+            projection: config.projection.map(|p| p.ordered_column_indices()),
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
@@ -643,7 +653,8 @@ impl DataSource for FileScanConfig {
                 projection,
                 &file_scan
                     .projection
-                    .clone()
+                    .as_ref()
+                    .map(|p| p.ordered_column_indices())
                     .unwrap_or_else(|| (0..self.file_schema().fields().len()).collect()),
             );
 
@@ -697,7 +708,7 @@ impl FileScanConfig {
 
     fn projection_indices(&self) -> Vec<usize> {
         match &self.projection {
-            Some(proj) => proj.clone(),
+            Some(proj) => proj.ordered_column_indices(),
             None => (0..self.file_schema().fields().len()
                 + self.table_partition_cols().len())
                 .collect(),
@@ -813,12 +824,18 @@ impl FileScanConfig {
     }
 
     pub fn projected_file_column_names(&self) -> Option<Vec<String>> {
+        let fields = self.file_schema().fields();
+
         self.projection.as_ref().map(|p| {
-            p.iter()
-                .filter(|col_idx| **col_idx < self.file_schema().fields().len())
-                .map(|col_idx| self.file_schema().field(*col_idx).name())
+            let column_indicies = p.ordered_column_indices();
+
+            column_indicies
+                .iter()
+                .filter_map(|&col_i| {
+                    (col_i < fields.len()).then(|| self.file_schema().field(col_i).name())
+                })
                 .cloned()
-                .collect()
+                .collect::<Vec<_>>()
         })
     }
 
@@ -845,10 +862,10 @@ impl FileScanConfig {
 
     pub fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
         self.projection.as_ref().map(|p| {
-            p.iter()
-                .filter(|col_idx| **col_idx < self.file_schema().fields().len())
-                .copied()
-                .collect()
+            p.ordered_column_indices()
+                .into_iter()
+                .filter(|&i| i < self.file_schema().fields().len())
+                .collect::<Vec<_>>()
         })
     }
 
@@ -1384,10 +1401,15 @@ fn get_projected_output_ordering(
                 return false;
             }
 
+            let indices = base_config
+                .projection
+                .as_ref()
+                .map(|p| p.ordered_column_indices());
+
             let statistics = match MinMaxStatistics::new_from_files(
                 &new_ordering,
                 projected_schema,
-                base_config.projection.as_deref(),
+                indices.as_deref(),
                 group.iter(),
             ) {
                 Ok(statistics) => statistics,
@@ -1448,7 +1470,7 @@ mod tests {
     use datafusion_common::{assert_batches_eq, internal_err};
     use datafusion_expr::{Operator, SortExpr};
     use datafusion_physical_expr::create_physical_sort_expr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     /// Returns the column names on the schema
@@ -2188,7 +2210,10 @@ mod tests {
         assert_eq!(config.object_store_url, object_store_url);
         assert_eq!(*config.file_schema(), file_schema);
         assert_eq!(config.limit, Some(1000));
-        assert_eq!(config.projection, Some(vec![0, 1]));
+        assert_eq!(
+            config.projection.as_ref().map(|p| p.column_indices()),
+            Some(vec![0, 1])
+        );
         assert_eq!(config.table_partition_cols().len(), 1);
         assert_eq!(config.table_partition_cols()[0].name(), "date");
         assert_eq!(config.file_groups.len(), 1);
@@ -2271,7 +2296,7 @@ mod tests {
         assert_eq!(config.object_store_url, object_store_url);
         assert_eq!(*config.file_schema(), file_schema);
         assert_eq!(config.limit, None);
-        assert_eq!(config.projection, None);
+        assert_eq!(config.projection.as_ref().map(|p| p.column_indices()), None);
         assert!(config.table_partition_cols().is_empty());
         assert!(config.file_groups.is_empty());
         assert_eq!(
@@ -2344,7 +2369,10 @@ mod tests {
         let partition_cols = partition_cols.into_iter().map(Arc::new).collect::<Vec<_>>();
         assert_eq!(new_config.object_store_url, object_store_url);
         assert_eq!(*new_config.file_schema(), schema);
-        assert_eq!(new_config.projection, Some(vec![0, 2]));
+        assert_eq!(
+            new_config.projection.as_ref().map(|p| p.column_indices()),
+            Some(vec![0, 2])
+        );
         assert_eq!(new_config.limit, Some(10));
         assert_eq!(*new_config.table_partition_cols(), partition_cols);
         assert_eq!(new_config.file_groups.len(), 1);
