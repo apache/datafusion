@@ -23,7 +23,8 @@ use datafusion::logical_expr::expr::Alias;
 use datafusion::logical_expr::{Aggregate, Distinct, Expr, GroupingSet};
 use substrait::proto::aggregate_rel::{Grouping, Measure};
 use substrait::proto::rel::RelType;
-use substrait::proto::{AggregateRel, Expression, Rel};
+use substrait::proto::rel_common::EmitKind;
+use substrait::proto::{rel_common, AggregateRel, Expression, Rel, RelCommon};
 
 pub fn from_aggregate(
     producer: &mut impl SubstraitProducer,
@@ -38,9 +39,15 @@ pub fn from_aggregate(
         .map(|e| to_substrait_agg_measure(producer, e, agg.input.schema()))
         .collect::<datafusion::common::Result<Vec<_>>>()?;
 
+    let common = grouping_set_emit_mapping(agg).map(|output_mapping| RelCommon {
+        emit_kind: Some(EmitKind::Emit(rel_common::Emit { output_mapping })),
+        hint: None,
+        advanced_extension: None,
+    });
+
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
-            common: None,
+            common,
             input: Some(input),
             grouping_expressions,
             groupings,
@@ -178,5 +185,20 @@ pub fn to_substrait_agg_measure(
             expr,
             expr.variant_name()
         ),
+    }
+}
+
+fn grouping_set_emit_mapping(agg: &Aggregate) -> Option<Vec<i32>> {
+    match agg.group_expr.as_slice() {
+        [Expr::GroupingSet(grouping_set)] => {
+            let group_key_count = grouping_set.distinct_expr().len() as i32;
+            let measure_count = agg.aggr_expr.len() as i32;
+            let output_mapping: Vec<i32> = (0..group_key_count)
+                .chain((group_key_count + 1)..(group_key_count + 1 + measure_count))
+                .chain(std::iter::once(group_key_count))
+                .collect();
+            Some(output_mapping)
+        }
+        _ => None,
     }
 }
