@@ -178,7 +178,7 @@ Commenting on the PR will remove the `stale` label.
 
 ## AI-Assisted contributions
 
-For AI-assisted PRs, it is recommended to follow these policies:
+DataFusion has the following policy for AI-assisted PRs:
 
 - The PR author should **understand the core ideas** behind the implementation **end-to-end**, and is able to defend the design and code during review.
 - **Calls out unknowns and assumptions**. Missing some corners in a AI-generated solution is fine (e.g. not sure API call X is working for edge case Y), pointing it out can help the review focus)
