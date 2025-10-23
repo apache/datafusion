@@ -168,9 +168,9 @@ fn filter_array(
 /// Merges elements by index from a list of [`ArrayData`], creating a new [`ColumnarValue`] from
 /// those values.
 ///
-/// Each element in `indices` is the index of an array in `values` offset by 1. The first
-/// occurrence of index value `n` will be mapped to the first value of array `n -1`. The second
-/// occurrence to the second value, and so on.
+/// Each element in `indices` is the index of an array in `values` offset by 1. `indices` is
+/// processed sequentially. The first occurrence of index value `n` will be mapped to the first
+/// value of array `n - 1`. The second occurrence to the second value, and so on.
 ///
 /// The index value `0` is used to indicate null values.
 ///
@@ -192,7 +192,6 @@ fn filter_array(
 /// ├─────────────────┤        indices
 /// │        E        │         array                                      result
 /// └─────────────────┘
-///   values array 1
 ///   values array 1
 /// ```
 fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
@@ -280,6 +279,30 @@ impl ResultBuilder {
     ///
     /// If `value` is an array, the values from the array and the indices from `row_indices` will be
     /// processed pairwise. The lengths of `value` and `row_indices` must match.
+    ///
+    /// The diagram below shows a situation where a when expression matched rows 1 and 4 of the
+    /// record batch. The then expression produced the value array `[A, D]`.
+    /// After adding this result, the result array will have been added to `partial_results` and
+    /// `partial_indices` will have been updated at indexes 1 and 4.
+    ///
+    /// ```text
+    /// ┌─────────┐     ┌─────────┐┌───────────┐                            ┌─────────┐┌───────────┐
+    /// │    A    │     │    0    ││           │                            │    0    ││┌─────────┐│
+    /// ├─────────┤     ├─────────┤│           │                            ├─────────┤││    A    ││
+    /// │    D    │     │    0    ││           │                            │    1    ││├─────────┤│
+    /// └─────────┘     ├─────────┤│           │   add_branch_result(       ├─────────┤││    D    ││
+    ///   value         │    0    ││           │     row indices,           │    0    ││└─────────┘│
+    ///                 ├─────────┤│           │     value                  ├─────────┤│           │
+    ///                 │    0    ││           │   )                        │    0    ││           │
+    /// ┌─────────┐     ├─────────┤│           │ ─────────────────────────▶ ├─────────┤│           │
+    /// │    1    │     │    0    ││           │                            │    1    ││           │
+    /// ├─────────┤     ├─────────┤│           │                            ├─────────┤│           │
+    /// │    4    │     │    0    ││           │                            │    0    ││           │
+    /// └─────────┘     └─────────┘└───────────┘                            └─────────┘└───────────┘
+    /// row indices
+    ///                   partial     partial                                 partial     partial
+    ///                   indices     results                                 indices     results
+    /// ```
     fn add_branch_result(
         &mut self,
         row_indices: &ArrayRef,
