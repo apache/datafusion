@@ -395,23 +395,6 @@ fn ensure_distribution_helper(
     ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
 }
 
-// NOTE: Will be removed in https://github.com/apache/datafusion/pull/18185
-/// Test whether plan matches with expected plan
-macro_rules! plans_matches_expected {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
-        let physical_plan = $PLAN;
-        let actual = get_plan_string(&physical_plan);
-
-        let expected_plan_lines: Vec<&str> = $EXPECTED_LINES
-            .iter().map(|s| *s).collect();
-
-        assert_eq!(
-            expected_plan_lines, actual,
-            "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-    }
-}
-
 fn test_suite_default_config_options() -> ConfigOptions {
     let mut config = ConfigOptions::new();
 
