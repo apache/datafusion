@@ -636,7 +636,7 @@ mod tests {
 
         // Spawn a task that will push data after a delay
         let writer_pool = Arc::clone(&pool_arc);
-        SpawnedTask::spawn(async move {
+        let _writer = SpawnedTask::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             let mut pool = writer_pool.lock();
             pool.push_batch(&create_test_batch(0, 10)).unwrap();
@@ -669,7 +669,7 @@ mod tests {
 
         // Spawn task to flush after delay
         let writer_pool = Arc::clone(&pool_arc);
-        SpawnedTask::spawn(async move {
+        let _writer = SpawnedTask::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             let mut pool = writer_pool.lock();
             pool.flush().unwrap();
@@ -697,7 +697,7 @@ mod tests {
 
         // Finalize after delay
         let writer_pool = Arc::clone(&pool_arc);
-        SpawnedTask::spawn(async move {
+        let _writer = SpawnedTask::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             writer_pool.lock().finalize();
         });
