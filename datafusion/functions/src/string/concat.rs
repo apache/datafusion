@@ -830,7 +830,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => {
                 assert_eq!(s, "abc123456");
             }
-            _ => panic!("Expected scalar UTF8 result, got {:?}", result),
+            _ => panic!("Expected scalar UTF8 result, got {result:?}"),
         }
 
         Ok(())
@@ -843,13 +843,13 @@ mod tests {
 
         let field = Arc::new(Field::new("item", Int32, true));
         let array1 = ListArray::new(
-            field.clone(),
+            Arc::clone(&field),
             OffsetBuffer::from_lengths([3]),
             Arc::new(Int32Array::from(vec![1, 2, 3])),
             None,
         );
         let array2 = ListArray::new(
-            field.clone(),
+            Arc::clone(&field),
             OffsetBuffer::from_lengths([2]),
             Arc::new(Int32Array::from(vec![4, 5])),
             None,
@@ -861,8 +861,8 @@ mod tests {
                 ColumnarValue::Array(Arc::new(array2)),
             ],
             arg_fields: vec![
-                Arc::new(Field::new("a", List(field.clone()), true)),
-                Arc::new(Field::new("b", List(field.clone()), true)),
+                Arc::new(Field::new("a", List(Arc::clone(&field)), true)),
+                Arc::new(Field::new("b", List(Arc::clone(&field)), true)),
             ],
             number_rows: 1,
             return_field: Arc::new(Field::new("f", List(field), true)),
@@ -886,13 +886,13 @@ mod tests {
 
         let field = Arc::new(Field::new("item", Int32, true));
         let array1 = ListArray::new(
-            field.clone(),
+            Arc::clone(&field),
             OffsetBuffer::from_lengths([2, 2]),
             Arc::new(Int32Array::from(vec![1, 2, 10, 20])),
             None,
         );
         let array2 = ListArray::new(
-            field.clone(),
+            Arc::clone(&field),
             OffsetBuffer::from_lengths([1, 1]),
             Arc::new(Int32Array::from(vec![3, 30])),
             None,
@@ -904,8 +904,8 @@ mod tests {
                 ColumnarValue::Array(Arc::new(array2)),
             ],
             arg_fields: vec![
-                Arc::new(Field::new("a", List(field.clone()), true)),
-                Arc::new(Field::new("b", List(field.clone()), true)),
+                Arc::new(Field::new("a", List(Arc::clone(&field)), true)),
+                Arc::new(Field::new("b", List(Arc::clone(&field)), true)),
             ],
             number_rows: 2,
             return_field: Arc::new(Field::new("f", List(field), true)),
@@ -935,13 +935,13 @@ mod tests {
 
         let field = Arc::new(Field::new("item", Int32, true));
         let array1 = ListArray::new(
-            field.clone(),
+            Arc::clone(&field),
             OffsetBuffer::from_lengths([2]),
             Arc::new(Int32Array::from(vec![1, 2])),
             Some(NullBuffer::new_null(1)),
         );
         let array2 = ListArray::new(
-            field.clone(),
+            Arc::clone(&field),
             OffsetBuffer::from_lengths([2]),
             Arc::new(Int32Array::from(vec![3, 4])),
             None,
@@ -953,8 +953,8 @@ mod tests {
                 ColumnarValue::Array(Arc::new(array2)),
             ],
             arg_fields: vec![
-                Arc::new(Field::new("a", List(field.clone()), true)),
-                Arc::new(Field::new("b", List(field.clone()), true)),
+                Arc::new(Field::new("a", List(Arc::clone(&field)), true)),
+                Arc::new(Field::new("b", List(Arc::clone(&field)), true)),
             ],
             number_rows: 1,
             return_field: Arc::new(Field::new("f", List(field), true)),

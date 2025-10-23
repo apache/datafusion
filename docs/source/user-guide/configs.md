@@ -256,62 +256,75 @@ SET datafusion.execution.batch_size = 1024;
 
 [`fairspillpool`]: https://docs.rs/datafusion/latest/datafusion/execution/memory_pool/struct.FairSpillPool.html
 
-## Join Queries
+# Runtime Configuration Settings
 
-Currently Apache Datafusion supports the following join algorithms:
+DataFusion runtime configurations can be set via SQL using the `SET` command.
 
-- Nested Loop Join
-- Sort Merge Join
-- Hash Join
-- Symmetric Hash Join
-- Piecewise Merge Join (experimental)
-
-The physical planner will choose the appropriate algorithm based on the statistics + join
-condition of the two tables.
-
-# Join Algorithm Optimizer Configurations
-
-You can modify join optimization behavior in your queries by setting specific configuration values.
-Use the following command to update a configuration:
+For example, to configure `datafusion.runtime.memory_limit`:
 
 ```sql
-SET datafusion.optimizer.<configuration_name>;
+SET datafusion.runtime.memory_limit = '2G';
 ```
 
-Example
+The following runtime configuration settings are available:
+
+| key                                        | default | description                                                                                                                                                               |
+| ------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| datafusion.runtime.max_temp_directory_size | 100G    | Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.                                  |
+| datafusion.runtime.memory_limit            | NULL    | Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.                               |
+| datafusion.runtime.metadata_cache_limit    | 50M     | Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes. |
+| datafusion.runtime.temp_directory          | NULL    | The path to the temporary file directory.                                                                                                                                 |
+
+# Tuning Guide
+
+## Short Queries
+
+By default DataFusion will attempt to maximize parallelism and use all cores --
+For example, if you have 32 cores, each plan will split the data into 32
+partitions. However, if your data is small, the overhead of splitting the data
+to enable parallelization can dominate the actual computation.
+
+You can find out how many cores are being used via the [`EXPLAIN`] command and look
+at the number of partitions in the plan.
+
+[`explain`]: sql/explain.md
+
+The `datafusion.optimizer.repartition_file_min_size` option controls the minimum file size the
+[`ListingTable`] provider will attempt to repartition. However, this
+does not apply to user defined data sources and only works when DataFusion has accurate statistics.
+
+If you know your data is small, you can set the `datafusion.execution.target_partitions`
+option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
+than 1MB), we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
 
 ```sql
-SET datafusion.optimizer.prefer_hash_join = false;
+SET datafusion.execution.target_partitions = '1';
 ```
 
-Adjusting the following configuration values influences how the optimizer selects the join algorithm
-used to execute your SQL query:
+[`listingtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 
-## Join Optimizer Configurations
+## Memory-limited Queries
 
-Adjusting the following configuration values influences how the optimizer selects the join algorithm
-used to execute your SQL query.
+When executing a memory-consuming query under a tight memory limit, DataFusion
+will spill intermediate results to disk.
 
-### allow_symmetric_joins_without_pruning (bool, default = true)
+When the [`FairSpillPool`] is used, memory is divided evenly among partitions.
+The higher the value of `datafusion.execution.target_partitions`, the less memory
+is allocated to each partition, and the out-of-core execution path may trigger
+more frequently, possibly slowing down execution.
 
-Controls whether symmetric hash joins are allowed for unbounded data sources even when their inputs
-lack ordering or filtering.
+Additionally, while spilling, data is read back in `datafusion.execution.batch_size` size batches.
+The larger this value, the fewer spilled sorted runs can be merged. Decreasing this setting
+can help reduce the number of subsequent spills required.
 
-- If disabled, the `SymmetricHashJoin` operator cannot prune its internal buffers to be produced only at the end of execution.
+In conclusion, for queries under a very tight memory limit, it's recommended to
+set `target_partitions` and `batch_size` to smaller values.
 
-### prefer_hash_join (bool, default = true)
+```sql
+-- Query still gets parallelized, but each partition will have more memory to use
+SET datafusion.execution.target_partitions = 4;
+-- Smaller than the default '8192', while still keep the benefit of vectorized execution
+SET datafusion.execution.batch_size = 1024;
+```
 
-Determines whether the optimizer prefers Hash Join over Sort Merge Join during physical plan selection.
-
-- true: favors HashJoin for faster execution when sufficient memory is available.
-- false: allows SortMergeJoin to be chosen when more memory-efficient execution is needed.
-
-### enable_piecewise_merge_join (bool, default = false)
-
-Enables the experimental Piecewise Merge Join algorithm.
-
-- When enabled, the physical planner may select PiecewiseMergeJoin if there is exactly one range
-  filter in the join condition.
-- Piecewise Merge Join is faster than Nested Loop Join performance wise for single range filter
-  except for cases where it is joining two large tables (num_rows > 100,000) that are approximately
-  equal in size.
+[`fairspillpool`]: https://docs.rs/datafusion/latest/datafusion/execution/memory_pool/struct.FairSpillPool.html
