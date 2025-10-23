@@ -243,6 +243,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 ..
             } => self.describe_table_to_plan(table_name),
             Statement::Explain {
+                describe_alias: DescribeAlias::Describe | DescribeAlias::Desc, // only parse 'DESCRIBE statement' or 'DESC statement' and not 'EXPLAIN statement'
+                statement,
+                ..
+            } => match *statement {
+                Statement::Query(query) => self.describe_query_to_plan(*query),
+                _ => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported statement type for DESCRIBE: {statement:?}",
+                ))),
+            },
+            Statement::Explain {
                 verbose,
                 statement,
                 analyze,
@@ -1387,6 +1397,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let table_source = self.context_provider.get_table_source(table_ref)?;
 
         let schema = table_source.schema();
+
+        let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
+
+        Ok(LogicalPlan::DescribeTable(DescribeTable {
+            schema,
+            output_schema: Arc::new(output_schema),
+        }))
+    }
+
+    fn describe_query_to_plan(&self, query: Query) -> Result<LogicalPlan> {
+        let plan = self.query_to_plan(query, &mut PlannerContext::new())?;
+
+        let schema = Arc::new(plan.schema().as_arrow().clone());
 
         let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
 
