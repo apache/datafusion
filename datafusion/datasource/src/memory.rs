@@ -198,7 +198,7 @@ impl DataSource for MemorySourceConfig {
             // Compute statistics for a specific partition
             if let Some(batches) = self.partitions.get(partition) {
                 Ok(common::compute_record_batch_statistics(
-                    from_ref(&batches),
+                    from_ref(batches),
                     &self.schema,
                     self.projection.clone(),
                 ))
