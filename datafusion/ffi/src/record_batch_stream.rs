@@ -227,8 +227,8 @@ mod tests {
     #[tokio::test]
     async fn test_round_trip_record_batch_stream() -> Result<()> {
         let record_batch = record_batch!(
-            ("a", Int32, vec![1, 2, 3]),
-            ("b", Float64, vec![Some(4.0), None, Some(5.0)])
+            ("a", Int32, [1, 2, 3]),
+            ("b", Float64, [Some(4.0), None, Some(5.0)])
         )?;
         let original_rbs = bounded_stream(record_batch.clone(), 1);
 

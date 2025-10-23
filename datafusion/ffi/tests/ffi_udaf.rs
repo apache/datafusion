@@ -44,8 +44,8 @@ mod tests {
 
         let ctx = SessionContext::default();
         let record_batch = record_batch!(
-            ("a", Int32, vec![1, 2, 2, 4, 4, 4, 4]),
-            ("b", Float64, vec![1.0, 2.0, 2.0, 4.0, 4.0, 4.0, 4.0])
+            ("a", Int32, [1, 2, 2, 4, 4, 4, 4]),
+            ("b", Float64, [1.0, 2.0, 2.0, 4.0, 4.0, 4.0, 4.0])
         )
         .unwrap();
 
@@ -61,8 +61,8 @@ mod tests {
         let result = df.collect().await?;
 
         let expected = record_batch!(
-            ("a", Int32, vec![1, 2, 4]),
-            ("sum_b", Float64, vec![1.0, 4.0, 16.0])
+            ("a", Int32, [1, 2, 4]),
+            ("sum_b", Float64, [1.0, 4.0, 16.0])
         )?;
 
         assert_eq!(result[0], expected);
@@ -86,11 +86,11 @@ mod tests {
 
         let ctx = SessionContext::default();
         let record_batch = record_batch!(
-            ("a", Int32, vec![1, 2, 2, 4, 4, 4, 4]),
+            ("a", Int32, [1, 2, 2, 4, 4, 4, 4]),
             (
                 "b",
                 Float64,
-                vec![
+                [
                     1.0,
                     2.0,
                     2.0 + 2.0_f64.sqrt(),

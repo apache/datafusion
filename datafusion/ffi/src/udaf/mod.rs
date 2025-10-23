@@ -713,7 +713,7 @@ mod tests {
             exprs: &[col("a", &schema)?],
         };
         let mut accumulator = foreign_udaf.accumulator(acc_args)?;
-        let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
+        let values = create_array!(Float64, [10., 20., 30., 40., 50.]);
         accumulator.update_batch(&[values])?;
         let resultant_value = accumulator.evaluate()?;
         assert_eq!(resultant_value, ScalarValue::Float64(Some(150.)));
@@ -791,7 +791,7 @@ mod tests {
         };
 
         let mut accumulator = foreign_udaf.create_sliding_accumulator(acc_args)?;
-        let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
+        let values = create_array!(Float64, [10., 20., 30., 40., 50.]);
         accumulator.update_batch(&[values])?;
         let resultant_value = accumulator.evaluate()?;
         assert_eq!(resultant_value, ScalarValue::Float64(Some(150.)));

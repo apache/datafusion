@@ -445,7 +445,7 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
 mod tests {
     use super::*;
     use arrow::array::{RecordBatch, RecordBatchOptions};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{self as arrow_schema, DataType, Field, Schema, SchemaRef};
     use datafusion_common::{assert_contains, record_batch, Result, ScalarValue};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, lit, CastExpr, Column, Literal};
@@ -758,8 +758,8 @@ mod tests {
     #[test]
     fn test_adapt_batches() {
         let physical_batch = record_batch!(
-            ("a", Int32, vec![Some(1), None, Some(3)]),
-            ("extra", Utf8, vec![Some("x"), Some("y"), None])
+            ("a", Int32, [Some(1), None, Some(3)]),
+            ("extra", Utf8, [Some("x"), Some("y"), None])
         )
         .unwrap();
 

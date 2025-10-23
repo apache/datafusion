@@ -3022,6 +3022,7 @@ dependencies = [
  "abi_stable",
  "arrow",
  "datafusion",
+ "datafusion-common",
  "datafusion-ffi",
  "ffi_module_interface",
 ]
