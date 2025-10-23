@@ -896,6 +896,36 @@ SELECT power(10000000000::decimal(38, 0), 2), arrow_typeof(power(10000000000::de
 ----
 100000000000000000000 Decimal128(38, 0)
 
+query R
+SELECT power(2.5, 4)
+----
+39.0625
+
+query error Arrow error: .*in integer computation is out of bounds
+SELECT power(2, 100000000000)
+
+query error Arrow error: Arithmetic overflow: Unsupported exp value
+SELECT power(2::decimal(38, 0), -5)
+
+# Expected to have `16 Decimal128(38, 0)`
+# Due to type coericion, it becomes Float -> Float -> Float
+query RT
+SELECT power(2::decimal(38, 0), 4.0), arrow_typeof(power(2::decimal(38, 0), 4.0));
+----
+16 Float64
+
+# Expected to have an error due to Decimal -> Float -> Decimal signature
+# Due to type coericion, it becomes Float -> Float -> Float:
+#   power(CAST(CAST(Int64(2) AS Decimal128(38, 0)) AS Float64),
+#         CAST(Decimal128(Some(23),2,1) AS Float64))
+# query error Arrow error: Cannot use non-integer exp
+# SELECT power(2::decimal(38, 0), 2.3)
+query R
+SELECT power(2::decimal(38, 0), 2.3)
+----
+4.92457765338
+
+
 # Set parse_float_as_decimal to false to test float parsing
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
