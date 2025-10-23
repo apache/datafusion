@@ -21,8 +21,7 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
-    interleave, is_null, not, nullif, prep_null_mask_filter, FilterBuilder,
-    FilterPredicate,
+    is_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
 };
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::error::ArrowError;
@@ -40,7 +39,7 @@ use std::{any::Any, sync::Arc};
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-enum EvalMethod {
+pub enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
     ///      [ELSE result]
@@ -96,7 +95,7 @@ pub struct CaseExpr {
     /// Optional "else" expression
     else_expr: Option<Arc<dyn PhysicalExpr>>,
     /// Evaluation method to use
-    eval_method: EvalMethod,
+    pub eval_method: EvalMethod,
 }
 
 impl std::fmt::Display for CaseExpr {
@@ -159,18 +158,27 @@ fn filter_array(
     filter.filter(array)
 }
 
-struct InterleaveBuilder {
-    indices: Vec<(usize, usize)>,
-    arrays: Vec<ArrayRef>,
+struct ResultBuilder {
+    data_type: DataType,
+    // A Vec of partial results that should be merged. `partial_result_indices` contains
+    // indexes into this vec.
+    partial_results: Vec<ArrayData>,
+    // Indicates per result row from which array in `partial_results` a value should be taken.
+    // The indexes in this array are offset by +1. The special value 0 indicates null values.
+    partial_result_indices: Vec<usize>,
+    // An optional result that is the covering result for all rows.
+    // This is used as an optimisation to avoid the cost of merging when all rows
+    // evaluate to the same case branch.
+    covering_result: Option<ColumnarValue>,
 }
 
-impl InterleaveBuilder {
+impl ResultBuilder {
     fn new(data_type: &DataType, capacity: usize) -> Self {
-        // By settings indices to (0, 0) every entry points to the single
-        // null value in the first array.
         Self {
-            indices: vec![(0, 0); capacity],
-            arrays: vec![new_null_array(data_type, 1)],
+            data_type: data_type.clone(),
+            partial_result_indices: vec![0; capacity],
+            partial_results: vec![],
+            covering_result: None,
         }
     }
 
@@ -183,56 +191,109 @@ impl InterleaveBuilder {
     /// If `value` is an array, the values from the array and the indices from `rows` will be
     /// processed pairwise.
     fn add_result(&mut self, rows: &ArrayRef, value: ColumnarValue) -> Result<()> {
-        let array_index = self.arrays.len();
         match value {
             ColumnarValue::Array(a) => {
                 assert_eq!(a.len(), rows.len());
-
-                self.arrays.push(a);
-                for (array_ix, row_ix) in rows
-                    .as_primitive::<UInt32Type>()
-                    .values()
-                    .iter()
-                    .enumerate()
-                {
-                    self.indices[*row_ix as usize] = (array_index, array_ix);
+                if rows.len() == self.partial_result_indices.len() {
+                    self.set_covering_result(ColumnarValue::Array(a));
+                } else {
+                    self.add_partial_result(rows, a.to_data());
                 }
             }
             ColumnarValue::Scalar(s) => {
-                self.arrays.push(s.to_array()?);
-                for row_ix in rows.as_primitive::<UInt32Type>().values().iter() {
-                    self.indices[*row_ix as usize] = (array_index, 0);
+                if rows.len() == self.partial_result_indices.len() {
+                    self.set_covering_result(ColumnarValue::Scalar(s));
+                } else {
+                    self.add_partial_result(
+                        rows,
+                        s.to_array_of_size(rows.len())?.to_data(),
+                    );
                 }
             }
         }
         Ok(())
     }
 
-    fn finish(mut self) -> Result<ColumnarValue> {
-        if self.arrays.len() == 1 {
-            // The first array is always a single null value.
-            if self.indices.len() == 1 {
-                // If there's only a single row, reuse the array
-                Ok(ColumnarValue::Array(self.arrays.remove(0)))
-            } else {
-                // Otherwise make a new null array with the correct type and length
-                Ok(ColumnarValue::Array(new_null_array(
-                    self.arrays[0].data_type(),
-                    self.indices.len(),
-                )))
+    fn add_partial_result(&mut self, rows: &ArrayRef, data: ArrayData) {
+        assert!(self.covering_result.is_none());
+
+        self.partial_results.push(data);
+        let array_index = self.partial_results.len();
+
+        for row_ix in rows.as_primitive::<UInt32Type>().values().iter() {
+            self.partial_result_indices[*row_ix as usize] = array_index;
+        }
+    }
+
+    fn set_covering_result(&mut self, value: ColumnarValue) {
+        assert!(self.partial_results.is_empty());
+        self.covering_result = Some(value);
+    }
+
+    fn finish(self) -> Result<ColumnarValue> {
+        match self.covering_result {
+            Some(v) => {
+                // If we have a covering result, we can just return it.
+                Ok(v)
             }
-        } else if self.arrays.len() == 2
-            && !self.indices.iter().any(|(array_ix, _)| *array_ix == 0)
-            && self.arrays[1].len() == self.indices.len()
-        {
-            // There's only a single non-null array and no references to the null array.
-            // We can take a shortcut and return the non-null array directly.
-            Ok(ColumnarValue::Array(self.arrays.remove(1)))
-        } else {
-            // Interleave arrays
-            let array_refs = self.arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-            let interleaved_result = interleave(&array_refs, &self.indices)?;
-            Ok(ColumnarValue::Array(interleaved_result))
+            None => match self.partial_results.len() {
+                0 => {
+                    // No covering result and no partial results.
+                    // This can happen for case expressions with no else branch where no rows
+                    // matched.
+                    Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                        &self.data_type,
+                    )?))
+                }
+                n => {
+                    // There are n partial results.
+                    // Merge into a single array.
+
+                    let data_refs = self.partial_results.iter().collect();
+                    let mut mutable = MutableArrayData::new(
+                        data_refs,
+                        true,
+                        self.partial_result_indices.len(),
+                    );
+
+                    // This loop extends the mutable array by taking slices from the partial results.
+                    //
+                    // take_offsets keeps track of how many values have been taken from each array.
+                    let mut take_offsets = vec![0; n + 1];
+                    let mut start_row_ix = 0;
+                    loop {
+                        let array_ix = self.partial_result_indices[start_row_ix];
+
+                        // Determine the length of the slice to take.
+                        let mut end_row_ix = start_row_ix + 1;
+                        while end_row_ix < self.partial_result_indices.len()
+                            && self.partial_result_indices[end_row_ix] == array_ix
+                        {
+                            end_row_ix += 1;
+                        }
+
+                        // Extend the mutable with either nulls or with values from the array.
+                        let start_offset = take_offsets[array_ix];
+                        let end_offset = start_offset + (end_row_ix - start_row_ix);
+                        if array_ix == 0 {
+                            mutable.extend_nulls(end_offset - start_offset);
+                        } else {
+                            mutable.extend(array_ix - 1, start_offset, end_offset);
+                        }
+
+                        if end_row_ix == self.partial_result_indices.len() {
+                            break;
+                        } else {
+                            // Update the take_offsets array.
+                            take_offsets[array_ix] = end_offset;
+                            // Set the start_row_ix for the next slice.
+                            start_row_ix = end_row_ix;
+                        }
+                    }
+
+                    Ok(ColumnarValue::Array(make_array(mutable.freeze())))
+                }
+            },
         }
     }
 }
@@ -313,12 +374,11 @@ impl CaseExpr {
         let optimize_filters = batch.num_columns() > 1;
 
         let return_type = self.data_type(&batch.schema())?;
-        let mut interleave_builder =
-            InterleaveBuilder::new(&return_type, batch.num_rows());
+        let mut result_builder = ResultBuilder::new(&return_type, batch.num_rows());
 
         // `remainder_rows` contains the indices of the rows that need to be evaluated
         let mut remainder_rows: ArrayRef =
-            Arc::new(UInt32Array::from_iter(0..batch.num_rows() as u32));
+            Arc::new(UInt32Array::from_iter_values(0..batch.num_rows() as u32));
         // `remainder_batch` contains the rows themselves that need to be evaluated
         let mut remainder_batch = Cow::Borrowed(batch);
 
@@ -337,7 +397,7 @@ impl CaseExpr {
         let base_nulls = is_null(base_value.as_ref())?;
         if base_nulls.true_count() > 0 {
             // If there is an else expression, use that as the default value for the null rows
-            // Otherwise the default `null` value from the eInterleaveBuilder will be used.
+            // Otherwise the default `null` value from the result builder will be used.
             if let Some(e) = self.else_expr() {
                 let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
 
@@ -345,12 +405,12 @@ impl CaseExpr {
                 let nulls_batch = filter_record_batch(&remainder_batch, &nulls_filter)?;
                 let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
                 let nulls_value = expr.evaluate(&nulls_batch)?;
-                interleave_builder.add_result(&nulls_rows, nulls_value)?;
+                result_builder.add_result(&nulls_rows, nulls_value)?;
             }
 
             // All base values were null, so we can return early
             if base_nulls.true_count() == remainder_batch.num_rows() {
-                return interleave_builder.finish();
+                return result_builder.finish();
             }
 
             // Remove the null rows from the remainder batch
@@ -397,14 +457,14 @@ impl CaseExpr {
 
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
-            interleave_builder.add_result(&then_rows, then_value)?;
+            result_builder.add_result(&then_rows, then_value)?;
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
             if remainder_batch.num_rows() == when_match_count
                 || (self.else_expr.is_none() && i == self.when_then_expr.len() - 1)
             {
-                return interleave_builder.finish();
+                return result_builder.finish();
             }
 
             // Prepare the next when branch (or the else branch)
@@ -422,10 +482,10 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
-            interleave_builder.add_result(&remainder_rows, else_value)?;
+            result_builder.add_result(&remainder_rows, else_value)?;
         }
 
-        interleave_builder.finish()
+        result_builder.finish()
     }
 
     /// This function evaluates the form of CASE where each WHEN expression is a boolean
@@ -439,8 +499,7 @@ impl CaseExpr {
         let optimize_filters = batch.num_columns() > 1;
 
         let return_type = self.data_type(&batch.schema())?;
-        let mut interleave_builder =
-            InterleaveBuilder::new(&return_type, batch.num_rows());
+        let mut result_builder = ResultBuilder::new(&return_type, batch.num_rows());
 
         // `remainder_rows` contains the indices of the rows that need to be evaluated
         let mut remainder_rows: ArrayRef =
@@ -480,14 +539,14 @@ impl CaseExpr {
 
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
-            interleave_builder.add_result(&then_rows, then_value)?;
+            result_builder.add_result(&then_rows, then_value)?;
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
             if remainder_batch.num_rows() == when_match_count
                 || (self.else_expr.is_none() && i == self.when_then_expr.len() - 1)
             {
-                return interleave_builder.finish();
+                return result_builder.finish();
             }
 
             // Prepare the next when branch (or the else branch)
@@ -504,10 +563,10 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
-            interleave_builder.add_result(&remainder_rows, else_value)?;
+            result_builder.add_result(&remainder_rows, else_value)?;
         }
 
-        interleave_builder.finish()
+        result_builder.finish()
     }
 
     /// This function evaluates the specialized case of:
