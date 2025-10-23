@@ -406,7 +406,10 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
-        assert_eq!(row_count, 100, "Should return all 100 rows when fetch is None");
+        assert_eq!(
+            row_count, 100,
+            "Should return all 100 rows when fetch is None"
+        );
 
         Ok(())
     }
