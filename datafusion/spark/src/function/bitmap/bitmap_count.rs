@@ -19,13 +19,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, FixedSizeBinaryArray, Int64Array,
-    LargeBinaryArray,
+    as_dictionary_array, Array, ArrayRef, BinaryArray, BinaryViewArray,
+    FixedSizeBinaryArray, Int64Array, LargeBinaryArray,
 };
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
-    Binary, BinaryView, FixedSizeBinary, Int64, LargeBinary,
+    Binary, BinaryView, Dictionary, FixedSizeBinary, Int64, LargeBinary,
 };
+use arrow::datatypes::{DataType, Int32Type};
+use datafusion_common::cast::as_binary_array;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
@@ -100,6 +101,22 @@ pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
         FixedSizeBinary(_size) => {
             downcast_and_count_ones!(input_array, FixedSizeBinaryArray)
         }
+        Dictionary(k, v) if k.as_ref() == &DataType::Int32 && v.as_ref() == &Binary => {
+            let dict_array = as_dictionary_array::<Int32Type>(input_array);
+            let binary_array = as_binary_array(dict_array.values())?;
+
+            let result: Int64Array = dict_array
+                .keys()
+                .iter()
+                .map(|key| {
+                    key.and_then(|k| {
+                        binary_count_ones(Some(binary_array.value(k as usize)))
+                    })
+                })
+                .collect();
+
+            Ok(result)
+        }
         data_type => {
             internal_err!("bitmap_count does not support {data_type}")
         }
@@ -113,6 +130,7 @@ mod tests {
     use crate::function::bitmap::bitmap_count::BitmapCount;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, Int64Array};
+    use arrow::datatypes::DataType;
     use arrow::datatypes::DataType::Int64;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
