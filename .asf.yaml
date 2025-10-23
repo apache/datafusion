@@ -40,5 +40,7 @@ github:
     allow_update_branch: true
     allow_auto_merge: true
   protected_branches:
-
+    main:
+      required_pull_request_reviews:
+        required_approving_review_count: 0
 
