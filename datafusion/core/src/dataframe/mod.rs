@@ -305,12 +305,11 @@ impl DataFrame {
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
         let fields = columns
             .iter()
-            .map(|name| {
+            .flat_map(|name| {
                 self.plan
                     .schema()
                     .qualified_fields_with_unqualified_name(name)
             })
-            .flatten()
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = fields
             .into_iter()
@@ -429,12 +428,11 @@ impl DataFrame {
     pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
         let fields_to_drop = columns
             .iter()
-            .map(|name| {
+            .flat_map(|name| {
                 self.plan
                     .schema()
                     .qualified_fields_with_unqualified_name(name)
             })
-            .flatten()
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = self
             .plan
