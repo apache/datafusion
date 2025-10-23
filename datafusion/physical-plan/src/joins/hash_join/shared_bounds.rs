@@ -107,8 +107,8 @@ pub(crate) struct SharedBoundsAccumulator {
     barrier: Barrier,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
-    /// Right side join expressions needed for creating filter bounds
-    on_right: Vec<PhysicalExprRef>,
+    /// Join expressions for the side that will receive the dynamic filter
+    on_expressions: Vec<PhysicalExprRef>,
 }
 
 /// State protected by SharedBoundsAccumulator's mutex
@@ -149,7 +149,7 @@ impl SharedBoundsAccumulator {
         left_child: &dyn ExecutionPlan,
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
-        on_right: Vec<PhysicalExprRef>,
+        on_expressions: Vec<PhysicalExprRef>,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -171,7 +171,7 @@ impl SharedBoundsAccumulator {
             }),
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
-            on_right,
+            on_expressions,
         }
     }
 
@@ -199,16 +199,16 @@ impl SharedBoundsAccumulator {
             // Create range predicates for each join key in this partition
             let mut column_predicates = Vec::with_capacity(partition_bounds.len());
 
-            for (col_idx, right_expr) in self.on_right.iter().enumerate() {
+            for (col_idx, expr) in self.on_expressions.iter().enumerate() {
                 if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
                     // Create predicate: col >= min AND col <= max
                     let min_expr = Arc::new(BinaryExpr::new(
-                        Arc::clone(right_expr),
+                        Arc::clone(expr),
                         Operator::GtEq,
                         lit(column_bounds.min.clone()),
                     )) as Arc<dyn PhysicalExpr>;
                     let max_expr = Arc::new(BinaryExpr::new(
-                        Arc::clone(right_expr),
+                        Arc::clone(expr),
                         Operator::LtEq,
                         lit(column_bounds.max.clone()),
                     )) as Arc<dyn PhysicalExpr>;
@@ -309,5 +309,70 @@ impl SharedBoundsAccumulator {
 impl fmt::Debug for SharedBoundsAccumulator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SharedBoundsAccumulator")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::empty::EmptyExec;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common_runtime::SpawnedTask;
+    use datafusion_physical_expr::expressions::{col, lit, DynamicFilterPhysicalExpr};
+    use tokio::task;
+
+    // This test verifies the synchronization behavior of `SharedBoundsAccumulator`.
+    // It ensures that the dynamic filter is not updated until all expected
+    // partitions have reported their build-side bounds. One partition reports
+    // in a spawned task while the test reports another; the dynamic filter
+    // should remain the default until the final partition arrives, at which
+    // point the accumulated bounds are combined and the dynamic filter is
+    // updated exactly once with range predicates (>= and <=) for the join key.
+    #[tokio::test]
+    async fn waits_for_all_partitions_before_updating() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let left = EmptyExec::new(Arc::clone(&schema)).with_partitions(2);
+        let right = EmptyExec::new(Arc::clone(&schema)).with_partitions(2);
+        let col_expr = col("a", &schema).unwrap();
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_expr)],
+            lit(true),
+        ));
+        let acc = Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
+            PartitionMode::Partitioned,
+            &left,
+            &right,
+            Arc::clone(&dynamic),
+            vec![Arc::clone(&col_expr)],
+        ));
+
+        assert_eq!(format!("{}", dynamic.current().unwrap()), "true");
+
+        let acc0 = Arc::clone(&acc);
+        let handle = SpawnedTask::spawn(async move {
+            acc0.report_partition_bounds(
+                0,
+                Some(vec![ColumnBounds::new(
+                    ScalarValue::from(1i32),
+                    ScalarValue::from(2i32),
+                )]),
+            )
+            .await
+            .unwrap();
+        });
+        task::yield_now().await;
+        assert_eq!(format!("{}", dynamic.current().unwrap()), "true");
+        acc.report_partition_bounds(
+            1,
+            Some(vec![ColumnBounds::new(
+                ScalarValue::from(3i32),
+                ScalarValue::from(4i32),
+            )]),
+        )
+        .await
+        .unwrap();
+        handle.await.unwrap();
+        let updated = format!("{}", dynamic.current().unwrap());
+        assert!(updated.contains(">=") && updated.contains("<="));
     }
 }

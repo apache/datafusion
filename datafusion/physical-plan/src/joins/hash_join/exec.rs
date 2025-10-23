@@ -463,12 +463,25 @@ impl HashJoinExec {
         })
     }
 
-    fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
-        // Extract the right-side keys (probe side keys) from the `on` clauses
-        // Dynamic filter will be created from build side values (left side) and applied to probe side (right side)
-        let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
+    fn join_exprs_for_side(on: &JoinOn, pushdown_side: JoinSide) -> Vec<PhysicalExprRef> {
+        match pushdown_side {
+            JoinSide::Left => on.iter().map(|(l, _)| Arc::clone(l)).collect(),
+            JoinSide::Right => on.iter().map(|(_, r)| Arc::clone(r)).collect(),
+            JoinSide::None => return vec![],
+        }
+    }
+
+    fn create_dynamic_filter(
+        on: &JoinOn,
+        pushdown_side: JoinSide,
+    ) -> Result<Arc<DynamicFilterPhysicalExpr>> {
+        if pushdown_side == JoinSide::None {
+            return internal_err!("dynamic filter side must be specified");
+        }
+        // Extract the join key expressions from the side that will receive the dynamic filter
+        let keys = Self::join_exprs_for_side(on, pushdown_side);
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
-        Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
+        Ok(Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true))))
     }
 
     /// left (build) side which gets hashed
@@ -780,6 +793,21 @@ impl DisplayAs for HashJoinExec {
     }
 }
 
+fn find_filter_pushdown_sides(join_type: JoinType) -> JoinSide {
+    match join_type {
+        JoinType::Inner => JoinSide::Right,
+        JoinType::Left => JoinSide::Right,
+        JoinType::Right => JoinSide::Left,
+        JoinType::Full => JoinSide::None,
+        JoinType::LeftSemi => JoinSide::Right,
+        JoinType::RightSemi => JoinSide::Left,
+        JoinType::LeftAnti => JoinSide::Right,
+        JoinType::RightAnti => JoinSide::Left,
+        JoinType::LeftMark => JoinSide::Right,
+        JoinType::RightMark => JoinSide::Left,
+    }
+}
+
 impl ExecutionPlan for HashJoinExec {
     fn name(&self) -> &'static str {
         "HashJoinExec"
@@ -929,8 +957,10 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
+        // let filter_pushdown_side = find_filter_pushdown_sides(self.join_type);
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+        let probe_side = find_filter_pushdown_sides(self.join_type);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
@@ -946,7 +976,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                    enable_dynamic_filter_pushdown,
+                    enable_dynamic_filter_pushdown && probe_side == JoinSide::Right,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -964,7 +994,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                    enable_dynamic_filter_pushdown,
+                    enable_dynamic_filter_pushdown && probe_side == JoinSide::Right,
                 ))
             }
             PartitionMode::Auto => {
@@ -982,18 +1012,22 @@ impl ExecutionPlan for HashJoinExec {
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
                     let filter = Arc::clone(&df.filter);
-                    let on_right = self
-                        .on
-                        .iter()
-                        .map(|(_, right_expr)| Arc::clone(right_expr))
-                        .collect::<Vec<_>>();
+                    // Determine which side will receive the dynamic filter
+                    let probe_side = find_filter_pushdown_sides(self.join_type);
+                    // Bounds should be collected from the build side (opposite of probe side)
+                    // let build_side = match probe_side {
+                    //     JoinSide::Left => JoinSide::Right,
+                    //     JoinSide::Right => JoinSide::Left,
+                    //     JoinSide::None => JoinSide::None,
+                    // };
+                    let on_expressions = Self::join_exprs_for_side(&self.on, probe_side);
                     Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
                         Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
                             filter,
-                            on_right,
+                            on_expressions,
                         ))
                     })))
                 })
@@ -1126,7 +1160,7 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         // Get basic filter descriptions for both children
-        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+        let mut left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
             &parent_filters,
             self.left(),
         )?;
@@ -1139,9 +1173,24 @@ impl ExecutionPlan for HashJoinExec {
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_join_dynamic_filter_pushdown
         {
-            // Add actual dynamic filter to right side (probe side)
-            let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+            let pushdown_side = find_filter_pushdown_sides(self.join_type);
+            let dynamic_filter = Self::create_dynamic_filter(&self.on, pushdown_side)?;
+            match pushdown_side {
+                JoinSide::None => {
+                    // A join type that preserves both sides (e.g. FULL) cannot
+                    // leverage dynamic filters. Return early before attempting to
+                    // create one.
+                    return Ok(FilterDescription::new()
+                        .with_child(left_child)
+                        .with_child(right_child));
+                }
+                JoinSide::Left => {
+                    left_child = left_child.with_self_filter(dynamic_filter);
+                }
+                JoinSide::Right => {
+                    right_child = right_child.with_self_filter(dynamic_filter);
+                }
+            }
         }
 
         Ok(FilterDescription::new()
@@ -1159,7 +1208,8 @@ impl ExecutionPlan for HashJoinExec {
         // non-inner joins in `gather_filters_for_pushdown`.
         // However it's a cheap check and serves to inform future devs touching this function that they need to be really
         // careful pushing down filters through non-inner joins.
-        if self.join_type != JoinType::Inner {
+        let pushdown_side = find_filter_pushdown_sides(self.join_type);
+        if pushdown_side == JoinSide::None {
             // Other types of joins can support *some* filters, but restrictions are complex and error prone.
             // For now we don't support them.
             // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
@@ -1170,9 +1220,13 @@ impl ExecutionPlan for HashJoinExec {
 
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
-        let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
+        let self_filters = match pushdown_side {
+            JoinSide::Left => &child_pushdown_result.self_filters[0],
+            JoinSide::Right => &child_pushdown_result.self_filters[1],
+            JoinSide::None => unreachable!(),
+        };
                                                                                // We expect 0 or 1 self filters
-        if let Some(filter) = right_child_self_filters.first() {
+        if let Some(filter) = self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
@@ -4517,5 +4571,113 @@ mod tests {
     /// Returns the column names on the schema
     fn columns(schema: &Schema) -> Vec<String> {
         schema.fields().iter().map(|f| f.name().clone()).collect()
+    }
+
+    #[test]
+    fn create_dynamic_filter_none_side_returns_error() {
+        let on: JoinOn = vec![];
+        let err = HashJoinExec::create_dynamic_filter(&on, JoinSide::None).unwrap_err();
+        assert_contains!(err.to_string(), "dynamic filter side must be specified");
+    }
+
+    #[test]
+    fn full_join_skips_dynamic_filter_creation() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_physical_expr::expressions::col;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )?;
+        let left =
+            TestMemoryExec::try_new(&[vec![batch.clone()]], Arc::clone(&schema), None)?;
+        let right = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?;
+
+        let on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
+        let join = HashJoinExec::try_new(
+            Arc::new(left),
+            Arc::new(right),
+            on,
+            None,
+            &JoinType::Full,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+        )?;
+
+        let mut config = ConfigOptions::default();
+        config.optimizer.enable_dynamic_filter_pushdown = true;
+
+        let desc =
+            join.gather_filters_for_pushdown(FilterPushdownPhase::Post, vec![], &config)?;
+        assert!(desc.self_filters().iter().all(|f| f.is_empty()));
+        Ok(())
+    }
+
+    // This test verifies that when a HashJoinExec is created with a dynamic filter
+    // targeting the left side, the join build phase collects min/max bounds from
+    // the build-side input and reports them back into the dynamic filter for the
+    // other side. Concretely:
+    // - Left input has values [1, 3, 5]
+    // - Right (build) input has values [2, 4, 6]
+    // - JoinType::Right is used so that the right side acts as the build side
+    //   and the dynamic filter is attached to the left side expression.
+    // - After fully executing the join, the dynamic filter should be updated
+    //   with the observed bounds `a@0 >= 2 AND a@0 <= 6` (min=2, max=6).
+    // The test asserts that HashJoinExec correctly accumulates and reports these
+    // bounds so downstream consumers can use the dynamic predicate for pruning.
+    #[tokio::test]
+    async fn reports_bounds_when_dynamic_filter_side_left() -> Result<()> {
+        use datafusion_physical_expr::expressions::col;
+
+        let task_ctx = Arc::new(TaskContext::default());
+
+        let left_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let left_batch = RecordBatch::try_new(
+            Arc::clone(&left_schema),
+            vec![Arc::new(Int32Array::from(vec![1, 3, 5]))],
+        )?;
+        let left = TestMemoryExec::try_new(&[vec![left_batch]], left_schema, None)?;
+
+        let right_schema =
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+        let right_batch = RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![Arc::new(Int32Array::from(vec![2, 4, 6]))],
+        )?;
+        let right = TestMemoryExec::try_new(&[vec![right_batch]], right_schema, None)?;
+
+        let on = vec![(col("a", &left.schema())?, col("b", &right.schema())?)];
+
+        let mut join = HashJoinExec::try_new(
+            Arc::new(left),
+            Arc::new(right),
+            on,
+            None,
+            &JoinType::Right,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+        )?;
+
+        let dynamic_filter: Arc<DynamicFilterPhysicalExpr> =
+            HashJoinExec::create_dynamic_filter(&join.on, JoinSide::Left)?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            bounds_accumulator: OnceLock::new(),
+        });
+
+        let stream = join.execute(0, task_ctx)?;
+        let _batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        assert_eq!(
+            format!("{}", dynamic_filter.current().unwrap()),
+            "a@0 >= 2 AND a@0 <= 6"
+        );
+
+        Ok(())
     }
 }
