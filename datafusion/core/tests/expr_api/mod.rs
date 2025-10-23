@@ -322,33 +322,22 @@ async fn test_create_physical_expr() {
 
 #[test]
 fn test_create_physical_expr_nvl2() {
-    #[rustfmt::skip]
-    evaluate_expr_test(
-        nvl2(col("i"), lit(1i64), lit(0i64)),
-        vec![
-            "+------+", 
-            "| expr |", 
-            "+------+", 
-            "| 1    |", 
-            "| 0    |", 
-            "| 1    |",
-            "+------+",
-        ],
-    );
+    let batch = &TEST_BATCH;
+    let df_schema = DFSchema::try_from(batch.schema()).unwrap();
+    let ctx = SessionContext::new();
 
-    #[rustfmt::skip]
-    evaluate_expr_test(
-        nvl2(lit(1i64), col("i"), lit(0i64)),
-        vec![
-            "+------+", 
-            "| expr |", 
-            "+------+", 
-            "| 10   |", 
-            "|      |", 
-            "| 5    |",
-            "+------+",
-        ],
-    );
+    let expect_err = |expr| {
+        let physical_expr = ctx.create_physical_expr(expr, &df_schema).unwrap();
+        let err = physical_expr.evaluate(batch).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("nvl2 should have been simplified to case"),
+            "unexpected error: {err:?}"
+        );
+    };
+
+    expect_err(nvl2(col("i"), lit(1i64), lit(0i64)));
+    expect_err(nvl2(lit(1i64), col("i"), lit(0i64)));
 }
 
 #[tokio::test]

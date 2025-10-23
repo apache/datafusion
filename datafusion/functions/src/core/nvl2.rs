@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::is_not_null;
-use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{internal_err, plan_err, utils::take_function_args, Result};
+use datafusion_common::{internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
     conditional_expressions::CaseBuilder,
     simplify::{ExprSimplifyResult, SimplifyInfo},
@@ -103,35 +101,8 @@ impl ScalarUDFImpl for NVL2Func {
         Ok(Field::new(self.name(), return_type, nullable).into())
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [test, if_non_null, if_null] = take_function_args(self.name(), args.args)?;
-
-        match test {
-            ColumnarValue::Scalar(test_scalar) => {
-                if test_scalar.is_null() {
-                    Ok(if_null)
-                } else {
-                    Ok(if_non_null)
-                }
-            }
-            ColumnarValue::Array(test_array) => {
-                let len = test_array.len();
-
-                let if_non_null_array = match if_non_null {
-                    ColumnarValue::Array(array) => array,
-                    ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len)?,
-                };
-
-                let if_null_array = match if_null {
-                    ColumnarValue::Array(array) => array,
-                    ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len)?,
-                };
-
-                let mask = is_not_null(&test_array)?;
-                let result = zip(&mask, &if_non_null_array, &if_null_array)?;
-                Ok(ColumnarValue::Array(result))
-            }
-        }
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        internal_err!("nvl2 should have been simplified to case")
     }
 
     fn simplify(
