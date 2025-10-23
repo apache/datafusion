@@ -315,13 +315,13 @@ impl ResultBuilder {
     /// This method adds the given array data as a partial result and updates the index mapping
     /// to indicate that the specified rows should take their values from this array.
     /// The partial results will be merged into a single array when finish() is called.
-    fn add_partial_result(&mut self, rows: &ArrayRef, data: ArrayData) {
+    fn add_partial_result(&mut self, row_indices: &ArrayRef, row_values: ArrayData) {
         assert!(self.covering_result.is_none());
 
-        self.partial_results.push(data);
+        self.partial_results.push(row_values);
         let array_index = self.partial_results.len();
 
-        for row_ix in rows.as_primitive::<UInt32Type>().values().iter() {
+        for row_ix in row_indices.as_primitive::<UInt32Type>().values().iter() {
             self.partial_result_indices[*row_ix as usize] = array_index;
         }
     }
