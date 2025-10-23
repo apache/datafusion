@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# A Gentle Introduction to Arrow & RecordBatches (for DataFusion users)
+# Introduction to `Arrow` & RecordBatches
 
 ```{contents}
 :local:
