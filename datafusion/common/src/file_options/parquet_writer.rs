@@ -406,13 +406,10 @@ mod tests {
         ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
         ParquetOptions,
     };
-    #[cfg(feature = "parquet_encryption")]
-    use parquet::{
-        basic::Compression,
-        file::properties::{
-            BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
-            DEFAULT_BLOOM_FILTER_NDV,
-        },
+    use parquet::basic::Compression;
+    use parquet::file::properties::{
+        BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
+        DEFAULT_BLOOM_FILTER_NDV,
     };
     use std::collections::HashMap;
 
@@ -540,9 +537,13 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
+        #[cfg(feature = "parquet_encryption")]
         let fep = props
             .file_encryption_properties()
             .map(ConfigFileEncryptionProperties::from);
+
+        #[cfg(not(feature = "parquet_encryption"))]
+        let fep = None;
 
         #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {
