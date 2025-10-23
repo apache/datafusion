@@ -194,7 +194,7 @@ trait BitShiftUDF: ScalarUDFImpl {
             }
             _ => {
                 plan_err!(
-                    "{} function does not support data type: {:?}",
+                    "{} function does not support data type: {}",
                     self.name(),
                     value_array.data_type()
                 )

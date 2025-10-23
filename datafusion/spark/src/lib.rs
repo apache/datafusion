@@ -53,6 +53,8 @@
 //! # impl FunctionRegistry for SessionContext {
 //! #    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> { Ok (None) }
 //! #    fn udfs(&self) -> HashSet<String> { unimplemented!() }
+//! #    fn udafs(&self) -> HashSet<String> { unimplemented!() }
+//! #    fn udwfs(&self) -> HashSet<String> { unimplemented!() }
 //! #    fn udf(&self, _name: &str) -> Result<Arc<ScalarUDF>> { unimplemented!() }
 //! #    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {unimplemented!() }
 //! #    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> { unimplemented!() }

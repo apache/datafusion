@@ -20,7 +20,7 @@ updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
     target-branch: main
     labels: [auto-dependencies]
     ignore:

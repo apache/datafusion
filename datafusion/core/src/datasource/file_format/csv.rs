@@ -1233,7 +1233,7 @@ mod tests {
     fn csv_values(line_number: usize) -> (i32, f64, bool, String) {
         let int_value = line_number as i32;
         let float_value = line_number as f64;
-        let bool_value = line_number % 2 == 0;
+        let bool_value = line_number.is_multiple_of(2);
         let char_value = format!("{line_number}-string");
         (int_value, float_value, bool_value, char_value)
     }

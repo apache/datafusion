@@ -216,6 +216,8 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// Option to replace table content if table already exists
+    pub or_replace: bool,
     /// Whether the table is a temporary table
     pub temporary: bool,
     /// SQL used to create the table, if available

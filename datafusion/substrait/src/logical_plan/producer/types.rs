@@ -325,7 +325,7 @@ pub(crate) fn to_substrait_type(
                 precision: *p as i32,
             })),
         }),
-        _ => not_impl_err!("Unsupported cast type: {dt:?}"),
+        _ => not_impl_err!("Unsupported cast type: {dt}"),
     }
 }
 
@@ -446,7 +446,7 @@ mod tests {
     }
 
     fn round_trip_type(dt: DataType) -> Result<()> {
-        println!("Checking round trip of {dt:?}");
+        println!("Checking round trip of {dt}");
 
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.

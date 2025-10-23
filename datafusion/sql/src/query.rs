@@ -21,14 +21,15 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use crate::stack::StackGuard;
 use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
-use datafusion_expr::expr::Sort;
+use datafusion_expr::expr::{Sort, WildcardOptions};
 
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Ident, LimitClause, OrderBy, OrderByExpr, OrderByKind, Query,
-    SelectInto, SetExpr,
+    Expr as SQLExpr, Ident, LimitClause, Offset, OffsetRows, OrderBy, OrderByExpr,
+    OrderByKind, PipeOperator, Query, SelectInto, SetExpr,
 };
 use sqlparser::tokenizer::Span;
 
@@ -49,7 +50,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let set_expr = *query.body;
-        match set_expr {
+        let plan = match set_expr {
             SetExpr::Select(mut select) => {
                 let select_into = select.into.take();
                 let plan =
@@ -78,6 +79,75 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let plan = self.order_by(plan, order_by_rex)?;
                 self.limit(plan, query.limit_clause, planner_context)
             }
+        }?;
+
+        self.pipe_operators(plan, query.pipe_operators, planner_context)
+    }
+
+    /// Apply pipe operators to a plan
+    fn pipe_operators(
+        &self,
+        mut plan: LogicalPlan,
+        pipe_operators: Vec<PipeOperator>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        for pipe_operator in pipe_operators {
+            plan = self.pipe_operator(plan, pipe_operator, planner_context)?;
+        }
+        Ok(plan)
+    }
+
+    /// Apply a pipe operator to a plan
+    fn pipe_operator(
+        &self,
+        plan: LogicalPlan,
+        pipe_operator: PipeOperator,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        match pipe_operator {
+            PipeOperator::Where { expr } => {
+                self.plan_selection(Some(expr), plan, planner_context)
+            }
+            PipeOperator::OrderBy { exprs } => {
+                let sort_exprs = self.order_by_to_sort_expr(
+                    exprs,
+                    plan.schema(),
+                    planner_context,
+                    true,
+                    None,
+                )?;
+                self.order_by(plan, sort_exprs)
+            }
+            PipeOperator::Limit { expr, offset } => self.limit(
+                plan,
+                Some(LimitClause::LimitOffset {
+                    limit: Some(expr),
+                    offset: offset.map(|offset| Offset {
+                        value: offset,
+                        rows: OffsetRows::None,
+                    }),
+                    limit_by: vec![],
+                }),
+                planner_context,
+            ),
+            PipeOperator::Select { exprs } => {
+                let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
+                let select_exprs =
+                    self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
+                self.project(plan, select_exprs)
+            }
+            PipeOperator::Extend { exprs } => {
+                let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
+                let extend_exprs =
+                    self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
+                let all_exprs =
+                    std::iter::once(SelectExpr::Wildcard(WildcardOptions::default()))
+                        .chain(extend_exprs)
+                        .collect();
+                self.project(plan, all_exprs)
+            }
+
+            x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }
     }
 

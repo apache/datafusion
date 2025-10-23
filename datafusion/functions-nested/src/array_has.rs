@@ -25,10 +25,10 @@ use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    in_list, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -131,40 +131,42 @@ impl ScalarUDFImpl for ArrayHas {
 
         // if the haystack is a constant list, we can use an inlist expression which is more
         // efficient because the haystack is not varying per-row
-        if let Expr::Literal(ScalarValue::List(array), _) = haystack {
-            // TODO: support LargeList
-            // (not supported by `convert_array_to_scalar_vec`)
-            // (FixedSizeList not supported either, but seems to have worked fine when attempting to
-            // build a reproducer)
+        match haystack {
+            Expr::Literal(
+                // FixedSizeList gets coerced to List
+                scalar @ ScalarValue::List(_) | scalar @ ScalarValue::LargeList(_),
+                _,
+            ) => {
+                let array = scalar.to_array().unwrap(); // guarantee of ScalarValue
+                if let Ok(scalar_values) =
+                    ScalarValue::convert_array_to_scalar_vec(&array)
+                {
+                    assert_eq!(scalar_values.len(), 1);
+                    let list = scalar_values
+                        .into_iter()
+                        .flatten()
+                        .map(|v| Expr::Literal(v, None))
+                        .collect();
 
-            assert_eq!(array.len(), 1); // guarantee of ScalarValue
-            if let Ok(scalar_values) =
-                ScalarValue::convert_array_to_scalar_vec(array.as_ref())
+                    return Ok(ExprSimplifyResult::Simplified(in_list(
+                        std::mem::take(needle),
+                        list,
+                        false,
+                    )));
+                }
+            }
+            Expr::ScalarFunction(ScalarFunction { func, args })
+                if func == &make_array_udf() =>
             {
-                assert_eq!(scalar_values.len(), 1);
-                let list = scalar_values
-                    .into_iter()
-                    .flatten()
-                    .map(|v| Expr::Literal(v, None))
-                    .collect();
-
-                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
-                    expr: Box::new(std::mem::take(needle)),
-                    list,
-                    negated: false,
-                })));
+                // make_array has a static set of arguments, so we can pull the arguments out from it
+                return Ok(ExprSimplifyResult::Simplified(in_list(
+                    std::mem::take(needle),
+                    std::mem::take(args),
+                    false,
+                )));
             }
-        } else if let Expr::ScalarFunction(ScalarFunction { func, args }) = haystack {
-            // make_array has a static set of arguments, so we can pull the arguments out from it
-            if func == &make_array_udf() {
-                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
-                    expr: Box::new(std::mem::take(needle)),
-                    list: std::mem::take(args),
-                    negated: false,
-                })));
-            }
-        }
-
+            _ => {}
+        };
         Ok(ExprSimplifyResult::Original(args))
     }
 
@@ -497,7 +499,7 @@ impl Default for ArrayHasAll {
 impl ArrayHasAll {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::arrays(2, None, Volatility::Immutable),
             aliases: vec![String::from("list_has_all")],
         }
     }
@@ -571,7 +573,7 @@ impl Default for ArrayHasAny {
 impl ArrayHasAny {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::arrays(2, None, Volatility::Immutable),
             aliases: vec![String::from("list_has_any"), String::from("arrays_overlap")],
         }
     }

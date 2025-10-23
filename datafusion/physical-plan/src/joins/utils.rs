@@ -563,15 +563,6 @@ fn estimate_inner_join_cardinality(
         .iter()
         .zip(right_stats.column_statistics.iter())
     {
-        // Break if any of statistics bounds are undefined
-        if left_stat.min_value.get_value().is_none()
-            || left_stat.max_value.get_value().is_none()
-            || right_stat.min_value.get_value().is_none()
-            || right_stat.max_value.get_value().is_none()
-        {
-            return None;
-        }
-
         let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat);
         let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
@@ -658,7 +649,8 @@ fn estimate_disjoint_inputs(
 /// Estimate the number of maximum distinct values that can be present in the
 /// given column from its statistics. If distinct_count is available, uses it
 /// directly. Otherwise, if the column is numeric and has min/max values, it
-/// estimates the maximum distinct count from those.
+/// estimates the maximum distinct count from those. Otherwise, the num_rows
+/// is used.
 fn max_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
@@ -2014,10 +2006,16 @@ mod tests {
                 (20, Inexact(1), Inexact(40), Absent, Absent),
                 Some(Inexact(10)),
             ),
-            // When we have distinct count.
+            // Distinct count matches the range
             (
                 (10, Inexact(1), Inexact(10), Inexact(10), Absent),
                 (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                Some(Inexact(10)),
+            ),
+            // Distinct count takes precedence over the range
+            (
+                (10, Inexact(1), Inexact(3), Inexact(10), Absent),
+                (10, Inexact(1), Inexact(3), Inexact(10), Absent),
                 Some(Inexact(10)),
             ),
             // distinct(left) > distinct(right)
@@ -2063,32 +2061,33 @@ mod tests {
             // Edge cases
             // ==========
             //
-            // No column level stats.
+            // No column level stats, fall back to row count.
             (
                 (10, Absent, Absent, Absent, Absent),
                 (10, Absent, Absent, Absent, Absent),
-                None,
+                Some(Inexact(10)),
             ),
-            // No min or max (or both).
+            // No min or max (or both), but distinct available.
             (
                 (10, Absent, Absent, Inexact(3), Absent),
                 (10, Absent, Absent, Inexact(3), Absent),
-                None,
+                Some(Inexact(33)),
             ),
             (
                 (10, Inexact(2), Absent, Inexact(3), Absent),
                 (10, Absent, Inexact(5), Inexact(3), Absent),
-                None,
+                Some(Inexact(33)),
             ),
             (
                 (10, Absent, Inexact(3), Inexact(3), Absent),
                 (10, Inexact(1), Absent, Inexact(3), Absent),
-                None,
+                Some(Inexact(33)),
             ),
+            // No min or max, fall back to row count
             (
                 (10, Absent, Inexact(3), Absent, Absent),
                 (10, Inexact(1), Absent, Absent, Absent),
-                None,
+                Some(Inexact(10)),
             ),
             // Non overlapping min/max (when exact=False).
             (

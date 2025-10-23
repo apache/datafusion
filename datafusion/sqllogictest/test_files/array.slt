@@ -1522,6 +1522,11 @@ select input, array_max(input) from (select make_array(d - 1, d, d + 1) input fr
 [NULL, NULL, NULL] NULL
 
 query II
+select array_max(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_max(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+3 1
+
+query II
 select array_max(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_max(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'));
 ----
 3 1
@@ -1605,6 +1610,11 @@ select input, array_min(input) from (select make_array(d - 1, d, d + 1) input fr
 [19, 20, 21] 19
 [29, 30, 31] 29
 [NULL, NULL, NULL] NULL
+
+query II
+select array_min(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_min(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+1 1
 
 query II
 select array_min(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_min(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'));
@@ -1938,6 +1948,12 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2,
 ----
 [2, 3, 4] [h, e]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 2, 4),
+       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'FixedSizeList(5, Utf8)'), 1, 2);
+----
+[2, 3, 4] [h, e]
+
 # array_slice scalar function #2 (with positive indexes; full array)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 0, 6), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, 5);
@@ -1946,6 +1962,12 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, 6), array_slice(make_array('h',
 
 query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0, 6), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 0, 5);
+----
+[1, 2, 3, 4, 5] [h, e, l, l, o]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 0, 6),
+       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'FixedSizeList(5, Utf8)'), 0, 5);
 ----
 [1, 2, 3, 4, 5] [h, e, l, l, o]
 
@@ -2423,6 +2445,20 @@ select array_sort(make_array(1, 3, null, 5, NULL, -5)), array_sort(make_array(1,
 ----
 [NULL, NULL, -5, 1, 3, 5] [NULL, 1, 2, 3] [NULL, 3, 2, 1]
 
+query ???
+select array_sort(arrow_cast(make_array(1, 3, null, 5, NULL, -5), 'LargeList(Int64)')),
+       array_sort(arrow_cast(make_array(1, 3, null, 2), 'LargeList(Int64)'), 'ASC'),
+       array_sort(arrow_cast(make_array(1, 3, null, 2), 'LargeList(Int64)'), 'desc', 'NULLS FIRST');
+----
+[NULL, NULL, -5, 1, 3, 5] [NULL, 1, 2, 3] [NULL, 3, 2, 1]
+
+query ???
+select array_sort(arrow_cast(make_array(1, 3, null, 5, NULL, -5), 'FixedSizeList(6, Int64)')),
+       array_sort(arrow_cast(make_array(1, 3, null, 2), 'FixedSizeList(4, Int64)'), 'ASC'),
+       array_sort(arrow_cast(make_array(1, 3, null, 2), 'FixedSizeList(4, Int64)'), 'desc', 'NULLS FIRST');
+----
+[NULL, NULL, -5, 1, 3, 5] [NULL, 1, 2, 3] [NULL, 3, 2, 1]
+
 query ?
 select array_sort(column1, 'DESC', 'NULLS LAST') from arrays_values;
 ----
@@ -2788,7 +2824,6 @@ select array_append(column1, arrow_cast(make_array(1, 11, 111), 'FixedSizeList(3
 
 # DuckDB: [4]
 # ClickHouse: Null
-# Since they dont have the same result, we just follow Postgres, return error
 query ?
 select array_prepend(4, NULL);
 ----
@@ -3208,6 +3243,22 @@ select array_concat(
 ----
 [1, 2, 3]
 
+query ?
+select array_concat(
+  arrow_cast(['1', '2'], 'LargeList(Utf8)'),
+  arrow_cast(['3'], 'LargeList(Utf8)')
+);
+----
+[1, 2, 3]
+
+query ?
+select array_concat(
+  arrow_cast(['1', '2'], 'FixedSizeList(2, Utf8)'),
+  arrow_cast(['3'], 'FixedSizeList(1, Utf8)')
+);
+----
+[1, 2, 3]
+
 # Concatenating string arrays
 query ?
 select array_concat(
@@ -3518,6 +3569,11 @@ select array_position(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 
 ----
 3 5 1
 
+query III
+select array_position(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'FixedSizeList(5, Utf8)'), 'l'), array_position(arrow_cast([1, 2, 3, 4, 5], 'FixedSizeList(5, Int64)'), 5), array_position(arrow_cast([1, 1, 1], 'FixedSizeList(3, Int64)'), 1);
+----
+3 5 1
+
 # array_position scalar function #2 (with optional argument)
 query III
 select array_position(['h', 'e', 'l', 'l', 'o'], 'l', 4), array_position([1, 2, 5, 4, 5], 5, 4), array_position([1, 1, 1], 1, 2);
@@ -3526,6 +3582,11 @@ select array_position(['h', 'e', 'l', 'l', 'o'], 'l', 4), array_position([1, 2, 
 
 query III
 select array_position(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 'l', 4), array_position(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), 5, 4), array_position(arrow_cast([1, 1, 1], 'LargeList(Int64)'), 1, 2);
+----
+4 5 2
+
+query III
+select array_position(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'FixedSizeList(5, Utf8)'), 'l', 4), array_position(arrow_cast([1, 2, 3, 4, 5], 'FixedSizeList(5, Int64)'), 5, 4), array_position(arrow_cast([1, 1, 1], 'FixedSizeList(3, Int64)'), 1, 2);
 ----
 4 5 2
 
@@ -3831,6 +3892,14 @@ select
 ----
 [1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
 
+query ???
+select
+  array_replace(arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int64)'), 2, 3),
+  array_replace(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'FixedSizeList(7, Int64)'), 4, 0),
+  array_replace(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 4, 0);
+----
+[1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
+
 # array_replace scalar function #2 (element is list)
 query ??
 select
@@ -3856,6 +3925,21 @@ select
   ),
   array_replace(
     arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'LargeList(List(Int64))'),
+    [2, 3, 4],
+    [3, 1, 4]
+  );
+----
+[[1, 2, 3], [1, 1, 1], [5, 5, 5], [4, 5, 6], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]]
+
+query ??
+select
+  array_replace(
+    arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'FixedSizeList(5, FixedSizeList(3, Int64))'),
+    [4, 5, 6],
+    [1, 1, 1]
+  ),
+  array_replace(
+    arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'FixedSizeList(5, FixedSizeList(3, Int64))'),
     [2, 3, 4],
     [3, 1, 4]
   );
@@ -4003,6 +4087,14 @@ select
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
 
+query ???
+select
+  array_replace_n(arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int64)'), 2, 3, 2),
+  array_replace_n(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'FixedSizeList(7, Int64)'), 4, 0, 2),
+  array_replace_n(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 4, 0, 3);
+----
+[1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
+
 # array_replace_n scalar function #2 (element is list)
 query ??
 select
@@ -4031,6 +4123,23 @@ select
     ),
   array_replace_n(
     arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'LargeList(List(Int64))'),
+    [2, 3, 4],
+    [3, 1, 4],
+    2
+  );
+----
+[[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
+
+query ??
+select
+  array_replace_n(
+    arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'FixedSizeList(5, FixedSizeList(3, Int64))'),
+      [4, 5, 6],
+      [1, 1, 1],
+      2
+    ),
+  array_replace_n(
+    arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'FixedSizeList(5, FixedSizeList(3, Int64))'),
     [2, 3, 4],
     [3, 1, 4],
     2
@@ -4194,6 +4303,14 @@ select
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
 
+query ???
+select
+  array_replace_all(arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int64)'), 2, 3),
+  array_replace_all(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'FixedSizeList(7, Int64)'), 4, 0),
+  array_replace_all(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 4, 0);
+----
+[1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
+
 # array_replace_all scalar function #2 (element is list)
 query ??
 select
@@ -4219,6 +4336,21 @@ select
   ),
   array_replace_all(
     arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'LargeList(List(Int64))'),
+    [2, 3, 4],
+    [3, 1, 4]
+  );
+----
+[[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
+
+query ??
+select
+  array_replace_all(
+    arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'FixedSizeList(5, FixedSizeList(3, Int64))'),
+    [4, 5, 6],
+    [1, 1, 1]
+  ),
+  array_replace_all(
+    arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'FixedSizeList(5, FixedSizeList(3, Int64))'),
     [2, 3, 4],
     [3, 1, 4]
   );
@@ -4490,6 +4622,16 @@ select array_union(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 
 ----
 [1, 2, 3, 4, 5, 6]
 
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int64)'), arrow_cast([5, 6, 3, 4], 'FixedSizeList(4, Int64)'));
+----
+[1, 2, 3, 4, 5, 6]
+
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int64)'), arrow_cast([5, 6], 'FixedSizeList(2, Int64)'));
+----
+[1, 2, 3, 4, 5, 6]
+
 # array_union scalar function #2
 query ?
 select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
@@ -4689,6 +4831,11 @@ select array_to_string(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'),
 ----
 h,e,l,l,o 1-2-3-4-5 1|2|3
 
+query TTT
+select array_to_string(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'FixedSizeList(5, Utf8)'), ','), array_to_string(arrow_cast([1, 2, 3, 4, 5], 'FixedSizeList(5, Int64)'), '-'), array_to_string(arrow_cast([1.0, 2.0, 3.0], 'FixedSizeList(3, Float64)'), '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
 # array_to_string scalar function with nulls #2
 query TTT
 select array_to_string(make_array('h', NULL, NULL, NULL, 'o'), ',', '-'), array_to_string(make_array(NULL, 2, NULL, 4, 5), '-', 'nil'), array_to_string(make_array(1.0, NULL, 3.0), '|', '0');
@@ -4699,6 +4846,16 @@ query TTT
 select array_to_string(arrow_cast(make_array('h', NULL, NULL, NULL, 'o'), 'LargeList(Utf8)'), ',', '-'), array_to_string(arrow_cast(make_array(NULL, 2, NULL, 4, 5), 'LargeList(Int64)'), '-', 'nil'), array_to_string(arrow_cast(make_array(1.0, NULL, 3.0), 'LargeList(Float64)'), '|', '0');
 ----
 h,-,-,-,o nil-2-nil-4-5 1|0|3
+
+query TTT
+select array_to_string(arrow_cast(make_array('h', NULL, NULL, NULL, 'o'), 'FixedSizeList(5, Utf8)'), ',', '-'), array_to_string(arrow_cast(make_array(NULL, 2, NULL, 4, 5), 'FixedSizeList(5, Int64)'), '-', 'nil'), array_to_string(arrow_cast(make_array(1.0, NULL, 3.0), 'FixedSizeList(3, Float64)'), '|', '0');
+----
+h,-,-,-,o nil-2-nil-4-5 1|0|3
+
+query T
+select array_to_string(arrow_cast([arrow_cast([NULL, 'a'], 'FixedSizeList(2, Utf8)'), NULL], 'FixedSizeList(2, FixedSizeList(2, Utf8))'), ',', '-');
+----
+-,a,-,-
 
 # array_to_string with columns #1
 
@@ -4965,6 +5122,12 @@ select array_remove(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5
 ----
 [[1, 2, 3], [5, 5, 5], [4, 5, 6], [7, 8, 9]] [[1, 3, 2], [2, 3, 4], [5, 3, 1], [1, 3, 2]]
 
+query ??
+select array_remove(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'FixedSizeList(5, FixedSizeList(3, Int64))'), [4, 5, 6]),
+       array_remove(arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'FixedSizeList(5, FixedSizeList(3, Int64))'), [2, 3, 4]);
+----
+[[1, 2, 3], [5, 5, 5], [4, 5, 6], [7, 8, 9]] [[1, 3, 2], [2, 3, 4], [5, 3, 1], [1, 3, 2]]
+
 # list_remove scalar function #3 (function alias `array_remove`)
 query ???
 select list_remove(make_array(1, 2, 2, 1, 1), 2), list_remove(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0), list_remove(make_array('h', 'e', 'l', 'l', 'o'), 'l');
@@ -5088,9 +5251,35 @@ select array_remove_n(make_array(1, 2, 2, 1, 1), 2, 2), array_remove_n(make_arra
 ----
 [1, 1, 1] [2.0, 2.0, 1.0] [h, e, o]
 
+query ???
+select array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int32)'), 2, 2),
+       array_remove_n(arrow_cast(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 'LargeList(Float32)'), 1.0, 2),
+       array_remove_n(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 'l', 3);
+----
+[1, 1, 1] [2.0, 2.0, 1.0] [h, e, o]
+
+query ???
+select array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'FixedSizeList(5, Int32)'), 2, 2),
+       array_remove_n(arrow_cast(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 'FixedSizeList(5, Float32)'), 1.0, 2),
+       array_remove_n(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'FixedSizeList(5, Utf8)'), 'l', 3);
+----
+[1, 1, 1] [2.0, 2.0, 1.0] [h, e, o]
+
 # array_remove_n scalar function #2 (element is list)
 query ??
 select array_remove_n(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], 2), array_remove_n(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], 2);
+----
+[[1, 2, 3], [5, 5, 5], [7, 8, 9]] [[1, 3, 2], [5, 3, 1], [1, 3, 2]]
+
+query ??
+select array_remove_n(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'LargeList(List(Int64))'), [4, 5, 6], 2),
+       array_remove_n(arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'LargeList(List(Int64))'), [2, 3, 4], 2);
+----
+[[1, 2, 3], [5, 5, 5], [7, 8, 9]] [[1, 3, 2], [5, 3, 1], [1, 3, 2]]
+
+query ??
+select array_remove_n(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'FixedSizeList(5, FixedSizeList(3, Int64))'), [4, 5, 6], 2),
+       array_remove_n(arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'FixedSizeList(5, FixedSizeList(3, Int64))'), [2, 3, 4], 2);
 ----
 [[1, 2, 3], [5, 5, 5], [7, 8, 9]] [[1, 3, 2], [5, 3, 1], [1, 3, 2]]
 
@@ -5157,6 +5346,13 @@ select array_remove_all(make_array(1, 2, 2, 1, 1), 2), array_remove_all(make_arr
 [1, 1, 1] [2.0, 2.0] [h, e, o]
 
 query ???
+select array_remove_all(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2),
+       array_remove_all(arrow_cast(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 'LargeList(Float64)'), 1.0),
+       array_remove_all(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 'l');
+----
+[1, 1, 1] [2.0, 2.0] [h, e, o]
+
+query ???
 select array_remove_all(arrow_cast(make_array(1, 2, 2, 1, 1), 'FixedSizeList(5, Int64)'), 2), array_remove_all(arrow_cast(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 'FixedSizeList(5, Float64)'), 1.0), array_remove_all(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'FixedSizeList(5, Utf8)'), 'l');
 ----
 [1, 1, 1] [2.0, 2.0] [h, e, o]
@@ -5170,6 +5366,12 @@ select array_remove_all(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [
 query ??
 select array_remove_all(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'FixedSizeList(5, List(Int64))'), [4, 5, 6]),
        array_remove_all(arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]),  'FixedSizeList(5, List(Int64))'), [2, 3, 4]);
+----
+[[1, 2, 3], [5, 5, 5], [7, 8, 9]] [[1, 3, 2], [5, 3, 1], [1, 3, 2]]
+
+query ??
+select array_remove_all(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'FixedSizeList(5, FixedSizeList(3, Int64))'), [4, 5, 6]),
+       array_remove_all(arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]),  'FixedSizeList(5, FixedSizeList(3, Int64))'), [2, 3, 4]);
 ----
 [[1, 2, 3], [5, 5, 5], [7, 8, 9]] [[1, 3, 2], [5, 3, 1], [1, 3, 2]]
 
@@ -6268,14 +6470,12 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
-# FIXME: due to rewrite below not working, this is _extremely_ slow to evaluate
-# query I
-# with test AS (SELECT substr(md5(i)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
-# select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'LargeList(Utf8View)'), needle);
-# ----
-# 1
+query I
+with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'LargeList(Utf8View)'), needle);
+----
+1
 
-# FIXME: array_has with large list haystack not currently rewritten to InList
 query TT
 explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
 select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'LargeList(Utf8View)'), needle);
@@ -6286,7 +6486,7 @@ logical_plan
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
 05)--------Projection:
-06)----------Filter: array_has(LargeList([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)))
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: generate_series() projection=[value]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
@@ -6295,7 +6495,7 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------ProjectionExec: expr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: array_has([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c], substr(md5(CAST(value@0 AS Utf8View)), 1, 32))
+07)------------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), field: Field { name: "lit", data_type: Utf8View, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8View("a"), field: Field { name: "lit", data_type: Utf8View, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8View("b"), field: Field { name: "lit", data_type: Utf8View, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8View("c"), field: Field { name: "lit", data_type: Utf8View, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
@@ -6604,6 +6804,17 @@ SELECT  array_intersect(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow
         array_intersect(arrow_cast(make_array(true, false), 'LargeList(Boolean)'), arrow_cast(make_array(true), 'LargeList(Boolean)')),
         array_intersect(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'), arrow_cast(make_array(2.2, 3.3, 4.4), 'LargeList(Float64)')),
         array_intersect(arrow_cast(make_array([1, 1], [2, 2], [3, 3]), 'LargeList(List(Int64))'), arrow_cast(make_array([2, 2], [3, 3], [4, 4]), 'LargeList(List(Int64))'))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query ??????
+SELECT  array_intersect(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(2,3,4), 'FixedSizeList(3, Int64)')),
+        array_intersect(arrow_cast(make_array(1,3,5), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(2,4,6), 'FixedSizeList(3, Int64)')),
+        array_intersect(arrow_cast(make_array('aa','bb','cc'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array('cc','aa','dd'), 'FixedSizeList(3, Utf8)')),
+        array_intersect(arrow_cast(make_array(true, false), 'FixedSizeList(2, Boolean)'), arrow_cast(make_array(true), 'FixedSizeList(1, Boolean)')),
+        array_intersect(arrow_cast(make_array(1.1, 2.2, 3.3), 'FixedSizeList(3, Float64)'), arrow_cast(make_array(2.2, 3.3, 4.4), 'FixedSizeList(3, Float64)')),
+        array_intersect(arrow_cast(make_array([1, 1], [2, 2], [3, 3]), 'FixedSizeList(3, List(Int64))'), arrow_cast(make_array([2, 2], [3, 3], [4, 4]), 'FixedSizeList(3, List(Int64))'))
 ;
 ----
 [2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
@@ -7285,6 +7496,16 @@ select array_except(null, null)
 ----
 NULL
 
+query ?
+select array_except(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 6, 3, 4], 'LargeList(Int64)'));
+----
+[1, 2]
+
+query ?
+select array_except(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int64)'), arrow_cast([5, 6, 3, 4], 'FixedSizeList(4, Int64)'));
+----
+[1, 2]
+
 ### Array operators tests
 
 
@@ -7848,6 +8069,11 @@ select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 1);
 ----
 [1]
 
+query ?
+select array_resize(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 1);
+----
+[1]
+
 # array_resize scalar function #2
 query ?
 select array_resize(make_array(1, 2, 3), 5);
@@ -7856,6 +8082,11 @@ select array_resize(make_array(1, 2, 3), 5);
 
 query ?
 select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5);
+----
+[1, 2, 3, NULL, NULL]
+
+query ?
+select array_resize(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 5);
 ----
 [1, 2, 3, NULL, NULL]
 
@@ -8002,6 +8233,23 @@ NULL NULL
 [60, 59, 58, 57, 56, 55, 54, NULL, 52, 51] [51, 52, NULL, 54, 55, 56, 57, 58, 59, 60]
 [70, 69, 68, 67, 66, 65, 64, 63, 62, 61] [61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
+statement ok
+CREATE TABLE test_reverse_fixed_size AS VALUES
+  (arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)')),
+  (arrow_cast([4, 5, 6], 'FixedSizeList(3, Int64)')),
+  (arrow_cast([NULL, 8, 9], 'FixedSizeList(3, Int64)')),
+  (NULL);
+
+query ?
+SELECT array_reverse(column1) FROM test_reverse_fixed_size;
+----
+[3, 2, 1]
+[6, 5, 4]
+[9, 8, NULL]
+NULL
+
+statement ok
+DROP TABLE test_reverse_fixed_size;
 
 # Test defining a table with array columns
 statement ok

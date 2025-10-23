@@ -792,19 +792,44 @@ impl SessionContext {
             return not_impl_err!("Temporary tables not supported");
         }
 
-        if exist {
-            match cmd.if_not_exists {
-                true => return self.return_empty_dataframe(),
-                false => {
-                    return exec_err!("Table '{}' already exists", cmd.name);
+        match (cmd.if_not_exists, cmd.or_replace, exist) {
+            (true, false, true) => self.return_empty_dataframe(),
+            (false, true, true) => {
+                let result = self
+                    .find_and_deregister(cmd.name.clone(), TableType::Base)
+                    .await;
+
+                match result {
+                    Ok(true) => {
+                        let table_provider: Arc<dyn TableProvider> =
+                            self.create_custom_table(cmd).await?;
+                        self.register_table(cmd.name.clone(), table_provider)?;
+                        self.return_empty_dataframe()
+                    }
+                    Ok(false) => {
+                        let table_provider: Arc<dyn TableProvider> =
+                            self.create_custom_table(cmd).await?;
+                        self.register_table(cmd.name.clone(), table_provider)?;
+                        self.return_empty_dataframe()
+                    }
+                    Err(e) => {
+                        exec_err!("Errored while deregistering external table: {}", e)
+                    }
                 }
             }
+            (true, true, true) => {
+                exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+            }
+            (_, _, false) => {
+                let table_provider: Arc<dyn TableProvider> =
+                    self.create_custom_table(cmd).await?;
+                self.register_table(cmd.name.clone(), table_provider)?;
+                self.return_empty_dataframe()
+            }
+            (false, false, true) => {
+                exec_err!("External table '{}' already exists", cmd.name)
+            }
         }
-
-        let table_provider: Arc<dyn TableProvider> =
-            self.create_custom_table(cmd).await?;
-        self.register_table(cmd.name.clone(), table_provider)?;
-        self.return_empty_dataframe()
     }
 
     async fn create_memory_table(&self, cmd: CreateMemoryTable) -> Result<DataFrame> {
@@ -830,7 +855,7 @@ impl SessionContext {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let schema = Arc::new(input.schema().as_ref().into());
+                let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
@@ -848,8 +873,7 @@ impl SessionContext {
                 exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
             }
             (_, _, Err(_)) => {
-                let df_schema = input.schema();
-                let schema = Arc::new(df_schema.as_ref().into());
+                let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
@@ -1729,6 +1753,14 @@ impl FunctionRegistry for SessionContext {
         expr_planner: Arc<dyn ExprPlanner>,
     ) -> Result<()> {
         self.state.write().register_expr_planner(expr_planner)
+    }
+
+    fn udafs(&self) -> HashSet<String> {
+        self.state.read().udafs()
+    }
+
+    fn udwfs(&self) -> HashSet<String> {
+        self.state.read().udwfs()
     }
 }
 

@@ -482,7 +482,7 @@ impl ExprSchemable for Expr {
                 Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
             }
             Expr::ScalarSubquery(subquery) => {
-                Ok(Arc::new(subquery.subquery.schema().field(0).clone()))
+                Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
             }
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
@@ -642,7 +642,7 @@ impl ExprSchemable for Expr {
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
-            plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
+            plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
         }
     }
 }

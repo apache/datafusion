@@ -115,7 +115,7 @@
 //!  let bytes = physical_plan_to_bytes(physical_plan.clone())?;
 //!
 //!  // Decode bytes from somewhere (over network, etc.) back to ExecutionPlan
-//!  let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
+//!  let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
 //!  assert_eq!(format!("{:?}", physical_plan), format!("{:?}", physical_round_trip));
 //! # Ok(())
 //! # }

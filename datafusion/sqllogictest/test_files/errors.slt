@@ -120,7 +120,7 @@ from aggregate_test_100
 order by c9
 
 # WindowFunction wrong signature
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'nth_value' function: coercion from \[Int32, Int64, Int64\] to the signature OneOf\(\[Any\(0\), Any\(1\), Any\(2\)\]\) failed
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'nth_value' function: coercion from Int32, Int64, Int64 to the signature OneOf\(\[Any\(0\), Any\(1\), Any\(2\)\]\) failed
 select
 c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1

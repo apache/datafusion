@@ -21,6 +21,14 @@
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+mod udaf;
+mod udf;
+mod udwf;
+
+pub use udaf::aggregate_doc_sections;
+pub use udf::scalar_doc_sections;
+pub use udwf::window_doc_sections;
+
 #[allow(rustdoc::broken_intra_doc_links)]
 /// Documentation for use by [`ScalarUDFImpl`](ScalarUDFImpl),
 /// [`AggregateUDFImpl`](AggregateUDFImpl) and [`WindowUDFImpl`](WindowUDFImpl) functions.

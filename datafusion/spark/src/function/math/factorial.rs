@@ -111,7 +111,7 @@ pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
             Ok(ColumnarValue::Scalar(ScalarValue::Int64(result)))
         }
         ColumnarValue::Scalar(other) => {
-            exec_err!("`factorial` got an unexpected scalar type: {:?}", other)
+            exec_err!("`factorial` got an unexpected scalar type: {}", other)
         }
         ColumnarValue::Array(array) => match array.data_type() {
             Int32 => {
@@ -122,7 +122,7 @@ pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             other => {
-                exec_err!("`factorial` got an unexpected argument type: {:?}", other)
+                exec_err!("`factorial` got an unexpected argument type: {}", other)
             }
         },
     }

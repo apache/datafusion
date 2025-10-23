@@ -27,12 +27,13 @@ use arrow::datatypes::DataType::{
     Binary, BinaryView, FixedSizeBinary, Int64, LargeBinary,
 };
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
+use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
-use datafusion_functions::{downcast_arg, downcast_named_arg};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BitmapCount {
@@ -48,8 +49,10 @@ impl Default for BitmapCount {
 impl BitmapCount {
     pub fn new() -> Self {
         Self {
-            // TODO: add definitive TypeSignature after https://github.com/apache/datafusion/issues/17291 is done
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Binary)],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -67,15 +70,8 @@ impl ScalarUDFImpl for BitmapCount {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.first() {
-            Some(Binary | BinaryView | FixedSizeBinary(_) | LargeBinary) => Ok(Int64),
-            Some(data_type) => plan_err!(
-                "bitmap_count expects Binary/BinaryView/FixedSizeBinary/LargeBinary as argument, got {:?}", 
-                data_type
-            ),
-            None => internal_err!("bitmap_count does not support zero arguments"),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Int64)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -105,7 +101,7 @@ pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             downcast_and_count_ones!(input_array, FixedSizeBinaryArray)
         }
         data_type => {
-            internal_err!("bitmap_count does not support {:?}", data_type)
+            internal_err!("bitmap_count does not support {data_type}")
         }
     };
 

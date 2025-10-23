@@ -1,0 +1,321 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test IS NOT DISTINCT FROM join functionality
+# This tests the optimizer's ability to convert IS NOT DISTINCT FROM joins
+# to equijoins with proper null equality handling
+
+statement ok
+CREATE TABLE t0 (
+    id INT,
+    val INT
+)
+
+statement ok
+CREATE TABLE t1 (
+    id INT,
+    val INT
+)
+
+statement ok
+CREATE TABLE t2 (
+    id INT,
+    val INT
+)
+
+statement ok
+INSERT INTO t0 VALUES
+(1, 10),
+(2, NULL),
+(5, 50)
+
+statement ok
+INSERT INTO t1 VALUES
+(1, 10),
+(2, NULL),
+(3, 30),
+(6, NULL)
+
+statement ok
+INSERT INTO t2 VALUES
+(1, 10),
+(2, NULL),
+(4, 40),
+(6, 6)
+
+# Test basic IS NOT DISTINCT FROM join functionality
+query IIII rowsort
+SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON t1.val IS NOT DISTINCT FROM t2.val
+----
+1 1 10 10
+2 2 NULL NULL
+6 2 NULL NULL
+
+# Test that IS NOT DISTINCT FROM join produces HashJoin when used alone
+query TT
+EXPLAIN SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON t1.val IS NOT DISTINCT FROM t2.val
+----
+logical_plan
+01)Projection: t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+02)--Inner Join: t1.val = t2.val
+03)----TableScan: t1 projection=[id, val]
+04)----TableScan: t2 projection=[id, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.explain.format = "tree";
+
+# Tree explain should highlight null equality semantics
+query TT
+EXPLAIN SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON t1.val IS NOT DISTINCT FROM t2.val
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│         t1_id: id         │
+05)│         t2_id: id         │
+06)│          val: val         │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│    CoalesceBatchesExec    │
+10)│    --------------------   │
+11)│     target_batch_size:    │
+12)│            8192           │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│        HashJoinExec       │
+16)│    --------------------   │
+17)│      NullsEqual: true     ├──────────────┐
+18)│                           │              │
+19)│      on: (val = val)      │              │
+20)└─────────────┬─────────────┘              │
+21)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+22)│       DataSourceExec      ││       DataSourceExec      │
+23)│    --------------------   ││    --------------------   │
+24)│         bytes: 288        ││         bytes: 288        │
+25)│       format: memory      ││       format: memory      │
+26)│          rows: 1          ││          rows: 1          │
+27)└───────────────────────────┘└───────────────────────────┘
+
+statement ok
+set datafusion.explain.format = "indent";
+
+# For nested expression comparision, it should still able to be converted to Hash Join
+query IIII rowsort
+SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON ((t1.val+1) IS NOT DISTINCT FROM (t2.val+1)) AND ((t1.val + 1) IS NOT DISTINCT FROM 11);
+----
+1 1 10 10
+
+# The plan should include HashJoin
+query TT
+EXPLAIN SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON ((t1.val+1) IS NOT DISTINCT FROM (t2.val+1)) AND ((t1.val + 1) IS NOT DISTINCT FROM 11);
+----
+logical_plan
+01)Projection: t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+02)--Inner Join: CAST(t1.val AS Int64) + Int64(1) = CAST(t2.val AS Int64) + Int64(1)
+03)----Filter: CAST(t1.val AS Int64) + Int64(1) IS NOT DISTINCT FROM Int64(11)
+04)------TableScan: t1 projection=[id, val]
+05)----TableScan: t2 projection=[id, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], projection=[id@0, val@1, id@3, val@4], NullsEqual: true
+04)------CoalescePartitionsExec
+05)--------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------FilterExec: CAST(val@1 AS Int64) + 1 IS NOT DISTINCT FROM 11
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
+11)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Mixed join predicate with `IS DISTINCT FROM` and `IS NOT DISTINCT FROM`
+query IIII rowsort
+SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON ((t1.val+1) IS NOT DISTINCT FROM (t2.val+1)) AND ((t1.val % 3) IS DISTINCT FROM (t2.val % 3));
+----
+
+# The plan should include HashJoin
+query TT
+EXPLAIN SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON ((t1.val+1) IS NOT DISTINCT FROM (t2.val+1)) AND ((t1.val % 3) IS DISTINCT FROM (t2.val % 3));
+----
+logical_plan
+01)Projection: t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+02)--Inner Join: CAST(t1.val AS Int64) + Int64(1) = CAST(t2.val AS Int64) + Int64(1) Filter: CAST(t1.val AS Int64) % Int64(3) IS DISTINCT FROM CAST(t2.val AS Int64) % Int64(3)
+03)----TableScan: t1 projection=[id, val]
+04)----TableScan: t2 projection=[id, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], filter=CAST(val@0 AS Int64) % 3 IS DISTINCT FROM CAST(val@1 AS Int64) % 3, projection=[id@0, val@1, id@3, val@4], NullsEqual: true
+04)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test mixed equal and IS NOT DISTINCT FROM conditions
+# The `IS NOT DISTINCT FROM` expr should NOT in HashJoin's `on` predicate
+query TT
+EXPLAIN SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON t1.id = t2.id AND t1.val IS NOT DISTINCT FROM t2.val
+----
+logical_plan
+01)Projection: t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+02)--Inner Join: t1.id = t2.id Filter: t1.val IS NOT DISTINCT FROM t2.val
+03)----TableScan: t1 projection=[id, val]
+04)----TableScan: t2 projection=[id, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], filter=val@0 IS NOT DISTINCT FROM val@1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test the mixed condition join result
+query IIII rowsort
+SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON t1.id = t2.id AND t1.val IS NOT DISTINCT FROM t2.val
+----
+1 1 10 10
+2 2 NULL NULL
+
+# Test 3 table join
+query IIII rowsort
+SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON t1.val IS NOT DISTINCT FROM t2.val
+JOIN t0 ON t1.val IS NOT DISTINCT FROM t0.val
+----
+1 1 10 10
+2 2 NULL NULL
+6 2 NULL NULL
+
+# Ensure there is HashJoin in the plan
+query TT
+EXPLAIN SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON t1.val IS NOT DISTINCT FROM t2.val
+JOIN t0 ON t1.val IS NOT DISTINCT FROM t0.val
+----
+logical_plan
+01)Projection: t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+02)--Inner Join: t1.val = t0.val
+03)----Inner Join: t1.val = t2.val
+04)------TableScan: t1 projection=[id, val]
+05)------TableScan: t2 projection=[id, val]
+06)----TableScan: t0 projection=[val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@0, val@1)], projection=[id@1, val@2, id@3, val@4], NullsEqual: true
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)--------CoalesceBatchesExec: target_batch_size=8192
+07)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test IS NOT DISTINCT FROM with multiple columns
+statement ok
+CREATE TABLE t3 (
+    id INT,
+    val1 INT,
+    val2 INT
+)
+
+statement ok
+CREATE TABLE t4 (
+    id INT,
+    val1 INT,
+    val2 INT
+)
+
+statement ok
+INSERT INTO t3 VALUES
+(1, 10, 100),
+(2, NULL, 200),
+(3, 30, NULL)
+
+statement ok
+INSERT INTO t4 VALUES
+(1, 10, 100),
+(2, NULL, 200),
+(3, 30, NULL)
+
+# Test multiple IS NOT DISTINCT FROM conditions - should produce HashJoin
+query TT rowsort
+EXPLAIN SELECT t3.id AS t3_id, t4.id AS t4_id, t3.val1, t4.val1, t3.val2, t4.val2
+FROM t3
+JOIN t4 ON (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.val2 IS NOT DISTINCT FROM t4.val2)
+----
+01)Projection: t3.id AS t3_id, t4.id AS t4_id, t3.val1, t4.val1, t3.val2, t4.val2
+01)ProjectionExec: expr=[id@0 as t3_id, id@3 as t4_id, val1@1 as val1, val1@4 as val1, val2@2 as val2, val2@5 as val2]
+02)--CoalesceBatchesExec: target_batch_size=8192
+02)--Inner Join: t3.val1 = t4.val1, t3.val2 = t4.val2
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val1@1, val1@1), (val2@2, val2@2)], NullsEqual: true
+03)----TableScan: t3 projection=[id, val1, val2]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----TableScan: t4 projection=[id, val1, val2]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan
+physical_plan
+
+# Test the multiple IS NOT DISTINCT FROM join result
+query IIIIII
+SELECT t3.id AS t3_id, t4.id AS t4_id, t3.val1, t4.val1, t3.val2, t4.val2
+FROM t3
+JOIN t4 ON (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.val2 IS NOT DISTINCT FROM t4.val2)
+----
+1 1 10 10 100 100
+2 2 NULL NULL 200 200
+3 3 30 30 NULL NULL
+
+statement ok
+drop table t0;
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
+
+statement ok
+drop table t3;
+
+statement ok
+drop table t4;

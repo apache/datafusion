@@ -119,7 +119,7 @@ impl SchemaMapper for CustomSchemaMapper {
                 let default_value = match field.data_type() {
                     DataType::Int64 => ScalarValue::Int64(Some(0)),
                     DataType::Utf8 => ScalarValue::Utf8(Some("a".to_string())),
-                    _ => unimplemented!("Unsupported data type: {:?}", field.data_type()),
+                    _ => unimplemented!("Unsupported data type: {}", field.data_type()),
                 };
                 output_columns
                     .push(default_value.to_array_of_size(batch.num_rows()).unwrap());
@@ -199,7 +199,7 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
                             DataType::Int64 => ScalarValue::Int64(Some(1)),
                             DataType::Utf8 => ScalarValue::Utf8(Some("b".to_string())),
                             _ => unimplemented!(
-                                "Unsupported data type: {:?}",
+                                "Unsupported data type: {}",
                                 field.data_type()
                             ),
                         };

@@ -72,11 +72,7 @@ impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         write!(self.f, "{}", plan.display())?;
         if self.with_schema {
-            write!(
-                self.f,
-                " {}",
-                display_schema(&plan.schema().as_ref().to_owned().into())
-            )?;
+            write!(self.f, " {}", display_schema(plan.schema().as_arrow()))?;
         }
 
         self.indent += 1;
@@ -196,7 +192,7 @@ impl<'n> TreeNodeVisitor<'n> for GraphvizVisitor<'_, '_> {
             format!(
                 r"{}\nSchema: {}",
                 plan.display(),
-                display_schema(&plan.schema().as_ref().to_owned().into())
+                display_schema(plan.schema().as_arrow())
             )
         } else {
             format!("{}", plan.display())

@@ -133,7 +133,7 @@ impl ScalarUDFImpl for SparkArray {
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
                     } else {
-                        plan_err!("Coercion from {acc:?} to {x:?} failed.")
+                        plan_err!("Coercion from {acc} to {x} failed.")
                     }
                 })?;
         Ok(vec![new_type; arg_types.len()])
