@@ -365,10 +365,6 @@ impl ResultBuilder {
     }
 
     /// Finishes building the result and returns the final array.
-    ///
-    /// If a covering result was set with set_covering_result(), that result will be returned directly.
-    /// Otherwise, all partial results will be merged into a single array.
-    /// If no results were added, a null array of the appropriate type will be returned.
     fn finish(self) -> Result<ColumnarValue> {
         match self.covering_result {
             Some(v) => {
