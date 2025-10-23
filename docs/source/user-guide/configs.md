@@ -273,7 +273,13 @@ You can modify join optimization behavior in your queries by setting specific co
 Use the following command to update a configuration:
 
 ```
-set datafusion.optimizer.<configuration_name>
+SET datafusion.optimizer.<configuration_name>
+```
+
+Example
+
+``` sql
+SET datafusion.optimizer.prefer_hash_join = false;
 ```
 
 Adjusting the following configuration values influences how the optimizer selects the join algorithm
