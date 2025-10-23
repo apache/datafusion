@@ -39,7 +39,7 @@ use std::{any::Any, sync::Arc};
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub enum EvalMethod {
+enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
     ///      [ELSE result]
@@ -95,7 +95,7 @@ pub struct CaseExpr {
     /// Optional "else" expression
     else_expr: Option<Arc<dyn PhysicalExpr>>,
     /// Evaluation method to use
-    pub eval_method: EvalMethod,
+    eval_method: EvalMethod,
 }
 
 impl std::fmt::Display for CaseExpr {
