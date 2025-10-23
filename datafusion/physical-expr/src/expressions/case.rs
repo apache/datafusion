@@ -164,6 +164,92 @@ fn filter_array(
     filter.filter(array)
 }
 
+///
+/// Merges elements by index from a list of [`ArrayData`], creating a new [`ColumnarValue`] from
+/// those values.
+///
+/// Each element in `indices` is the index of an array in `values` offset by 1. The first
+/// occurrence of index value `n` will be mapped to the first value of array `n -1`. The second
+/// occurrence to the second value, and so on.
+///
+/// The index value `0` is used to indicate null values.
+///
+/// ```text
+/// ┌─────────────────┐      ┌─────────┐                                  ┌─────────────────┐
+/// │        A        │      │    0    │        merge(                    │       NULL      │
+/// ├─────────────────┤      ├─────────┤          [values0, values1],     ├─────────────────┤
+/// │        D        │      │    2    │          indices                 │        B        │
+/// └─────────────────┘      ├─────────┤        )                         ├─────────────────┤
+///   values array 0         │    2    │      ─────────────────────────▶  │        C        │
+///                          ├─────────┤                                  ├─────────────────┤
+///                          │    1    │                                  │        A        │
+///                          ├─────────┤                                  ├─────────────────┤
+///                          │    1    │                                  │        D        │
+/// ┌─────────────────┐      ├─────────┤                                  ├─────────────────┤
+/// │        B        │      │    2    │                                  │        E        │
+/// ├─────────────────┤      └─────────┘                                  └─────────────────┘
+/// │        C        │
+/// ├─────────────────┤        indices
+/// │        E        │         array                                      result
+/// └─────────────────┘
+///   values array 1
+///   values array 1
+/// ```
+fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
+    let data_refs = values.iter().collect();
+    let mut mutable = MutableArrayData::new(
+        data_refs,
+        true,
+        indices.len(),
+    );
+
+    // This loop extends the mutable array by taking slices from the partial results.
+    //
+    // take_offsets keeps track of how many values have been taken from each array.
+    let mut take_offsets = vec![0; values.len() + 1];
+    let mut start_row_ix = 0;
+    loop {
+        let array_ix = indices[start_row_ix];
+
+        // Determine the length of the slice to take.
+        let mut end_row_ix = start_row_ix + 1;
+        while end_row_ix < indices.len()
+            && indices[end_row_ix] == array_ix
+        {
+            end_row_ix += 1;
+        }
+
+        // Extend mutable with either nulls or with values from the array.
+        let start_offset = take_offsets[array_ix];
+        let end_offset = start_offset + (end_row_ix - start_row_ix);
+        if array_ix == 0 {
+            mutable.extend_nulls(end_offset - start_offset);
+        } else {
+            mutable.extend(array_ix - 1, start_offset, end_offset);
+        }
+
+        if end_row_ix == indices.len() {
+            break;
+        } else {
+            // Update the take_offsets array.
+            take_offsets[array_ix] = end_offset;
+            // Set the start_row_ix for the next slice.
+            start_row_ix = end_row_ix;
+        }
+    }
+
+    Ok(make_array(mutable.freeze()))
+}
+
+/// A builder for constructing result arrays for CASE expressions.
+///
+/// Rather than building a monolithic array containing all results, it maintains a set of
+/// partial result arrays and a mapping that indicates for each row which partial array
+/// contains the result value for that row.
+///
+/// On finish(), the builder will merge all partial results into a single array if necessary.
+/// If all rows evaluated to the same array, that array can be returned directly without
+/// any merging overhead.
 struct ResultBuilder {
     data_type: DataType,
     // A Vec of partial results that should be merged. `partial_result_indices` contains
@@ -179,6 +265,9 @@ struct ResultBuilder {
 }
 
 impl ResultBuilder {
+    /// Creates a new ResultBuilder that will produce arrays of the given data type.
+    ///
+    /// The capacity parameter indicates the number of rows in the result.
     fn new(data_type: &DataType, capacity: usize) -> Self {
         Self {
             data_type: data_type.clone(),
@@ -188,31 +277,32 @@ impl ResultBuilder {
         }
     }
 
-    /// Adds a result value.
+    /// Adds a result for one branch of the case expression.
     ///
-    /// `rows` should be a [UInt32Array] containing [RecordBatch] relative row indices
+    /// `row_indices` should be a [UInt32Array] containing [RecordBatch] relative row indices
     /// for which `value` contains result values.
     ///
-    /// If `value` is a scalar, the scalar value is used for each row in `rows`.
-    /// If `value` is an array, the values from the array and the indices from `rows` will be
-    /// processed pairwise.
-    fn add_result(&mut self, rows: &ArrayRef, value: ColumnarValue) -> Result<()> {
+    /// If `value` is a scalar, the scalar value will be used as the value for each row in `row_indices`.
+    ///
+    /// If `value` is an array, the values from the array and the indices from `row_indices` will be
+    /// processed pairwise. The lengths of `value` and `row_indices` must match.
+    fn add_branch_result(&mut self, row_indices: &ArrayRef, value: ColumnarValue) -> Result<()> {
         match value {
             ColumnarValue::Array(a) => {
-                assert_eq!(a.len(), rows.len());
-                if rows.len() == self.partial_result_indices.len() {
+                assert_eq!(a.len(), row_indices.len());
+                if row_indices.len() == self.partial_result_indices.len() {
                     self.set_covering_result(ColumnarValue::Array(a));
                 } else {
-                    self.add_partial_result(rows, a.to_data());
+                    self.add_partial_result(row_indices, a.to_data());
                 }
             }
             ColumnarValue::Scalar(s) => {
-                if rows.len() == self.partial_result_indices.len() {
+                if row_indices.len() == self.partial_result_indices.len() {
                     self.set_covering_result(ColumnarValue::Scalar(s));
                 } else {
                     self.add_partial_result(
-                        rows,
-                        s.to_array_of_size(rows.len())?.to_data(),
+                        row_indices,
+                        s.to_array_of_size(row_indices.len())?.to_data(),
                     );
                 }
             }
@@ -220,6 +310,11 @@ impl ResultBuilder {
         Ok(())
     }
 
+    /// Adds a partial result array.
+    ///
+    /// This method adds the given array data as a partial result and updates the index mapping
+    /// to indicate that the specified rows should take their values from this array.
+    /// The partial results will be merged into a single array when finish() is called.
     fn add_partial_result(&mut self, rows: &ArrayRef, data: ArrayData) {
         assert!(self.covering_result.is_none());
 
@@ -231,11 +326,21 @@ impl ResultBuilder {
         }
     }
 
+    /// Sets a covering result that applies to all rows.
+    ///
+    /// This is an optimization for cases where all rows evaluate to the same result.
+    /// When a covering result is set, the builder will return it directly from finish()
+    /// without any merging overhead.
     fn set_covering_result(&mut self, value: ColumnarValue) {
         assert!(self.partial_results.is_empty());
         self.covering_result = Some(value);
     }
 
+    /// Finishes building the result and returns the final array.
+    ///
+    /// If a covering result was set with set_covering_result(), that result will be returned directly.
+    /// Otherwise, all partial results will be merged into a single array.
+    /// If no results were added, a null array of the appropriate type will be returned.
     fn finish(self) -> Result<ColumnarValue> {
         match self.covering_result {
             Some(v) => {
@@ -251,53 +356,9 @@ impl ResultBuilder {
                         &self.data_type,
                     )?))
                 }
-                n => {
-                    // There are n partial results.
+                _ => {
                     // Merge into a single array.
-
-                    let data_refs = self.partial_results.iter().collect();
-                    let mut mutable = MutableArrayData::new(
-                        data_refs,
-                        true,
-                        self.partial_result_indices.len(),
-                    );
-
-                    // This loop extends the mutable array by taking slices from the partial results.
-                    //
-                    // take_offsets keeps track of how many values have been taken from each array.
-                    let mut take_offsets = vec![0; n + 1];
-                    let mut start_row_ix = 0;
-                    loop {
-                        let array_ix = self.partial_result_indices[start_row_ix];
-
-                        // Determine the length of the slice to take.
-                        let mut end_row_ix = start_row_ix + 1;
-                        while end_row_ix < self.partial_result_indices.len()
-                            && self.partial_result_indices[end_row_ix] == array_ix
-                        {
-                            end_row_ix += 1;
-                        }
-
-                        // Extend the mutable with either nulls or with values from the array.
-                        let start_offset = take_offsets[array_ix];
-                        let end_offset = start_offset + (end_row_ix - start_row_ix);
-                        if array_ix == 0 {
-                            mutable.extend_nulls(end_offset - start_offset);
-                        } else {
-                            mutable.extend(array_ix - 1, start_offset, end_offset);
-                        }
-
-                        if end_row_ix == self.partial_result_indices.len() {
-                            break;
-                        } else {
-                            // Update the take_offsets array.
-                            take_offsets[array_ix] = end_offset;
-                            // Set the start_row_ix for the next slice.
-                            start_row_ix = end_row_ix;
-                        }
-                    }
-
-                    Ok(ColumnarValue::Array(make_array(mutable.freeze())))
+                    Ok(ColumnarValue::Array(merge(&self.partial_results, &self.partial_result_indices)?))
                 }
             },
         }
@@ -409,7 +470,7 @@ impl CaseExpr {
                 let nulls_batch = filter_record_batch(&remainder_batch, &nulls_filter)?;
                 let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
                 let nulls_value = expr.evaluate(&nulls_batch)?;
-                result_builder.add_result(&nulls_rows, nulls_value)?;
+                result_builder.add_branch_result(&nulls_rows, nulls_value)?;
             }
 
             // All base values were null, so we can return early
@@ -461,7 +522,7 @@ impl CaseExpr {
 
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
-            result_builder.add_result(&then_rows, then_value)?;
+            result_builder.add_branch_result(&then_rows, then_value)?;
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
@@ -486,7 +547,7 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
-            result_builder.add_result(&remainder_rows, else_value)?;
+            result_builder.add_branch_result(&remainder_rows, else_value)?;
         }
 
         result_builder.finish()
@@ -541,7 +602,7 @@ impl CaseExpr {
 
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
-            result_builder.add_result(&then_rows, then_value)?;
+            result_builder.add_branch_result(&then_rows, then_value)?;
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
@@ -565,7 +626,7 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
-            result_builder.add_result(&remainder_rows, else_value)?;
+            result_builder.add_branch_result(&remainder_rows, else_value)?;
         }
 
         result_builder.finish()
