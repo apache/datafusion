@@ -740,13 +740,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let fields = fields
                     .iter()
                     .enumerate()
-                    .map(|(idx, field)| {
-                        let data_type = self.convert_data_type_to_field(&field.field_type)?;
-                        let field_name = match &field.field_name {
+                    .map(|(idx, sql_struct_field)| {
+                        let field = self.convert_data_type_to_field(&sql_struct_field.field_type)?;
+                        let field_name = match &sql_struct_field.field_name {
                             Some(ident) => ident.clone(),
                             None => Ident::new(format!("c{idx}")),
                         };
-                        Ok(data_type.as_ref().clone().with_name(self.ident_normalizer.normalize(field_name)))
+                        Ok(field.as_ref().clone().with_name(self.ident_normalizer.normalize(field_name)))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
