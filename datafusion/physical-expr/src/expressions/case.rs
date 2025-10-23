@@ -131,6 +131,8 @@ fn create_filter(predicate: &BooleanArray) -> FilterPredicate {
     filter_builder.build()
 }
 
+// This should be removed when https://github.com/apache/arrow-rs/pull/8693
+// is merged and becomes available.
 fn filter_record_batch(
     record_batch: &RecordBatch,
     filter: &FilterPredicate,
@@ -140,6 +142,11 @@ fn filter_record_batch(
         .iter()
         .map(|a| filter_array(a, filter))
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    // SAFETY: since we start from a valid RecordBatch, there's no need to revalidate the schema
+    // since the set of columns has not changed.
+    // The input column arrays all had the same length (since they're coming from a valid RecordBatch)
+    // and the filtering them with the same filter will produces a new set of arrays with identical
+    // lengths.
     unsafe {
         Ok(RecordBatch::new_unchecked(
             record_batch.schema(),
