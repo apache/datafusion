@@ -39,4 +39,6 @@ github:
     # enable updating head branches of pull requests
     allow_update_branch: true
     allow_auto_merge: true
+  protected_branches:
+
 
