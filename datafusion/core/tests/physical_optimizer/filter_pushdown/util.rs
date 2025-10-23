@@ -158,6 +158,10 @@ impl FileSource for TestSource {
     }
 
     fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+        assert!(
+            schema.table_partition_cols().is_empty(),
+            "TestSource does not support partition columns"
+        );
         Arc::new(TestSource {
             schema: Some(schema.file_schema().clone()),
             ..self.clone()

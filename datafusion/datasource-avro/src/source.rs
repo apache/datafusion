@@ -87,7 +87,8 @@ impl FileSource for AvroSource {
 
     fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.schema = Some(schema.file_schema().clone());
+        // TableSchema may have partition columns, but AvroSource does not use partition columns or values atm
+        conf.schema = Some(Arc::clone(&schema.file_schema()));
         Arc::new(conf)
     }
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
