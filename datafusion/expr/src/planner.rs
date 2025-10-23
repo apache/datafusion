@@ -25,7 +25,7 @@ use crate::{
     AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
 };
-use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
@@ -102,6 +102,18 @@ pub trait ContextProvider {
     ///
     /// A user defined variable is typically accessed via `@var_name`
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType>;
+
+    /// Return metadata about a system/user-defined variable, if any.
+    ///
+    /// By default, this wraps [`Self::get_variable_type`] in an Arrow [`Field`]
+    /// with nullable set to `true` and no metadata. Implementations that can
+    /// provide richer information (such as nullability or extension metadata)
+    /// should override this method.
+    fn get_variable_field(&self, variable_names: &[String]) -> Option<FieldRef> {
+        self.get_variable_type(variable_names).map(|data_type| {
+            Arc::new(Field::new("", data_type, true)) as FieldRef
+        })
+    }
 
     /// Return overall configuration options
     fn options(&self) -> &ConfigOptions;

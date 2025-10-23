@@ -113,7 +113,7 @@ impl ExprSchemable for Expr {
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
-            Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
+            Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
                 for (_, then_expr) in &case.when_then_expr {
@@ -309,8 +309,8 @@ impl ExprSchemable for Expr {
                     window_function,
                 )
                 .map(|(_, nullable)| nullable),
-            Expr::ScalarVariable(_, _)
-            | Expr::TryCast { .. }
+            Expr::ScalarVariable(field, _) => Ok(field.is_nullable()),
+            Expr::TryCast { .. }
             | Expr::Unnest(_)
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -460,9 +460,9 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => {
                 Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
             }
-            Expr::ScalarVariable(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
-            }
+            Expr::ScalarVariable(field, _) => Ok(Arc::new(
+                field.as_ref().clone().with_name(&schema_name),
+            )),
             Expr::Literal(l, metadata) => {
                 let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
                 if let Some(metadata) = metadata {
