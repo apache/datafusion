@@ -337,6 +337,9 @@ impl ResultBuilder {
     /// to indicate that the specified rows should take their values from this array.
     /// The partial results will be merged into a single array when finish() is called.
     fn add_partial_result(&mut self, row_indices: &ArrayRef, row_values: ArrayData) {
+        // Covering results and partial results are mutually exclusive.
+        // We can assert this since the case evaluation methods are written to only evaluate
+        // each row of the record batch once.
         assert!(self.covering_result.is_none());
 
         self.partial_results.push(row_values);
@@ -353,7 +356,11 @@ impl ResultBuilder {
     /// When a covering result is set, the builder will return it directly from finish()
     /// without any merging overhead.
     fn set_covering_result(&mut self, value: ColumnarValue) {
+        // Covering results and partial results are mutually exclusive.
+        // We can assert this since the case evaluation methods are written to only evaluate
+        // each row of the record batch once.
         assert!(self.partial_results.is_empty());
+
         self.covering_result = Some(value);
     }
 
