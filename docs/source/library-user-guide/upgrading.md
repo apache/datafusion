@@ -25,6 +25,15 @@
 
 You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
 
+### `arrow` / `parquet` updated to 57.0.0
+
+### Upgrade to arrow `57.0.0` and parquet `57.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `57.0.0`, including several dependent crates such as `prost`,
+`tonic`, `pyo3`, and `substrait`. . See the [release
+notes](https://github.com/apache/arrow-rs/releases/tag/57.0.0) for more details.
+
 ### `MSRV` updated to 1.87.0
 
 The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
