@@ -34,7 +34,7 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
-use datafusion_common::{exec_err, plan_datafusion_err, plan_err, Result, ScalarValue};
+use datafusion_common::{exec_err, plan_datafusion_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -194,28 +194,7 @@ impl ScalarUDFImpl for PowerFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Int32 => Ok(DataType::Int32),
-            DataType::Int64 => Ok(DataType::Int64),
-            DataType::Float32 => Ok(DataType::Float32),
-            DataType::Float64 => Ok(DataType::Float64),
-            DataType::Decimal32(precision, scale) => {
-                Ok(DataType::Decimal32(precision, scale))
-            }
-            DataType::Decimal64(precision, scale) => {
-                Ok(DataType::Decimal64(precision, scale))
-            }
-            DataType::Decimal128(precision, scale) => {
-                Ok(DataType::Decimal128(precision, scale))
-            }
-            DataType::Decimal256(precision, scale) => {
-                Ok(DataType::Decimal256(precision, scale))
-            }
-            _ => plan_err!(
-                "Unsupported arguments {arg_types:?} for function {}",
-                self.name()
-            ),
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn aliases(&self) -> &[String] {
@@ -223,30 +202,28 @@ impl ScalarUDFImpl for PowerFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(&args.args)?;
-
-        let base = &args[0];
-        let exponent = ColumnarValue::Array(Arc::clone(&args[1]));
+        let base = &args.args[0].to_array(args.number_rows)?;
+        let exponent = &args.args[1];
 
         let arr: ArrayRef = match base.data_type() {
             DataType::Float32 => {
                 calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
                     base,
-                    &exponent,
+                    exponent,
                     |b, e| Ok(f32::powf(b, e)),
                 )?
             }
             DataType::Float64 => {
                 calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
                     &base,
-                    &exponent,
+                    exponent,
                     |b, e| Ok(f64::powf(b, e)),
                 )?
             }
             DataType::Int32 => {
                 calculate_binary_math::<Int32Type, Int32Type, Int32Type, _>(
                     &base,
-                    &exponent,
+                    exponent,
                     |b, e| match e.try_into() {
                         Ok(exp_u32) => b.pow_checked(exp_u32),
                         Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
@@ -258,7 +235,7 @@ impl ScalarUDFImpl for PowerFunc {
             DataType::Int64 => {
                 calculate_binary_math::<Int64Type, Int64Type, Int64Type, _>(
                     &base,
-                    &exponent,
+                    exponent,
                     |b, e| match e.try_into() {
                         Ok(exp_u32) => b.pow_checked(exp_u32),
                         Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
@@ -272,7 +249,7 @@ impl ScalarUDFImpl for PowerFunc {
                     DataType::Int64 => {
                         calculate_binary_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
                             &base,
-                            &exponent,
+                            exponent,
                             |b, e| pow_decimal32_int(b, *scale, e),
                         )?
                     }
@@ -282,7 +259,7 @@ impl ScalarUDFImpl for PowerFunc {
                             Float64Type,
                             Decimal32Type,
                             _,
-                        >(&base, &exponent, |b, e| {
+                        >(&base, exponent, |b, e| {
                             pow_decimal32_float(b, *scale, e)
                         })?
                     }
@@ -297,7 +274,7 @@ impl ScalarUDFImpl for PowerFunc {
                     DataType::Int64 => {
                         calculate_binary_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
                             &base,
-                            &exponent,
+                            exponent,
                             |b, e| pow_decimal64_int(b, *scale, e),
                         )?
                     }
@@ -307,7 +284,7 @@ impl ScalarUDFImpl for PowerFunc {
                             Float64Type,
                             Decimal64Type,
                             _,
-                        >(&base, &exponent, |b, e| {
+                        >(&base, exponent, |b, e| {
                             pow_decimal64_float(b, *scale, e)
                         })?
                     }
@@ -319,23 +296,21 @@ impl ScalarUDFImpl for PowerFunc {
             }
             DataType::Decimal128(_precision, scale) => {
                 let array = match exponent.data_type() {
-                    DataType::Int64 => {
-                        calculate_binary_math::<
-                            Decimal128Type,
-                            Int64Type,
-                            Decimal128Type,
-                            _,
-                        >(&base, &exponent, |b, e| {
-                            pow_decimal128_int(b, *scale, e)
-                        })?
-                    }
+                    DataType::Int64 => calculate_binary_math::<
+                        Decimal128Type,
+                        Int64Type,
+                        Decimal128Type,
+                        _,
+                    >(&base, exponent, |b, e| {
+                        pow_decimal128_int(b, *scale, e)
+                    })?,
                     DataType::Float64 => {
                         calculate_binary_math::<
                             Decimal128Type,
                             Float64Type,
                             Decimal128Type,
                             _,
-                        >(&base, &exponent, |b, e| {
+                        >(&base, exponent, |b, e| {
                             pow_decimal128_float(b, *scale, e)
                         })?
                     }
@@ -347,23 +322,21 @@ impl ScalarUDFImpl for PowerFunc {
             }
             DataType::Decimal256(_precision, scale) => {
                 let array = match exponent.data_type() {
-                    DataType::Int64 => {
-                        calculate_binary_math::<
-                            Decimal256Type,
-                            Int64Type,
-                            Decimal256Type,
-                            _,
-                        >(&base, &exponent, |b, e| {
-                            pow_decimal256_int(b, *scale, e)
-                        })?
-                    }
+                    DataType::Int64 => calculate_binary_math::<
+                        Decimal256Type,
+                        Int64Type,
+                        Decimal256Type,
+                        _,
+                    >(&base, exponent, |b, e| {
+                        pow_decimal256_int(b, *scale, e)
+                    })?,
                     DataType::Float64 => {
                         calculate_binary_math::<
                             Decimal256Type,
                             Float64Type,
                             Decimal256Type,
                             _,
-                        >(&base, &exponent, |b, e| {
+                        >(&base, exponent, |b, e| {
                             pow_decimal256_float(b, *scale, e)
                         })?
                     }
