@@ -1441,14 +1441,15 @@ mod tests {
         },
         {collect, expressions::col},
     };
-
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use insta::assert_snapshot;
     use itertools::Itertools;
 
@@ -1937,6 +1938,47 @@ mod tests {
         let exec =
             TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
         let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(2))?;
+
+        let mut total_rows = 0;
+        for partition in 0..2 {
+            let mut stream = exec.execute(partition, Arc::clone(&task_ctx))?;
+            while let Some(batch) = stream.next().await {
+                total_rows += batch?.num_rows();
+            }
+        }
+
+        let metrics = exec.metrics().expect("repartition metrics");
+        assert_eq!(metrics.output_rows(), Some(total_rows));
+        assert!(
+            metrics.elapsed_compute().is_some(),
+            "expected elapsed_compute metric"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repartition_preserve_order_reports_baseline_metrics() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = test_schema();
+        let partition = create_vec_batches(1);
+        let input_partitions = vec![partition.clone(), partition];
+
+        let sort_exprs: LexOrdering = [PhysicalSortExpr {
+            expr: col("c0", schema.as_ref()).unwrap(),
+            options: SortOptions::default(),
+        }]
+        .into();
+
+        let memory =
+            TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+        let memory = memory
+            .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs.clone()])?;
+        let memory = TestMemoryExec::update_cache(Arc::new(memory));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(memory);
+
+        let exec = RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))?
+            .with_preserve_order();
 
         let mut total_rows = 0;
         for partition in 0..2 {
