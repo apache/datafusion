@@ -97,6 +97,8 @@ struct PartitionChannels {
     reservation: SharedMemoryReservation,
     /// Spill manager for handling disk spills for this output partition
     spill_manager: Arc<SpillManager>,
+    /// Baseline metrics shared by this output partition
+    baseline_metrics: BaselineMetrics,
 }
 
 #[derive(Debug)]
@@ -236,6 +238,7 @@ impl RepartitionExecState {
                 spill_metrics,
                 input.schema(),
             ));
+            let baseline_metrics = BaselineMetrics::new(&metrics, partition);
             channels.insert(
                 partition,
                 PartitionChannels {
@@ -243,6 +246,7 @@ impl RepartitionExecState {
                     rx,
                     reservation,
                     spill_manager,
+                    baseline_metrics,
                 },
             );
         }
@@ -266,11 +270,22 @@ impl RepartitionExecState {
                 })
                 .collect();
 
+            let baseline_metrics: Vec<_> = (0..partitioning.partition_count())
+                .map(|partition| {
+                    channels
+                        .get(&partition)
+                        .expect("baseline for partition should exist")
+                        .baseline_metrics
+                        .intermediate()
+                })
+                .collect();
+
             let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
                 stream,
                 txs.clone(),
                 partitioning.clone(),
                 metrics,
+                baseline_metrics,
             ));
 
             // In a separate task, wait for each input to be done
@@ -349,14 +364,20 @@ impl BatchPartitioner {
     ///
     /// The time spent repartitioning, not including time spent in `f` will be recorded
     /// to the [`metrics::Time`] provided on construction
-    pub fn partition<F>(&mut self, batch: RecordBatch, mut f: F) -> Result<()>
+    pub fn partition<F>(
+        &mut self,
+        batch: RecordBatch,
+        baselines: Option<&[BaselineMetrics]>,
+        mut f: F,
+    ) -> Result<()>
     where
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
-        self.partition_iter(batch)?.try_for_each(|res| match res {
-            Ok((partition, batch)) => f(partition, batch),
-            Err(e) => Err(e),
-        })
+        self.partition_iter(batch, baselines)?
+            .try_for_each(|res| match res {
+                Ok((partition, batch)) => f(partition, batch),
+                Err(e) => Err(e),
+            })
     }
 
     /// Actual implementation of [`partition`](Self::partition).
@@ -364,10 +385,11 @@ impl BatchPartitioner {
     /// The reason this was pulled out is that we need to have a variant of `partition` that works w/ sync functions,
     /// and one that works w/ async. Using an iterator as an intermediate representation was the best way to achieve
     /// this (so we don't need to clone the entire implementation).
-    fn partition_iter(
-        &mut self,
+    fn partition_iter<'a>(
+        &'a mut self,
         batch: RecordBatch,
-    ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
+        baselines: Option<&'a [BaselineMetrics]>,
+    ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + 'a> {
         let it: Box<dyn Iterator<Item = Result<(usize, RecordBatch)>> + Send> =
             match &mut self.state {
                 BatchPartitionerState::RoundRobin {
@@ -410,6 +432,7 @@ impl BatchPartitioner {
 
                     // Borrowing partitioner timer to prevent moving `self` to closure
                     let partitioner_timer = &self.timer;
+                    let baselines_copy = baselines;
                     let it = indices
                         .into_iter()
                         .enumerate()
@@ -418,6 +441,9 @@ impl BatchPartitioner {
                             (!indices.is_empty()).then_some((partition, indices))
                         })
                         .map(move |(partition, indices)| {
+                            let baseline_timer = baselines_copy.map(|baselines| {
+                                baselines[partition].elapsed_compute().timer()
+                            });
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
 
@@ -433,7 +459,9 @@ impl BatchPartitioner {
                             )
                             .unwrap();
 
-                            Ok((partition, batch))
+                            let result = Ok((partition, batch));
+                            drop(baseline_timer);
+                            result
                         });
 
                     Box::new(it)
@@ -721,7 +749,7 @@ impl ExecutionPlan for RepartitionExec {
             let num_input_partitions = input.output_partitioning().partition_count();
 
             // lock scope
-            let (mut rx, reservation, spill_manager, abort_helper) = {
+            let (mut rx, reservation, spill_manager, baseline_metrics, abort_helper) = {
                 // lock mutexes
                 let mut state = state.lock();
                 let state = state.consume_input_streams(
@@ -739,6 +767,7 @@ impl ExecutionPlan for RepartitionExec {
                     rx,
                     reservation,
                     spill_manager,
+                    baseline_metrics,
                     ..
                 } = state
                     .channels
@@ -749,6 +778,7 @@ impl ExecutionPlan for RepartitionExec {
                     rx,
                     reservation,
                     spill_manager,
+                    baseline_metrics,
                     Arc::clone(&state.abort_helper),
                 )
             };
@@ -784,7 +814,7 @@ impl ExecutionPlan for RepartitionExec {
                     .with_streams(input_streams)
                     .with_schema(schema_captured)
                     .with_expressions(&sort_exprs.unwrap())
-                    .with_metrics(BaselineMetrics::new(&metrics, partition))
+                    .with_metrics(baseline_metrics.clone())
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(fetch)
                     .with_reservation(merge_reservation)
@@ -798,7 +828,7 @@ impl ExecutionPlan for RepartitionExec {
                     _drop_helper: abort_helper,
                     reservation,
                     spill_manager,
-                    baseline_metrics: BaselineMetrics::new(&metrics, partition),
+                    baseline_metrics,
                     state: RepartitionStreamState::ReceivingFromChannel,
                 }) as SendableRecordBatchStream)
             }
@@ -1048,6 +1078,7 @@ impl RepartitionExec {
         >,
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
+        baseline_metrics: Vec<BaselineMetrics>,
     ) -> Result<()> {
         let mut partitioner =
             BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
@@ -1071,7 +1102,7 @@ impl RepartitionExec {
                 continue;
             }
 
-            for res in partitioner.partition_iter(batch)? {
+            for res in partitioner.partition_iter(batch, Some(&baseline_metrics))? {
                 let (partition, batch) = res?;
                 let size = batch.get_array_memory_size();
 
@@ -1080,6 +1111,8 @@ impl RepartitionExec {
                 if let Some((tx, reservation, spill_manager)) =
                     output_channels.get_mut(&partition)
                 {
+                    let _baseline_timer =
+                        baseline_metrics[partition].elapsed_compute().timer();
                     let (batch_to_send, is_memory_batch) =
                         match reservation.lock().try_grow(size) {
                             Ok(_) => {
