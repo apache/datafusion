@@ -529,16 +529,15 @@ impl CaseExpr {
             // Evaluate the 'when' predicate for the remainder batch
             // This results in a boolean array with the same length as the remaining number of rows
             let when_expr = &self.when_then_expr[i].0;
-            let when_value = when_expr
-                .evaluate(&remainder_batch)?
-                .into_array(remainder_batch.num_rows())?;
-            let when_value = compare_with_eq(
-                &when_value,
-                &base_value,
-                // The types of case and when expressions will be coerced to match.
-                // We only need to check if the base_value is nested.
-                base_value_is_nested,
-            )?;
+            let when_value = match when_expr.evaluate(&remainder_batch)? {
+                ColumnarValue::Array(a) => {
+                    compare_with_eq(&a, &base_value, base_value_is_nested)
+                }
+                ColumnarValue::Scalar(s) => {
+                    let scalar = Scalar::new(s.to_array()?);
+                    compare_with_eq(&scalar, &base_value, base_value_is_nested)
+                }
+            }?;
 
             let when_match_count = when_value.true_count();
 
