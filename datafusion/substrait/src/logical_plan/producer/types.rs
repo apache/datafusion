@@ -284,7 +284,8 @@ pub(crate) fn to_substrait_type_from_field(
         DataType::Map(inner, _) => match inner.data_type() {
             DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
                 let key_type = to_substrait_type_from_field(producer, &key_and_value[0])?;
-                let value_type = to_substrait_type_from_field(producer, &key_and_value[1])?;
+                let value_type =
+                    to_substrait_type_from_field(producer, &key_and_value[1])?;
                 Ok(substrait::proto::Type {
                     kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
                         key: Some(Box::new(key_type)),
@@ -298,10 +299,12 @@ pub(crate) fn to_substrait_type_from_field(
         },
         DataType::Dictionary(key_type, value_type) => {
             let key_type = to_substrait_type_from_field(
-                producer, &Field::new("", key_type.as_ref().clone(), dt.is_nullable()).into(),
+                producer,
+                &Field::new("", key_type.as_ref().clone(), dt.is_nullable()).into(),
             )?;
             let value_type = to_substrait_type_from_field(
-                producer, &Field::new("", value_type.as_ref().clone(), dt.is_nullable()).into(),
+                producer,
+                &Field::new("", value_type.as_ref().clone(), dt.is_nullable()).into(),
             )?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
@@ -315,9 +318,7 @@ pub(crate) fn to_substrait_type_from_field(
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
-                .map(|field| {
-                    to_substrait_type_from_field(producer, field)
-                })
+                .map(|field| to_substrait_type_from_field(producer, field))
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Struct(r#type::Struct {

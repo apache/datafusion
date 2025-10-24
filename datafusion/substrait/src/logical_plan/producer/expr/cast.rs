@@ -80,7 +80,7 @@ pub fn from_try_cast(
 mod tests {
     use super::*;
     use crate::logical_plan::producer::{
-        to_substrait_extended_expr, DefaultSubstraitProducer, to_substrait_type
+        to_substrait_extended_expr, to_substrait_type, DefaultSubstraitProducer,
     };
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;
