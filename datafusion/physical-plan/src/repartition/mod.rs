@@ -183,6 +183,7 @@ impl RepartitionExecState {
         Ok(())
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn consume_input_streams(
         &mut self,
         input: Arc<dyn ExecutionPlan>,
