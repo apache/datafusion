@@ -1075,6 +1075,35 @@ async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let plan = ctx
+        .sql("SELECT $1")
+        .await
+        .unwrap()
+        .into_optimized_plan()
+        .unwrap();
+    let prepared = LogicalPlanBuilder::new(plan)
+        .prepare(
+            "".to_string(),
+            vec![Field::new("", DataType::Int32, true)
+                .with_metadata(
+                    [("some_key".to_string(), "some_value".to_string())].into(),
+                )
+                .into()],
+        )
+        .unwrap()
+        .plan()
+        .clone();
+
+    let bytes = logical_plan_to_bytes(&prepared)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{prepared}"), format!("{logical_round_trip}"));
+    Ok(())
+}
+
 pub mod proto {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct TopKPlanProto {
