@@ -119,6 +119,7 @@ See [issue #17713] for more details.
 ### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
 
 A new `TableSchema` struct has been introduced in the `datafusion-datasource` crate to better manage table schemas with partition columns. This struct helps distinguish between:
+
 - **File schema**: The schema of actual data files on disk
 - **Partition columns**: Columns derived from directory structure (e.g., Hive-style partitioning)
 - **Table schema**: The complete schema combining both file and partition columns
@@ -126,6 +127,7 @@ A new `TableSchema` struct has been introduced in the `datafusion-datasource` cr
 As part of this change, the `FileSource::with_schema()` method signature has changed from accepting a `SchemaRef` to accepting a `TableSchema`.
 
 **Who is affected:**
+
 - Users who have implemented custom `FileSource` implementations will need to update their code
 - Users who only use built-in file sources (Parquet, CSV, JSON, AVRO, Arrow) are not affected
 
