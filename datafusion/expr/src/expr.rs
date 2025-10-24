@@ -32,6 +32,7 @@ use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
+use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -3304,28 +3305,18 @@ impl Display for Expr {
                 write!(f, "END")
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                if data_type.metadata().is_empty() {
-                    write!(f, "CAST({expr} AS {})", data_type.data_type())
-                } else {
-                    write!(
-                        f,
-                        "CAST({expr} AS {}<{:?}>)",
-                        data_type.data_type(),
-                        data_type.metadata()
-                    )
-                }
+                let formatted = format_type_and_metadata(
+                    data_type.data_type(),
+                    Some(data_type.metadata()),
+                );
+                write!(f, "CAST({expr} AS {})", formatted)
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
-                if data_type.metadata().is_empty() {
-                    write!(f, "TRY_CAST({expr} AS {})", data_type.data_type())
-                } else {
-                    write!(
-                        f,
-                        "TRY_CAST({expr} AS {}<{:?}>)",
-                        data_type.data_type(),
-                        data_type.metadata()
-                    )
-                }
+                let formatted = format_type_and_metadata(
+                    data_type.data_type(),
+                    Some(data_type.metadata()),
+                );
+                write!(f, "TRY_CAST({expr} AS {})", formatted)
             }
             Expr::Not(expr) => write!(f, "NOT {expr}"),
             Expr::Negative(expr) => write!(f, "(- {expr})"),
