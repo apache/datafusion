@@ -521,6 +521,10 @@ impl CaseExpr {
             base_value = filter_array(&base_value, &not_null_filter)?;
         }
 
+        // The types of case and when expressions will be coerced to match.
+        // We only need to check if the base_value is nested.
+        let base_value_is_nested = base_value.data_type().is_nested();
+
         for i in 0..self.when_then_expr.len() {
             // Evaluate the 'when' predicate for the remainder batch
             // This results in a boolean array with the same length as the remaining number of rows
@@ -533,13 +537,22 @@ impl CaseExpr {
                 &base_value,
                 // The types of case and when expressions will be coerced to match.
                 // We only need to check if the base_value is nested.
-                base_value.data_type().is_nested(),
+                base_value_is_nested,
             )?;
 
-            // If the 'when' predicate did not match any rows, continue to the next branch immediately
             let when_match_count = when_value.true_count();
+
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately
             if when_match_count == 0 {
                 continue;
+            }
+
+            // If the 'when' predicate matched all remaining rows, there is no need to filter
+            if when_match_count == remainder_batch.num_rows() {
+                let then_expression = &self.when_then_expr[i].1;
+                let then_value = then_expression.evaluate(&remainder_batch)?;
+                result_builder.add_branch_result(&remainder_rows, then_value)?;
+                return result_builder.finish();
             }
 
             // Make sure 'NULL' is treated as false
@@ -561,9 +574,7 @@ impl CaseExpr {
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
-            if remainder_batch.num_rows() == when_match_count
-                || (self.else_expr.is_none() && i == self.when_then_expr.len() - 1)
-            {
+            if self.else_expr.is_none() && i == self.when_then_expr.len() - 1 {
                 return result_builder.finish();
             }
 
@@ -616,10 +627,19 @@ impl CaseExpr {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
 
-            // If the 'when' predicate did not match any rows, continue to the next branch immediately
             let when_match_count = when_value.true_count();
+
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately
             if when_match_count == 0 {
                 continue;
+            }
+
+            // If the 'when' predicate matched all remaining rows, there is no need to filter
+            if when_match_count == remainder_batch.num_rows() {
+                let then_expression = &self.when_then_expr[i].1;
+                let then_value = then_expression.evaluate(&remainder_batch)?;
+                result_builder.add_branch_result(&remainder_rows, then_value)?;
+                return result_builder.finish();
             }
 
             // Make sure 'NULL' is treated as false
@@ -641,9 +661,7 @@ impl CaseExpr {
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
-            if remainder_batch.num_rows() == when_match_count
-                || (self.else_expr.is_none() && i == self.when_then_expr.len() - 1)
-            {
+            if self.else_expr.is_none() && i == self.when_then_expr.len() - 1 {
                 return result_builder.finish();
             }
 
