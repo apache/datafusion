@@ -211,12 +211,13 @@ fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
         while end_row_ix < indices.len() && indices[end_row_ix] == array_ix {
             end_row_ix += 1;
         }
+        let slice_length = end_row_ix - start_row_ix;
 
         // Extend mutable with either nulls or with values from the array.
         let start_offset = take_offsets[array_ix];
-        let end_offset = start_offset + (end_row_ix - start_row_ix);
+        let end_offset = start_offset + slice_length;
         if array_ix == 0 {
-            mutable.extend_nulls(end_offset - start_offset);
+            mutable.extend_nulls(slice_length);
         } else {
             mutable.extend(array_ix - 1, start_offset, end_offset);
         }
