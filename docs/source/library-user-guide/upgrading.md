@@ -126,23 +126,19 @@ However, if you were directly constructing `FileScanConfigBuilder` from a `FileS
 
 **Before:**
 
-```rust
-# /* comment to avoid running
+```rust,ignore
 let builder = FileScanConfigBuilder {
     file_schema: my_schema,
     table_partition_cols: partition_cols,
     ...
 };
-# */
 ```
 
 **After:**
 
-```rust
-# /* comment to avoid running
-let builder = FileScanConfigBuilder::new(url, my_schema, file_source)
-    .with_table_partition_cols(partition_cols);
-# */
+```rust,ignore
+let table_schema = TableSchema::new(my_schema, partition_cols);
+let builder = FileScanConfigBuilder::new(url, table_schema, file_source);
 ```
 
 See [#18231] for details.
