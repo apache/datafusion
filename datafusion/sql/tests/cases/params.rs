@@ -754,7 +754,7 @@ fn test_update_infer_with_metadata() {
         ("$2", Some(uuid_field.clone().with_name("id").into())),
     ];
     let param_values = vec![
-        ScalarAndMetadata::new(ScalarValue::from("Turing"), None),
+        ScalarAndMetadata::from(ScalarValue::from("Turing")),
         ScalarAndMetadata::new(
             ScalarValue::FixedSizeBinary(16, Some(uuid_bytes)),
             Some(uuid_field.metadata().into()),
@@ -831,8 +831,8 @@ fn test_insert_infer_with_metadata() {
             ScalarValue::FixedSizeBinary(16, Some(uuid_bytes)),
             Some(uuid_field.metadata().into()),
         ),
-        ScalarAndMetadata::new(ScalarValue::from("Alan"), None),
-        ScalarAndMetadata::new(ScalarValue::from("Turing"), None),
+        ScalarAndMetadata::from(ScalarValue::from("Alan")),
+        ScalarAndMetadata::from(ScalarValue::from("Turing")),
     ];
 
     // Check a normal insert
