@@ -75,15 +75,40 @@ impl Display for ScalarAndMetadata {
             .map(|metadata| SerializedTypeView::from((&storage_type, metadata)))
             .unwrap_or(SerializedTypeView::from(&storage_type));
 
+        let metadata_without_extension_info = self
+            .metadata
+            .as_ref()
+            .map(|metadata| {
+                metadata
+                    .inner()
+                    .into_iter()
+                    .filter(|(k, _)| {
+                        *k != "ARROW:extension:name" && *k != "ARROW:extension:metadata"
+                    })
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or(BTreeMap::new());
+
         match (
             serialized_type.extension_name(),
             serialized_type.extension_metadata(),
         ) {
-            (Some(name), None) => write!(f, "{name}<{:?}>", self.value()),
+            (Some(name), None) => write!(f, "{name}<{:?}>", self.value())?,
             (Some(name), Some(metadata)) => {
-                write!(f, "{name}({metadata})<{:?}>", self.value())
+                write!(f, "{name}({metadata})<{:?}>", self.value())?
             }
-            _ => write!(f, "{:?}", self.value()),
+            _ => write!(f, "{:?}", self.value())?,
+        }
+
+        if !metadata_without_extension_info.is_empty() {
+            write!(
+                f,
+                " {:?}",
+                FieldMetadata::new(metadata_without_extension_info)
+            )
+        } else {
+            Ok(())
         }
     }
 }
