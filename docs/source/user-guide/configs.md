@@ -272,8 +272,8 @@ condition of the two tables.
 You can modify join optimization behavior in your queries by setting specific configuration values.
 Use the following command to update a configuration:
 
-```
-SET datafusion.optimizer.<configuration_name>
+```sql
+SET datafusion.optimizer.<configuration_name>;
 ```
 
 Example
