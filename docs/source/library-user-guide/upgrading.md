@@ -116,6 +116,39 @@ Users may need to update their paths to account for these changes.
 
 See [issue #17713] for more details.
 
+### `FileScanConfigBuilder` now uses `TableSchema` internally
+
+The `FileScanConfigBuilder` has been refactored to use `TableSchema` directly instead of managing `file_schema` and `table_partition_cols` separately. This simplifies the builder's internal state management and makes the API more consistent.
+
+**Impact:** This change is mostly internal and should not affect most users. The public API of `FileScanConfigBuilder` remains the same - you still use `with_table_partition_cols()` to set partition columns.
+
+However, if you were directly constructing `FileScanConfigBuilder` from a `FileScanConfig` (via the `From` trait) or accessing its internal fields, you may need to update your code.
+
+**Before:**
+
+```rust
+# /* comment to avoid running
+let builder = FileScanConfigBuilder {
+    file_schema: my_schema,
+    table_partition_cols: partition_cols,
+    ...
+};
+# */
+```
+
+**After:**
+
+```rust
+# /* comment to avoid running
+let builder = FileScanConfigBuilder::new(url, my_schema, file_source)
+    .with_table_partition_cols(partition_cols);
+# */
+```
+
+See [#18231] for details.
+
+[#18231]: https://github.com/apache/datafusion/pull/18231
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
