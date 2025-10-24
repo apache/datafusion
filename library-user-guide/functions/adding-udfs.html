@@ -942,8 +942,8 @@ for the same input.</p></li>
 </section>
 </section>
 </section>
-<section id="adding-a-async-scalar-udf">
-<h2>Adding a Async Scalar UDF<a class="headerlink" href="#adding-a-async-scalar-udf" title="Link to this heading">#</a></h2>
+<section id="adding-an-async-scalar-udf">
+<h2>Adding an Async Scalar UDF<a class="headerlink" href="#adding-an-async-scalar-udf" title="Link to this heading">#</a></h2>
 <p>An Async Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
 UDF.</p>
@@ -1404,15 +1404,15 @@ for the same input.</p></li>
 </div>
 </section>
 </section>
-<section id="adding-a-user-defined-table-function">
-<h2>Adding a User-Defined Table Function<a class="headerlink" href="#adding-a-user-defined-table-function" title="Link to this heading">#</a></h2>
+<section id="adding-a-table-udf">
+<h2>Adding a Table UDF<a class="headerlink" href="#adding-a-table-udf" title="Link to this heading">#</a></h2>
 <p>A User-Defined Table Function (UDTF) is a function that takes parameters and returns a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
 <p>Because we’re returning a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>, in this example we’ll use the <code class="docutils literal notranslate"><span class="pre">MemTable</span></code> data source to represent a table.
 This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would
 be replaced with your own struct that implements <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
 <p>While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be
-particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4]
-for a working example that reads from a CSV file. As another example, you could use the built-in UDTF <code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code>
+particularly useful for reading data from external sources and interactive analysis. See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs">working example</a>
+which reads from a CSV file. As another example, you could use the built-in UDTF <code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code>
 in the CLI to read the metadata from a Parquet file.</p>
 <div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">&gt; select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata(&#39;./benchmarks/data/hits.parquet&#39;) where  column_id = 17 limit 10;</span>
 <span class="go">+--------------------------------+--------------+--------------------+-----------------+-----------+-----------+</span>
@@ -1626,7 +1626,7 @@ validation of the input <code class="docutils literal notranslate"><span class="
 </li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-async-scalar-udf">Adding a Async Scalar UDF</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-an-async-scalar-udf">Adding an Async Scalar UDF</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-by-impl-asyncscalarudfimpl">Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">AsyncScalarUDFImpl</span></code></a></li>
 </ul>
 </li>
@@ -1638,7 +1638,7 @@ validation of the input <code class="docutils literal notranslate"><span class="
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-an-aggregate-udf">Registering an Aggregate UDF</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-user-defined-table-function">Adding a User-Defined Table Function</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-table-udf">Adding a Table UDF</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-the-udtf">Writing the UDTF</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-and-using-the-udtf">Registering and Using the UDTF</a></li>
 </ul>

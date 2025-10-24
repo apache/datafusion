@@ -718,81 +718,85 @@
 <h1>HOWTOs<a class="headerlink" href="#howtos" title="Link to this heading">#</a></h1>
 <section id="how-to-update-the-version-of-rust-used-in-ci-tests">
 <h2>How to update the version of Rust used in CI tests<a class="headerlink" href="#how-to-update-the-version-of-rust-used-in-ci-tests" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p>Make a PR to update the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/rust-toolchain.toml">rust-toolchain</a> file in the root of the repository:</p></li>
-</ul>
+<p>Make a PR to update the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/rust-toolchain.toml">rust-toolchain</a> file in the root of the repository.</p>
 </section>
-<section id="how-to-add-a-new-scalar-function">
-<h2>How to add a new scalar function<a class="headerlink" href="#how-to-add-a-new-scalar-function" title="Link to this heading">#</a></h2>
-<p>Below is a checklist of what you need to do to add a new scalar function to DataFusion:</p>
+<section id="adding-new-functions">
+<h2>Adding new functions<a class="headerlink" href="#adding-new-functions" title="Link to this heading">#</a></h2>
+<p><strong>Implementation</strong></p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function type</p></th>
+<th class="head"><p>Location to implement</p></th>
+<th class="head"><p>Trait to implement</p></th>
+<th class="head"><p>Macros to use</p></th>
+<th class="head"><p>Example</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Scalar</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions">functions</a></p></td>
+<td><p><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html"><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code></a></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">make_udf_function!()</span></code> and <code class="docutils literal notranslate"><span class="pre">export_functions!()</span></code></p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udf.rs</span></code></a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Nested</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions-nested">functions-nested</a></p></td>
+<td><p><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html"><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code></a></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">make_udf_expr_and_func!()</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>Aggregate</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions-aggregate">functions-aggregate</a></p></td>
+<td><p><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.AggregateUDFImpl.html"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code></a> and an <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.Accumulator.html"><code class="docutils literal notranslate"><span class="pre">Accumulator</span></code></a></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">make_udaf_expr_and_func!()</span></code></p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udaf.rs</span></code></a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Window</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions-window">functions-window</a></p></td>
+<td><p><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.WindowUDFImpl.html"><code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code></a> and a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.PartitionEvaluator.html"><code class="docutils literal notranslate"><span class="pre">PartitionEvaluator</span></code></a></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">define_udwf_and_expr!()</span></code></p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udwf.rs</span></code></a></p></td>
+</tr>
+<tr class="row-even"><td><p>Table</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions-table">functions-table</a></p></td>
+<td><p><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableFunctionImpl.html"><code class="docutils literal notranslate"><span class="pre">TableFunctionImpl</span></code></a> and a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html"><code class="docutils literal notranslate"><span class="pre">TableProvider</span></code></a></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">create_udtf_function!()</span></code></p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs"><code class="docutils literal notranslate"><span class="pre">simple_udtf.rs</span></code></a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
 <ul class="simple">
-<li><p>Add the actual implementation of the function to a new module file within:</p>
-<ul>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions-nested">here</a> for arrays, maps and structs functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/crypto">here</a> for crypto functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/datetime">here</a> for datetime functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/encoding">here</a> for encoding functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/math">here</a> for math functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/regex">here</a> for regex functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/string">here</a> for string functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/unicode">here</a> for unicode functions</p></li>
-<li><p>create a new module <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/">here</a> for other functions.</p></li>
+<li><p>The macros are to simplify some boilerplate such as ensuring a DataFrame API compatible function is also created</p></li>
+<li><p>Ensure new functions are properly exported through the subproject
+<code class="docutils literal notranslate"><span class="pre">mod.rs</span></code> or <code class="docutils literal notranslate"><span class="pre">lib.rs</span></code>.</p></li>
+<li><p>Functions should preferably provide documentation via the <code class="docutils literal notranslate"><span class="pre">#[user_doc(...)]</span></code> attribute so their documentation
+can be included in the SQL reference documentation (see below section)</p></li>
+<li><p>Scalar functions are further grouped into modules for families of functions (e.g. string, math, datetime).
+Functions should be added to the relevant module; if a new module needs to be created then a new <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/features.html">Rust feature</a>
+should also be added to allow DataFusion users to conditionally compile the modules as needed</p></li>
+<li><p>Aggregate functions can optionally implement a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.GroupsAccumulator.html"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator</span></code></a> for better performance</p></li>
 </ul>
-</li>
-<li><p>New function modules - for example a <code class="docutils literal notranslate"><span class="pre">vector</span></code> module, should use a <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/features.html">rust feature</a> (for example <code class="docutils literal notranslate"><span class="pre">vector_expressions</span></code>) to allow DataFusion
-users to enable or disable the new module as desired.</p></li>
-<li><p>The implementation of the function is done via implementing <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code> trait for the function struct.</p>
-<ul>
-<li><p>See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs">advanced_udf.rs</a> example for an example implementation</p></li>
-<li><p>Add tests for the new function</p></li>
-</ul>
-</li>
-<li><p>To connect the implementation of the function add to the mod.rs file:</p>
-<ul>
-<li><p>a <code class="docutils literal notranslate"><span class="pre">mod</span> <span class="pre">xyz;</span></code> where xyz is the new module file</p></li>
-<li><p>a call to <code class="docutils literal notranslate"><span class="pre">make_udf_function!(..);</span></code></p></li>
-<li><p>an item in <code class="docutils literal notranslate"><span class="pre">export_functions!(..);</span></code></p></li>
-</ul>
-</li>
-<li><p>In <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files">sqllogictest/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
-<ul>
-<li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md">here</a></p></li>
-</ul>
-</li>
-<li><p>Add SQL reference documentation <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md">here</a></p>
-<ul>
-<li><p>An example of this being done can be seen <a class="reference external" href="https://github.com/apache/datafusion/pull/12775">here</a></p></li>
-<li><p>Run <code class="docutils literal notranslate"><span class="pre">./dev/update_function_docs.sh</span></code> to update docs</p></li>
-</ul>
-</li>
-</ul>
-</section>
-<section id="how-to-add-a-new-aggregate-function">
-<h2>How to add a new aggregate function<a class="headerlink" href="#how-to-add-a-new-aggregate-function" title="Link to this heading">#</a></h2>
-<p>Below is a checklist of what you need to do to add a new aggregate function to DataFusion:</p>
+<p>Spark compatible functions are <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/spark">located in separate crate</a> but otherwise follow the same steps, though all
+function types (e.g. scalar, nested, aggregate) are grouped together in the single location.</p>
+<p><strong>Testing</strong></p>
+<p>Prefer adding <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called via SQL against
+well known data and returns an expected result. See the existing <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files">test files</a> if
+there is an appropriate file to add test cases to, otherwise create a new file. See the
+<a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md"><code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> documentation</a> for details on how to construct these tests.
+Ensure edge case, <code class="docutils literal notranslate"><span class="pre">null</span></code> input cases are considered in these tests.</p>
+<p>If a behaviour cannot be tested via <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> (e.g. testing <code class="docutils literal notranslate"><span class="pre">simplify()</span></code>, needs to be
+tested in isolation from the optimizer, difficult to construct exact input via <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code>)
+then tests can be added as Rust unit tests in the implementation module, though these should be
+kept minimal where possible</p>
+<p><strong>Documentation</strong></p>
+<p>Run documentation update script <code class="docutils literal notranslate"><span class="pre">./dev/update_function_docs.sh</span></code> which will update the relevant
+markdown document <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql">here</a> (see the documents for <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md">scalar</a>,
+<a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md">aggregate</a> and <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/window_functions.md">window</a> functions)</p>
 <ul class="simple">
-<li><p>Add the actual implementation of an <code class="docutils literal notranslate"><span class="pre">Accumulator</span></code> and <code class="docutils literal notranslate"><span class="pre">AggregateExpr</span></code>:</p></li>
-<li><p>In <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/expr/src">datafusion/expr/src</a>, add:</p>
-<ul>
-<li><p>a new variant to <code class="docutils literal notranslate"><span class="pre">AggregateFunction</span></code></p></li>
-<li><p>a new entry to <code class="docutils literal notranslate"><span class="pre">FromStr</span></code> with the name of the function as called by SQL</p></li>
-<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">return_type</span></code> with the expected return type of the function, given an incoming type</p></li>
-<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">signature</span></code> with the signature of the function (number and types of its arguments)</p></li>
-<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">create_aggregate_expr</span></code> mapping the built-in to the implementation</p></li>
-<li><p>tests to the function.</p></li>
-</ul>
-</li>
-<li><p>In <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files">sqllogictest/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
-<ul>
-<li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md">here</a></p></li>
-</ul>
-</li>
-<li><p>Add SQL reference documentation <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md">here</a></p>
-<ul>
-<li><p>An example of this being done can be seen <a class="reference external" href="https://github.com/apache/datafusion/pull/12775">here</a></p></li>
-<li><p>Run <code class="docutils literal notranslate"><span class="pre">./dev/update_function_docs.sh</span></code> to update docs</p></li>
-</ul>
-</li>
+<li><p>You <em>should not</em> manually update the markdown document after running the script as those manual
+changes would be overwritten on next execution</p></li>
+<li><p>Reference <a class="reference external" href="https://github.com/apache/datafusion/issues/12740">GitHub issue</a> which introduced this behaviour</p></li>
 </ul>
 </section>
 <section id="how-to-display-plans-graphically">
@@ -812,10 +816,12 @@ can be displayed. For example, the following command creates a
 </pre></div>
 </div>
 </section>
-<section id="how-to-format-md-document">
-<h2>How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> document<a class="headerlink" href="#how-to-format-md-document" title="Link to this heading">#</a></h2>
-<p>We are using <code class="docutils literal notranslate"><span class="pre">prettier</span></code> to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> files.</p>
-<p>You can either use <code class="docutils literal notranslate"><span class="pre">npm</span> <span class="pre">i</span> <span class="pre">-g</span> <span class="pre">prettier</span></code> to install it globally or use <code class="docutils literal notranslate"><span class="pre">npx</span></code> to run it as a standalone binary. Using <code class="docutils literal notranslate"><span class="pre">npx</span></code> required a working node environment. Upgrading to the latest prettier is recommended (by adding <code class="docutils literal notranslate"><span class="pre">--upgrade</span></code> to the <code class="docutils literal notranslate"><span class="pre">npm</span></code> command).</p>
+<section id="how-to-format-md-documents">
+<h2>How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> documents<a class="headerlink" href="#how-to-format-md-documents" title="Link to this heading">#</a></h2>
+<p>We use <a class="reference external" href="https://prettier.io/"><code class="docutils literal notranslate"><span class="pre">prettier</span></code></a> to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> files.</p>
+<p>You can either use <code class="docutils literal notranslate"><span class="pre">npm</span> <span class="pre">i</span> <span class="pre">-g</span> <span class="pre">prettier</span></code> to install it globally or use <code class="docutils literal notranslate"><span class="pre">npx</span></code> to run it as a standalone binary.
+Using <code class="docutils literal notranslate"><span class="pre">npx</span></code> requires a working node environment. Upgrading to the latest prettier is recommended (by adding
+<code class="docutils literal notranslate"><span class="pre">--upgrade</span></code> to the <code class="docutils literal notranslate"><span class="pre">npm</span></code> command).</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>prettier<span class="w"> </span>--version
 <span class="m">2</span>.3.0
 </pre></div>
@@ -827,13 +833,13 @@ can be displayed. For example, the following command creates a
 </section>
 <section id="how-to-format-toml-files">
 <h2>How to format <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files<a class="headerlink" href="#how-to-format-toml-files" title="Link to this heading">#</a></h2>
-<p>We use <code class="docutils literal notranslate"><span class="pre">taplo</span></code> to format <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files.</p>
-<p>For Rust developers, you can install it via:</p>
+<p>We use <a class="reference external" href="https://taplo.tamasfe.dev/"><code class="docutils literal notranslate"><span class="pre">taplo</span></code></a> to format <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files.</p>
+<p>To install via cargo:</p>
 <div class="highlight-sh notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>install<span class="w"> </span>taplo-cli<span class="w"> </span>--locked
 </pre></div>
 </div>
 <blockquote>
-<div><p>Refer to the <a class="reference external" href="https://taplo.tamasfe.dev/cli/installation/binary.html">Installation section</a> on other ways to install it.</p>
+<div><p>Refer to the <a class="reference external" href="https://taplo.tamasfe.dev/cli/installation/binary.html">taplo installation documentation</a> for other ways to install it.</p>
 </div></blockquote>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>taplo<span class="w"> </span>--version
 taplo<span class="w"> </span><span class="m">0</span>.9.0
@@ -846,18 +852,15 @@ taplo<span class="w"> </span><span class="m">0</span>.9.0
 </section>
 <section id="how-to-update-protobuf-gen-dependencies">
 <h2>How to update protobuf/gen dependencies<a class="headerlink" href="#how-to-update-protobuf-gen-dependencies" title="Link to this heading">#</a></h2>
-<p>The prost/tonic code can be generated by running <code class="docutils literal notranslate"><span class="pre">./regen.sh</span></code>, which in turn invokes the Rust binary located in <code class="docutils literal notranslate"><span class="pre">./gen</span></code></p>
+<p>For the <code class="docutils literal notranslate"><span class="pre">proto</span></code> and <code class="docutils literal notranslate"><span class="pre">proto-common</span></code> crates, the prost/tonic code is generated by running their respective <code class="docutils literal notranslate"><span class="pre">./regen.sh</span></code> scripts,
+which in turn invokes the Rust binary located in <code class="docutils literal notranslate"><span class="pre">./gen</span></code>.</p>
 <p>This is necessary after modifying the protobuf definitions or altering the dependencies of <code class="docutils literal notranslate"><span class="pre">./gen</span></code>, and requires a
 valid installation of <a class="reference external" href="https://github.com/protocolbuffers/protobuf#protocol-compiler-installation">protoc</a> (see <a class="reference external" href="https://datafusion.apache.org/contributor-guide/getting_started.html#protoc-installation">installation instructions</a> for details).</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>./regen.sh
-</pre></div>
-</div>
-</section>
-<section id="how-to-add-edit-documentation-for-udfs">
-<h2>How to add/edit documentation for UDFs<a class="headerlink" href="#how-to-add-edit-documentation-for-udfs" title="Link to this heading">#</a></h2>
-<p>Documentations for the UDF documentations are generated from code (related <a class="reference external" href="https://github.com/apache/datafusion/issues/12740">github issue</a>). To generate markdown run <code class="docutils literal notranslate"><span class="pre">./update_function_docs.sh</span></code>.</p>
-<p>This is necessary after adding new UDF implementation or modifying existing implementation which requires to update documentation.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>./dev/update_function_docs.sh
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># From repository root</span>
+<span class="c1"># proto-common</span>
+./datafusion/proto-common/regen.sh
+<span class="c1"># proto</span>
+./datafusion/proto/regen.sh
 </pre></div>
 </div>
 </section>
@@ -911,13 +914,11 @@ valid installation of <a class="reference external" href="https://github.com/pro
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-update-the-version-of-rust-used-in-ci-tests">How to update the version of Rust used in CI tests</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-add-a-new-scalar-function">How to add a new scalar function</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-add-a-new-aggregate-function">How to add a new aggregate function</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-new-functions">Adding new functions</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-display-plans-graphically">How to display plans graphically</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-format-md-document">How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> document</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-format-md-documents">How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> documents</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-format-toml-files">How to format <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-update-protobuf-gen-dependencies">How to update protobuf/gen dependencies</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-add-edit-documentation-for-udfs">How to add/edit documentation for UDFs</a></li>
 </ul>
   </nav></div>
 
