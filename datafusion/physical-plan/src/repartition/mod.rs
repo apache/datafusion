@@ -2034,6 +2034,14 @@ mod tests {
 
         // Verify spilling metrics to confirm spilling actually happened
         let metrics = exec.metrics().unwrap();
+        assert_eq!(metrics.output_rows(), Some(total_rows));
+        let elapsed = metrics
+            .elapsed_compute()
+            .expect("expected elapsed_compute metric for spilling case");
+        assert!(
+            elapsed > 0,
+            "expected elapsed_compute > 0 but was {elapsed}"
+        );
         assert!(
             metrics.spill_count().unwrap() > 0,
             "Expected spill_count > 0, but got {:?}",
@@ -2097,6 +2105,14 @@ mod tests {
 
         // Verify partial spilling metrics
         let metrics = exec.metrics().unwrap();
+        assert_eq!(metrics.output_rows(), Some(total_rows));
+        let elapsed = metrics
+            .elapsed_compute()
+            .expect("expected elapsed_compute metric for partial spilling case");
+        assert!(
+            elapsed > 0,
+            "expected elapsed_compute > 0 but was {elapsed}"
+        );
         let spill_count = metrics.spill_count().unwrap();
         let spilled_rows = metrics.spilled_rows().unwrap();
         let spilled_bytes = metrics.spilled_bytes().unwrap();
