@@ -1236,87 +1236,92 @@ impl Stream for RepartitionStream {
         let poll = loop {
             match &mut this.state {
                 RepartitionStreamState::ReceivingFromChannel => {
-                    match this.input.recv().poll_unpin(cx) {
-                        Poll::Ready(value) => match value {
-                            Some(Some(v)) => match v {
+                    let recv = match this.input.recv().poll_unpin(cx) {
+                        Poll::Pending => break Poll::Pending,
+                        Poll::Ready(value) => value,
+                    };
+
+                    match recv {
+                        Some(Some(result)) => {
+                            match result {
                                 Ok(RepartitionBatch::Memory(batch)) => {
-                                    let _timer =
-                                        this.baseline_metrics.elapsed_compute().timer();
-                                    // Release memory and return
-                                    this.reservation
-                                        .lock()
-                                        .shrink(batch.get_array_memory_size());
-                                    break Poll::Ready(Some(Ok(batch)));
+                                    let bytes = batch.get_array_memory_size();
+                                    break this.ready_with_batch(batch, Some(bytes));
                                 }
                                 Ok(RepartitionBatch::Spilled { spill_file, size }) => {
-                                    // Read from disk - SpillReaderStream uses tokio::fs internally
-                                    // Pass the original size for validation
                                     match this
                                         .spill_manager
                                         .read_spill_as_stream(spill_file, Some(size))
                                     {
                                         Ok(stream) => {
+                                            // Read from disk - SpillReaderStream uses tokio::fs internally
                                             this.state = RepartitionStreamState::ReadingSpilledBatch(stream);
-                                            // Continue loop to poll the stream immediately
                                             continue;
                                         }
-                                        Err(e) => {
+                                        Err(err) => {
                                             let _timer = this
                                                 .baseline_metrics
                                                 .elapsed_compute()
                                                 .timer();
-                                            break Poll::Ready(Some(Err(e)));
+                                            break Poll::Ready(Some(Err(err)));
                                         }
                                     }
                                 }
-                                Err(e) => {
+                                Err(err) => {
                                     let _timer =
                                         this.baseline_metrics.elapsed_compute().timer();
-                                    break Poll::Ready(Some(Err(e)));
-                                }
-                            },
-                            Some(None) => {
-                                this.num_input_partitions_processed += 1;
-
-                                if this.num_input_partitions
-                                    == this.num_input_partitions_processed
-                                {
-                                    // all input partitions have finished sending batches
-                                    break Poll::Ready(None);
-                                } else {
-                                    // other partitions still have data to send
-                                    continue;
+                                    break Poll::Ready(Some(Err(err)));
                                 }
                             }
-                            None => break Poll::Ready(None),
-                        },
-                        Poll::Pending => break Poll::Pending,
+                        }
+                        Some(None) => {
+                            this.num_input_partitions_processed += 1;
+                            if this.num_input_partitions
+                                == this.num_input_partitions_processed
+                            {
+                                break Poll::Ready(None);
+                            }
+                            continue;
+                        }
+                        None => break Poll::Ready(None),
                     }
                 }
                 RepartitionStreamState::ReadingSpilledBatch(stream) => {
                     match stream.poll_next_unpin(cx) {
+                        Poll::Pending => break Poll::Pending,
                         Poll::Ready(Some(Ok(batch))) => {
-                            let _timer = this.baseline_metrics.elapsed_compute().timer();
-                            // Return batch and stay in ReadingSpilledBatch state to read more batches
-                            break Poll::Ready(Some(Ok(batch)));
+                            break this.ready_with_batch(batch, None)
                         }
-                        Poll::Ready(Some(Err(e))) => {
-                            let _timer = this.baseline_metrics.elapsed_compute().timer();
+                        Poll::Ready(Some(Err(err))) => {
                             this.state = RepartitionStreamState::ReceivingFromChannel;
-                            break Poll::Ready(Some(Err(e)));
+                            let _timer = this.baseline_metrics.elapsed_compute().timer();
+                            break Poll::Ready(Some(Err(err)));
                         }
                         Poll::Ready(None) => {
-                            // Spill stream ended - go back to receiving from channel
                             this.state = RepartitionStreamState::ReceivingFromChannel;
                             continue;
                         }
-                        Poll::Pending => break Poll::Pending,
                     }
                 }
             }
         };
 
         this.baseline_metrics.record_poll(poll)
+    }
+}
+
+impl RepartitionStream {
+    fn ready_with_batch(
+        &mut self,
+        batch: RecordBatch,
+        released_bytes: Option<usize>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        if let Some(bytes) = released_bytes {
+            // Release reserved memory before returning the batch
+            self.reservation.lock().shrink(bytes);
+        }
+        let _timer = self.baseline_metrics.elapsed_compute().timer();
+        Poll::Ready(Some(Ok(batch)))
     }
 }
 
