@@ -64,7 +64,7 @@ See [use cases] for examples. The following related subprojects target end users
   DataFusion.
 
 "Out of the box,"
-DataFusion offers [SQL] and [`Dataframe`] APIs, excellent [performance],
+DataFusion offers [SQL](docs/source/user-guide/sql) and [Dataframe](docs/source/user-guide/dataframe.md) APIs, excellent [performance],
 built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
 a great community.
 
