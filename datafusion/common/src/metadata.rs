@@ -15,17 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::BTreeMap, fmt::Display, sync::Arc};
+use std::{collections::BTreeMap, fmt::Display, hash::Hash, sync::Arc};
 
 use arrow::datatypes::{DataType, Field};
 use hashbrown::HashMap;
 
-use crate::{
-    datatype::SerializedTypeView, error::_plan_err, DataFusionError, ScalarValue,
-};
+use crate::{datatype::SerializedTypeView, DataFusionError, ScalarValue};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialOrd)]
 pub struct ScalarAndMetadata {
     pub value: ScalarValue,
     pub metadata: Option<FieldMetadata>,
@@ -69,11 +67,7 @@ impl ScalarAndMetadata {
 impl Display for ScalarAndMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let storage_type = self.value.data_type();
-        let serialized_type = self
-            .metadata
-            .as_ref()
-            .map(|metadata| SerializedTypeView::from((&storage_type, metadata)))
-            .unwrap_or(SerializedTypeView::from(&storage_type));
+        let serialized_type = SerializedTypeView::from((&storage_type, self.metadata()));
 
         let metadata_without_extension_info = self
             .metadata
@@ -113,40 +107,32 @@ impl Display for ScalarAndMetadata {
     }
 }
 
-/// Assert equality of data types where one or both sides may have field metadata
-///
-/// This currently compares absent metadata (e.g., one side was a DataType) and
-/// empty metadata (e.g., one side was a field where the field had no metadata)
-/// as equal and uses byte-for-byte comparison for the keys and values of the
-/// fields, even though this is potentially too strict for some cases (e.g.,
-/// extension types where extension metadata is represented by JSON, or cases
-/// where field metadata is orthogonal to the interpretation of the data type).
-///
-/// Returns a planning error with suitably formatted type representations if
-/// actual and expected do not compare to equal.
-pub fn check_metadata_with_storage_equal(
-    actual: (
-        &DataType,
-        Option<&std::collections::HashMap<String, String>>,
-    ),
-    expected: (
-        &DataType,
-        Option<&std::collections::HashMap<String, String>>,
-    ),
-    what: &str,
-    context: &str,
-) -> Result<(), DataFusionError> {
-    let metadata_empty = std::collections::HashMap::new();
-    let actual =
-        SerializedTypeView::from((actual.0, actual.1.unwrap_or(&metadata_empty)));
-    let expected =
-        SerializedTypeView::from((expected.0, expected.1.unwrap_or(&metadata_empty)));
-
-    if actual != expected {
-        return _plan_err!("Expected {what} of type {expected}, got {actual}{context}");
+impl From<ScalarValue> for ScalarAndMetadata {
+    fn from(value: ScalarValue) -> Self {
+        ScalarAndMetadata::new(value, None)
     }
+}
 
-    Ok(())
+impl PartialEq<ScalarAndMetadata> for ScalarAndMetadata {
+    fn eq(&self, other: &ScalarAndMetadata) -> bool {
+        let metadata_equal = match (self.metadata(), other.metadata()) {
+            (None, None) => true,
+            (None, Some(other_meta)) => other_meta.is_empty(),
+            (Some(meta), None) => meta.is_empty(),
+            (Some(meta), Some(other_meta)) => meta == other_meta,
+        };
+
+        metadata_equal && self.value() == other.value()
+    }
+}
+
+impl Hash for ScalarAndMetadata {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+        if let Some(metadata) = self.metadata() {
+            metadata.hash(state);
+        }
+    }
 }
 
 /// Literal metadata

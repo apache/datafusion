@@ -129,6 +129,26 @@ impl<'a, 'b, 'c> SerializedTypeView<'a, 'b, 'c> {
         }
     }
 
+    pub fn from_type_and_metadata(
+        arrow_type: &'a DataType,
+        metadata: impl IntoIterator<Item = (&'b String, &'b String)>,
+    ) -> Self
+    where
+        'b: 'c,
+    {
+        let mut extension_name = None;
+        let mut extension_metadata = None;
+        for (k, v) in metadata {
+            match k.as_str() {
+                "ARROW:extension:name" => extension_name.replace(v.as_str()),
+                "ARROW:extension:metadata" => extension_metadata.replace(v.as_str()),
+                _ => None,
+            };
+        }
+
+        Self::new(arrow_type, extension_name, extension_metadata)
+    }
+
     pub fn data_type(&self) -> Option<&DataType> {
         if self.extension_name.is_some() {
             None
@@ -206,38 +226,32 @@ impl<'a> From<&'a DataType> for SerializedTypeView<'a, 'static, 'static> {
     }
 }
 
-impl<'a, 'b, T: IntoIterator<Item = (&'b String, &'b String)>> From<(&'a DataType, T)>
-    for SerializedTypeView<'a, 'b, 'b>
-{
-    fn from(value: (&'a DataType, T)) -> Self {
-        let mut extension_name = None;
-        let mut extension_metadata = None;
-        for (k, v) in value.1 {
-            match k.as_str() {
-                "ARROW:extension:name" => extension_name.replace(v.as_str()),
-                "ARROW:extension:metadata" => extension_metadata.replace(v.as_str()),
-                _ => None,
-            };
-        }
-
-        Self::new(value.0, extension_name, extension_metadata)
-    }
-}
-
 impl<'a> From<&'a Field> for SerializedTypeView<'a, 'a, 'a> {
     fn from(value: &'a Field) -> Self {
-        (value.data_type(), value.metadata()).into()
+        Self::from_type_and_metadata(value.data_type(), value.metadata())
     }
 }
 
 impl<'a> From<&'a FieldRef> for SerializedTypeView<'a, 'a, 'a> {
     fn from(value: &'a FieldRef) -> Self {
-        (value.data_type(), value.metadata()).into()
+        Self::from_type_and_metadata(value.data_type(), value.metadata())
     }
 }
 
 impl<'a, 'b> From<(&'a DataType, &'b FieldMetadata)> for SerializedTypeView<'a, 'b, 'b> {
     fn from(value: (&'a DataType, &'b FieldMetadata)) -> Self {
-        (value.0, value.1.inner()).into()
+        Self::from_type_and_metadata(value.0, value.1.inner())
+    }
+}
+
+impl<'a, 'b> From<(&'a DataType, Option<&'b FieldMetadata>)>
+    for SerializedTypeView<'a, 'b, 'b>
+{
+    fn from(value: (&'a DataType, Option<&'b FieldMetadata>)) -> Self {
+        if let Some(metadata) = value.1 {
+            Self::from_type_and_metadata(value.0, metadata.inner())
+        } else {
+            value.0.into()
+        }
     }
 }
