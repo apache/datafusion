@@ -33,7 +33,6 @@ pub mod file;
 pub mod file_compression_type;
 pub mod file_format;
 pub mod file_groups;
-pub mod file_meta;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
@@ -42,6 +41,7 @@ pub mod schema_adapter;
 pub mod sink;
 pub mod source;
 mod statistics;
+pub mod table_schema;
 
 #[cfg(test)]
 pub mod test_util;
@@ -55,10 +55,10 @@ use chrono::TimeZone;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
 use datafusion_common::{ScalarValue, Statistics};
-use file_meta::FileMeta;
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
 #[allow(deprecated)]
 pub use statistics::add_row_stats;
@@ -251,23 +251,23 @@ pub enum RangeCalculation {
 /// Calculates an appropriate byte range for reading from an object based on the
 /// provided metadata.
 ///
-/// This asynchronous function examines the `FileMeta` of an object in an object store
+/// This asynchronous function examines the [`PartitionedFile`] of an object in an object store
 /// and determines the range of bytes to be read. The range calculation may adjust
 /// the start and end points to align with meaningful data boundaries (like newlines).
 ///
-/// Returns a `Result` wrapping a `RangeCalculation`, which is either a calculated byte range or an indication to terminate early.
+/// Returns a `Result` wrapping a [`RangeCalculation`], which is either a calculated byte range or an indication to terminate early.
 ///
 /// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
 pub async fn calculate_range(
-    file_meta: &FileMeta,
+    file: &PartitionedFile,
     store: &Arc<dyn ObjectStore>,
     terminator: Option<u8>,
 ) -> Result<RangeCalculation> {
-    let location = file_meta.location();
-    let file_size = file_meta.object_meta.size;
+    let location = &file.object_meta.location;
+    let file_size = file.object_meta.size;
     let newline = terminator.unwrap_or(b'\n');
 
-    match file_meta.range {
+    match file.range {
         None => Ok(RangeCalculation::Range(None)),
         Some(FileRange { start, end }) => {
             let start: u64 = start.try_into().map_err(|_| {

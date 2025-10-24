@@ -514,8 +514,7 @@ fn multiple_now() -> Result<()> {
     // expect the same timestamp appears in both exprs
     let actual = get_optimized_plan_formatted(plan, &time);
     let expected = format!(
-        "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
-            \n  TableScan: test",
+        "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\n  TableScan: test",
         time.timestamp_nanos_opt().unwrap(),
         time.timestamp_nanos_opt().unwrap()
     );

@@ -34,7 +34,7 @@ use crate::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
     datasource::{provider_as_source, MemTable, ViewTable},
-    error::{DataFusionError, Result},
+    error::Result,
     execution::{
         options::ArrowReadOptions,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
@@ -64,11 +64,13 @@ use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
+    plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
+    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
@@ -297,13 +299,13 @@ impl SessionContext {
     pub async fn refresh_catalogs(&self) -> Result<()> {
         let cat_names = self.catalog_names().clone();
         for cat_name in cat_names.iter() {
-            let cat = self.catalog(cat_name.as_str()).ok_or_else(|| {
-                DataFusionError::Internal("Catalog not found!".to_string())
-            })?;
+            let cat = self
+                .catalog(cat_name.as_str())
+                .ok_or_else(|| internal_datafusion_err!("Catalog not found!"))?;
             for schema_name in cat.schema_names() {
-                let schema = cat.schema(schema_name.as_str()).ok_or_else(|| {
-                    DataFusionError::Internal("Schema not found!".to_string())
-                })?;
+                let schema = cat
+                    .schema(schema_name.as_str())
+                    .ok_or_else(|| internal_datafusion_err!("Schema not found!"))?;
                 let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
                 if let Some(lister) = lister {
                     lister.refresh(&self.state()).await?;
@@ -502,6 +504,13 @@ impl SessionContext {
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         self.runtime_env().register_object_store(url, object_store)
+    }
+
+    /// Deregisters an [`ObjectStore`] associated with the specific URL prefix.
+    ///
+    /// See [`RuntimeEnv::deregister_object_store`] for more details.
+    pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        self.runtime_env().deregister_object_store(url)
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
@@ -707,15 +716,15 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
                 input,
-                data_types,
+                fields,
             })) => {
                 // The number of parameters must match the specified data types length.
-                if !data_types.is_empty() {
+                if !fields.is_empty() {
                     let param_names = input.get_parameter_names()?;
-                    if param_names.len() != data_types.len() {
+                    if param_names.len() != fields.len() {
                         return plan_err!(
                             "Prepare specifies {} data types but query has {} parameters",
-                            data_types.len(),
+                            fields.len(),
                             param_names.len()
                         );
                     }
@@ -725,7 +734,7 @@ impl SessionContext {
                 // not currently feasible. This is because `now()` would be optimized to a
                 // constant value, causing each EXECUTE to yield the same result, which is
                 // incorrect behavior.
-                self.state.write().store_prepared(name, data_types, input)?;
+                self.state.write().store_prepared(name, fields, input)?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Execute(execute)) => {
@@ -949,17 +958,15 @@ impl SessionContext {
                 let state = self.state.read();
                 let name = &state.config().options().catalog.default_catalog;
                 let catalog = state.catalog_list().catalog(name).ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "Missing default catalog '{name}'"
-                    ))
+                    exec_datafusion_err!("Missing default catalog '{name}'")
                 })?;
                 (catalog, tokens[0])
             }
             2 => {
                 let name = &tokens[0];
-                let catalog = self.catalog(name).ok_or_else(|| {
-                    DataFusionError::Execution(format!("Missing catalog '{name}'"))
-                })?;
+                let catalog = self
+                    .catalog(name)
+                    .ok_or_else(|| exec_datafusion_err!("Missing catalog '{name}'"))?;
                 (catalog, tokens[1])
             }
             _ => return exec_err!("Unable to parse catalog from {schema_name}"),
@@ -1073,6 +1080,26 @@ impl SessionContext {
         } else {
             let mut state = self.state.write();
             state.config_mut().options_mut().set(&variable, &value)?;
+
+            // Re-initialize any UDFs that depend on configuration
+            // This allows both built-in and custom functions to respond to configuration changes
+            let config_options = state.config().options();
+
+            // Collect updated UDFs in a separate vector
+            let udfs_to_update: Vec<_> = state
+                .scalar_functions()
+                .values()
+                .filter_map(|udf| {
+                    udf.inner()
+                        .with_updated_config(config_options)
+                        .map(Arc::new)
+                })
+                .collect();
+
+            for udf in udfs_to_update {
+                state.register_udf(udf)?;
+            }
+
             drop(state);
         }
 
@@ -1099,11 +1126,7 @@ impl SessionContext {
                 let limit = Self::parse_memory_limit(value)?;
                 builder.with_metadata_cache_limit(limit)
             }
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "Unknown runtime configuration: {variable}"
-                )))
-            }
+            _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
 
         *state = SessionStateBuilder::from(state.clone())
@@ -1126,18 +1149,14 @@ impl SessionContext {
     pub fn parse_memory_limit(limit: &str) -> Result<usize> {
         let (number, unit) = limit.split_at(limit.len() - 1);
         let number: f64 = number.parse().map_err(|_| {
-            DataFusionError::Plan(format!(
-                "Failed to parse number from memory limit '{limit}'"
-            ))
+            plan_datafusion_err!("Failed to parse number from memory limit '{limit}'")
         })?;
 
         match unit {
             "K" => Ok((number * 1024.0) as usize),
             "M" => Ok((number * 1024.0 * 1024.0) as usize),
             "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
-            _ => Err(DataFusionError::Plan(format!(
-                "Unsupported unit '{unit}' in memory limit '{limit}'"
-            ))),
+            _ => plan_err!("Unsupported unit '{unit}' in memory limit '{limit}'"),
         }
     }
 
@@ -1152,10 +1171,7 @@ impl SessionContext {
                 .table_factories()
                 .get(file_type.as_str())
                 .ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "Unable to find factory for {}",
-                        cmd.file_type
-                    ))
+                    exec_datafusion_err!("Unable to find factory for {}", cmd.file_type)
                 })?;
         let table = (*factory).create(&state, cmd).await?;
         Ok(table)
@@ -1196,9 +1212,11 @@ impl SessionContext {
 
             match function_factory {
                 Some(f) => f.create(&state, stmt).await?,
-                _ => Err(DataFusionError::Configuration(
-                    "Function factory has not been configured".into(),
-                ))?,
+                _ => {
+                    return Err(DataFusionError::Configuration(
+                        "Function factory has not been configured".to_string(),
+                    ))
+                }
             }
         };
 
@@ -1248,28 +1266,30 @@ impl SessionContext {
         })?;
 
         // Only allow literals as parameters for now.
-        let mut params: Vec<ScalarValue> = parameters
+        let mut params: Vec<ScalarAndMetadata> = parameters
             .into_iter()
             .map(|e| match e {
-                Expr::Literal(scalar, _) => Ok(scalar),
+                Expr::Literal(scalar, metadata) => {
+                    Ok(ScalarAndMetadata::new(scalar, metadata))
+                }
                 _ => not_impl_err!("Unsupported parameter type: {}", e),
             })
             .collect::<Result<_>>()?;
 
         // If the prepared statement provides data types, cast the params to those types.
-        if !prepared.data_types.is_empty() {
-            if params.len() != prepared.data_types.len() {
+        if !prepared.fields.is_empty() {
+            if params.len() != prepared.fields.len() {
                 return exec_err!(
                     "Prepared statement '{}' expects {} parameters, but {} provided",
                     name,
-                    prepared.data_types.len(),
+                    prepared.fields.len(),
                     params.len()
                 );
             }
             params = params
                 .into_iter()
-                .zip(prepared.data_types.iter())
-                .map(|(e, dt)| e.cast_to(dt))
+                .zip(prepared.fields.iter())
+                .map(|(e, dt)| -> Result<_> { e.cast_storage_to(dt.data_type()) })
                 .collect::<Result<_>>()?;
         }
 
@@ -1974,6 +1994,7 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
+    use datafusion_common::DataFusionError;
     use std::error::Error;
     use std::path::PathBuf;
 

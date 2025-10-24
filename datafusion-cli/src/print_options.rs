@@ -16,10 +16,14 @@
 // under the License.
 
 use std::fmt::{Display, Formatter};
-use std::io::Write;
+use std::io;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
 
+use crate::object_storage::instrumented::{
+    InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry, RequestSummaries,
+};
 use crate::print_format::PrintFormat;
 
 use arrow::datatypes::SchemaRef;
@@ -67,12 +71,15 @@ impl Display for MaxRows {
     }
 }
 
+const OBJECT_STORE_PROFILING_HEADER: &str = "Object Store Profiling";
+
 #[derive(Debug, Clone)]
 pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
+    pub instrumented_registry: Arc<InstrumentedObjectStoreRegistry>,
 }
 
 // Returns the query execution details formatted
@@ -128,11 +135,7 @@ impl PrintOptions {
             query_start_time,
         );
 
-        if !self.quiet {
-            writeln!(writer, "{formatted_exec_details}")?;
-        }
-
-        Ok(())
+        self.write_output(&mut writer, formatted_exec_details)
     }
 
     /// Print the stream to stdout using the specified format
@@ -174,9 +177,87 @@ impl PrintOptions {
             query_start_time,
         );
 
+        self.write_output(&mut writer, formatted_exec_details)
+    }
+
+    fn write_output<W: io::Write>(
+        &self,
+        writer: &mut W,
+        formatted_exec_details: String,
+    ) -> Result<()> {
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
+
+            let instrument_mode = self.instrumented_registry.instrument_mode();
+            if instrument_mode != InstrumentedObjectStoreMode::Disabled {
+                writeln!(writer, "{OBJECT_STORE_PROFILING_HEADER}")?;
+                for store in self.instrumented_registry.stores() {
+                    let requests = store.take_requests();
+
+                    if !requests.is_empty() {
+                        writeln!(writer, "{store}")?;
+                        if instrument_mode == InstrumentedObjectStoreMode::Trace {
+                            for req in requests.iter() {
+                                writeln!(writer, "{req}")?;
+                            }
+                            // Add an extra blank line to help visually organize the output
+                            writeln!(writer)?;
+                        }
+
+                        writeln!(writer, "Summaries:")?;
+                        let summaries = RequestSummaries::new(&requests);
+                        writeln!(writer, "{summaries}")?;
+                    }
+                }
+            }
         }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::error::Result;
+
+    use super::*;
+
+    #[test]
+    fn write_output() -> Result<()> {
+        let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new());
+        let mut print_options = PrintOptions {
+            format: PrintFormat::Automatic,
+            quiet: true,
+            maxrows: MaxRows::Unlimited,
+            color: true,
+            instrumented_registry: Arc::clone(&instrumented_registry),
+        };
+
+        let mut print_output: Vec<u8> = Vec::new();
+        let exec_out = String::from("Formatted Exec Output");
+        print_options.write_output(&mut print_output, exec_out.clone())?;
+        assert!(print_output.is_empty());
+
+        print_options.quiet = false;
+        print_options.write_output(&mut print_output, exec_out.clone())?;
+        let out_str: String = print_output
+            .clone()
+            .try_into()
+            .expect("Expected successful String conversion");
+        assert!(out_str.contains(&exec_out));
+
+        // clear the previous data from the output so it doesn't pollute the next test
+        print_output.clear();
+        print_options
+            .instrumented_registry
+            .set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        print_options.write_output(&mut print_output, exec_out.clone())?;
+        let out_str: String = print_output
+            .clone()
+            .try_into()
+            .expect("Expected successful String conversion");
+        assert!(out_str.contains(&exec_out));
+        assert!(out_str.contains(OBJECT_STORE_PROFILING_HEADER));
 
         Ok(())
     }

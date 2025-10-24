@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod instrumented;
+
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_credential_types::provider::{
@@ -295,10 +297,7 @@ pub fn get_gcs_object_store_builder(
 
 fn get_bucket_name(url: &Url) -> Result<&str> {
     url.host_str().ok_or_else(|| {
-        DataFusionError::Execution(format!(
-            "Not able to parse bucket name from url: {}",
-            url.as_str()
-        ))
+        exec_datafusion_err!("Not able to parse bucket name from url: {}", url.as_str())
     })
 }
 

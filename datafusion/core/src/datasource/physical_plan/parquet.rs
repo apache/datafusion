@@ -50,7 +50,6 @@ mod tests {
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{assert_contains, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
@@ -65,7 +64,9 @@ mod tests {
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::analyze::AnalyzeExec;
     use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+    use datafusion_physical_plan::metrics::{
+        ExecutionPlanMetricsSet, MetricType, MetricsSet,
+    };
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use chrono::{TimeZone, Utc};
@@ -239,6 +240,7 @@ mod tests {
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
                 false,
+                vec![MetricType::SUMMARY, MetricType::DEV],
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
                     Arc::clone(table_schema),
@@ -2207,7 +2209,7 @@ mod tests {
         fn create_reader(
             &self,
             partition_index: usize,
-            file_meta: FileMeta,
+            partitioned_file: PartitionedFile,
             metadata_size_hint: Option<usize>,
             metrics: &ExecutionPlanMetricsSet,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
@@ -2218,7 +2220,7 @@ mod tests {
                 .push(metadata_size_hint);
             self.inner.create_reader(
                 partition_index,
-                file_meta,
+                partitioned_file,
                 metadata_size_hint,
                 metrics,
             )

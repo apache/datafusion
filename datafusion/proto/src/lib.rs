@@ -34,8 +34,8 @@
 //!
 //! [`LogicalPlan`]: datafusion_expr::LogicalPlan
 //! [`Expr`]: datafusion_expr::Expr
-//! [`ExecutionPlan`]: datafusion::physical_plan::ExecutionPlan
-//! [`PhysicalExpr`]: datafusion::physical_expr::PhysicalExpr
+//! [`ExecutionPlan`]: datafusion_physical_plan::ExecutionPlan
+//! [`PhysicalExpr`]: datafusion_physical_expr::PhysicalExpr
 //!
 //! Internally, this crate is implemented by converting the plans to [protocol
 //! buffers] using [prost].
@@ -93,7 +93,7 @@
 //!  let bytes = logical_plan_to_bytes(&plan)?;
 //!
 //!  // Decode bytes from somewhere (over network, etc.) back to LogicalPlan
-//!  let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+//!  let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
 //!  assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
 //! # Ok(())
 //! # }

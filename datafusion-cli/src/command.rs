@@ -26,9 +26,9 @@ use clap::ValueEnum;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::exec_err;
 use datafusion::common::instant::Instant;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::common::{exec_datafusion_err, exec_err};
+use datafusion::error::Result;
 use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
@@ -46,6 +46,7 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
+    ObjectStoreProfileMode(Option<String>),
 }
 
 pub enum OutputFormat {
@@ -84,9 +85,7 @@ impl Command {
             Self::Include(filename) => {
                 if let Some(filename) = filename {
                     let file = File::open(filename).map_err(|e| {
-                        DataFusionError::Execution(format!(
-                            "Error opening {filename:?} {e}"
-                        ))
+                        exec_datafusion_err!("Error opening {filename:?} {e}")
                     })?;
                     exec_from_lines(ctx, &mut BufReader::new(file), print_options)
                         .await?;
@@ -124,6 +123,29 @@ impl Command {
             Self::OutputFormat(_) => exec_err!(
                 "Unexpected change output format, this should be handled outside"
             ),
+            Self::ObjectStoreProfileMode(mode) => {
+                if let Some(mode) = mode {
+                    let profile_mode = mode
+                        .parse()
+                        .map_err(|_|
+                            exec_datafusion_err!("Failed to parse input: {mode}. Valid options are disabled, summary, trace")
+                        )?;
+                    print_options
+                        .instrumented_registry
+                        .set_instrument_mode(profile_mode);
+                    println!(
+                        "ObjectStore Profile mode set to {}",
+                        print_options.instrumented_registry.instrument_mode()
+                    );
+                } else {
+                    println!(
+                        "ObjectStore Profile mode is {}",
+                        print_options.instrumented_registry.instrument_mode()
+                    );
+                }
+
+                Ok(())
+            }
         }
     }
 
@@ -142,11 +164,15 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
+            Self::ObjectStoreProfileMode(_) => (
+                "\\object_store_profiling (disabled|summary|trace)",
+                "print or set object store profile mode",
+            ),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 9] = [
+const ALL_COMMANDS: [Command; 10] = [
     Command::ListTables,
     Command::DescribeTableStmt(String::new()),
     Command::Quit,
@@ -156,6 +182,7 @@ const ALL_COMMANDS: [Command; 9] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
+    Command::ObjectStoreProfileMode(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -206,6 +233,10 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
+            ("object_store_profiling", Some(mode)) => {
+                Self::ObjectStoreProfileMode(Some(mode.to_string()))
+            }
+            ("object_store_profiling", None) => Self::ObjectStoreProfileMode(None),
             _ => return Err(()),
         })
     }
@@ -244,5 +275,64 @@ impl OutputFormat {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::SessionContext;
+
+    use crate::{
+        object_storage::instrumented::{
+            InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
+        },
+        print_options::MaxRows,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn command_execute_profile_mode() {
+        let ctx = SessionContext::new();
+
+        let mut print_options = PrintOptions {
+            format: PrintFormat::Automatic,
+            quiet: false,
+            maxrows: MaxRows::Unlimited,
+            color: true,
+            instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
+        };
+
+        let mut cmd: Command = "object_store_profiling"
+            .parse()
+            .expect("expected parse to succeed");
+        assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
+        assert_eq!(
+            print_options.instrumented_registry.instrument_mode(),
+            InstrumentedObjectStoreMode::default()
+        );
+
+        cmd = "object_store_profiling summary"
+            .parse()
+            .expect("expected parse to succeed");
+        assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
+        assert_eq!(
+            print_options.instrumented_registry.instrument_mode(),
+            InstrumentedObjectStoreMode::Summary
+        );
+
+        cmd = "object_store_profiling trace"
+            .parse()
+            .expect("expected parse to succeed");
+        assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
+        assert_eq!(
+            print_options.instrumented_registry.instrument_mode(),
+            InstrumentedObjectStoreMode::Trace
+        );
+
+        cmd = "object_store_profiling does_not_exist"
+            .parse()
+            .expect("expected parse to succeed");
+        assert!(cmd.execute(&ctx, &mut print_options).await.is_err());
     }
 }

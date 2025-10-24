@@ -73,7 +73,7 @@ pub fn to_substrait_rel(
             let mut names = vec![];
             let mut types = vec![];
 
-            for field in file_config.file_schema.fields.iter() {
+            for field in file_config.file_schema().fields.iter() {
                 match to_substrait_type(field.data_type(), field.is_nullable()) {
                     Ok(t) => {
                         names.push(field.name().clone());
