@@ -20,9 +20,10 @@ use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
 use sqlparser::ast::{
-    AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind, DataType as SQLDataType,
-    DictionaryField, DateTimeField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
-    StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
+    AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
+    DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
+    ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript, TrimWhereField,
+    TypedString, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -504,7 +505,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 CeilFloorKind::Scale(_) => {
                     not_impl_err!("FLOOR with scale is not supported")
                 }
-            }
+            },
             SQLExpr::Ceil { expr, field } => match field {
                 CeilFloorKind::DateTimeField(DateTimeField::NoDateTime) => {
                     self.sql_fn_name_to_expr(*expr, "ceil", schema, planner_context)
@@ -515,7 +516,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 CeilFloorKind::Scale(_) => {
                     not_impl_err!("CEIL with scale is not supported")
                 }
-            }
+            },
             SQLExpr::Overlay {
                 expr,
                 overlay_what,
