@@ -194,7 +194,7 @@ fn find_most_restrictive_predicate(
     let mut best_value: Option<&ScalarValue> = None;
 
     for (idx, pred) in predicates.iter().enumerate() {
-        if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = pred {
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = pred {
             // Extract the literal value based on which side has it
             let scalar_value = match (right.as_literal(), left.as_literal()) {
                 (Some(scalar), _) => Some(scalar),
@@ -207,8 +207,12 @@ fn find_most_restrictive_predicate(
                     let comparison = scalar.try_cmp(current_best)?;
                     let is_better = if find_greater {
                         comparison == std::cmp::Ordering::Greater
+                            || (comparison == std::cmp::Ordering::Equal
+                                && op == &Operator::Gt)
                     } else {
                         comparison == std::cmp::Ordering::Less
+                            || (comparison == std::cmp::Ordering::Equal
+                                && op == &Operator::Lt)
                     };
 
                     if is_better {

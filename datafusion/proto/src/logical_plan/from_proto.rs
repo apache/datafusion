@@ -315,8 +315,7 @@ pub fn parse_expr(
                     let null_treatment  =  protobuf::NullTreatment::try_from(null_treatment)
                     .map_err(|_| {
                         proto_error(format!(
-                            "Received a WindowExprNode message with unknown NullTreatment {}",
-                            null_treatment
+                            "Received a WindowExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
                     Some(NullTreatment::from(null_treatment))
@@ -596,8 +595,7 @@ pub fn parse_expr(
                     let null_treatment  =  protobuf::NullTreatment::try_from(null_treatment)
                     .map_err(|_| {
                         proto_error(format!(
-                            "Received an AggregateUdfExprNode message with unknown NullTreatment {}",
-                            null_treatment
+                            "Received an AggregateUdfExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
                     Some(NullTreatment::from(null_treatment))

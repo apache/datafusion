@@ -442,7 +442,7 @@ impl FileScanConfigBuilder {
             table_schema,
             file_source,
             limit,
-            projection_indices: projection,
+            projection_indices,
             constraints,
             file_groups,
             statistics,
@@ -464,7 +464,7 @@ impl FileScanConfigBuilder {
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
 
-        let projection = projection.as_ref().map(|indices| {
+        let projection = projection_indices.as_ref().map(|indices| {
             ProjectionExprs::from_indices(indices, table_schema.table_schema())
         });
 
