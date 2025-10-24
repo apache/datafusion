@@ -504,7 +504,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 CeilFloorKind::Scale(_) => {
                     not_impl_err!("FLOOR with scale is not supported")
                 }
-
             }
             SQLExpr::Ceil { expr, field } => match field {
                 CeilFloorKind::DateTimeField(DateTimeField::NoDateTime) => {
