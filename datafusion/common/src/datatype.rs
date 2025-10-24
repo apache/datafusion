@@ -21,7 +21,7 @@ use crate::{
     arrow::datatypes::{DataType, Field, FieldRef},
     metadata::FieldMetadata,
 };
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 /// DataFusion extension methods for Arrow [`DataType`]
 pub trait DataTypeExt {
@@ -177,6 +177,18 @@ impl<'a, 'b, 'c> SerializedTypeView<'a, 'b, 'c> {
 
     pub fn to_field_ref(&self) -> FieldRef {
         self.to_field().into()
+    }
+}
+
+impl Display for SerializedTypeView<'_, '_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.extension_name(), self.extension_metadata()) {
+            (Some(name), None) => write!(f, "{}<{}>", name, self.arrow_type()),
+            (Some(name), Some(metadata)) => {
+                write!(f, "{}({})<{}>", name, metadata, self.arrow_type())
+            }
+            _ => write!(f, "{}", self.arrow_type()),
+        }
     }
 }
 

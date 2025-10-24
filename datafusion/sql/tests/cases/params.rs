@@ -18,8 +18,7 @@
 use crate::logical_plan;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{
-    assert_contains,
-    metadata::{format_type_and_metadata, ScalarAndMetadata},
+    assert_contains, datatype::SerializedTypeView, metadata::ScalarAndMetadata,
     ParamValues, ScalarValue,
 };
 use datafusion_expr::{LogicalPlan, Prepare, Statement};
@@ -88,7 +87,7 @@ fn generate_prepare_stmt_and_data_types(sql: &str) -> (LogicalPlan, String) {
     let data_types = match &plan {
         LogicalPlan::Statement(Statement::Prepare(Prepare { fields, .. })) => fields
             .iter()
-            .map(|f| format_type_and_metadata(f.data_type(), Some(f.metadata())))
+            .map(|f| SerializedTypeView::from(f).to_string())
             .join(", ")
             .to_string(),
         _ => panic!("Expected a Prepare statement"),
@@ -795,7 +794,7 @@ fn test_update_infer_with_metadata() {
         test.run(),
         @r#"
     ** Initial Plan:
-    Prepare: "my_plan" [Utf8, FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>]
+    Prepare: "my_plan" [Utf8, arrow.uuid<FixedSizeBinary(16)>]
       Dml: op=[Update] table=[person_with_uuid_extension]
         Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, $1 AS last_name
           Filter: person_with_uuid_extension.id = $2
@@ -867,7 +866,7 @@ fn test_insert_infer_with_metadata() {
         test.run(),
         @r#"
     ** Initial Plan:
-    Prepare: "my_plan" [FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>, Utf8, Utf8]
+    Prepare: "my_plan" [arrow.uuid<FixedSizeBinary(16)>, Utf8, Utf8]
       Dml: op=[Insert Into] table=[person_with_uuid_extension]
         Projection: column1 AS id, column2 AS first_name, column3 AS last_name
           Values: ($1, $2, $3)

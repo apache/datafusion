@@ -20,7 +20,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use arrow::datatypes::{DataType, Field};
 use hashbrown::HashMap;
 
-use crate::{error::_plan_err, DataFusionError, ScalarValue};
+use crate::{
+    datatype::SerializedTypeView, error::_plan_err, DataFusionError, ScalarValue,
+};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
 #[derive(Debug, Clone)]
@@ -87,50 +89,17 @@ pub fn check_metadata_with_storage_equal(
     what: &str,
     context: &str,
 ) -> Result<(), DataFusionError> {
-    if actual.0 != expected.0 {
-        return _plan_err!(
-            "Expected {what} of type {}, got {}{context}",
-            format_type_and_metadata(expected.0, expected.1),
-            format_type_and_metadata(actual.0, actual.1)
-        );
-    }
+    let metadata_empty = std::collections::HashMap::new();
+    let actual =
+        SerializedTypeView::from((actual.0, actual.1.unwrap_or(&metadata_empty)));
+    let expected =
+        SerializedTypeView::from((expected.0, expected.1.unwrap_or(&metadata_empty)));
 
-    let metadata_equal = match (actual.1, expected.1) {
-        (None, None) => true,
-        (None, Some(expected_metadata)) => expected_metadata.is_empty(),
-        (Some(actual_metadata), None) => actual_metadata.is_empty(),
-        (Some(actual_metadata), Some(expected_metadata)) => {
-            actual_metadata == expected_metadata
-        }
-    };
-
-    if !metadata_equal {
-        return _plan_err!(
-            "Expected {what} of type {}, got {}{context}",
-            format_type_and_metadata(expected.0, expected.1),
-            format_type_and_metadata(actual.0, actual.1)
-        );
+    if actual != expected {
+        return _plan_err!("Expected {what} of type {expected}, got {actual}{context}");
     }
 
     Ok(())
-}
-
-/// Given a data type represented by storage and optional metadata, generate
-/// a user-facing string
-///
-/// This function exists to reduce the number of Field debug strings that are
-/// used to communicate type information in error messages and plan explain
-/// renderings.
-pub fn format_type_and_metadata(
-    data_type: &DataType,
-    metadata: Option<&std::collections::HashMap<String, String>>,
-) -> String {
-    match metadata {
-        Some(metadata) if !metadata.is_empty() => {
-            format!("{data_type}<{metadata:?}>")
-        }
-        _ => data_type.to_string(),
-    }
 }
 
 /// Literal metadata
