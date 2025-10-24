@@ -631,8 +631,8 @@ async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
 
 #[tokio::test]
 async fn predicate_cache_pushdown_disable() -> datafusion_common::Result<()> {
-    // Can disable the cache even with filter pushdown by setting the size to 0. In this case we
-    //  no records are read from the cache and no metrics are reported
+    // Can disable the cache even with filter pushdown by setting the size to 0.
+    // This results in no records read from the cache and no metrics reported
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
     config
