@@ -130,10 +130,13 @@ mod tests {
     use crate::function::bitmap::bitmap_count::BitmapCount;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, Int64Array};
-    use arrow::datatypes::DataType;
     use arrow::datatypes::DataType::Int64;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::ColumnarValue::Scalar;
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use std::sync::Arc;
 
     macro_rules! test_bitmap_count_binary_invoke {
         ($INPUT:expr, $EXPECTED:expr) => {
@@ -187,6 +190,33 @@ mod tests {
             Some(vec![0x0Au8, 0xB0u8, 0xCDu8]),
             Ok(Some(10))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_dictionary_encoded_bitmap_count_invoke() -> Result<()> {
+        let dict = Scalar(ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Binary(Some(vec![0xFFu8, 0xFFu8]))),
+        ));
+
+        let arg_fields = vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            true,
+        )
+        .into()];
+        let args = ScalarFunctionArgs {
+            args: vec![dict.clone()],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let udf = BitmapCount::new();
+        let actual = udf.invoke_with_args(args)?;
+        let expect = Scalar(ScalarValue::Int64(Some(16)));
+        assert_eq!(*actual.into_array(1)?, *expect.into_array(1)?);
         Ok(())
     }
 }
