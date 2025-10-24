@@ -194,7 +194,7 @@ The purposes of code review are:
 
 An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.
 
-Please understand the reviewing capacity is **very limited** for the project,  so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.
+Please understand the reviewing capacity is **very limited** for the project, so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.
 
 ### Better ways to contribute than an “AI dump”
 
