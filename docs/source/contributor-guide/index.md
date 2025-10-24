@@ -192,7 +192,7 @@ The purposes of code review are:
 1. Finish the intended task.
 2. Share knowledge between authors and reviewers, as a long-term investment in the project. For this reason, even if someone familiar with the codebase can finish a task quickly, we're still happy to help a new contributor work on it even if it takes longer.
 
-An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and little knowledge is shared if the author does not intend to understand the solution.
+An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.
 
 Please understand the reviewing capacity is **very limited** for the project, so such PRs might be closed or get redirected.
 
