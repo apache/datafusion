@@ -260,7 +260,7 @@ impl FileSource for CsvSource {
 
     fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.file_schema = Some(Arc::clone(&schema.file_schema()));
+        conf.file_schema = Some(Arc::clone(schema.file_schema()));
         Arc::new(conf)
     }
 

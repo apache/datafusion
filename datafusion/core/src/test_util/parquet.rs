@@ -187,7 +187,7 @@ impl TestParquetFile {
                 ParquetSource::new(parquet_options)
                     .with_predicate(Arc::clone(&physical_filter_expr)),
             )
-            .with_schema(TableSchema::new_from_file_schema(Arc::clone(&self.schema)));
+            .with_schema(TableSchema::from_file_schema(Arc::clone(&self.schema)));
             let config = scan_config_builder.with_source(source).build();
             let parquet_exec = DataSourceExec::from_data_source(config);
 
