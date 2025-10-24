@@ -17,7 +17,10 @@
 
 //! [DataTypeExt] extension trait for converting DataTypes to Fields
 
-use crate::arrow::datatypes::{DataType, Field, FieldRef};
+use crate::{
+    arrow::datatypes::{DataType, Field, FieldRef},
+    metadata::FieldMetadata,
+};
 use std::sync::Arc;
 
 /// DataFusion extension methods for Arrow [`DataType`]
@@ -103,5 +106,126 @@ impl FieldExt for Arc<Field> {
         } else {
             self
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq)]
+pub struct SerializedTypeView<'a, 'b, 'c> {
+    arrow_type: &'a DataType,
+    extension_name: Option<&'b str>,
+    extension_metadata: Option<&'c str>,
+}
+
+impl<'a, 'b, 'c> SerializedTypeView<'a, 'b, 'c> {
+    pub fn new(
+        arrow_type: &'a DataType,
+        extension_name: Option<&'b str>,
+        extension_metadata: Option<&'c str>,
+    ) -> Self {
+        Self {
+            arrow_type,
+            extension_name,
+            extension_metadata,
+        }
+    }
+
+    pub fn data_type(&self) -> Option<&DataType> {
+        if self.extension_name.is_some() {
+            None
+        } else {
+            Some(self.arrow_type)
+        }
+    }
+
+    pub fn arrow_type(&self) -> &DataType {
+        self.arrow_type
+    }
+
+    pub fn extension_name(&self) -> Option<&str> {
+        self.extension_name
+    }
+
+    pub fn extension_metadata(&self) -> Option<&str> {
+        if let Some(metadata) = self.extension_metadata {
+            if !metadata.is_empty() {
+                return Some(metadata);
+            }
+        }
+
+        None
+    }
+
+    pub fn to_field(&self) -> Field {
+        if let Some(extension_name) = self.extension_name() {
+            self.arrow_type.clone().into_nullable_field().with_metadata(
+                [
+                    (
+                        "ARROW:extension:name".to_string(),
+                        extension_name.to_string(),
+                    ),
+                    (
+                        "ARROW:extension:metadata".to_string(),
+                        self.extension_metadata().unwrap_or("").to_string(),
+                    ),
+                ]
+                .into(),
+            )
+        } else {
+            self.arrow_type.clone().into_nullable_field()
+        }
+    }
+
+    pub fn to_field_ref(&self) -> FieldRef {
+        self.to_field().into()
+    }
+}
+
+impl PartialEq<SerializedTypeView<'_, '_, '_>> for SerializedTypeView<'_, '_, '_> {
+    fn eq(&self, other: &SerializedTypeView) -> bool {
+        self.arrow_type() == other.arrow_type()
+            && self.extension_name() == other.extension_name()
+            && self.extension_metadata() == other.extension_metadata()
+    }
+}
+
+impl<'a> From<&'a DataType> for SerializedTypeView<'a, 'static, 'static> {
+    fn from(value: &'a DataType) -> Self {
+        Self::new(value, None, None)
+    }
+}
+
+impl<'a, 'b, T: IntoIterator<Item = (&'b String, &'b String)>> From<(&'a DataType, T)>
+    for SerializedTypeView<'a, 'b, 'b>
+{
+    fn from(value: (&'a DataType, T)) -> Self {
+        let mut extension_name = None;
+        let mut extension_metadata = None;
+        for (k, v) in value.1 {
+            match k.as_str() {
+                "ARROW:extension:name" => extension_name.replace(v.as_str()),
+                "ARROW:extension:metadata" => extension_metadata.replace(v.as_str()),
+                _ => None,
+            };
+        }
+
+        Self::new(value.0, extension_name, extension_metadata)
+    }
+}
+
+impl<'a> From<&'a Field> for SerializedTypeView<'a, 'a, 'a> {
+    fn from(value: &'a Field) -> Self {
+        (value.data_type(), value.metadata()).into()
+    }
+}
+
+impl<'a> From<&'a FieldRef> for SerializedTypeView<'a, 'a, 'a> {
+    fn from(value: &'a FieldRef) -> Self {
+        (value.data_type(), value.metadata()).into()
+    }
+}
+
+impl<'a, 'b> From<(&'a DataType, &'b FieldMetadata)> for SerializedTypeView<'a, 'b, 'b> {
+    fn from(value: (&'a DataType, &'b FieldMetadata)) -> Self {
+        (value.0, value.1.inner()).into()
     }
 }
