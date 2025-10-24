@@ -17,40 +17,24 @@
   under the License.
 -->
 
-# A Gentle Introduction to Arrow & RecordBatches (for DataFusion users)
+# Introduction to `Arrow` & RecordBatches
 
 ```{contents}
 :local:
 :depth: 2
 ```
 
-This guide helps DataFusion users understand Arrow and its RecordBatch format. While you may never need to work with Arrow directly, this knowledge becomes valuable when using DataFusion's extension points or debugging performance issues.
+This guide helps DataFusion users understand [Apache Arrow]—a language-independent, in-memory columnar format and development platform for analytics. It defines a standardized columnar representation that enables different systems and languages (e.g., Rust and Python) to share data with zero-copy interchange, avoiding serialization overhead. A core building block is the [`RecordBatch`] format. While you may never need to work with Arrow directly, this knowledge becomes valuable when using DataFusion's extension points or debugging performance issues.
 
 **Why Arrow is central to DataFusion**: Arrow provides the unified type system that makes DataFusion possible. When you query a CSV file, join it with a Parquet file, and aggregate results from JSON—it all works seamlessly because every data source is converted to Arrow's common representation. This unified type system, combined with Arrow's columnar format, enables DataFusion to execute efficient vectorized operations across any combination of data sources while benefiting from zero-copy data sharing between query operators.
 
 ## Why Columnar? The Arrow Advantage
 
-Apache Arrow is an open **specification** that defines how analytical data should be organized in memory. Think of it as a blueprint that different systems agree to follow, not a database or programming language.
+Apache Arrow is an open **specification** that defines a common way to organize analytical data in memory. Think of it as a set of best practices that different systems agree to follow, not a database or programming language.
 
 ### Row-oriented vs Columnar Layout
 
-Traditional databases often store data row-by-row:
-
-```
-Row 1: [id: 1, name: "Alice", age: 30]
-Row 2: [id: 2, name: "Bob",   age: 25]
-Row 3: [id: 3, name: "Carol", age: 35]
-```
-
-Arrow organizes the same data by column:
-
-```
-Column "id":   [1, 2, 3]
-Column "name": ["Alice", "Bob", "Carol"]
-Column "age":  [30, 25, 35]
-```
-
-Visual comparison:
+Quick visual: row-major (left) vs Arrow's columnar layout (right). For a deeper primer, see the [arrow2 guide].
 
 ```
 Traditional Row Storage:          Arrow Columnar Storage:
@@ -66,38 +50,48 @@ Traditional Row Storage:          Arrow Columnar Storage:
 
 ### Why This Matters
 
+- **Unified Type System**: All data sources (CSV, Parquet, JSON) convert to the same Arrow types, enabling seamless cross-format queries
 - **Vectorized Execution**: Process entire columns at once using SIMD instructions
-- **Better Compression**: Similar values stored together compress more efficiently
-- **Cache Efficiency**: Scanning specific columns doesn't load unnecessary data
+- **Cache Efficiency**: Scanning specific columns doesn't load unnecessary data into CPU cache
 - **Zero-Copy Data Sharing**: Systems can share Arrow data without conversion overhead
 
-DataFusion, DuckDB, Polars, and Pandas all speak Arrow natively—they can exchange data without expensive serialization/deserialization steps.
+Arrow is widely adopted for in-memory analytics precisely because of its **columnar format**—systems that natively store or process data in Arrow (DataFusion, Polars, InfluxDB 3.0), and runtimes that convert to Arrow for interchange (DuckDB, Spark, pandas), all organize data by column rather than by row. This cross-language, cross-platform adoption of the columnar model enables seamless data flow between systems with minimal conversion overhead.
+
+Within this columnar design, Arrow's standard unit for packaging data is the **RecordBatch**—the key to making columnar format practical for real-world query engines.
 
 ## What is a RecordBatch? (And Why Batch?)
 
-A **[`RecordBatch`]** represents a horizontal slice of a table—a collection of equal-length columnar arrays sharing the same schema.
+A **[`RecordBatch`]** represents a horizontal slice of a table—a collection of equal-length columnar arrays that conform to a defined schema. Each column within the slice is a contiguous Arrow array, and all columns have the same number of rows (length). This chunked, immutable unit enables efficient streaming and parallel execution.
 
-### Why Not Process Entire Tables?
+Think of it as having two perspectives:
 
-- **Memory Constraints**: A billion-row table might not fit in RAM
-- **Pipeline Processing**: Start producing results before reading all data
-- **Parallel Execution**: Different threads can process different batches
+- **Columnar inside**: Each column (`id`, `name`, `age`) is a contiguous array optimized for vectorized operations
+- **Row-chunked externally**: The batch represents a chunk of rows (e.g., rows 1-1000), making it a manageable unit for streaming
 
-### Why Not Process Single Rows?
+RecordBatches are **immutable snapshots**—once created, they cannot be modified. Any transformation produces a _new_ RecordBatch, enabling safe parallel processing without locks or coordination overhead.
 
-- **Lost Vectorization**: Can't use SIMD instructions on single values
-- **Poor Cache Utilization**: Jumping between rows defeats CPU cache optimization
-- **High Overhead**: Managing individual rows has significant bookkeeping costs
+This design allows DataFusion to process streams of row-based chunks while gaining maximum performance from the columnar layout. Let's see how this works in practice.
 
-### RecordBatches: The Sweet Spot
+### Configuring Batch Size
 
-RecordBatches typically contain thousands of rows—enough to benefit from vectorization but small enough to fit in memory. DataFusion streams these batches through operators, achieving both efficiency and scalability.
+DataFusion uses a default batch size of 8192 rows per RecordBatch, balancing memory efficiency with vectorization benefits. You can adjust this via the session configuration or the [`datafusion.execution.batch_size`] configuration setting:
 
-**Key Properties**:
+```rust
+use datafusion::execution::config::SessionConfig;
+use datafusion::prelude::*;
 
-- Arrays are immutable (create new batches to modify data)
-- NULL values tracked via efficient validity bitmaps
-- Variable-length data (strings, lists) use offset arrays for efficient access
+let config = SessionConfig::new().with_batch_size(8192); // default value
+let ctx = SessionContext::with_config(config);
+```
+
+You can also query and modify this setting using SQL:
+
+```sql
+SHOW datafusion.execution.batch_size;
+SET datafusion.execution.batch_size TO 1024;
+```
+
+See [configuration settings] for more details.
 
 ## From files to Arrow
 
@@ -115,7 +109,7 @@ async fn main() -> datafusion::error::Result<()> {
     // Pick ONE of these per run (each returns a new DataFrame):
     let df = ctx.read_csv("data.csv", CsvReadOptions::new()).await?;
     // let df = ctx.read_parquet("data.parquet", ParquetReadOptions::default()).await?;
-    // let df = ctx.read_json("data.ndjson", NdJsonReadOptions::default()).await?; // requires "json" feature
+    // let df = ctx.read_json("data.ndjson", NdJsonReadOptions::default()).await?; // requires "json" feature; expects newline-delimited JSON (NDJSON)
     // let df = ctx.read_avro("data.avro", AvroReadOptions::default()).await?;     // requires "avro" feature
 
     let batches = df
@@ -150,16 +144,15 @@ In this pipeline, [`RecordBatch`]es are the "packages" of columnar data that flo
 
 Sometimes you need to create Arrow data programmatically rather than reading from files. This example shows the core building blocks: creating typed arrays (like [`Int32Array`] for numbers), defining a [`Schema`] that describes your columns, and assembling them into a [`RecordBatch`].
 
-You'll notice [`Arc`] ([Atomically Reference Counted](https://doc.rust-lang.org/std/sync/struct.Arc.html)) is used frequently—this is how Arrow enables efficient, zero-copy data sharing. Instead of copying data, different parts of the query engine can safely share read-only references to the same underlying memory. [`ArrayRef`] is simply a type alias for `Arc<dyn Array>`, representing a reference to any Arrow array type.
-
-Notice how nullable columns can contain `None` values, tracked efficiently by Arrow's internal validity bitmap.
+Note: You'll see [`Arc`] used frequently in the code—Arrow arrays are wrapped in `Arc` (atomically reference-counted pointers) to enable cheap, thread-safe sharing across operators and tasks. [`ArrayRef`] is simply a type alias for `Arc<dyn Array>`.
 
 ```rust
 use std::sync::Arc;
+use arrow_schema::ArrowError;
 use arrow_array::{ArrayRef, Int32Array, StringArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 
-fn make_batch() -> arrow_schema::Result<RecordBatch> {
+fn make_batch() -> Result<RecordBatch, ArrowError> {
     let ids = Int32Array::from(vec![1, 2, 3]);
     let names = StringArray::from(vec![Some("alice"), None, Some("carol")]);
 
@@ -218,8 +211,8 @@ When working with Arrow and RecordBatches, watch out for these common issues:
 
 - **Schema consistency**: All batches in a stream must share the exact same [`Schema`]. For example, you can't have one batch where a column is [`Int32`] and the next where it's [`Int64`], even if the values would fit
 - **Immutability**: Arrays are immutable—to "modify" data, you must build new arrays or new RecordBatches. For instance, to change a value in an array, you'd create a new array with the updated value
-- **Buffer management**: Variable-length types (UTF-8, binary, lists) use offsets + values arrays internally. Avoid manual buffer slicing unless you understand Arrow's internal invariants—use Arrow's built-in compute functions instead
-- **Type mismatches**: Mixed input types across files may require explicit casts. For example, a string column `"123"` from a CSV file won't automatically join with an integer column `123` from a Parquet file—you'll need to cast one to match the other
+- **Row by Row Processing**: Avoid iterating over Arrays element by element when possible, and use Arrow's built-in compute functions instead
+- **Type mismatches**: Mixed input types across files may require explicit casts. For example, a string column `"123"` from a CSV file won't automatically join with an integer column `123` from a Parquet file—you'll need to cast one to match the other. Use Arrow's [`cast`] kernel where appropriate
 - **Batch size assumptions**: Don't assume a particular batch size; always iterate until the stream ends. One file might produce 8192-row batches while another produces 1024-row batches
 
 ## When Arrow knowledge is needed (Extension Points)
@@ -232,47 +225,40 @@ These APIs are where you can plug your own code into the engine, and they often 
 
 - **[User-Defined Functions (UDFs)]**: If you need to perform a custom transformation on your data that isn't built into DataFusion, you can write a UDF. Your function will receive data as Arrow arrays (inside a [`RecordBatch`]) and must produce an Arrow array as its output.
 
-- **[Custom Optimizer Rules and Operators]**: For advanced use cases, you can even add your own rules to the query optimizer or implement entirely new physical operators (like a special type of join). These also operate on the Arrow-based query plans.
+- **[Custom Optimizer Rules and Physical Operators]**: For advanced use cases, you can add your own optimizer rules or implement entirely new physical operators by implementing the [`ExecutionPlan`] trait. While optimizer rules primarily reason about schemas and plan properties, ExecutionPlan implementations directly produce and consume streams of [`RecordBatch`]es during query execution.
 
 In short, knowing Arrow is key to unlocking the full power of DataFusion's modular and extensible architecture.
 
-## Next Steps: Working with DataFrames
-
-Now that you understand Arrow's RecordBatch format, you're ready to work with DataFusion's high-level APIs. The [DataFrame API](dataframe.md) provides a familiar, ergonomic interface for building queries without needing to think about Arrow internals most of the time.
-
-The DataFrame API handles all the Arrow details under the hood - reading files into RecordBatches, applying transformations, and producing results. You only need to drop down to the Arrow level when implementing custom data sources, UDFs, or other extension points.
-
-**Recommended reading order:**
-
-1. [DataFrame API](dataframe.md) - High-level query building interface
-2. [Library User Guide: DataFrame API](../library-user-guide/using-the-dataframe-api.md) - Detailed examples and patterns
-3. [Custom Table Providers](../library-user-guide/custom-table-providers.md) - When you need Arrow knowledge
-
 ## Further reading
 
-- [Arrow introduction](https://arrow.apache.org/docs/format/Intro.html)
-- [Arrow columnar format (overview)](https://arrow.apache.org/docs/format/Columnar.html)
-- [Arrow IPC format (files and streams)](https://arrow.apache.org/docs/format/IPC.html)
-- [arrow_array::RecordBatch (docs.rs)](https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html)
-- [Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine (Paper)](https://dl.acm.org/doi/10.1145/3626246.3653368)
+**Arrow Documentation:**
 
-- DataFusion + Arrow integration (docs.rs):
-  - [datafusion::common::arrow](https://docs.rs/datafusion/latest/datafusion/common/arrow/index.html)
-  - [datafusion::common::arrow::array](https://docs.rs/datafusion/latest/datafusion/common/arrow/array/index.html)
-  - [datafusion::common::arrow::compute](https://docs.rs/datafusion/latest/datafusion/common/arrow/compute/index.html)
-  - [SessionContext::read_csv](https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_csv)
-  - [read_parquet](https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_parquet)
-  - [read_json](https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_json)
-  - [DataFrame::collect](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.collect)
-  - [SendableRecordBatchStream](https://docs.rs/datafusion/latest/datafusion/physical_plan/type.SendableRecordBatchStream.html)
-  - [TableProvider](https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html)
-  - [MemTable](https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html)
-- Deep dive (memory layout internals): [ArrayData on docs.rs](https://docs.rs/datafusion/latest/datafusion/common/arrow/array/struct.ArrayData.html)
-- Parquet format and pushdown: [Parquet format](https://parquet.apache.org/docs/file-format/), [Row group filtering / predicate pushdown](https://arrow.apache.org/docs/cpp/parquet.html#row-group-filtering)
-- For DataFusion contributors: [DataFusion Invariants](../contributor-guide/specification/invariants.md) - How DataFusion maintains type safety and consistency with Arrow's dynamic type system
+- [Arrow Format Introduction](https://arrow.apache.org/docs/format/Intro.html) - Understand the Arrow specification and why it enables zero-copy data sharing
+- [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html) - Deep dive into memory layout for performance optimization
+- [Arrow Rust Documentation](https://docs.rs/arrow/latest/arrow/) - Complete API reference for the Rust implementation
 
+**DataFusion Extension Guides:**
+
+- [Custom Table Providers](../library-user-guide/custom-table-providers.md) - Build custom data sources that stream RecordBatches
+- [Adding UDFs](../library-user-guide/functions/adding-udfs.md) - Create efficient user-defined functions working with Arrow arrays
+- [Extending Operators](../library-user-guide/extending-operators.md) - Implement custom ExecutionPlan operators for specialized processing
+
+**Key API References:**
+
+- [RecordBatch](https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html) - The fundamental data structure for streaming columnar data
+- [ExecutionPlan](https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html) - Trait for implementing custom physical operators
+- [TableProvider](https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html) - Interface for custom data sources
+- [ScalarUDF](https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html) - Building scalar user-defined functions
+- [MemTable](https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html) - Working with in-memory Arrow data
+
+**Academic Paper:**
+
+- [Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine](https://dl.acm.org/doi/10.1145/3626246.3653368) - Architecture and design decisions (SIGMOD 2024)
+
+[apache arrow]: https://arrow.apache.org/docs/index.html
 [`arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 [`arrayref`]: https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html
+[`cast`]: https://docs.rs/arrow/latest/arrow/compute/fn.cast.html
 [`field`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Field.html
 [`schema`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html
 [`datatype`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html
@@ -280,11 +266,12 @@ The DataFrame API handles all the Arrow details under the hood - reading files i
 [`stringarray`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.StringArray.html
 [`int32`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int32
 [`int64`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int64
-[ extension points]: ../library-user-guide/extensions.md
+[extension points]: ../library-user-guide/extensions.md
 [`tableprovider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 [custom table providers guide]: ../library-user-guide/custom-table-providers.md
 [user-defined functions (udfs)]: ../library-user-guide/functions/adding-udfs.md
-[custom optimizer rules and operators]: ../library-user-guide/extending-operators.md
+[custom optimizer rules and physical operators]: ../library-user-guide/extending-operators.md
+[`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 [`.register_table()`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.register_table
 [`.sql()`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql
 [`.show()`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.show
@@ -299,3 +286,6 @@ The DataFrame API handles all the Arrow details under the hood - reading files i
 [`read_avro`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_avro
 [`dataframe`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
 [`.collect()`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.collect
+[arrow2 guide]: https://jorgecarleitao.github.io/arrow2/main/guide/arrow.html#what-is-apache-arrow
+[configuration settings]: configs.md
+[`datafusion.execution.batch_size`]: configs.md#setting-configuration-options
