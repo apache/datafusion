@@ -527,7 +527,7 @@ config_namespace! {
         ///
         /// A larger value reduces file creation overhead but may hold more disk space.
         /// A smaller value creates more files but allows finer-grained space reclamation
-        /// (especially in LIFO mode where files are truncated after reading).
+        /// as files can be deleted once fully consumed.
         ///
         /// Default: 100 MB
         pub max_spill_file_size_bytes: usize, default = 100 * 1024 * 1024

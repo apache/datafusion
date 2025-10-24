@@ -40,7 +40,6 @@
 //! let pool = SpillPool::new(
 //!     100 * 1024 * 1024,  // 100MB max per file
 //!     spill_manager,
-//!     schema,
 //! );
 //! let pool = Arc::new(Mutex::new(pool));
 //!
@@ -54,7 +53,7 @@
 //! }
 //!
 //! // Read back in FIFO order using a stream
-//! let mut stream = SpillPool::reader(pool, spill_manager);
+//! let mut stream = SpillPool::reader(pool);
 //! let batch1 = stream.next().await.unwrap()?;  // Returns batch1
 //! let batch2 = stream.next().await.unwrap()?;  // Returns batch2
 //! // stream.next() returns None after finalize
@@ -92,14 +91,8 @@ pub struct SpillPool {
     files: VecDeque<RefCountedTempFile>,
     /// Current file being written to (if any)
     current_write_file: Option<InProgressSpillFile>,
-    /// Size of current write file in bytes (estimated)
-    current_write_size: usize,
-    /// Number of batches written to current file
-    current_batch_count: usize,
     /// SpillManager for creating files and tracking metrics
     spill_manager: Arc<SpillManager>,
-    /// Schema for batches (used by SpillPoolStream to implement RecordBatchStream)
-    schema: SchemaRef,
     /// Wakers to notify when new data is available for readers
     wakers: Vec<Waker>,
     /// Flag indicating no more writes will occur
@@ -113,20 +106,12 @@ impl SpillPool {
     ///
     /// * `max_file_size_bytes` - Maximum size per file before rotation (e.g., 100MB)
     /// * `spill_manager` - Manager for file creation and metrics
-    /// * `schema` - Schema for record batches
-    pub fn new(
-        max_file_size_bytes: usize,
-        spill_manager: Arc<SpillManager>,
-        schema: SchemaRef,
-    ) -> Self {
+    pub fn new(max_file_size_bytes: usize, spill_manager: Arc<SpillManager>) -> Self {
         Self {
             max_file_size_bytes,
             files: VecDeque::new(),
             current_write_file: None,
-            current_write_size: 0,
-            current_batch_count: 0,
             spill_manager,
-            schema,
             wakers: Vec::new(),
             finalized: false,
         }
@@ -153,17 +138,13 @@ impl SpillPool {
     /// # Arguments
     ///
     /// * `pool` - Shared reference to the SpillPool
-    /// * `spill_manager` - Manager for creating streams from spill files
     ///
     /// # Returns
     ///
     /// A `SpillPoolStream` that returns batches in FIFO order and ends when the pool
     /// is finalized and all data has been read
-    pub fn reader(
-        pool: Arc<Mutex<Self>>,
-        spill_manager: Arc<SpillManager>,
-    ) -> SendableRecordBatchStream {
-        Box::pin(SpillPoolStream::new(pool, spill_manager))
+    pub fn reader(pool: Arc<Mutex<Self>>) -> SendableRecordBatchStream {
+        Box::pin(SpillPoolStream::new(pool))
     }
 
     /// Spills a batch to the pool, rotating files when necessary.
@@ -183,9 +164,9 @@ impl SpillPool {
         let batch_size = batch.get_array_memory_size();
 
         // Check if we need to rotate to a new file
-        let needs_rotation = if self.current_write_file.is_some() {
+        let needs_rotation = if let Some(ref file) = self.current_write_file {
             // Rotate if adding this batch would exceed the max file size
-            self.current_write_size + batch_size > self.max_file_size_bytes
+            file.estimated_size() + batch_size > self.max_file_size_bytes
         } else {
             // No current file, need to create one
             true
@@ -200,17 +181,12 @@ impl SpillPool {
         if self.current_write_file.is_none() {
             self.current_write_file =
                 Some(self.spill_manager.create_in_progress_file("SpillPool")?);
-            self.current_write_size = 0;
-            self.current_batch_count = 0;
         }
 
         // Append batch to current file
         if let Some(ref mut file) = self.current_write_file {
             file.append_batch(batch)?;
         }
-
-        self.current_write_size += batch_size;
-        self.current_batch_count += 1;
 
         // Wake any waiting readers
         self.wake();
@@ -257,10 +233,6 @@ impl SpillPool {
                 self.files.push_back(temp_file);
             }
 
-            // Reset write state
-            self.current_write_size = 0;
-            self.current_batch_count = 0;
-
             // Wake any waiting readers since a new complete file is available
             self.wake();
         }
@@ -287,8 +259,6 @@ impl Drop for SpillPool {
 struct SpillPoolStream {
     /// Shared reference to the spill pool
     spill_pool: Arc<Mutex<SpillPool>>,
-    /// SpillManager for creating streams from spill files
-    spill_manager: Arc<SpillManager>,
     /// Current stream being read from
     current_stream: Option<SendableRecordBatchStream>,
     /// Schema for the batches
@@ -301,19 +271,14 @@ impl SpillPoolStream {
     /// # Arguments
     ///
     /// * `spill_pool` - Shared reference to the pool to read from
-    /// * `spill_manager` - Manager for creating streams from spill files
-    pub fn new(
-        spill_pool: Arc<Mutex<SpillPool>>,
-        spill_manager: Arc<SpillManager>,
-    ) -> Self {
+    pub fn new(spill_pool: Arc<Mutex<SpillPool>>) -> Self {
         let schema = {
             let pool = spill_pool.lock();
-            Arc::clone(&pool.schema)
+            pool.spill_manager.schema()
         };
 
         Self {
             spill_pool,
-            spill_manager,
             current_stream: None,
             schema,
         }
@@ -358,9 +323,10 @@ impl futures::Stream for SpillPoolStream {
 
             if let Some(file) = pool.files.pop_front() {
                 // We have a completed file to read
+                let spill_manager = Arc::clone(&pool.spill_manager);
                 drop(pool); // Release lock before creating stream
 
-                match self.spill_manager.read_spill_as_stream(file, None) {
+                match spill_manager.read_spill_as_stream(file, None) {
                     Ok(stream) => {
                         self.current_stream = Some(stream);
                         // Continue loop to poll the new stream
@@ -433,7 +399,7 @@ mod tests {
         let spill_manager =
             Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
 
-        SpillPool::new(max_file_size, spill_manager, schema)
+        SpillPool::new(max_file_size, spill_manager)
     }
 
     /// Helper to collect all batches from a stream
@@ -456,9 +422,8 @@ mod tests {
         let mut pool = create_spill_pool(1024 * 1024);
         pool.finalize(); // Mark as done with no data
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool, spill_manager);
+        let stream = SpillPool::reader(pool);
 
         let batches = collect_batches(stream).await?;
         assert_eq!(batches.len(), 0);
@@ -476,9 +441,8 @@ mod tests {
         pool.flush()?;
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool, spill_manager);
+        let stream = SpillPool::reader(pool);
 
         let batches = collect_batches(stream).await?;
         assert_eq!(batches.len(), 1);
@@ -500,9 +464,8 @@ mod tests {
         pool.flush()?;
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool, spill_manager);
+        let stream = SpillPool::reader(pool);
 
         let batches = collect_batches(stream).await?;
         assert_eq!(batches.len(), 5);
@@ -534,9 +497,8 @@ mod tests {
         pool.flush()?;
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool, spill_manager);
+        let stream = SpillPool::reader(pool);
 
         let batches = collect_batches(stream).await?;
         assert_eq!(batches.len(), 10);
@@ -568,9 +530,8 @@ mod tests {
         pool.flush()?;
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool, spill_manager);
+        let stream = SpillPool::reader(pool);
 
         let batches = collect_batches(stream).await?;
         // Should only have 2 batches (empty one skipped)
@@ -592,9 +553,8 @@ mod tests {
         pool.flush()?;
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool, spill_manager);
+        let stream = SpillPool::reader(pool);
 
         let batches = collect_batches(stream).await?;
         assert_eq!(batches.len(), 2);
@@ -612,9 +572,8 @@ mod tests {
     async fn test_stream_blocks_when_no_data() -> Result<()> {
         let pool = create_spill_pool(1024 * 1024);
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let mut stream = SpillPool::reader(Arc::clone(&pool), spill_manager);
+        let mut stream = SpillPool::reader(Arc::clone(&pool));
 
         // Poll should return Pending since no data and not finalized
         let poll_result = futures::poll!(stream.next());
@@ -626,11 +585,10 @@ mod tests {
     #[tokio::test]
     async fn test_stream_wakes_on_push() -> Result<()> {
         let pool = create_spill_pool(1024 * 1024);
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         let pool_clone = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(pool_clone, spill_manager);
+        let stream = SpillPool::reader(pool_clone);
 
         // Spawn a task that will push data after a delay
         let writer_pool = Arc::clone(&pool_arc);
@@ -652,11 +610,10 @@ mod tests {
     #[tokio::test]
     async fn test_stream_wakes_on_flush() -> Result<()> {
         let pool = create_spill_pool(1024 * 1024);
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         let pool_clone = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(pool_clone, spill_manager);
+        let stream = SpillPool::reader(pool_clone);
 
         // Push without flush first
         {
@@ -683,11 +640,10 @@ mod tests {
     #[tokio::test]
     async fn test_stream_wakes_on_finalize() -> Result<()> {
         let pool = create_spill_pool(1024 * 1024);
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         let pool_clone = Arc::clone(&pool_arc);
-        let mut stream = SpillPool::reader(pool_clone, spill_manager);
+        let mut stream = SpillPool::reader(pool_clone);
 
         // First poll should be pending
         let poll_result = futures::poll!(stream.next());
@@ -715,9 +671,8 @@ mod tests {
         pool.push_batch(&create_test_batch(0, 10))?;
         pool.finalize(); // Finalize without flush
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool, spill_manager);
+        let stream = SpillPool::reader(pool);
 
         // Data in current_write_file should still be lost since not flushed
         let batches = collect_batches(stream).await?;
@@ -733,7 +688,6 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_push_and_read() -> Result<()> {
         let pool = create_spill_pool(1024 * 1024);
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         let writer_pool = Arc::clone(&pool_arc);
@@ -748,7 +702,7 @@ mod tests {
         });
 
         let reader_pool = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(reader_pool, spill_manager);
+        let stream = SpillPool::reader(reader_pool);
         let reader = SpawnedTask::spawn(async move { collect_batches(stream).await });
 
         // Wait for both tasks
@@ -771,12 +725,11 @@ mod tests {
     #[tokio::test]
     async fn test_reader_catches_up_to_writer() -> Result<()> {
         let pool = create_spill_pool(1024 * 1024);
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         // Start reader before any data is written
         let reader_pool = Arc::clone(&pool_arc);
-        let mut stream = SpillPool::reader(reader_pool, spill_manager);
+        let mut stream = SpillPool::reader(reader_pool);
 
         // Should return pending
         let poll_result = futures::poll!(stream.next());
@@ -808,13 +761,11 @@ mod tests {
         pool.flush()?;
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         // Create two readers
-        let stream1 =
-            SpillPool::reader(Arc::clone(&pool_arc), Arc::clone(&spill_manager));
-        let stream2 = SpillPool::reader(Arc::clone(&pool_arc), spill_manager);
+        let stream1 = SpillPool::reader(Arc::clone(&pool_arc));
+        let stream2 = SpillPool::reader(Arc::clone(&pool_arc));
 
         // Read from both concurrently
         let reader1 = SpawnedTask::spawn(async move { collect_batches(stream1).await });
@@ -834,7 +785,6 @@ mod tests {
     #[tokio::test]
     async fn test_file_cutover_during_read() -> Result<()> {
         let pool = create_spill_pool(500); // Small size for rotation
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         let writer_pool = Arc::clone(&pool_arc);
@@ -853,7 +803,7 @@ mod tests {
 
         // Read concurrently
         let reader_pool = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(reader_pool, spill_manager);
+        let stream = SpillPool::reader(reader_pool);
         let reader = SpawnedTask::spawn(async move { collect_batches(stream).await });
 
         writer.await.unwrap();
@@ -878,9 +828,8 @@ mod tests {
         pool.flush()?;
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool, spill_manager);
+        let stream = SpillPool::reader(pool);
 
         let batches = collect_batches(stream).await?;
         assert_eq!(batches.len(), 5);
@@ -908,9 +857,8 @@ mod tests {
 
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(Arc::clone(&pool_arc), spill_manager);
+        let stream = SpillPool::reader(Arc::clone(&pool_arc));
 
         // Read all batches
         let batches = collect_batches(stream).await?;
@@ -926,7 +874,6 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_with_rotation() -> Result<()> {
         let pool = create_spill_pool(400);
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         // Write and read concurrently
@@ -944,7 +891,7 @@ mod tests {
         });
 
         let reader_pool = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(reader_pool, spill_manager);
+        let stream = SpillPool::reader(reader_pool);
         let reader = SpawnedTask::spawn(async move {
             let mut batches = Vec::new();
             let mut stream = stream;
@@ -988,9 +935,8 @@ mod tests {
 
         pool.finalize();
 
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool_arc, spill_manager);
+        let stream = SpillPool::reader(pool_arc);
 
         // Should only get the 3 flushed batches
         let batches = collect_batches(stream).await?;
@@ -1006,7 +952,6 @@ mod tests {
     #[tokio::test]
     async fn test_interleaved_flush() -> Result<()> {
         let pool = create_spill_pool(1024 * 1024);
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         // Push → flush
@@ -1017,7 +962,7 @@ mod tests {
         }
 
         // Read one batch
-        let stream = SpillPool::reader(Arc::clone(&pool_arc), Arc::clone(&spill_manager));
+        let stream = SpillPool::reader(Arc::clone(&pool_arc));
         let mut stream = stream;
         let batch1 = stream.next().await.unwrap()?;
         assert_eq!(batch1.num_rows(), 10);
@@ -1076,7 +1021,6 @@ mod tests {
     #[tokio::test]
     async fn test_drop_flushes_current_file() -> Result<()> {
         let pool = create_spill_pool(1024 * 1024);
-        let spill_manager = Arc::clone(&pool.spill_manager);
         let pool_arc = Arc::new(Mutex::new(pool));
 
         // Push without flush
@@ -1090,7 +1034,7 @@ mod tests {
         // Drop should trigger flush in Drop impl
         // (though in this case we already flushed)
 
-        let stream = SpillPool::reader(pool_arc, spill_manager);
+        let stream = SpillPool::reader(pool_arc);
         let batches = collect_batches(stream).await?;
         assert_eq!(batches.len(), 1);
 

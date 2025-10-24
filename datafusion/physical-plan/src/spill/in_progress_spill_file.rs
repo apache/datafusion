@@ -35,6 +35,10 @@ pub struct InProgressSpillFile {
     writer: Option<IPCStreamWriter>,
     /// Lazily initialized in-progress file, it will be moved out when the `finish` method is invoked
     in_progress_file: Option<RefCountedTempFile>,
+    /// Number of batches written to this file
+    batch_count: usize,
+    /// Estimated size of data written to this file in bytes
+    estimated_size: usize,
 }
 
 impl InProgressSpillFile {
@@ -46,6 +50,8 @@ impl InProgressSpillFile {
             spill_writer,
             in_progress_file: Some(in_progress_file),
             writer: None,
+            batch_count: 0,
+            estimated_size: 0,
         }
     }
 
@@ -84,6 +90,10 @@ impl InProgressSpillFile {
 
             // Update metrics
             self.spill_writer.metrics.spilled_rows.add(spilled_rows);
+
+            // Update stats
+            self.batch_count += 1;
+            self.estimated_size += batch.get_array_memory_size();
         }
         Ok(())
     }
@@ -106,5 +116,15 @@ impl InProgressSpillFile {
         }
 
         Ok(self.in_progress_file.take())
+    }
+
+    /// Returns the number of batches written to this file
+    pub fn batch_count(&self) -> usize {
+        self.batch_count
+    }
+
+    /// Returns the estimated size of data written to this file in bytes
+    pub fn estimated_size(&self) -> usize {
+        self.estimated_size
     }
 }
