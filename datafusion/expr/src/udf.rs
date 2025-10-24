@@ -252,7 +252,21 @@ impl ScalarUDF {
         Ok(result)
     }
 
-    /// Get the circuits of inner implementation
+    /// Determines which of the arguments passed to this function are evaluated eagerly
+    /// and which may be evaluated lazily.
+    ///
+    /// See [ScalarUDFImpl::conditional_arguments] for more information.
+    pub fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        self.inner.conditional_arguments(args)
+    }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered.
+    ///
+    /// See [ScalarUDFImpl::short_circuits] for more information.
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
     }
@@ -532,6 +546,33 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
+    /// Create a new instance of this function with updated configuration.
+    ///
+    /// This method is called when configuration options change at runtime
+    /// (e.g., via `SET` statements) to allow functions that depend on
+    /// configuration to update themselves accordingly.
+    ///
+    /// Note the current [`ConfigOptions`] are also passed to [`Self::invoke_with_args`] so
+    /// this API is not needed for functions where the values may
+    /// depend on the current options.
+    ///
+    /// This API is useful for functions where the return
+    /// **type** depends on the configuration options, such as the `now()` function
+    /// which depends on the current timezone.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The updated configuration options
+    ///
+    /// # Returns
+    ///
+    /// * `Some(ScalarUDF)` - A new instance of this function configured with the new settings
+    /// * `None` - If this function does not change with new configuration settings (the default)
+    ///
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+        None
+    }
+
     /// What type will be returned by this function, given the arguments?
     ///
     /// By default, this function calls [`Self::return_type`] with the
@@ -656,8 +697,40 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// Setting this to true prevents certain optimizations such as common
     /// subexpression elimination
+    ///
+    /// When overriding this function to return `true`, [ScalarUDFImpl::conditional_arguments] can also be
+    /// overridden to report more accurately which arguments are eagerly evaluated and which ones
+    /// lazily.
     fn short_circuits(&self) -> bool {
         false
+    }
+
+    /// Determines which of the arguments passed to this function are evaluated eagerly
+    /// and which may be evaluated lazily.
+    ///
+    /// If this function returns `None`, all arguments are eagerly evaluated.
+    /// Returning `None` is a micro optimization that saves a needless `Vec`
+    /// allocation.
+    ///
+    /// If the function returns `Some`, returns (`eager`, `lazy`) where `eager`
+    /// are the arguments that are always evaluated, and `lazy` are the
+    /// arguments that may be evaluated lazily (i.e. may not be evaluated at all
+    /// in some cases).
+    ///
+    /// Implementations must ensure that the two returned `Vec`s are disjunct,
+    /// and that each argument from `args` is present in one the two `Vec`s.
+    ///
+    /// When overriding this function, [ScalarUDFImpl::short_circuits] must
+    /// be overridden to return `true`.
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        if self.short_circuits() {
+            Some((vec![], args.iter().collect()))
+        } else {
+            None
+        }
     }
 
     /// Computes the output [`Interval`] for a [`ScalarUDFImpl`], given the input
@@ -833,6 +906,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.invoke_with_args(args)
     }
 
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+        None
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -843,6 +920,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
+    }
+
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        self.inner.conditional_arguments(args)
     }
 
     fn short_circuits(&self) -> bool {

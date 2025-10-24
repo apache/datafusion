@@ -866,6 +866,7 @@ pub fn comparison_coercion_numeric(
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| dictionary_comparison_coercion_numeric(lhs_type, rhs_type, true))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion_as_numeric(lhs_type, rhs_type))
@@ -1353,6 +1354,38 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
     }
 }
 
+/// Generic coercion rules for Dictionaries: the type that both lhs and rhs
+/// can be casted to for the purpose of a computation.
+///
+/// Not all operators support dictionaries, if `preserve_dictionaries` is true
+/// dictionaries will be preserved if possible.
+///
+/// The `coerce_fn` parameter determines which comparison coercion function to use
+/// for comparing the dictionary value types.
+fn dictionary_comparison_coercion_generic(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_dictionaries: bool,
+    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (
+            Dictionary(_lhs_index_type, lhs_value_type),
+            Dictionary(_rhs_index_type, rhs_value_type),
+        ) => coerce_fn(lhs_value_type, rhs_value_type),
+        (d @ Dictionary(_, value_type), other_type)
+        | (other_type, d @ Dictionary(_, value_type))
+            if preserve_dictionaries && value_type.as_ref() == other_type =>
+        {
+            Some(d.clone())
+        }
+        (Dictionary(_index_type, value_type), _) => coerce_fn(value_type, rhs_type),
+        (_, Dictionary(_index_type, value_type)) => coerce_fn(lhs_type, value_type),
+        _ => None,
+    }
+}
+
 /// Coercion rules for Dictionaries: the type that both lhs and rhs
 /// can be casted to for the purpose of a computation.
 ///
@@ -1363,26 +1396,31 @@ fn dictionary_comparison_coercion(
     rhs_type: &DataType,
     preserve_dictionaries: bool,
 ) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-    match (lhs_type, rhs_type) {
-        (
-            Dictionary(_lhs_index_type, lhs_value_type),
-            Dictionary(_rhs_index_type, rhs_value_type),
-        ) => comparison_coercion(lhs_value_type, rhs_value_type),
-        (d @ Dictionary(_, value_type), other_type)
-        | (other_type, d @ Dictionary(_, value_type))
-            if preserve_dictionaries && value_type.as_ref() == other_type =>
-        {
-            Some(d.clone())
-        }
-        (Dictionary(_index_type, value_type), _) => {
-            comparison_coercion(value_type, rhs_type)
-        }
-        (_, Dictionary(_index_type, value_type)) => {
-            comparison_coercion(lhs_type, value_type)
-        }
-        _ => None,
-    }
+    dictionary_comparison_coercion_generic(
+        lhs_type,
+        rhs_type,
+        preserve_dictionaries,
+        comparison_coercion,
+    )
+}
+
+/// Coercion rules for Dictionaries with numeric preference: similar to
+/// [`dictionary_comparison_coercion`] but uses [`comparison_coercion_numeric`]
+/// which prefers numeric types over strings when both are present.
+///
+/// This is used by [`comparison_coercion_numeric`] to maintain consistent
+/// numeric-preferring semantics when dealing with dictionary types.
+fn dictionary_comparison_coercion_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_dictionaries: bool,
+) -> Option<DataType> {
+    dictionary_comparison_coercion_generic(
+        lhs_type,
+        rhs_type,
+        preserve_dictionaries,
+        comparison_coercion_numeric,
+    )
 }
 
 /// Coercion rules for string concat.

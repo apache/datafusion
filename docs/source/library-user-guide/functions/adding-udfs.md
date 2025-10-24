@@ -354,7 +354,7 @@ async fn main() {
 }
 ```
 
-## Adding a Async Scalar UDF
+## Adding an Async Scalar UDF
 
 An Async Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
@@ -1257,7 +1257,7 @@ async fn main() -> Result<()> {
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
-## Adding a User-Defined Table Function
+## Adding a Table UDF
 
 A User-Defined Table Function (UDTF) is a function that takes parameters and returns a `TableProvider`.
 
@@ -1266,8 +1266,8 @@ This is a simple struct that holds a set of RecordBatches in memory and treats t
 be replaced with your own struct that implements `TableProvider`.
 
 While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be
-particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4]
-for a working example that reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata`
+particularly useful for reading data from external sources and interactive analysis. See the [working example][simple_udtf.rs]
+which reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata`
 in the CLI to read the metadata from a Parquet file.
 
 ```console

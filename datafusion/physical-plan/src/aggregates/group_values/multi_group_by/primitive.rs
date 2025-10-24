@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
+use crate::aggregates::group_values::multi_group_by::{
+    nulls_equal_to, GroupColumn, Nulls,
+};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{cast::AsArray, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
@@ -132,15 +134,15 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         let null_count = array.null_count();
         let num_rows = array.len();
         let all_null_or_non_null = if null_count == 0 {
-            Some(true)
+            Nulls::None
         } else if null_count == num_rows {
-            Some(false)
+            Nulls::All
         } else {
-            None
+            Nulls::Some
         };
 
         match (NULLABLE, all_null_or_non_null) {
-            (true, None) => {
+            (true, Nulls::Some) => {
                 for &row in rows {
                     if array.is_null(row) {
                         self.nulls.append(true);
@@ -152,14 +154,14 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 }
             }
 
-            (true, Some(true)) => {
+            (true, Nulls::None) => {
                 self.nulls.append_n(rows.len(), false);
                 for &row in rows {
                     self.group_values.push(arr.value(row));
                 }
             }
 
-            (true, Some(false)) => {
+            (true, Nulls::All) => {
                 self.nulls.append_n(rows.len(), true);
                 self.group_values
                     .extend(iter::repeat_n(T::default_value(), rows.len()));

@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
 use std::sync::Arc;
@@ -31,6 +32,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion::physical_plan::metrics::MetricType;
 use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -42,9 +44,11 @@ use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
-use datafusion::datasource::file_format::json::JsonSink;
+use datafusion::datasource::file_format::json::{JsonFormat, JsonSink};
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl, PartitionedFile,
+};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup,
@@ -1433,6 +1437,7 @@ fn roundtrip_analyze() -> Result<()> {
     roundtrip_test(Arc::new(AnalyzeExec::new(
         false,
         false,
+        vec![MetricType::SUMMARY, MetricType::DEV],
         input,
         Arc::new(schema),
     )))
@@ -1711,7 +1716,7 @@ fn roundtrip_unnest() -> Result<()> {
         vec![2, 4],
         output_schema,
         options,
-    );
+    )?;
     roundtrip_test(Arc::new(unnest))
 }
 
@@ -2219,5 +2224,43 @@ async fn roundtrip_memory_source() -> Result<()> {
         .await?
         .create_physical_plan()
         .await?;
+    roundtrip_test(plan)
+}
+
+#[tokio::test]
+async fn roundtrip_listing_table_with_schema_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let file_format = JsonFormat::default();
+    let table_partition_cols = vec![("part".to_owned(), DataType::Int64)];
+    let data = "../core/tests/data/partitioned_table_json";
+    let listing_table_url = ListingTableUrl::parse(data)?;
+    let listing_options = ListingOptions::new(Arc::new(file_format))
+        .with_table_partition_cols(table_partition_cols);
+
+    let config = ListingTableConfig::new(listing_table_url)
+        .with_listing_options(listing_options)
+        .infer_schema(&ctx.state())
+        .await?;
+
+    // Decorate metadata onto the inferred ListingTable schema
+    let schema_with_meta = config
+        .file_schema
+        .clone()
+        .map(|s| {
+            let mut meta: HashMap<String, String> = HashMap::new();
+            meta.insert("foo.bar".to_string(), "baz".to_string());
+            s.as_ref().clone().with_metadata(meta)
+        })
+        .expect("Must decorate metadata");
+
+    let config = config.with_schema(Arc::new(schema_with_meta));
+    ctx.register_table("hive_style", Arc::new(ListingTable::try_new(config)?))?;
+
+    let plan = ctx
+        .sql("select * from hive_style limit 1")
+        .await?
+        .create_physical_plan()
+        .await?;
+
     roundtrip_test(plan)
 }
