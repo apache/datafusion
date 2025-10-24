@@ -271,7 +271,7 @@ In short, knowing Arrow is key to unlocking the full power of DataFusion's modul
 [custom table providers guide]: ../library-user-guide/custom-table-providers.md
 [user-defined functions (udfs)]: ../library-user-guide/functions/adding-udfs.md
 [custom optimizer rules and physical operators]: ../library-user-guide/extending-operators.md
-[`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
+[`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 [`.register_table()`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.register_table
 [`.sql()`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql
 [`.show()`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.show
