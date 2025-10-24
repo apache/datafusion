@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use super::*;
-use datafusion_common::ScalarValue;
+use datafusion::assert_batches_eq;
+use datafusion_common::{metadata::ScalarAndMetadata, ParamValues, ScalarValue};
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -313,6 +316,53 @@ async fn test_named_parameter_not_bound() -> Result<()> {
     | -1     | 1        |
     +--------+----------+
     ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_query_parameters_with_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df = ctx.sql("SELECT $1, $2").await.unwrap();
+
+    let metadata1 = HashMap::from([("some_key".to_string(), "some_value".to_string())]);
+    let metadata2 =
+        HashMap::from([("some_other_key".to_string(), "some_other_value".to_string())]);
+
+    let df_with_params_replaced = df
+        .with_param_values(ParamValues::List(vec![
+            ScalarAndMetadata::new(
+                ScalarValue::UInt32(Some(1)),
+                Some(metadata1.clone().into()),
+            ),
+            ScalarAndMetadata::new(
+                ScalarValue::Utf8(Some("two".to_string())),
+                Some(metadata2.clone().into()),
+            ),
+        ]))
+        .unwrap();
+
+    // df_with_params_replaced.schema() is not correct here
+    // https://github.com/apache/datafusion/issues/18102
+    let batches = df_with_params_replaced.clone().collect().await.unwrap();
+    let schema = batches[0].schema();
+
+    assert_eq!(schema.field(0).data_type(), &DataType::UInt32);
+    assert_eq!(schema.field(0).metadata(), &metadata1);
+    assert_eq!(schema.field(1).data_type(), &DataType::Utf8);
+    assert_eq!(schema.field(1).metadata(), &metadata2);
+
+    assert_batches_eq!(
+        [
+            "+----+-----+",
+            "| $1 | $2  |",
+            "+----+-----+",
+            "| 1  | two |",
+            "+----+-----+",
+        ],
+        &batches
+    );
 
     Ok(())
 }

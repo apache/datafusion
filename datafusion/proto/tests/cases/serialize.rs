@@ -18,10 +18,11 @@
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
+use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{col, create_udf, lit, ColumnarValue};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_functions::string;
@@ -134,6 +135,21 @@ fn exact_roundtrip_linearized_binary_expr() {
 fn roundtrip_qualified_alias() {
     let qual_alias = col("c1").alias_qualified(Some("my_table"), "my_column");
     assert_eq!(qual_alias, roundtrip_expr(&qual_alias));
+}
+
+#[test]
+fn roundtrip_placeholder_with_metadata() {
+    let expr = Expr::Placeholder(Placeholder::new_with_field(
+        "placeholder_id".to_string(),
+        Some(
+            Field::new("", DataType::Utf8, false)
+                .with_metadata(
+                    [("some_key".to_string(), "some_value".to_string())].into(),
+                )
+                .into(),
+        ),
+    ));
+    assert_eq!(expr, roundtrip_expr(&expr));
 }
 
 #[test]
