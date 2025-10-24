@@ -494,11 +494,18 @@ impl CaseExpr {
             if let Some(e) = self.else_expr() {
                 let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
 
-                let nulls_filter = create_filter(&base_nulls);
-                let nulls_batch = filter_record_batch(&remainder_batch, &nulls_filter)?;
-                let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
-                let nulls_value = expr.evaluate(&nulls_batch)?;
-                result_builder.add_branch_result(&nulls_rows, nulls_value)?;
+                if base_nulls.true_count() == remainder_batch.num_rows() {
+                    // All base values were null, so no need to filter
+                    let nulls_value = expr.evaluate(&remainder_batch)?;
+                    result_builder.add_branch_result(&remainder_rows, nulls_value)?;
+                } else {
+                    let nulls_filter = create_filter(&base_nulls);
+                    let nulls_batch =
+                        filter_record_batch(&remainder_batch, &nulls_filter)?;
+                    let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
+                    let nulls_value = expr.evaluate(&nulls_batch)?;
+                    result_builder.add_branch_result(&nulls_rows, nulls_value)?;
+                }
             }
 
             // All base values were null, so we can return early
