@@ -29,6 +29,7 @@ use crate::filter_pushdown::{
 use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBoundsAccumulator};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
+    ProbeSideBoundsAccumulator,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
@@ -540,12 +541,6 @@ impl HashJoinExec {
         ]
     }
 
-    /// Get probe side information for the hash join.
-    pub fn probe_side() -> JoinSide {
-        // In current implementation right side is always probe side.
-        JoinSide::Right
-    }
-
     /// Return whether the join contains a projection
     pub fn contains_projection(&self) -> bool {
         self.projection.is_some()
@@ -591,7 +586,7 @@ impl HashJoinExec {
             &join_type,
             Arc::clone(&schema),
             &Self::maintains_input_order(join_type),
-            Some(Self::probe_side()),
+            Some(find_filter_pushdown_sides(join_type)),
             on,
         )?;
 
@@ -793,6 +788,7 @@ impl DisplayAs for HashJoinExec {
     }
 }
 
+// TODO(crystal): double check if this is correct
 fn find_filter_pushdown_sides(join_type: JoinType) -> JoinSide {
     match join_type {
         JoinType::Inner => JoinSide::Right,
@@ -957,10 +953,11 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
-        // let filter_pushdown_side = find_filter_pushdown_sides(self.join_type);
+        let probe_side = find_filter_pushdown_sides(self.join_type);
+        let report_build_bounds =
+            enable_dynamic_filter_pushdown && probe_side == JoinSide::Right;
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
-        let probe_side = find_filter_pushdown_sides(self.join_type);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
@@ -976,7 +973,9 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                    enable_dynamic_filter_pushdown && probe_side == JoinSide::Right,
+                    report_build_bounds,
+                    // TODO(crystal): why do we need to use this AND? this looks very sketchy
+                    // Can we extend it to right as well?
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -994,7 +993,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                    enable_dynamic_filter_pushdown && probe_side == JoinSide::Right,
+                    report_build_bounds,
                 ))
             }
             PartitionMode::Auto => {
@@ -1014,12 +1013,7 @@ impl ExecutionPlan for HashJoinExec {
                     let filter = Arc::clone(&df.filter);
                     // Determine which side will receive the dynamic filter
                     let probe_side = find_filter_pushdown_sides(self.join_type);
-                    // Bounds should be collected from the build side (opposite of probe side)
-                    // let build_side = match probe_side {
-                    //     JoinSide::Left => JoinSide::Right,
-                    //     JoinSide::Right => JoinSide::Left,
-                    //     JoinSide::None => JoinSide::None,
-                    // };
+                    // TODO(crystal): maybe rename on_expressions to something that makes more sense, such as probe_side_expressions?
                     let on_expressions = Self::join_exprs_for_side(&self.on, probe_side);
                     Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
                         Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
@@ -1038,6 +1032,7 @@ impl ExecutionPlan for HashJoinExec {
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
         let right_stream = self.right.execute(partition, context)?;
+        let right_schema = right_stream.schema();
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match &self.projection {
@@ -1053,6 +1048,23 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
+
+        let probe_bounds_accumulators =
+            if enable_dynamic_filter_pushdown && probe_side == JoinSide::Left {
+                Some(
+                    on_right
+                        .iter()
+                        .map(|expr| {
+                            ProbeSideBoundsAccumulator::try_new(
+                                Arc::clone(expr),
+                                &right_schema,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                )
+            } else {
+                None
+            };
 
         Ok(Box::pin(HashJoinStream::new(
             partition,
@@ -1071,6 +1083,8 @@ impl ExecutionPlan for HashJoinExec {
             vec![],
             self.right.output_ordering().is_some(),
             bounds_accumulator,
+            report_build_bounds,
+            probe_bounds_accumulators,
             self.mode,
         )))
     }
@@ -1225,7 +1239,7 @@ impl ExecutionPlan for HashJoinExec {
             JoinSide::Right => &child_pushdown_result.self_filters[1],
             JoinSide::None => unreachable!(),
         };
-                                                                               // We expect 0 or 1 self filters
+        // We expect 0 or 1 self filters
         if let Some(filter) = self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
@@ -4621,9 +4635,8 @@ mod tests {
     // the build-side input and reports them back into the dynamic filter for the
     // other side. Concretely:
     // - Left input has values [1, 3, 5]
-    // - Right (build) input has values [2, 4, 6]
-    // - JoinType::Right is used so that the right side acts as the build side
-    //   and the dynamic filter is attached to the left side expression.
+    // - Right (probe) input has values [2, 4, 6]
+    // - JoinType::Right is used so that the dynamic filter is attached to the left side expression.
     // - After fully executing the join, the dynamic filter should be updated
     //   with the observed bounds `a@0 >= 2 AND a@0 <= 6` (min=2, max=6).
     // The test asserts that HashJoinExec correctly accumulates and reports these
@@ -4652,31 +4665,37 @@ mod tests {
 
         let on = vec![(col("a", &left.schema())?, col("b", &right.schema())?)];
 
-        let mut join = HashJoinExec::try_new(
-            Arc::new(left),
-            Arc::new(right),
-            on,
-            None,
-            &JoinType::Right,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNull,
-        )?;
+        let test_cases = vec![
+            (JoinType::Right, JoinSide::Left, "a@0 >= 2 AND a@0 <= 6"),
+            (JoinType::Left, JoinSide::Right, "b@0 >= 1 AND b@0 <= 5"),
+        ];
+        for (join_type, probe_side, expected_filter) in test_cases {
+            let mut join_exec = HashJoinExec::try_new(
+                Arc::new(left.clone()),
+                Arc::new(right.clone()),
+                on.clone(),
+                None,
+                &join_type,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNull,
+            )?;
 
-        let dynamic_filter: Arc<DynamicFilterPhysicalExpr> =
-            HashJoinExec::create_dynamic_filter(&join.on, JoinSide::Left)?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: Arc::clone(&dynamic_filter),
-            bounds_accumulator: OnceLock::new(),
-        });
+            let dynamic_filter: Arc<DynamicFilterPhysicalExpr> =
+                HashJoinExec::create_dynamic_filter(&join_exec.on, probe_side)?;
+            join_exec.dynamic_filter = Some(HashJoinExecDynamicFilter {
+                filter: Arc::clone(&dynamic_filter),
+                bounds_accumulator: OnceLock::new(),
+            });
 
-        let stream = join.execute(0, task_ctx)?;
-        let _batches: Vec<RecordBatch> = stream.try_collect().await?;
+            let stream = join_exec.execute(0, task_ctx.clone())?;
+            let _batches: Vec<RecordBatch> = stream.try_collect().await?;
 
-        assert_eq!(
-            format!("{}", dynamic_filter.current().unwrap()),
-            "a@0 >= 2 AND a@0 <= 6"
-        );
+            assert_eq!(
+                format!("{}", dynamic_filter.current().unwrap()),
+                expected_filter
+            );
+        }
 
         Ok(())
     }
