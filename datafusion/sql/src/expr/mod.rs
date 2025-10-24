@@ -494,7 +494,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 self.sql_grouping_sets_to_expr(exprs, schema, planner_context)
             }
 
-                       SQLExpr::Floor { expr, field } => match field {
+            SQLExpr::Floor { expr, field } => match field {
                 CeilFloorKind::DateTimeField(DateTimeField::NoDateTime) => {
                     self.sql_fn_name_to_expr(*expr, "floor", schema, planner_context)
                 }
