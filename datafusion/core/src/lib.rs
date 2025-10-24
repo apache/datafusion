@@ -922,6 +922,12 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 //
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/arrow-introduction.md",
+    user_guide_arrow_introduction
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/concepts-readings-events.md",
     user_guide_concepts_readings_events
 );
