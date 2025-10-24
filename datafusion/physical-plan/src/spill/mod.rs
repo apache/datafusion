@@ -19,7 +19,7 @@
 
 pub(crate) mod in_progress_spill_file;
 pub(crate) mod spill_manager;
-pub mod spill_pool;
+pub(crate) mod spill_pool;
 
 use std::fs::File;
 use std::io::BufReader;
