@@ -78,7 +78,7 @@ pub fn to_substrait_extended_expr(
             })
         })
         .collect::<datafusion::common::Result<Vec<_>>>()?;
-    let substrait_schema = to_substrait_named_struct(schema)?;
+    let substrait_schema = to_substrait_named_struct(&mut producer, schema)?;
 
     let extensions = producer.get_extensions();
     Ok(Box::new(ExtendedExpression {

@@ -70,7 +70,7 @@ SELECT format_string('Value: %d', 42);
 Value: 42
 
 ## Hexadecimal integer formatting (lowercase)
-query T  
+query T
 SELECT format_string('Hex: %x', 255);
 ----
 Hex: ff
@@ -118,7 +118,7 @@ SELECT format_string('Negative: %d', -42);
 Negative: -42
 
 # ================================
-# Float formatting tests  
+# Float formatting tests
 # ================================
 
 ## Basic float formatting
@@ -254,7 +254,7 @@ SELECT format_string('Bool: %b', true);
 ----
 Bool: true
 
-## Boolean uppercase  
+## Boolean uppercase
 query T
 SELECT format_string('Bool: %B', false);
 ----
@@ -370,7 +370,7 @@ SELECT format_string('Minute: %tM', TIMESTAMP '2023-12-25 14:30:45');
 ----
 Minute: 30
 
-## Second formatting  
+## Second formatting
 query T
 SELECT format_string('Second: %tS', TIMESTAMP '2023-12-25 14:30:45');
 ----

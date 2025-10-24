@@ -25,7 +25,7 @@ use datafusion_common::{NullEquality, TableReference, UnnestOptions};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
-    Like, Placeholder, ScalarFunction, Unnest,
+    Like, NullTreatment, Placeholder, ScalarFunction, Unnest,
 };
 use datafusion_expr::WriteOp;
 use datafusion_expr::{
@@ -314,11 +314,9 @@ pub fn serialize_expr(
                         ref partition_by,
                         ref order_by,
                         ref window_frame,
-                        // TODO: support null treatment, distinct, and filter in proto.
-                        // See https://github.com/apache/datafusion/issues/17417
-                        null_treatment: _,
-                        distinct: _,
-                        filter: _,
+                        ref null_treatment,
+                        ref distinct,
+                        ref filter,
                     },
             } = window_fun.as_ref();
             let mut buf = Vec::new();
@@ -342,16 +340,24 @@ pub fn serialize_expr(
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
+
             let window_expr = protobuf::WindowExprNode {
                 exprs: serialize_exprs(args, codec)?,
                 window_function: Some(window_function),
                 partition_by,
                 order_by,
                 window_frame,
+                distinct: *distinct,
+                filter: match filter {
+                    Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
+                    None => None,
+                },
+                null_treatment: null_treatment
+                    .map(|nt| protobuf::NullTreatment::from(nt).into()),
                 fun_definition,
             };
             protobuf::LogicalExprNode {
-                expr_type: Some(ExprType::WindowExpr(window_expr)),
+                expr_type: Some(ExprType::WindowExpr(Box::new(window_expr))),
             }
         }
         Expr::AggregateFunction(expr::AggregateFunction {
@@ -362,7 +368,7 @@ pub fn serialize_expr(
                     ref distinct,
                     ref filter,
                     ref order_by,
-                    null_treatment: _,
+                    ref null_treatment,
                 },
         }) => {
             let mut buf = Vec::new();
@@ -379,6 +385,8 @@ pub fn serialize_expr(
                         },
                         order_by: serialize_sorts(order_by, codec)?,
                         fun_definition: (!buf.is_empty()).then_some(buf),
+                        null_treatment: null_treatment
+                            .map(|nt| protobuf::NullTreatment::from(nt).into()),
                     },
                 ))),
             }
@@ -719,6 +727,15 @@ impl From<&WriteOp> for protobuf::dml_node::Type {
             WriteOp::Delete => protobuf::dml_node::Type::Delete,
             WriteOp::Update => protobuf::dml_node::Type::Update,
             WriteOp::Ctas => protobuf::dml_node::Type::Ctas,
+        }
+    }
+}
+
+impl From<NullTreatment> for protobuf::NullTreatment {
+    fn from(t: NullTreatment) -> Self {
+        match t {
+            NullTreatment::RespectNulls => protobuf::NullTreatment::RespectNulls,
+            NullTreatment::IgnoreNulls => protobuf::NullTreatment::IgnoreNulls,
         }
     }
 }

@@ -22,6 +22,7 @@ use rstest::rstest;
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
+use datafusion_common::format::ExplainAnalyzeLevel;
 use object_store::path::Path;
 
 #[tokio::test]
@@ -158,6 +159,40 @@ async fn explain_analyze_baseline_metrics() {
 fn nanos_from_timestamp(ts: &Timestamp) -> i64 {
     ts.value().unwrap().timestamp_nanos_opt().unwrap()
 }
+
+// Test different detail level for config `datafusion.explain.analyze_level`
+#[tokio::test]
+async fn explain_analyze_level() {
+    async fn collect_plan(level: ExplainAnalyzeLevel) -> String {
+        let mut config = SessionConfig::new();
+        config.options_mut().explain.analyze_level = level;
+        let ctx = SessionContext::new_with_config(config);
+        let sql = "EXPLAIN ANALYZE \
+            SELECT * \
+            FROM generate_series(10) as t1(v1) \
+            ORDER BY v1 DESC";
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let batches = dataframe.collect().await.unwrap();
+        arrow::util::pretty::pretty_format_batches(&batches)
+            .unwrap()
+            .to_string()
+    }
+
+    for (level, needle, should_contain) in [
+        (ExplainAnalyzeLevel::Summary, "spill_count", false),
+        (ExplainAnalyzeLevel::Summary, "output_rows", true),
+        (ExplainAnalyzeLevel::Dev, "spill_count", true),
+        (ExplainAnalyzeLevel::Dev, "output_rows", true),
+    ] {
+        let plan = collect_plan(level).await;
+        assert_eq!(
+            plan.contains(needle),
+            should_contain,
+            "plan for level {level:?} unexpected content: {plan}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation

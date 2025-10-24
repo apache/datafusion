@@ -100,6 +100,72 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
     Ok(sort_exprs)
 }
 
+/// Rewrite Filter plans that have a Window as their input by inserting a SubqueryAlias.
+///
+/// When a Filter directly operates on a Window plan, it can cause issues during SQL unparsing
+/// because window functions in a WHERE clause are not valid SQL. The solution is to wrap
+/// the Window plan in a SubqueryAlias, effectively creating a derived table.
+///
+/// Example transformation:
+///
+/// Filter: condition
+///   Window: window_function
+///     TableScan: table
+///
+/// becomes:
+///
+/// Filter: condition
+///   SubqueryAlias: __qualify_subquery
+///     Projection: table.column1, table.column2
+///       Window: window_function
+///         TableScan: table
+///
+pub(super) fn rewrite_qualify(plan: LogicalPlan) -> Result<LogicalPlan> {
+    let transformed_plan = plan.transform_up(|plan| match plan {
+        // Check if the filter's input is a Window plan
+        LogicalPlan::Filter(mut filter) => {
+            if matches!(&*filter.input, LogicalPlan::Window(_)) {
+                // Create a SubqueryAlias around the Window plan
+                let qualifier = filter
+                    .input
+                    .schema()
+                    .iter()
+                    .find_map(|(q, _)| q)
+                    .map(|q| q.to_string())
+                    .unwrap_or_else(|| "__qualify_subquery".to_string());
+
+                // for Postgres, name of column for 'rank() over (...)' is 'rank'
+                // but in Datafusion, it is 'rank() over (...)'
+                // without projection, it's still an invalid sql in Postgres
+
+                let project_exprs = filter
+                    .input
+                    .schema()
+                    .iter()
+                    .map(|(_, f)| datafusion_expr::col(f.name()).alias(f.name()))
+                    .collect::<Vec<_>>();
+
+                let input =
+                    datafusion_expr::LogicalPlanBuilder::from(Arc::clone(&filter.input))
+                        .project(project_exprs)?
+                        .build()?;
+
+                let subquery_alias =
+                    datafusion_expr::SubqueryAlias::try_new(Arc::new(input), qualifier)?;
+
+                filter.input = Arc::new(LogicalPlan::SubqueryAlias(subquery_alias));
+                Ok(Transformed::yes(LogicalPlan::Filter(filter)))
+            } else {
+                Ok(Transformed::no(LogicalPlan::Filter(filter)))
+            }
+        }
+
+        _ => Ok(Transformed::no(plan)),
+    });
+
+    transformed_plan.data()
+}
+
 /// Rewrite logic plan for query that order by columns are not in projections
 /// Plan before rewrite:
 ///

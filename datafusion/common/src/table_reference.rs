@@ -269,24 +269,41 @@ impl TableReference {
     }
 
     /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
-    /// identifier. See docs on [`TableReference`] for more details.
+    /// identifier, normalizing `s` to lowercase.
+    /// See docs on [`TableReference`] for more details.
     pub fn parse_str(s: &str) -> Self {
-        let mut parts = parse_identifiers_normalized(s, false);
+        Self::parse_str_normalized(s, false)
+    }
 
+    /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
+    /// identifier, normalizing `s` to lowercase if `ignore_case` is `false`.
+    /// See docs on [`TableReference`] for more details.
+    pub fn parse_str_normalized(s: &str, ignore_case: bool) -> Self {
+        let table_parts = parse_identifiers_normalized(s, ignore_case);
+
+        Self::from_vec(table_parts).unwrap_or_else(|| Self::Bare { table: s.into() })
+    }
+
+    /// Consume a vector of identifier parts to compose a [`TableReference`]. The input vector
+    /// should contain 1 <= N <= 3 elements in the following sequence:
+    /// ```no_rust
+    /// [<catalog>, <schema>, table]
+    /// ```
+    fn from_vec(mut parts: Vec<String>) -> Option<Self> {
         match parts.len() {
-            1 => Self::Bare {
-                table: parts.remove(0).into(),
-            },
-            2 => Self::Partial {
-                schema: parts.remove(0).into(),
-                table: parts.remove(0).into(),
-            },
-            3 => Self::Full {
-                catalog: parts.remove(0).into(),
-                schema: parts.remove(0).into(),
-                table: parts.remove(0).into(),
-            },
-            _ => Self::Bare { table: s.into() },
+            1 => Some(Self::Bare {
+                table: parts.pop()?.into(),
+            }),
+            2 => Some(Self::Partial {
+                table: parts.pop()?.into(),
+                schema: parts.pop()?.into(),
+            }),
+            3 => Some(Self::Full {
+                table: parts.pop()?.into(),
+                schema: parts.pop()?.into(),
+                catalog: parts.pop()?.into(),
+            }),
+            _ => None,
         }
     }
 

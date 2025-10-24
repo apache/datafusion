@@ -1,0 +1,63 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+
+## Ensure test coverage for NLJ using joining on LISTS
+
+## Reproducer for https://github.com/apache/datafusion/issues/18070
+
+statement ok
+CREATE TABLE categories_raw
+AS SELECT arrow_cast('cat_' || value, 'Utf8View')  AS category_id FROM generate_series(1, 5);
+
+statement ok
+CREATE TABLE places
+AS SELECT column1 as id, column2 as fsq_category_ids, column3 as date_refreshed
+FROM VALUES
+    (1, ['cat_1', 'cat_2', 'cat_3'], DATE '2023-05-10'),
+    (2, ['cat_4', 'cat_5'], DATE '2021-12-01'),
+    (3, ['cat_6', 'cat_7', 'cat_8', 'cat_9'], DATE '2024-01-15'); --> NOTE these categories do not exist in categories_raw
+
+
+query I
+WITH categories_arr AS (
+    SELECT array_agg(category_id) AS category_ids FROM categories_raw LIMIT 500
+)
+SELECT COUNT(*)
+    FROM places p
+    WHERE array_has_any(p.fsq_category_ids, (SELECT category_ids FROM categories_arr));
+----
+2
+
+query I
+WITH categories_arr AS (
+    SELECT array_agg(category_id) AS category_ids FROM categories_raw LIMIT 500
+)
+SELECT COUNT(*)
+    FROM places p
+    WHERE id <> 1 AND array_has_any(p.fsq_category_ids, (SELECT category_ids FROM categories_arr));
+----
+1
+
+# cleanup
+statement ok
+DROP TABLE categories_raw;
+
+statement ok
+DROP TABLE places;
+

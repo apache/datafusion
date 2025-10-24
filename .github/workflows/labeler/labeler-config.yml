@@ -58,7 +58,7 @@ execution:
 
 datasource:
   - changed-files:
-      - any-glob-to-any-file: ['datafusion/datasource/**/*', 'datafusion/datasource-avro/**/*', 'datafusion/datasource-csv/**/*', 'datafusion/datasource-json/**/*', 'datafusion/datasource-parquet/**/*']
+      - any-glob-to-any-file: ['datafusion/datasource/**/*', 'datafusion/datasource-avro/**/*', 'datafusion/datasource-arrow/**/*', 'datafusion/datasource-csv/**/*', 'datafusion/datasource-json/**/*', 'datafusion/datasource-parquet/**/*']
 
 functions:
   - changed-files:

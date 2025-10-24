@@ -4240,7 +4240,7 @@ physical_plan
 03)----DataSourceExec: partitions=1, partition_sizes=[2]
 04)----DataSourceExec: partitions=1, partition_sizes=[2]
 
-## Test join.on.is_empty() && join.filter.is_some()
+## Test join.on.is_empty() && join.filter.is_some() -> single filter now a PWMJ
 query TT
 EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 2;
 ----
@@ -5193,6 +5193,40 @@ SELECT c
 8
 9
 
+# PiecewiseMergeJoin Test
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query II
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id > join_t2.t2_id
+WHERE join_t1.t1_id > 10 AND join_t2.t2_int > 1
+ORDER BY 1
+----
+22 11
+33 11
+44 11
+
+query TT
+EXPLAIN
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id > join_t2.t2_id
+WHERE join_t1.t1_id > 10 AND join_t2.t2_int > 1
+ORDER BY 1
+----
+physical_plan
+01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
+03)----SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
+04)------CoalesceBatchesExec: target_batch_size=3
+05)--------FilterExec: t1_id@0 > 10
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=3
+08)------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 DROP TABLE t1;
 
@@ -5201,3 +5235,6 @@ DROP TABLE t2;
 
 statement ok
 set datafusion.explain.physical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;

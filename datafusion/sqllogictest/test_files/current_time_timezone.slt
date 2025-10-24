@@ -1,0 +1,100 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## current_time with timezone tests
+##########
+
+# Test 1: Verify current_time is consistent within the same query (default UTC)
+query B
+SELECT current_time() = current_time();
+----
+true
+
+# Test 2: Verify data type is correct
+query T
+SELECT arrow_typeof(current_time());
+----
+Time64(Nanosecond)
+
+# Test 3: Set timezone to +08:00 and verify current_time is still stable
+statement ok
+SET datafusion.execution.time_zone = '+08:00';
+
+query B
+SELECT current_time() = current_time();
+----
+true
+
+# Test 4: Verify current_time returns Time64 type in different timezone
+query T
+SELECT arrow_typeof(current_time());
+----
+Time64(Nanosecond)
+
+# Test 5: Test with negative offset timezone
+statement ok
+SET datafusion.execution.time_zone = '-05:00';
+
+query B
+SELECT current_time() = current_time();
+----
+true
+
+# Test 6: Test with named timezone (America/New_York)
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+query B
+SELECT current_time() = current_time();
+----
+true
+
+# Test 7: Verify current_time is stable within a query
+query B
+SELECT 
+  current_time() = current_time() AND
+  current_time() = current_time();
+----
+true
+
+# Test 8: Reset to UTC
+statement ok
+SET datafusion.execution.time_zone = '+00:00';
+
+query B
+SELECT current_time() = current_time();
+----
+true
+
+# Test 9: Verify current_time with Asia/Tokyo timezone
+statement ok
+SET datafusion.execution.time_zone = 'Asia/Tokyo';
+
+query B
+SELECT current_time() = current_time();
+----
+true
+
+# Test 10: Verify current_time with Europe/London timezone
+statement ok
+SET datafusion.execution.time_zone = 'Europe/London';
+
+query B
+SELECT current_time() = current_time();
+----
+true

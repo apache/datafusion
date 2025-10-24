@@ -114,8 +114,6 @@ impl RuntimeEnv {
     /// ```
     ///
     /// # Example: Register remote URL object store like [Github](https://github.com)
-    ///
-    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use url::Url;
@@ -139,6 +137,12 @@ impl RuntimeEnv {
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         self.object_store_registry.register_store(url, object_store)
+    }
+
+    /// Deregisters a custom `ObjectStore` previously registered for a specific url.
+    /// See [`ObjectStoreRegistry::deregister_store`] for more details.
+    pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        self.object_store_registry.deregister_store(url)
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the

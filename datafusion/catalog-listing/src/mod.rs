@@ -24,4 +24,11 @@
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
+mod config;
 pub mod helpers;
+mod options;
+mod table;
+
+pub use config::{ListingTableConfig, SchemaSource};
+pub use options::ListingOptions;
+pub use table::ListingTable;

@@ -29,7 +29,7 @@ statement ok
 
 CREATE EXTERNAL TABLE arrow_simple
 STORED AS ARROW
-LOCATION '../core/tests/data/example.arrow';
+LOCATION '../datasource-arrow/tests/data/example.arrow';
 
 
 # physical plan
@@ -37,7 +37,7 @@ query TT
 EXPLAIN SELECT * FROM arrow_simple
 ----
 logical_plan TableScan: arrow_simple projection=[f0, f1, f2]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow]]}, projection=[f0, f1, f2], file_type=arrow
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/datasource-arrow/tests/data/example.arrow]]}, projection=[f0, f1, f2], file_type=arrow
 
 # correct content
 query ITB
@@ -50,8 +50,8 @@ SELECT * FROM arrow_simple
 
 # Ensure that local files can not be read by default (a potential security issue)
 # (url table is only supported when DynamicFileCatalog is enabled)
-statement error DataFusion error: Error during planning: table 'datafusion.public.../core/tests/data/example.arrow' not found
-SELECT * FROM '../core/tests/data/example.arrow';
+statement error DataFusion error: Error during planning: table 'datafusion.public.../datasource-arrow/tests/data/example.arrow' not found
+SELECT * FROM '../datasource-arrow/tests/data/example.arrow';
 
 # ARROW partitioned table
 statement ok

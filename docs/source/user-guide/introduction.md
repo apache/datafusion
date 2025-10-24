@@ -109,6 +109,7 @@ Here are some active projects using DataFusion:
 - [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [GreptimeDB] Open Source & Cloud Native Distributed Time Series Database
+- [hiop](https://hiop.io) Serverless Data Logistic Platform
 - [HoraeDB] Distributed Time-Series Database
 - [Iceberg-rust](https://github.com/apache/iceberg-rust) Rust implementation of Apache Iceberg
 - [InfluxDB] Time Series Database

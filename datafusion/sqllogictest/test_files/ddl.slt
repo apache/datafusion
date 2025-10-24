@@ -312,7 +312,7 @@ DROP TABLE aggregate_simple
 
 # Arrow format
 statement ok
-CREATE external table arrow_simple STORED as ARROW LOCATION '../core/tests/data/example.arrow';
+CREATE external table arrow_simple STORED as ARROW LOCATION '../datasource-arrow/tests/data/example.arrow';
 
 query ITB rowsort
 SELECT * FROM arrow_simple order by f1 LIMIT 1
@@ -796,7 +796,7 @@ logical_plan
 02)--Values: (Int64(1), Int64(2), Int64(3))
 
 query TT
-explain CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../core/tests/data/example.arrow';
+explain CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../datasource-arrow/tests/data/example.arrow';
 ----
 logical_plan CreateExternalTable: Bare { table: "tty" }
 
@@ -804,7 +804,7 @@ statement ok
 set datafusion.explain.logical_plan_only=false;
 
 statement error DataFusion error: This feature is not implemented: Temporary tables not supported
-CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../core/tests/data/example.arrow';
+CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../datasource-arrow/tests/data/example.arrow';
 
 statement error DataFusion error: This feature is not implemented: Temporary views not supported
 CREATE TEMPORARY VIEW y AS VALUES (1,2,3);

@@ -20,7 +20,7 @@ use std::fmt::{Debug, Formatter};
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use arrow::array::{Array, RecordBatch};
+use arrow::array::Array;
 use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{
@@ -28,25 +28,27 @@ use arrow::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
         Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field},
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
-    Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr, Signature,
-    TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+
+use crate::utils::{get_scalar_value, validate_percentile_expr};
 
 create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
@@ -164,7 +166,8 @@ impl ApproxPercentileCont {
         &self,
         args: AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
-        let percentile = validate_input_percentile_expr(&args.exprs[1])?;
+        let percentile =
+            validate_percentile_expr(&args.exprs[1], "APPROX_PERCENTILE_CONT")?;
 
         let is_descending = args
             .order_bys
@@ -214,45 +217,15 @@ impl ApproxPercentileCont {
     }
 }
 
-fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
-    let empty_schema = Arc::new(Schema::empty());
-    let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    if let ColumnarValue::Scalar(s) = expr.evaluate(&batch)? {
-        Ok(s)
-    } else {
-        internal_err!("Didn't expect ColumnarValue::Array")
-    }
-}
-
-fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
-    let percentile = match get_scalar_value(expr)
-        .map_err(|_| not_impl_datafusion_err!("Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
-        ScalarValue::Float32(Some(value)) => {
-            value as f64
-        }
-        ScalarValue::Float64(Some(value)) => {
-            value
-        }
-        sv => {
-            return not_impl_err!(
-                "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
-                sv.data_type()
-            )
-        }
-    };
-
-    // Ensure the percentile is between 0 and 1.
-    if !(0.0..=1.0).contains(&percentile) {
-        return plan_err!(
-            "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
-        );
-    }
-    Ok(percentile)
-}
-
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
-    let max_size = match get_scalar_value(expr)
-        .map_err(|_| not_impl_datafusion_err!("Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
+    let scalar_value = get_scalar_value(expr).map_err(|_e| {
+        DataFusionError::Plan(
+            "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal"
+                .to_string(),
+        )
+    })?;
+
+    let max_size = match scalar_value {
         ScalarValue::UInt8(Some(q)) => q as usize,
         ScalarValue::UInt16(Some(q)) => q as usize,
         ScalarValue::UInt32(Some(q)) => q as usize,
@@ -262,7 +235,7 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
         ScalarValue::Int16(Some(q)) if q > 0 => q as usize,
         ScalarValue::Int8(Some(q)) if q > 0 => q as usize,
         sv => {
-            return not_impl_err!(
+            return plan_err!(
                 "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
                 sv.data_type()
             )

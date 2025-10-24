@@ -20,7 +20,9 @@
 //! and query data inside these systems.
 
 use dashmap::DashMap;
-use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, Result,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
@@ -154,6 +156,13 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>>;
 
+    /// Deregister the store previously registered with the same key. Returns the
+    /// deregistered store if it existed.
+    #[allow(unused_variables)]
+    fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        not_impl_err!("ObjectStoreRegistry::deregister_store is not implemented for this ObjectStoreRegistry")
+    }
+
     /// Get a suitable store for the provided URL. For example:
     ///
     /// - URL with scheme `file:///` or no scheme will return the default LocalFS store
@@ -228,6 +237,17 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     ) -> Option<Arc<dyn ObjectStore>> {
         let s = get_url_key(url);
         self.object_stores.insert(s, store)
+    }
+
+    fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        let s = get_url_key(url);
+        let (_, object_store) = self.object_stores
+            .remove(&s)
+            .ok_or_else(|| {
+                internal_datafusion_err!("Failed to deregister object store. No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
+            })?;
+
+        Ok(object_store)
     }
 
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
