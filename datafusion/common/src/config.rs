@@ -528,7 +528,7 @@ config_namespace! {
         /// A larger value reduces file creation overhead but may hold more disk space.
         /// A smaller value creates more files but allows finer-grained space reclamation
         /// as files can be deleted once fully consumed.
-        /// 
+        ///
         /// Not all operators support this feature, some may create spill files larger than the limit.
         ///
         /// Default: 128 MB
