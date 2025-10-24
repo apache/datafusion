@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Introduction to `Arrow` & RecordBatches
+# Introduction to Apache Arrow & `RecordBatch`es
 
 ```{contents}
 :local:
@@ -237,23 +237,13 @@ In short, knowing Arrow is key to unlocking the full power of DataFusion's modul
 - [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html) - Deep dive into memory layout for performance optimization
 - [Arrow Rust Documentation](https://docs.rs/arrow/latest/arrow/) - Complete API reference for the Rust implementation
 
-**DataFusion Extension Guides:**
-
-- [Custom Table Providers](../library-user-guide/custom-table-providers.md) - Build custom data sources that stream RecordBatches
-- [Adding UDFs](../library-user-guide/functions/adding-udfs.md) - Create efficient user-defined functions working with Arrow arrays
-- [Extending Operators](../library-user-guide/extending-operators.md) - Implement custom ExecutionPlan operators for specialized processing
-
 **Key API References:**
 
-- [RecordBatch](https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html) - The fundamental data structure for streaming columnar data
-- [ExecutionPlan](https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html) - Trait for implementing custom physical operators
-- [TableProvider](https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html) - Interface for custom data sources
-- [ScalarUDF](https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html) - Building scalar user-defined functions
-- [MemTable](https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html) - Working with in-memory Arrow data
+- [RecordBatch](https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html) - The fundamental data structure for columnar data (a table slice)
+- [ArrayRef](https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html) - Represents a reference-counted Arrow array (single column)
+- [DataType](https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html) - Enum of all supported Arrow data types (e.g., Int32, Utf8)
+- [Schema](https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html) - Describes the structure of a RecordBatch (column names and types)
 
-**Academic Paper:**
-
-- [Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine](https://dl.acm.org/doi/10.1145/3626246.3653368) - Architecture and design decisions (SIGMOD 2024)
 
 [apache arrow]: https://arrow.apache.org/docs/index.html
 [`arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
