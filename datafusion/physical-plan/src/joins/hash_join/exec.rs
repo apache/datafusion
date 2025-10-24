@@ -468,7 +468,7 @@ impl HashJoinExec {
         match pushdown_side {
             JoinSide::Left => on.iter().map(|(l, _)| Arc::clone(l)).collect(),
             JoinSide::Right => on.iter().map(|(_, r)| Arc::clone(r)).collect(),
-            JoinSide::None => return vec![],
+            JoinSide::None => vec![],
         }
     }
 
@@ -974,8 +974,6 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     report_build_bounds,
-                    // TODO(crystal): why do we need to use this AND? this looks very sketchy
-                    // Can we extend it to right as well?
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -1013,7 +1011,6 @@ impl ExecutionPlan for HashJoinExec {
                     let filter = Arc::clone(&df.filter);
                     // Determine which side will receive the dynamic filter
                     let probe_side = find_filter_pushdown_sides(self.join_type);
-                    // TODO(crystal): maybe rename on_expressions to something that makes more sense, such as probe_side_expressions?
                     let on_expressions = Self::join_exprs_for_side(&self.on, probe_side);
                     Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
                         Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
@@ -4688,7 +4685,7 @@ mod tests {
                 bounds_accumulator: OnceLock::new(),
             });
 
-            let stream = join_exec.execute(0, task_ctx.clone())?;
+            let stream = join_exec.execute(0, Arc::clone(&task_ctx))?;
             let _batches: Vec<RecordBatch> = stream.try_collect().await?;
 
             assert_eq!(
