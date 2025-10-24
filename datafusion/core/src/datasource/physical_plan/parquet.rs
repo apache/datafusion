@@ -64,7 +64,9 @@ mod tests {
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::analyze::AnalyzeExec;
     use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+    use datafusion_physical_plan::metrics::{
+        ExecutionPlanMetricsSet, MetricType, MetricsSet,
+    };
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use chrono::{TimeZone, Utc};
@@ -238,6 +240,7 @@ mod tests {
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
                 false,
+                vec![MetricType::SUMMARY, MetricType::DEV],
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
                     Arc::clone(table_schema),

@@ -16,8 +16,12 @@
 // under the License.
 
 use crate::logical_plan;
-use arrow::datatypes::DataType;
-use datafusion_common::{assert_contains, ParamValues, ScalarValue};
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{
+    assert_contains,
+    metadata::{format_type_and_metadata, ScalarAndMetadata},
+    ParamValues, ScalarValue,
+};
 use datafusion_expr::{LogicalPlan, Prepare, Statement};
 use insta::assert_snapshot;
 use itertools::Itertools as _;
@@ -51,12 +55,42 @@ impl ParameterTest<'_> {
     }
 }
 
+pub struct ParameterTestWithMetadata<'a> {
+    pub sql: &'a str,
+    pub expected_types: Vec<(&'a str, Option<FieldRef>)>,
+    pub param_values: Vec<ScalarAndMetadata>,
+}
+
+impl ParameterTestWithMetadata<'_> {
+    pub fn run(&self) -> String {
+        let plan = logical_plan(self.sql).unwrap();
+
+        let actual_types = plan.get_parameter_fields().unwrap();
+        let expected_types: HashMap<String, Option<FieldRef>> = self
+            .expected_types
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
+            .collect();
+
+        assert_eq!(actual_types, expected_types);
+
+        let plan_with_params = plan
+            .clone()
+            .with_param_values(ParamValues::List(self.param_values.clone()))
+            .unwrap();
+
+        format!("** Initial Plan:\n{plan}\n** Final Plan:\n{plan_with_params}")
+    }
+}
+
 fn generate_prepare_stmt_and_data_types(sql: &str) -> (LogicalPlan, String) {
     let plan = logical_plan(sql).unwrap();
     let data_types = match &plan {
-        LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. })) => {
-            data_types.iter().join(", ").to_string()
-        }
+        LogicalPlan::Statement(Statement::Prepare(Prepare { fields, .. })) => fields
+            .iter()
+            .map(|f| format_type_and_metadata(f.data_type(), Some(f.metadata())))
+            .join(", ")
+            .to_string(),
         _ => panic!("Expected a Prepare statement"),
     };
     (plan, data_types)
@@ -701,6 +735,147 @@ fn test_prepare_statement_to_plan_one_param() {
       Filter: person.age = Int32(10)
         TableScan: person
     "
+    );
+}
+
+#[test]
+fn test_update_infer_with_metadata() {
+    // Here the uuid field is inferred as nullable because it appears in the filter
+    // (and not in the update values, where its nullability would be inferred)
+    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
+        [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into(),
+    );
+    let uuid_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let expected_types = vec![
+        (
+            "$1",
+            Some(Field::new("last_name", DataType::Utf8, false).into()),
+        ),
+        ("$2", Some(uuid_field.clone().with_name("id").into())),
+    ];
+    let param_values = vec![
+        ScalarAndMetadata::new(ScalarValue::from("Turing"), None),
+        ScalarAndMetadata::new(
+            ScalarValue::FixedSizeBinary(16, Some(uuid_bytes)),
+            Some(uuid_field.metadata().into()),
+        ),
+    ];
+
+    // Check a normal update
+    let test = ParameterTestWithMetadata {
+        sql: "update person_with_uuid_extension set last_name=$1 where id=$2",
+        expected_types: expected_types.clone(),
+        param_values: param_values.clone(),
+    };
+
+    assert_snapshot!(
+        test.run(),
+        @r#"
+    ** Initial Plan:
+    Dml: op=[Update] table=[person_with_uuid_extension]
+      Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, $1 AS last_name
+        Filter: person_with_uuid_extension.id = $2
+          TableScan: person_with_uuid_extension
+    ** Final Plan:
+    Dml: op=[Update] table=[person_with_uuid_extension]
+      Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, Utf8("Turing") AS last_name
+        Filter: person_with_uuid_extension.id = FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} }
+          TableScan: person_with_uuid_extension
+    "#
+    );
+
+    // Check a prepared update
+    let test = ParameterTestWithMetadata {
+        sql: "PREPARE my_plan AS update person_with_uuid_extension set last_name=$1 where id=$2",
+        expected_types,
+        param_values
+    };
+
+    assert_snapshot!(
+        test.run(),
+        @r#"
+    ** Initial Plan:
+    Prepare: "my_plan" [Utf8, FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>]
+      Dml: op=[Update] table=[person_with_uuid_extension]
+        Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, $1 AS last_name
+          Filter: person_with_uuid_extension.id = $2
+            TableScan: person_with_uuid_extension
+    ** Final Plan:
+    Dml: op=[Update] table=[person_with_uuid_extension]
+      Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, Utf8("Turing") AS last_name
+        Filter: person_with_uuid_extension.id = FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} }
+          TableScan: person_with_uuid_extension
+    "#
+    );
+}
+
+#[test]
+fn test_insert_infer_with_metadata() {
+    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
+        [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into(),
+    );
+    let uuid_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let expected_types = vec![
+        ("$1", Some(uuid_field.clone().with_name("id").into())),
+        (
+            "$2",
+            Some(Field::new("first_name", DataType::Utf8, false).into()),
+        ),
+        (
+            "$3",
+            Some(Field::new("last_name", DataType::Utf8, false).into()),
+        ),
+    ];
+    let param_values = vec![
+        ScalarAndMetadata::new(
+            ScalarValue::FixedSizeBinary(16, Some(uuid_bytes)),
+            Some(uuid_field.metadata().into()),
+        ),
+        ScalarAndMetadata::new(ScalarValue::from("Alan"), None),
+        ScalarAndMetadata::new(ScalarValue::from("Turing"), None),
+    ];
+
+    // Check a normal insert
+    let test = ParameterTestWithMetadata {
+        sql: "insert into person_with_uuid_extension (id, first_name, last_name) values ($1, $2, $3)",
+        expected_types: expected_types.clone(),
+        param_values: param_values.clone()
+    };
+
+    assert_snapshot!(
+        test.run(),
+        @r#"
+    ** Initial Plan:
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+        Values: ($1, $2, $3)
+    ** Final Plan:
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+        Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
+    "#
+    );
+
+    // Check a prepared insert
+    let test = ParameterTestWithMetadata {
+        sql: "PREPARE my_plan AS insert into person_with_uuid_extension (id, first_name, last_name) values ($1, $2, $3)",
+        expected_types,
+        param_values
+    };
+
+    assert_snapshot!(
+        test.run(),
+        @r#"
+    ** Initial Plan:
+    Prepare: "my_plan" [FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>, Utf8, Utf8]
+      Dml: op=[Insert Into] table=[person_with_uuid_extension]
+        Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+          Values: ($1, $2, $3)
+    ** Final Plan:
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+        Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
+    "#
     );
 }
 

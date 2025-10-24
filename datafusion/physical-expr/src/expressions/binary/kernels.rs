@@ -145,12 +145,14 @@ pub fn concat_elements_utf8view(
     left: &StringViewArray,
     right: &StringViewArray,
 ) -> std::result::Result<StringViewArray, ArrowError> {
-    let capacity = left
-        .data_buffers()
-        .iter()
-        .zip(right.data_buffers().iter())
-        .map(|(b1, b2)| b1.len() + b2.len())
-        .sum();
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Arrays must have the same length: {} != {}",
+            left.len(),
+            right.len()
+        )));
+    }
+    let capacity = left.len();
     let mut result = StringViewBuilder::with_capacity(capacity);
 
     // Avoid reallocations by writing to a reused buffer (note we

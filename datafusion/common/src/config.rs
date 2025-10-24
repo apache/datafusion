@@ -22,7 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::ExplainFormat;
+use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -938,6 +938,11 @@ config_namespace! {
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         pub prefer_hash_join: bool, default = true
 
+        /// When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently
+        /// experimental. Physical planner will opt for PiecewiseMergeJoin when there is only
+        /// one range filter.
+        pub enable_piecewise_merge_join: bool, default = false
+
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
@@ -991,6 +996,11 @@ config_namespace! {
         /// (format=tree only) Maximum total width of the rendered tree.
         /// When set to 0, the tree will have no width limit.
         pub tree_maximum_render_width: usize, default = 240
+
+        /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
+        /// "summary" shows common metrics for high-level insights.
+        /// "dev" provides deep operator-level introspection for developers.
+        pub analyze_level: ExplainAnalyzeLevel, default = ExplainAnalyzeLevel::Dev
     }
 }
 

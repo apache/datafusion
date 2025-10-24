@@ -33,6 +33,7 @@ use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{SortOptions, TimeUnit};
 use datafusion::{assert_batches_eq, dataframe};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
@@ -65,15 +66,13 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
 use datafusion_common::{
     assert_contains, internal_datafusion_err, Constraint, Constraints, DFSchema,
-    DataFusionError, ParamValues, ScalarValue, TableReference, UnnestOptions,
+    DataFusionError, ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_expr::expr::{
-    FieldMetadata, GroupingSet, NullTreatment, Sort, WindowFunction,
-};
+use datafusion_expr::expr::{GroupingSet, NullTreatment, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
@@ -2465,7 +2464,7 @@ async fn filtered_aggr_with_param_values() -> Result<()> {
     let df = ctx
         .sql("select count (c2) filter (where c3 > $1) from table1")
         .await?
-        .with_param_values(ParamValues::List(vec![ScalarValue::from(10u64)]));
+        .with_param_values(vec![ScalarValue::from(10u64)]);
 
     let df_results = df?.collect().await?;
     assert_snapshot!(

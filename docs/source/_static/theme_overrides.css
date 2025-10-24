@@ -40,6 +40,18 @@ code {
   text-align: center;
 }
 
+/* Display appropriate logo for dark and light mode */
+.light-logo { display: inline; }
+.dark-logo { display: none; }
+
+@media (prefers-color-scheme: dark) {
+  .light-logo { display: none; }
+  .dark-logo { 
+    display: inline; 
+    background-color: transparent !important;
+  }
+}
+
 /* Ensure the logo is properly displayed */
 
 .navbar-brand {
@@ -91,6 +103,13 @@ Details: 8rem for search box etc*/
   display: block;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+/* Make table container width fit content instead of spanning full width. */
+.pst-scrollable-table-container {
+  display: inline-block;
+  overflow-x: auto;
   max-width: 100%;
 }
 

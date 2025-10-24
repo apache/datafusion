@@ -402,7 +402,6 @@ async fn test_object_store_profiling() {
     let container = setup_minio_container().await;
 
     let mut settings = make_settings();
-    settings.set_snapshot_suffix("s3_url_fallback");
 
     // as the object store profiling contains timestamps and durations, we must
     // filter them out to have stable snapshots
@@ -412,18 +411,17 @@ async fn test_object_store_profiling() {
     // Output:
     // <TIMESTAMP> operation=Get duration=[DURATION] size=1006 path=cars.csv
     settings.add_filter(
-        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2} operation=(Get|Put|Delete|List|Head) duration=\d+\.\d{6}s size=(\d+) path=(.*)",
-        "<TIMESTAMP> operation=$1 duration=[DURATION] size=$2 path=$3",
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2} operation=(Get|Put|Delete|List|Head) duration=\d+\.\d{6}s (size=\d+\s+)?path=(.*)",
+        "<TIMESTAMP> operation=$1 duration=[DURATION] ${2}path=$3",
     );
 
-    // We also need to filter out the durations reported in the summary output
-    //
+    // We also need to filter out the summary statistics (anything with an 's' at the end)
     // Example line(s) to filter:
-    //
-    // duration min: 0.000729s
-    // duration max: 0.000729s
-    // duration avg: 0.000729s
-    settings.add_filter(r"duration (min|max|avg): \d+\.\d{6}s", "[SUMMARY_DURATION]");
+    // | Get       | duration | 5.000000s | 5.000000s | 5.000000s |           | 1         |
+    settings.add_filter(
+        r"\| (Get|Put|Delete|List|Head)( +)\| duration \| .*? \| .*? \| .*? \| .*? \| (.*?) \|",
+        "| $1$2 | duration | ...NORMALIZED...| $3 |",
+    );
 
     let _bound = settings.bind_to_scope();
 

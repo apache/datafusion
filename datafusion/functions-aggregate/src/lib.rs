@@ -211,13 +211,7 @@ mod tests {
     #[test]
     fn test_no_duplicate_name() -> Result<()> {
         let mut names = HashSet::new();
-        let migrated_functions = ["array_agg", "count", "max", "min"];
         for func in all_default_aggregate_functions() {
-            // TODO: remove this
-            // These functions are in intermediate migration state, skip them
-            if migrated_functions.contains(&func.name().to_lowercase().as_str()) {
-                continue;
-            }
             assert!(
                 names.insert(func.name().to_string().to_lowercase()),
                 "duplicate function name: {}",

@@ -941,3 +941,275 @@ where min_height * width1 = (
 )
 ----
 4 7 4 28
+
+## Unnest with ordering on unrelated column is preserved
+query TT
+EXPLAIN WITH unnested AS (SELECT
+    ROW_NUMBER() OVER () AS generated_id,
+    unnest(array[value]) as ar
+  FROM range(1,5)) SELECT array_agg(ar) FROM unnested group by generated_id;
+----
+logical_plan
+01)Projection: array_agg(unnested.ar)
+02)--Aggregate: groupBy=[[unnested.generated_id]], aggr=[[array_agg(unnested.ar)]]
+03)----SubqueryAlias: unnested
+04)------Projection: generated_id, __unnest_placeholder(make_array(range().value),depth=1) AS UNNEST(make_array(range().value)) AS ar
+05)--------Unnest: lists[__unnest_placeholder(make_array(range().value))|depth=1] structs[]
+06)----------Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS generated_id, make_array(range().value) AS __unnest_placeholder(make_array(range().value))
+07)------------WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+08)--------------TableScan: range() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[array_agg(unnested.ar)@1 as array_agg(unnested.ar)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[generated_id@0 as generated_id], aggr=[array_agg(unnested.ar)], ordering_mode=Sorted
+03)----SortExec: expr=[generated_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([generated_id@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[generated_id@0 as generated_id], aggr=[array_agg(unnested.ar)], ordering_mode=Sorted
+07)------------ProjectionExec: expr=[generated_id@0 as generated_id, __unnest_placeholder(make_array(range().value),depth=1)@1 as ar]
+08)--------------UnnestExec
+09)----------------ProjectionExec: expr=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as generated_id, make_array(value@0) as __unnest_placeholder(make_array(range().value))]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+12)----------------------LazyMemoryExec: partitions=1, batch_generators=[range: start=1, end=5, batch_size=8192]
+
+# Unnest array where data is already ordered by column2 (100, 200, 300, 400)
+statement ok
+COPY (
+  SELECT * FROM VALUES
+    ([1,2,3], 100),
+    ([3],     200),
+    ([],      300),
+    ([3,1],   400)
+  ORDER BY column2
+ ) TO 'test_files/scratch/unnest/ordered_array.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/unnest/ordered_array.parquet'
+WITH ORDER (column2)
+
+query ?I
+SELECT * FROM t;
+----
+[1, 2, 3] 100
+[3] 200
+[] 300
+[3, 1] 400
+
+# Data is sorted on column2 already, so no need to sort again
+query II
+SELECT UNNEST(column1), column2 FROM t ORDER BY column2;
+----
+1 100
+2 100
+3 100
+3 200
+3 400
+1 400
+
+# Explain should not have a SortExec
+query TT
+EXPLAIN SELECT UNNEST(column1), column2 FROM t ORDER BY column2;
+----
+logical_plan
+01)Sort: t.column2 ASC NULLS LAST
+02)--Projection: __unnest_placeholder(t.column1,depth=1) AS UNNEST(t.column1), t.column2
+03)----Unnest: lists[__unnest_placeholder(t.column1)|depth=1] structs[]
+04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
+05)--------TableScan: t projection=[column1, column2]
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=1)@0 as UNNEST(t.column1), column2@1 as column2]
+02)--UnnestExec
+03)----ProjectionExec: expr=[column1@0 as __unnest_placeholder(t.column1), column2@1 as column2]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_array.parquet]]}, projection=[column1, column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
+
+# Explain should have a SortExec at the top because we order by the output of the unnest (i.e. discarding the ordering)
+query TT
+EXPLAIN SELECT UNNEST(column1) as unnested, column2 FROM t ORDER BY 1;
+----
+logical_plan
+01)Sort: unnested ASC NULLS LAST
+02)--Projection: __unnest_placeholder(t.column1,depth=1) AS UNNEST(t.column1) AS unnested, t.column2
+03)----Unnest: lists[__unnest_placeholder(t.column1)|depth=1] structs[]
+04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
+05)--------TableScan: t projection=[column1, column2]
+physical_plan
+01)SortExec: expr=[unnested@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=1)@0 as unnested, column2@1 as column2]
+03)----UnnestExec
+04)------ProjectionExec: expr=[column1@0 as __unnest_placeholder(t.column1), column2@1 as column2]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_array.parquet]]}, projection=[column1, column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
+
+# cleanup
+statement ok
+drop table t;
+
+# Unnest tuple where the data is already sorted by column 1
+statement ok
+COPY (
+  SELECT * FROM VALUES
+    (100, [3,2,1], 'a'),
+    (200, [1,2,3], 'b'),
+    (300, [3,1,2], 'c')
+  ORDER BY column1
+ ) TO 'test_files/scratch/unnest/ordered_tuples.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/unnest/ordered_tuples.parquet'
+WITH ORDER (column1)
+
+query I?T
+SELECT * FROM t;
+----
+100 [3, 2, 1] a
+200 [1, 2, 3] b
+300 [3, 1, 2] c
+
+# Put the columns in a tuple and unnest, we need to sort because we discard ordering of unnested columns
+query TT
+EXPLAIN WITH unnested AS (
+  SELECT unnest((column1, column2, column3))
+  FROM t
+) SELECT * FROM unnested order by 1;
+----
+logical_plan
+01)Sort: unnested.__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0 ASC NULLS LAST
+02)--SubqueryAlias: unnested
+03)----Unnest: lists[] structs[__unnest_placeholder(struct(t.column1,t.column2,t.column3))]
+04)------Projection: struct(t.column1, t.column2, t.column3) AS __unnest_placeholder(struct(t.column1,t.column2,t.column3))
+05)--------TableScan: t projection=[column1, column2, column3]
+physical_plan
+01)SortExec: expr=[__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--UnnestExec
+03)----ProjectionExec: expr=[struct(column1@0, column2@1, column3@2) as __unnest_placeholder(struct(t.column1,t.column2,t.column3))]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_tuples.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 ASC NULLS LAST], file_type=parquet
+
+# cleanup
+statement ok
+drop table t;
+
+# Unnest struct where data is already ordered by column2 (100, 200, 300, 400)
+statement ok
+COPY (
+  SELECT * FROM VALUES
+    (named_struct('s1', 1, 's2', 2, 's3', 3), 100),
+    (named_struct('s1', 1, 's2', 3, 's3', 2), 200),
+    (named_struct('s1', 2, 's2', 1, 's3', 3), 300),
+    (named_struct('s1', 3, 's2', 2, 's3', 1), 400)
+  ORDER BY column2
+ ) TO 'test_files/scratch/unnest/ordered_struct.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/unnest/ordered_struct.parquet'
+WITH ORDER (column2)
+
+query ?I
+SELECT * FROM t;
+----
+{s1: 1, s2: 2, s3: 3} 100
+{s1: 1, s2: 3, s3: 2} 200
+{s1: 2, s2: 1, s3: 3} 300
+{s1: 3, s2: 2, s3: 1} 400
+
+# data is sorted on column2 already, so no need to sort again
+query IIII
+SELECT UNNEST(column1), column2 FROM t ORDER BY column2;
+----
+1 2 3 100
+1 3 2 200
+2 1 3 300
+3 2 1 400
+
+# Explain should not have a SortExec
+query TT
+EXPLAIN SELECT UNNEST(column1), column2 FROM t ORDER BY column2;
+----
+logical_plan
+01)Sort: t.column2 ASC NULLS LAST
+02)--Unnest: lists[] structs[__unnest_placeholder(t.column1)]
+03)----Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
+04)------TableScan: t projection=[column1, column2]
+physical_plan
+01)UnnestExec
+02)--ProjectionExec: expr=[column1@0 as __unnest_placeholder(t.column1), column2@1 as column2]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct.parquet]]}, projection=[column1, column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
+
+# cleanup
+statement ok
+drop table t;
+
+# Unnest nested array (unnesting twice), struct, and array, where data is already ordered by column4 (100, 200, 300, 400)
+statement ok
+COPY (
+  SELECT * FROM VALUES
+    ([[1],[2],[3]], [1,2,3], named_struct('s1', 1, 's2', 2, 's3', 3),  100),
+    ([[1],[3],[2]], [3],     named_struct('s1', 1, 's2', 3, 's3', 2),  200),
+    ([[2],[1],[3]], [],      named_struct('s1', 2, 's2', 1, 's3', 3),  300),
+    ([[3],[2],[1]], [3,1],   named_struct('s1', 3, 's2', 2, 's3', 1),  400)
+  ORDER BY column4
+ ) TO 'test_files/scratch/unnest/ordered_struct_arrays.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/unnest/ordered_struct_arrays.parquet'
+WITH ORDER (column4)
+
+query ???I
+SELECT * FROM t;
+----
+[[1], [2], [3]] [1, 2, 3] {s1: 1, s2: 2, s3: 3} 100
+[[1], [3], [2]] [3] {s1: 1, s2: 3, s3: 2} 200
+[[2], [1], [3]] [] {s1: 2, s2: 1, s3: 3} 300
+[[3], [2], [1]] [3, 1] {s1: 3, s2: 2, s3: 1} 400
+
+# data is sorted on column4 already, so no need to sort again
+query IIIIII
+SELECT UNNEST(UNNEST(column1)), UNNEST(column2), UNNEST(column3), column4 FROM t ORDER BY column4;
+----
+1 1 1 2 3 100
+NULL 2 1 2 3 100
+NULL 3 1 2 3 100
+2 1 1 2 3 100
+NULL 2 1 2 3 100
+NULL 3 1 2 3 100
+3 1 1 2 3 100
+NULL 2 1 2 3 100
+NULL 3 1 2 3 100
+1 3 1 3 2 200
+3 3 1 3 2 200
+2 3 1 3 2 200
+2 NULL 2 1 3 300
+1 NULL 2 1 3 300
+3 NULL 2 1 3 300
+3 3 3 2 1 400
+NULL 1 3 2 1 400
+2 3 3 2 1 400
+NULL 1 3 2 1 400
+1 3 3 2 1 400
+NULL 1 3 2 1 400
+
+# Explain should not have a SortExec
+query TT
+EXPLAIN SELECT UNNEST(UNNEST(column1)), UNNEST(column2), UNNEST(column3), column4 FROM t ORDER BY column4;
+----
+logical_plan
+01)Sort: t.column4 ASC NULLS LAST
+02)--Projection: __unnest_placeholder(t.column1,depth=2) AS UNNEST(UNNEST(t.column1)), __unnest_placeholder(t.column2,depth=1) AS UNNEST(t.column2), __unnest_placeholder(t.column3).s1, __unnest_placeholder(t.column3).s2, __unnest_placeholder(t.column3).s3, t.column4
+03)----Unnest: lists[__unnest_placeholder(t.column1)|depth=2, __unnest_placeholder(t.column2)|depth=1] structs[__unnest_placeholder(t.column3)]
+04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2 AS __unnest_placeholder(t.column2), t.column3 AS __unnest_placeholder(t.column3), t.column4
+05)--------TableScan: t projection=[column1, column2, column3, column4]
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=2)@0 as UNNEST(UNNEST(t.column1)), __unnest_placeholder(t.column2,depth=1)@1 as UNNEST(t.column2), __unnest_placeholder(t.column3).s1@2 as __unnest_placeholder(t.column3).s1, __unnest_placeholder(t.column3).s2@3 as __unnest_placeholder(t.column3).s2, __unnest_placeholder(t.column3).s3@4 as __unnest_placeholder(t.column3).s3, column4@5 as column4]
+02)--UnnestExec
+03)----ProjectionExec: expr=[column1@0 as __unnest_placeholder(t.column1), column2@1 as __unnest_placeholder(t.column2), column3@2 as __unnest_placeholder(t.column3), column4@3 as column4]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct_arrays.parquet]]}, projection=[column1, column2, column3, column4], output_ordering=[column4@3 ASC NULLS LAST], file_type=parquet
+
+# cleanup
+statement ok
+drop table t;

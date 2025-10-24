@@ -426,6 +426,21 @@ select * from validate_parquet_single;
 1 Foo
 2 Bar
 
+# copy 0 rows to a single parquet file output
+query I
+COPY (SELECT 1 AS id WHERE FALSE) TO 'test_files/scratch/copy/table_no_rows.parquet';
+----
+0
+
+statement ok
+CREATE EXTERNAL TABLE validate_parquet_single_no_rows STORED AS PARQUET LOCATION 'test_files/scratch/copy/table_no_rows.parquet';
+
+# validate the parquet file contains 0 rows.
+query I
+SELECT count(id) FROM validate_parquet_single_no_rows;
+----
+0
+
 # copy from table to folder of compressed json files
 query I
 COPY source_table  to 'test_files/scratch/copy/table_json_gz' STORED AS JSON OPTIONS ('format.compression' gzip);

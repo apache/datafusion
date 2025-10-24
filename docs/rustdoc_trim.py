@@ -19,7 +19,7 @@ import re
 from sphinx.application import Sphinx
 
 # Regex pattern to match Rust code blocks in Markdown
-RUST_CODE_BLOCK_PATTERN = re.compile(r"```rust\s*(.*?)```", re.DOTALL)
+RUST_CODE_BLOCK_PATTERN = re.compile(r"```rust(?:,ignore)?\s*(.*?)```", re.DOTALL)
 
 
 def remove_hashtag_lines_in_rust_blocks(markdown_content):

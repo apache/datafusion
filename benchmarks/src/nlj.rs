@@ -146,6 +146,45 @@ const NLJ_QUERIES: &[&str] = &[
         FULL JOIN range(30000) AS t2
         ON (t1.value > t2.value);
     "#,
+    // Q13: LEFT SEMI 30K x 30K | HIGH 99.9%
+    r#"
+        SELECT t1.*
+        FROM range(30000) AS t1
+        LEFT SEMI JOIN range(30000) AS t2
+        ON t1.value < t2.value;
+    "#,
+    // Q14: LEFT ANTI 30K x 30K | LOW 0.003%
+    r#"
+        SELECT t1.*
+        FROM range(30000) AS t1
+        LEFT ANTI JOIN range(30000) AS t2
+        ON t1.value < t2.value;
+    "#,
+    // Q15: RIGHT SEMI 30K x 30K | HIGH 99.9%
+    r#"
+        SELECT t1.*
+        FROM range(30000) AS t2
+        RIGHT SEMI JOIN range(30000) AS t1
+        ON t2.value < t1.value;
+    "#,
+    // Q16: RIGHT ANTI 30K x 30K | LOW 0.003%
+    r#"
+        SELECT t1.*
+        FROM range(30000) AS t2
+        RIGHT ANTI JOIN range(30000) AS t1
+        ON t2.value < t1.value;
+    "#,
+    // Q17: LEFT MARK | HIGH 99.9%
+    r#"
+        SELECT *
+        FROM range(30000) AS t2(k2)
+        WHERE k2 > 0
+        OR EXISTS (
+            SELECT 1
+            FROM range(30000) AS t1(k1)
+            WHERE t2.k2 > t1.k1
+        );
+    "#,
 ];
 
 impl RunOpt {

@@ -20,7 +20,7 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_month_day_nano_config, IntervalParseConfig, IntervalUnit,
 };
 use arrow::datatypes::{
-    i256, DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    i256, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
@@ -45,7 +45,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_value(
         &self,
         value: Value,
-        param_data_types: &[DataType],
+        param_data_types: &[FieldRef],
     ) -> Result<Expr> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
@@ -108,7 +108,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
     fn create_placeholder_expr(
         param: String,
-        param_data_types: &[DataType],
+        param_data_types: &[FieldRef],
     ) -> Result<Expr> {
         // Parse the placeholder as a number because it is the only support from sqlparser and postgres
         let index = param[1..].parse::<usize>();
@@ -121,7 +121,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Ok(index) => index - 1,
             Err(_) => {
                 return if param_data_types.is_empty() {
-                    Ok(Expr::Placeholder(Placeholder::new(param, None)))
+                    Ok(Expr::Placeholder(Placeholder::new_with_field(param, None)))
                 } else {
                     // when PREPARE Statement, param_data_types length is always 0
                     plan_err!("Invalid placeholder, not a number: {param}")
@@ -133,7 +133,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Data type of the parameter
         debug!("type of param {param} param_data_types[idx]: {param_type:?}");
 
-        Ok(Expr::Placeholder(Placeholder::new(
+        Ok(Expr::Placeholder(Placeholder::new_with_field(
             param,
             param_type.cloned(),
         )))

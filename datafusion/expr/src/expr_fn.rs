@@ -119,13 +119,13 @@ pub fn ident(name: impl Into<String>) -> Expr {
 ///
 /// ```rust
 /// # use datafusion_expr::{placeholder};
-/// let p = placeholder("$0"); // $0, refers to parameter 1
-/// assert_eq!(p.to_string(), "$0")
+/// let p = placeholder("$1"); // $1, refers to parameter 1
+/// assert_eq!(p.to_string(), "$1")
 /// ```
 pub fn placeholder(id: impl Into<String>) -> Expr {
     Expr::Placeholder(Placeholder {
         id: id.into(),
-        data_type: None,
+        field: None,
     })
 }
 

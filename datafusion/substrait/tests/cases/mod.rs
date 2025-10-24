@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod aggregation_tests;
 mod builtin_expr_semantics_tests;
 mod consumer_integration;
 mod emit_kind_tests;

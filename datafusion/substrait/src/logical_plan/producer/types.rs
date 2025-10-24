@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::to_substrait_precision;
 use crate::logical_plan::producer::utils::flatten_names;
+use crate::logical_plan::producer::{to_substrait_precision, SubstraitProducer};
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
     DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    FLOAT_16_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
     TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
@@ -32,13 +32,15 @@ use datafusion::common::{internal_err, not_impl_err, plan_err, DFSchemaRef};
 use substrait::proto::{r#type, NamedStruct};
 
 pub(crate) fn to_substrait_type(
+    producer: &mut impl SubstraitProducer,
     dt: &DataType,
     nullable: bool,
 ) -> datafusion::common::Result<substrait::proto::Type> {
-    to_substrait_type_from_field(&Field::new("", dt.clone(), nullable).into())
+    to_substrait_type_from_field(producer, &Field::new("", dt.clone(), nullable).into())
 }
 
 pub(crate) fn to_substrait_type_from_field(
+    producer: &mut impl SubstraitProducer,
     dt: &FieldRef,
 ) -> datafusion::common::Result<substrait::proto::Type> {
     let nullability = if dt.is_nullable() {
@@ -102,7 +104,17 @@ pub(crate) fn to_substrait_type_from_field(
                 nullability,
             })),
         }),
-        // Float16 is not supported in Substrait
+        DataType::Float16 => {
+            let type_anchor = producer.register_type(FLOAT_16_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::Float32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
@@ -250,7 +262,7 @@ pub(crate) fn to_substrait_type_from_field(
             })),
         }),
         DataType::List(inner) => {
-            let inner_type = to_substrait_type_from_field(inner)?;
+            let inner_type = to_substrait_type_from_field(producer, inner)?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
@@ -260,7 +272,7 @@ pub(crate) fn to_substrait_type_from_field(
             })
         }
         DataType::LargeList(inner) => {
-            let inner_type = to_substrait_type_from_field(inner)?;
+            let inner_type = to_substrait_type_from_field(producer, inner)?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
@@ -271,8 +283,8 @@ pub(crate) fn to_substrait_type_from_field(
         }
         DataType::Map(inner, _) => match inner.data_type() {
             DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
-                let key_type = to_substrait_type_from_field(&key_and_value[0])?;
-                let value_type = to_substrait_type_from_field(&key_and_value[1])?;
+                let key_type = to_substrait_type_from_field(producer, &key_and_value[0])?;
+                let value_type = to_substrait_type_from_field(producer, &key_and_value[1])?;
                 Ok(substrait::proto::Type {
                     kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
                         key: Some(Box::new(key_type)),
@@ -286,10 +298,10 @@ pub(crate) fn to_substrait_type_from_field(
         },
         DataType::Dictionary(key_type, value_type) => {
             let key_type = to_substrait_type_from_field(
-                &Field::new("", key_type.as_ref().clone(), dt.is_nullable()).into(),
+                producer, &Field::new("", key_type.as_ref().clone(), dt.is_nullable()).into(),
             )?;
             let value_type = to_substrait_type_from_field(
-                &Field::new("", value_type.as_ref().clone(), dt.is_nullable()).into(),
+                producer, &Field::new("", value_type.as_ref().clone(), dt.is_nullable()).into(),
             )?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
@@ -303,7 +315,9 @@ pub(crate) fn to_substrait_type_from_field(
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
-                .map(to_substrait_type_from_field)
+                .map(|field| {
+                    to_substrait_type_from_field(producer, field)
+                })
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Struct(r#type::Struct {
@@ -334,6 +348,7 @@ pub(crate) fn to_substrait_type_from_field(
 }
 
 pub(crate) fn to_substrait_named_struct(
+    producer: &mut impl SubstraitProducer,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<NamedStruct> {
     let mut names = Vec::with_capacity(schema.fields().len());
@@ -345,7 +360,7 @@ pub(crate) fn to_substrait_named_struct(
         types: schema
             .fields()
             .iter()
-            .map(to_substrait_type_from_field)
+            .map(|f| to_substrait_type_from_field(producer, f))
             .collect::<datafusion::common::Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
         nullability: r#type::Nullability::Required as i32,
@@ -364,8 +379,10 @@ mod tests {
     use crate::logical_plan::consumer::{
         from_substrait_named_struct, from_substrait_type_without_names,
     };
+    use crate::logical_plan::producer::DefaultSubstraitProducer;
     use datafusion::arrow::datatypes::{Field, Fields, Schema, TimeUnit};
     use datafusion::common::{DFSchema, Result};
+    use datafusion::prelude::SessionContext;
     use std::sync::Arc;
 
     #[test]
@@ -452,9 +469,12 @@ mod tests {
     fn round_trip_type(dt: DataType) -> Result<()> {
         println!("Checking round trip of {dt}");
 
+        let state = SessionContext::default().state();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
-        let substrait = to_substrait_type(&dt, true)?;
+        let substrait = to_substrait_type(&mut producer, &dt, true)?;
         let consumer = test_consumer();
         let roundtrip_dt = from_substrait_type_without_names(&consumer, &substrait)?;
         assert_eq!(dt, roundtrip_dt);
@@ -477,7 +497,10 @@ mod tests {
             Field::new("trailer", DataType::Float64, true),
         ]))?);
 
-        let named_struct = to_substrait_named_struct(&schema)?;
+        let state = SessionContext::default().state();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
+        let named_struct = to_substrait_named_struct(&mut producer, &schema)?;
 
         // Struct field names should be flattened DFS style
         // List field names should be omitted
