@@ -191,6 +191,7 @@ impl RepartitionExecState {
         preserve_order: bool,
         name: String,
         context: Arc<TaskContext>,
+        spill_manager: SpillManager,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
@@ -213,6 +214,8 @@ impl RepartitionExecState {
 
         let num_input_partitions = streams_and_metrics.len();
         let num_output_partitions = partitioning.partition_count();
+
+        let spill_manager = Arc::new(spill_manager);
 
         let (txs, rxs) = if preserve_order {
             let (txs, rxs) =
@@ -241,12 +244,6 @@ impl RepartitionExecState {
                 MemoryConsumer::new(format!("{name}[{partition}]"))
                     .with_can_spill(true)
                     .register(context.memory_pool()),
-            ));
-            let spill_metrics = SpillMetrics::new(&metrics, partition);
-            let spill_manager = Arc::new(SpillManager::new(
-                Arc::clone(&context.runtime_env()),
-                spill_metrics,
-                input.schema(),
             ));
 
             // Create one SpillPool per input partition for this output partition
@@ -722,6 +719,8 @@ impl ExecutionPlan for RepartitionExec {
             partition
         );
 
+        let spill_metrics = SpillMetrics::new(&self.metrics, partition);
+
         let input = Arc::clone(&self.input);
         let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
@@ -729,6 +728,12 @@ impl ExecutionPlan for RepartitionExec {
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
+
+        let spill_manager = SpillManager::new(
+            Arc::clone(&context.runtime_env()),
+            spill_metrics,
+            input.schema(),
+        );
 
         // Get existing ordering to use for merging
         let sort_exprs = self.sort_exprs().cloned();
@@ -757,6 +762,7 @@ impl ExecutionPlan for RepartitionExec {
                     preserve_order,
                     name.clone(),
                     Arc::clone(&context),
+                    spill_manager.clone(),
                 )?;
 
                 // now return stream for the specified *output* partition which will
@@ -820,6 +826,7 @@ impl ExecutionPlan for RepartitionExec {
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(fetch)
                     .with_reservation(merge_reservation)
+                    .with_spill_manager(spill_manager)
                     .build()
             } else {
                 // Non-preserve-order case: single input stream, so use the first SpillPool
@@ -1116,7 +1123,14 @@ impl RepartitionExec {
                             Err(_) => {
                                 // We're memory limited - spill to SpillPool
                                 // SpillPool handles file handle reuse and rotation
-                                channel.spill_pool.lock().push_batch(&batch)?;
+                                {
+                                    let mut pool = channel.spill_pool.lock();
+                                    pool.push_batch(&batch)?;
+                                    // Flush immediately to make the batch available for reading
+                                    // This is necessary for order-preserving repartition where
+                                    // the reader needs immediate access to spilled data
+                                    pool.flush()?;
+                                }
 
                                 // Send marker indicating batch was spilled
                                 (RepartitionBatch::Spilled, false)
@@ -1393,19 +1407,25 @@ impl Stream for PerPartitionStream {
                 }
                 Poll::Ready(None) => {
                     // Spill stream ended - all spilled data has been read
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    // No spilled data available
+                    // Only end the stream if input is also finished
                     if self.input_finished {
-                        // Input finished and no more spilled data - we're done
                         return Poll::Ready(None);
                     }
-                    // Otherwise check the channel
+                    // Otherwise, continue to check the channel for new data
+                }
+                Poll::Pending => {
+                    // No spilled data available yet (async I/O in progress)
+                    if self.input_finished {
+                        // Input finished, but spill stream might have data being read
+                        // Wait for the async I/O to complete
+                        return Poll::Pending;
+                    }
+                    // Spill stream is pending but not finished
+                    // Fall through to check the channel
                 }
             }
 
-            // If input is finished, don't poll channel anymore
+            // If input is finished, don't poll channel anymore - just wait for spill stream
             if self.input_finished {
                 return Poll::Pending;
             }
@@ -2213,6 +2233,7 @@ mod tests {
 
 #[cfg(test)]
 mod test {
+    use arrow::array::record_batch;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::assert_batches_eq;
@@ -2301,28 +2322,32 @@ mod test {
 
     #[tokio::test]
     async fn test_preserve_order_with_spilling() -> Result<()> {
-        use arrow::array::UInt32Array;
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
         use datafusion_execution::TaskContext;
 
-        // Test that order-preserving repartition successfully spills to disk
-        // when memory is constrained while maintaining correct order
-        let schema = test_schema();
-        let sort_exprs = sort_exprs(&schema);
-
         // Create sorted input data across multiple partitions
-        // Each partition has sorted data: [1,2,3,4,5,6,7,8]
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
-        )?;
-        let partition1 = vec![batch.clone(); 25];
-        let partition2 = vec![batch; 25];
+        // Partition1: [1,3], [5,7], [9,11]
+        // Partition2: [2,4], [6,8], [10,12]
+        let batch1 = record_batch!(("c0", UInt32, [1, 3])).unwrap();
+        let batch2 = record_batch!(("c0", UInt32, [2, 4])).unwrap();
+        let batch3 = record_batch!(("c0", UInt32, [5, 7])).unwrap();
+        let batch4 = record_batch!(("c0", UInt32, [6, 8])).unwrap();
+        let batch5 = record_batch!(("c0", UInt32, [9, 11])).unwrap();
+        let batch6 = record_batch!(("c0", UInt32, [10, 12])).unwrap();
+        let schema = batch1.schema();
+        let sort_exprs = LexOrdering::new([PhysicalSortExpr {
+            expr: col("c0", &schema).unwrap(),
+            options: SortOptions::default().asc(),
+        }])
+        .unwrap();
+        let partition1 = vec![batch1.clone(), batch3.clone(), batch5.clone()];
+        let partition2 = vec![batch2.clone(), batch4.clone(), batch6.clone()];
         let input_partitions = vec![partition1, partition2];
 
-        // Set up context with very tight memory limit to force spilling
+        // Set up context with tight memory limit to force spilling
+        // Sorting needs some non-spillable memory, so 64 bytes should force spilling while still allowing the query to complete
         let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(1, 1.0)
+            .with_memory_limit(64, 1.0)
             .build_arc()?;
 
         let task_ctx = TaskContext::default().with_runtime(runtime);
@@ -2332,57 +2357,91 @@ mod test {
         let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?
             .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs])?;
         let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
-        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(4))?
+        // Repartition into 3 partitions with order preservation
+        // We expect 1 batch per output partition after repartitioning
+        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(3))?
             .with_preserve_order();
 
         let mut batches = vec![];
 
         // Collect all partitions - should succeed by spilling to disk
-        let mut total_rows = 0;
         for i in 0..exec.partitioning().partition_count() {
             let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
             while let Some(result) = stream.next().await {
                 let batch = result?;
-                total_rows += batch.num_rows();
                 batches.push(batch);
             }
         }
 
-        // Verify we got all the data (2 partitions * 25 batches * 8 rows each)
-        assert_eq!(total_rows, 2 * 25 * 8);
+        #[rustfmt::skip]
+        let expected = [
+            [
+                "+----+",
+                "| c0 |",
+                "+----+",
+                "| 1  |",
+                "| 2  |",
+                "| 3  |",
+                "| 4  |",
+                "+----+",
+            ],
+            [
+                "+----+",
+                "| c0 |",
+                "+----+",
+                "| 5  |",
+                "| 6  |",
+                "| 7  |",
+                "| 8  |",
+                "+----+",
+            ],
+            [
+                "+----+",
+                "| c0 |",
+                "+----+",
+                "| 9  |",
+                "| 10 |",
+                "| 11 |",
+                "| 12 |",
+                "+----+",
+            ],
+        ];
 
-        // Verify spilling metrics to confirm spilling actually happened
+        for (batch, expected) in batches.iter().zip(expected.iter()) {
+            assert_batches_eq!(expected, &[batch.clone()]);
+        }
+
+        // We should have spilled ~ all of the data.
+        // - We spill data during the repartitioning phase
+        // - We may also spill during the final merge sort
+        let all_batches = [batch1, batch2, batch3, batch4, batch5, batch6];
         let metrics = exec.metrics().unwrap();
         assert!(
-            metrics.spill_count().unwrap() > 0,
-            "Expected spill_count > 0 for order-preserving repartition, but got {:?}",
+            metrics.spill_count().unwrap() > input_partitions.len(),
+            "Expected spill_count > {} for order-preserving repartition, but got {:?}",
+            input_partitions.len(),
             metrics.spill_count()
         );
         assert!(
-            metrics.spilled_bytes().unwrap() > 0,
-            "Expected spilled_bytes > 0 for order-preserving repartition"
+            metrics.spilled_bytes().unwrap()
+                > all_batches
+                    .iter()
+                    .map(|b| b.get_array_memory_size())
+                    .sum::<usize>(),
+            "Expected spilled_bytes > {} for order-preserving repartition, got {}",
+            all_batches
+                .iter()
+                .map(|b| b.get_array_memory_size())
+                .sum::<usize>(),
+            metrics.spilled_bytes().unwrap()
         );
         assert!(
-            metrics.spilled_rows().unwrap() > 0,
-            "Expected spilled_rows > 0 for order-preserving repartition"
+            metrics.spilled_rows().unwrap()
+                >= all_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            "Expected spilled_rows > {} for order-preserving repartition, got {}",
+            all_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            metrics.spilled_rows().unwrap()
         );
-
-        // Verify that the final output batches are in sorted order
-        #[rustfmt::skip]
-        let expected = [
-            "+----+",
-            "| c0 |",
-            "+----+",
-            "| 1  |",
-            "| 2  |",
-            "| 3  |",
-            "| 4  |",
-            "| 5  |",
-            "| 6  |",
-            "| 7  |",
-            "| 8  |",
-        ];
-        assert_batches_eq!(&expected, &batches);
 
         Ok(())
     }
