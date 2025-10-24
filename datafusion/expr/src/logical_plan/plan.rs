@@ -4810,9 +4810,9 @@ mod tests {
             )
             .unwrap();
 
-        // Attempt to bind a parameter with metadata
+        // Attempt to bind a parameter with an extension type
         let mut scalar_meta = HashMap::new();
-        scalar_meta.insert("some_key".to_string(), "some_value".to_string());
+        scalar_meta.insert("ARROW:extension:name".to_string(), "uuid".to_string());
         let param_values = ParamValues::List(vec![ScalarAndMetadata::new(
             ScalarValue::Int32(Some(42)),
             Some(scalar_meta.into()),

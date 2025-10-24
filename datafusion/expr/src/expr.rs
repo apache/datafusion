@@ -32,6 +32,7 @@ use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
+use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -3256,10 +3257,7 @@ impl Display for Expr {
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v, metadata) => {
-                match metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
-                    false => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
-                    true => write!(f, "{v:?}"),
-                }
+                write!(f, "{}", ScalarAndMetadata::new(v.clone(), metadata.clone()))
             }
             Expr::Case(case) => {
                 write!(f, "CASE ")?;

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, fmt::Display, sync::Arc};
 
 use arrow::datatypes::{DataType, Field};
 use hashbrown::HashMap;
@@ -63,6 +63,28 @@ impl ScalarAndMetadata {
     ) -> Result<Self, DataFusionError> {
         let new_value = self.value().cast_to(target_type)?;
         Ok(ScalarAndMetadata::new(new_value, self.metadata.clone()))
+    }
+}
+
+impl Display for ScalarAndMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let storage_type = self.value.data_type();
+        let serialized_type = self
+            .metadata
+            .as_ref()
+            .map(|metadata| SerializedTypeView::from((&storage_type, metadata)))
+            .unwrap_or(SerializedTypeView::from(&storage_type));
+
+        match (
+            serialized_type.extension_name(),
+            serialized_type.extension_metadata(),
+        ) {
+            (Some(name), None) => write!(f, "{name}<{:?}>", self.value()),
+            (Some(name), Some(metadata)) => {
+                write!(f, "{name}({metadata})<{:?}>", self.value())
+            }
+            _ => write!(f, "{:?}", self.value()),
+        }
     }
 }
 

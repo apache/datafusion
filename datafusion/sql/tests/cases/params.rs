@@ -778,7 +778,7 @@ fn test_update_infer_with_metadata() {
     ** Final Plan:
     Dml: op=[Update] table=[person_with_uuid_extension]
       Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, Utf8("Turing") AS last_name
-        Filter: person_with_uuid_extension.id = FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} }
+        Filter: person_with_uuid_extension.id = arrow.uuid<FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16")>
           TableScan: person_with_uuid_extension
     "#
     );
@@ -802,7 +802,7 @@ fn test_update_infer_with_metadata() {
     ** Final Plan:
     Dml: op=[Update] table=[person_with_uuid_extension]
       Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, Utf8("Turing") AS last_name
-        Filter: person_with_uuid_extension.id = FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} }
+        Filter: person_with_uuid_extension.id = arrow.uuid<FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16")>
           TableScan: person_with_uuid_extension
     "#
     );
@@ -851,7 +851,7 @@ fn test_insert_infer_with_metadata() {
     ** Final Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
       Projection: column1 AS id, column2 AS first_name, column3 AS last_name
-        Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
+        Values: (arrow.uuid<FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16")> AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );
 
@@ -873,7 +873,7 @@ fn test_insert_infer_with_metadata() {
     ** Final Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
       Projection: column1 AS id, column2 AS first_name, column3 AS last_name
-        Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
+        Values: (arrow.uuid<FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16")> AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );
 }
