@@ -58,7 +58,7 @@ pub enum InstrumentedObjectStoreMode {
 
 impl fmt::Display for InstrumentedObjectStoreMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -194,6 +194,25 @@ impl InstrumentedObjectStore {
         Ok(ret)
     }
 
+    async fn instrumented_delete(&self, location: &Path) -> Result<()> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        self.inner.delete(location).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Delete,
+            path: location.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: None,
+        });
+
+        Ok(())
+    }
+
     fn instrumented_list(
         &self,
         prefix: Option<&Path>,
@@ -226,6 +245,67 @@ impl InstrumentedObjectStore {
         self.requests.lock().push(RequestDetails {
             op: Operation::List,
             path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: None,
+        });
+
+        Ok(ret)
+    }
+
+    async fn instrumented_copy(&self, from: &Path, to: &Path) -> Result<()> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        self.inner.copy(from, to).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Copy,
+            path: from.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: Some(format!("copy_to: {to}")),
+        });
+
+        Ok(())
+    }
+
+    async fn instrumented_copy_if_not_exists(
+        &self,
+        from: &Path,
+        to: &Path,
+    ) -> Result<()> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        self.inner.copy_if_not_exists(from, to).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Copy,
+            path: from.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: Some(format!("copy_to: {to}")),
+        });
+
+        Ok(())
+    }
+
+    async fn instrumented_head(&self, location: &Path) -> Result<ObjectMeta> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        let ret = self.inner.head(location).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Head,
+            path: location.clone(),
             timestamp,
             duration: Some(elapsed),
             size: None,
@@ -285,6 +365,10 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
+        if self.enabled() {
+            return self.instrumented_delete(location).await;
+        }
+
         self.inner.delete(location).await
     }
 
@@ -305,14 +389,26 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+        if self.enabled() {
+            return self.instrumented_copy(from, to).await;
+        }
+
         self.inner.copy(from, to).await
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        if self.enabled() {
+            return self.instrumented_copy_if_not_exists(from, to).await;
+        }
+
         self.inner.copy_if_not_exists(from, to).await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+        if self.enabled() {
+            return self.instrumented_head(location).await;
+        }
+
         self.inner.head(location).await
     }
 }
@@ -320,17 +416,17 @@ impl ObjectStore for InstrumentedObjectStore {
 /// Object store operation types tracked by [`InstrumentedObjectStore`]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Operation {
-    _Copy,
-    _Delete,
+    Copy,
+    Delete,
     Get,
-    _Head,
+    Head,
     List,
     Put,
 }
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -460,11 +556,11 @@ impl RequestSummaries {
                 let size_stats = s.size_stats.as_ref();
                 let dur_avg = duration_stats.map(|d| {
                     let avg = d.sum.as_secs_f32() / count;
-                    format!("{:.6}s", avg)
+                    format!("{avg:.6}s")
                 });
                 let size_avg = size_stats.map(|s| {
                     let avg = s.sum as f32 / count;
-                    format!("{} B", avg)
+                    format!("{avg} B")
                 });
                 [dur_avg, size_avg]
             })
@@ -648,6 +744,13 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
         self.inner.register_store(url, instrumented)
     }
 
+    fn deregister_store(
+        &self,
+        url: &Url,
+    ) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
+        self.inner.deregister_store(url)
+    }
+
     fn get_store(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
         self.inner.get_store(url)
     }
@@ -750,6 +853,35 @@ mod tests {
         assert!(request.duration.is_some());
         assert_eq!(request.size, Some(9));
         assert_eq!(request.range, None);
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_delete() {
+        let (instrumented, path) = setup_test_store().await;
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.delete(&path).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        // We need a new store so we have data to delete again
+        let (instrumented, path) = setup_test_store().await;
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.delete(&path).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Delete);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
         assert!(request.extra_display.is_none());
     }
 
@@ -858,6 +990,103 @@ mod tests {
 
         let request = instrumented.take_requests().pop().unwrap();
         assert_eq!(request.op, Operation::Put);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_copy() {
+        let (instrumented, path) = setup_test_store().await;
+        let copy_to = Path::from("test/copied");
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.copy(&path, &copy_to).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.copy(&path, &copy_to).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Copy);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert_eq!(
+            request.extra_display.unwrap(),
+            format!("copy_to: {copy_to}")
+        );
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_copy_if_not_exists() {
+        let (instrumented, path) = setup_test_store().await;
+        let mut copy_to = Path::from("test/copied");
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented
+            .copy_if_not_exists(&path, &copy_to)
+            .await
+            .unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        // Use a new destination since the previous one already exists
+        copy_to = Path::from("test/copied_again");
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented
+            .copy_if_not_exists(&path, &copy_to)
+            .await
+            .unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Copy);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert_eq!(
+            request.extra_display.unwrap(),
+            format!("copy_to: {copy_to}")
+        );
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_head() {
+        let (instrumented, path) = setup_test_store().await;
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.head(&path).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.head(&path).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Head);
         assert_eq!(request.path, path);
         assert!(request.duration.is_some());
         assert!(request.size.is_none());
