@@ -309,16 +309,16 @@ async fn test_fn_arrow_typeof() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&batches),
-        @r#"
-    +------------------------------------------------------------------------------------------------------------------+
-    | arrow_typeof(test.l)                                                                                             |
-    +------------------------------------------------------------------------------------------------------------------+
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    +------------------------------------------------------------------------------------------------------------------+
-    "#);
+        @r"
+    +----------------------+
+    | arrow_typeof(test.l) |
+    +----------------------+
+    | List(nullable Int32) |
+    | List(nullable Int32) |
+    | List(nullable Int32) |
+    | List(nullable Int32) |
+    +----------------------+
+    ");
 
     Ok(())
 }

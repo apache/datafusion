@@ -29,7 +29,7 @@ true
 query T
 SELECT arrow_typeof(current_time());
 ----
-Time64(Nanosecond)
+Time64(ns)
 
 # Test 3: Set timezone to +08:00 and verify current_time is still stable
 statement ok
@@ -44,7 +44,7 @@ true
 query T
 SELECT arrow_typeof(current_time());
 ----
-Time64(Nanosecond)
+Time64(ns)
 
 # Test 5: Test with negative offset timezone
 statement ok

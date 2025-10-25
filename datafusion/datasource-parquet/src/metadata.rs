@@ -58,7 +58,7 @@ pub struct DFParquetMetadata<'a> {
     store: &'a dyn ObjectStore,
     object_meta: &'a ObjectMeta,
     metadata_size_hint: Option<usize>,
-    decryption_properties: Option<&'a FileDecryptionProperties>,
+    decryption_properties: Option<Arc<FileDecryptionProperties>>,
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     /// timeunit to coerce INT96 timestamps to
     pub coerce_int96: Option<TimeUnit>,
@@ -85,7 +85,7 @@ impl<'a> DFParquetMetadata<'a> {
     /// set decryption properties
     pub fn with_decryption_properties(
         mut self,
-        decryption_properties: Option<&'a FileDecryptionProperties>,
+        decryption_properties: Option<Arc<FileDecryptionProperties>>,
     ) -> Self {
         self.decryption_properties = decryption_properties;
         self
@@ -145,7 +145,8 @@ impl<'a> DFParquetMetadata<'a> {
 
         #[cfg(feature = "parquet_encryption")]
         if let Some(decryption_properties) = decryption_properties {
-            reader = reader.with_decryption_properties(Some(decryption_properties));
+            reader = reader
+                .with_decryption_properties(Some(Arc::clone(decryption_properties)));
         }
 
         if cache_metadata && file_metadata_cache.is_some() {
