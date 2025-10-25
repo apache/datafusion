@@ -571,8 +571,8 @@ impl CaseExpr {
             let then_value = then_expression.evaluate(&then_batch)?;
             result_builder.add_branch_result(&then_rows, then_value)?;
 
-            // If the 'when' predicate matched all remaining row, there's nothing left to do so
-            // we can return early
+            // If this is the last 'when' branch and there is no 'else' expression, there's no
+            // point in calculating the remaining rows.
             if self.else_expr.is_none() && i == self.when_then_expr.len() - 1 {
                 return result_builder.finish();
             }
@@ -658,9 +658,9 @@ impl CaseExpr {
             let then_value = then_expression.evaluate(&then_batch)?;
             result_builder.add_branch_result(&then_rows, then_value)?;
 
-            // If the 'when' predicate matched all remaining row, there's nothing left to do so
-            // we can return early
-            if self.else_expr.is_none() && i == self.when_then_expr.len() - 1 {
+            // If this is the last 'when' branch and there is no 'else' expression, there's no
+            // point in calculating the remaining rows.
+            if i == self.when_then_expr.len() - 1 && self.else_expr.is_none() {
                 return result_builder.finish();
             }
 
