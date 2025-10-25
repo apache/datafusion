@@ -21,7 +21,7 @@ use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use crate::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    AsExecutionPlan, DecodeContext, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use crate::protobuf;
 use datafusion_common::{plan_datafusion_err, Result};
@@ -313,7 +313,8 @@ pub fn physical_plan_from_json(
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    back.try_into_physical_plan(&ctx, &extension_codec)
+    let decode_ctx = DecodeContext::new(ctx);
+    back.try_into_physical_plan(&decode_ctx, &extension_codec)
 }
 
 /// Deserialize a PhysicalPlan from bytes
@@ -333,5 +334,6 @@ pub fn physical_plan_from_bytes_with_extension_codec(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    protobuf.try_into_physical_plan(ctx, extension_codec)
+    let decode_ctx = DecodeContext::new(ctx);
+    protobuf.try_into_physical_plan(&decode_ctx, extension_codec)
 }

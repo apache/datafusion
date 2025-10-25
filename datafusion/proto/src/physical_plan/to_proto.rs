@@ -56,6 +56,9 @@ pub fn serialize_physical_aggr_expr(
     aggr_expr: Arc<AggregateFunctionExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
+    // Calculate the ID from the Arc pointer for caching during deserialization
+    let expr_id = Arc::as_ptr(&aggr_expr).addr() as u64;
+
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
     let order_bys =
         serialize_physical_sort_exprs(aggr_expr.order_bys().iter().cloned(), codec)?;
@@ -64,6 +67,7 @@ pub fn serialize_physical_aggr_expr(
     let mut buf = Vec::new();
     codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
     Ok(protobuf::PhysicalExprNode {
+        id: Some(expr_id),
         expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
             protobuf::PhysicalAggregateExprNode {
                 aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
@@ -221,6 +225,10 @@ pub fn serialize_physical_expr(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
+    // Calculate the ID from the Arc pointer for caching during deserialization
+    // Use the data pointer (not the vtable) for fat pointers
+    let expr_id = Arc::as_ptr(value) as *const () as usize as u64;
+
     // Snapshot the expr in case it has dynamic predicate state so
     // it can be serialized
     let value = snapshot_physical_expr(Arc::clone(value))?;
@@ -228,6 +236,7 @@ pub fn serialize_physical_expr(
 
     if let Some(expr) = expr.downcast_ref::<Column>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
                 protobuf::PhysicalColumn {
                     name: expr.name().to_string(),
@@ -237,6 +246,7 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
                 protobuf::UnknownColumn {
                     name: expr.name().to_string(),
@@ -251,12 +261,14 @@ pub fn serialize_physical_expr(
         });
 
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
                 binary_expr,
             )),
         })
     } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(
                 protobuf::physical_expr_node::ExprType::Case(
                     Box::new(
@@ -288,6 +300,7 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<NotExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
                 protobuf::PhysicalNot {
                     expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
@@ -296,6 +309,7 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<IsNullExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
                 Box::new(protobuf::PhysicalIsNull {
                     expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
@@ -304,6 +318,7 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<IsNotNullExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
                 Box::new(protobuf::PhysicalIsNotNull {
                     expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
@@ -312,6 +327,7 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
                 protobuf::PhysicalInListNode {
                     expr: Some(Box::new(serialize_physical_expr(expr.expr(), codec)?)),
@@ -322,6 +338,7 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
                 protobuf::PhysicalNegativeNode {
                     expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
@@ -330,12 +347,14 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(lit) = expr.downcast_ref::<Literal>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
                 lit.value().try_into()?,
             )),
         })
     } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
                 protobuf::PhysicalCastNode {
                     expr: Some(Box::new(serialize_physical_expr(cast.expr(), codec)?)),
@@ -345,6 +364,7 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
                 protobuf::PhysicalTryCastNode {
                     expr: Some(Box::new(serialize_physical_expr(cast.expr(), codec)?)),
@@ -356,6 +376,7 @@ pub fn serialize_physical_expr(
         let mut buf = Vec::new();
         codec.try_encode_udf(expr.fun(), &mut buf)?;
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
                 protobuf::PhysicalScalarUdfNode {
                     name: expr.name().to_string(),
@@ -372,6 +393,7 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
         Ok(protobuf::PhysicalExprNode {
+            id: Some(expr_id),
             expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
                 protobuf::PhysicalLikeExprNode {
                     negated: expr.negated(),
@@ -394,6 +416,7 @@ pub fn serialize_physical_expr(
                     .map(|e| serialize_physical_expr(e, codec))
                     .collect::<Result<_>>()?;
                 Ok(protobuf::PhysicalExprNode {
+                    id: Some(expr_id),
                     expr_type: Some(protobuf::physical_expr_node::ExprType::Extension(
                         protobuf::PhysicalExtensionExprNode { expr: buf, inputs },
                     )),
