@@ -77,7 +77,7 @@ use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
     scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
-    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, WindowFrame,
+    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -1574,6 +1574,23 @@ async fn register_table() -> Result<()> {
     +----+---------------------+
     "###
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn register_temporary_table() -> Result<()> {
+    let df = test_table().await?.select_columns(&["c1", "c12"])?;
+    let ctx = SessionContext::new();
+    let df_impl = DataFrame::new(ctx.state(), df.logical_plan().clone());
+
+    let df_table_provider = df_impl.clone().into_temporary_view();
+
+    // check that we set the correct table_type
+    assert_eq!(df_table_provider.table_type(), TableType::Temporary);
+
+    // check that we can register a dataframe as a temporary table
+    ctx.register_table("test_table", df_table_provider)?;
+
     Ok(())
 }
 
