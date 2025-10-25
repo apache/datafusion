@@ -134,7 +134,7 @@ pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use crate::function::bitmap::bitmap_count::BitmapCount;
     use crate::function::utils::test::test_scalar_function;
-    use arrow::array::{Array, Int64Array};
+    use arrow::array::Array;
     use arrow::datatypes::DataType::Int64;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::config::ConfigOptions;
