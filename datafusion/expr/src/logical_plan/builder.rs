@@ -25,7 +25,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, FieldMetadata, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -50,13 +50,14 @@ use crate::{
 
 use super::dml::InsertOp;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, not_impl_err, plan_datafusion_err,
-    plan_err, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, NullEquality,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    exec_err, get_target_functional_dependencies, internal_datafusion_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
+    NullEquality, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -622,11 +623,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
-    pub fn prepare(self, name: String, data_types: Vec<DataType>) -> Result<Self> {
+    pub fn prepare(self, name: String, fields: Vec<FieldRef>) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Statement(Statement::Prepare(
             Prepare {
                 name,
-                data_types,
+                fields,
                 input: self.plan,
             },
         ))))
@@ -1188,7 +1189,7 @@ impl LogicalPlanBuilder {
         if join_on.is_empty() {
             let join = Self::from(self.plan).cross_join(right)?;
             join.filter(filters.ok_or_else(|| {
-                DataFusionError::Internal("filters should not be None here".to_string())
+                internal_datafusion_err!("filters should not be None here")
             })?)
         } else {
             let join = Join::try_new(
@@ -2191,7 +2192,9 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
     use crate::test::function_stub::sum;
-    use datafusion_common::{Constraint, RecursionUnnestOption, SchemaError};
+    use datafusion_common::{
+        Constraint, DataFusionError, RecursionUnnestOption, SchemaError,
+    };
     use insta::assert_snapshot;
 
     #[test]

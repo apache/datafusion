@@ -28,7 +28,9 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_cli::{
-    cli_context::CliSessionContext, exec::exec_from_repl, print_options::PrintOptions,
+    cli_context::CliSessionContext, exec::exec_from_repl,
+    object_storage::instrumented::InstrumentedObjectStoreRegistry,
+    print_options::PrintOptions,
 };
 use object_store::ObjectStore;
 
@@ -89,6 +91,7 @@ pub async fn main() {
         quiet: false,
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
         color: true,
+        instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
     };
 
     exec_from_repl(&my_ctx, &mut print_options).await.unwrap();

@@ -42,7 +42,7 @@ impl<'a> PartitionEvaluatorArgs<'a> {
     ///
     /// * `input_exprs` - The expressions passed as arguments
     ///   to the user-defined window function.
-    /// * `input_types` - The data types corresponding to the
+    /// * `input_fields` - The fields corresponding to the
     ///   arguments to the user-defined window function.
     /// * `is_reversed` - Set to `true` if and only if the user-defined
     ///   window function is reversible and is reversed.
