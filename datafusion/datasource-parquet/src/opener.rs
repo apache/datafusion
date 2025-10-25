@@ -731,7 +731,7 @@ mod test {
 
     use arrow::{
         compute::cast,
-        datatypes::{DataType, Field, Schema, SchemaRef},
+        datatypes::{self as arrow_schema, DataType, Field, Schema, SchemaRef},
     };
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -820,8 +820,8 @@ mod test {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
         let batch = record_batch!(
-            ("a", Int32, vec![Some(1), Some(2), Some(2)]),
-            ("b", Float32, vec![Some(1.0), Some(2.0), None])
+            ("a", Int32, [Some(1), Some(2), Some(2)]),
+            ("b", Float32, [Some(1.0), Some(2.0), None])
         )
         .unwrap();
 
@@ -897,7 +897,7 @@ mod test {
     async fn test_prune_on_partition_statistics_with_dynamic_expression() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
-        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch = record_batch!(("a", Int32, [Some(1), Some(2), Some(3)])).unwrap();
         let data_size =
             write_parquet(Arc::clone(&store), "part=1/file.parquet", batch.clone()).await;
 
@@ -975,8 +975,8 @@ mod test {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
         let batch = record_batch!(
-            ("a", Int32, vec![Some(1), Some(2), Some(3)]),
-            ("b", Float64, vec![Some(1.0), Some(2.0), None])
+            ("a", Int32, [Some(1), Some(2), Some(3)]),
+            ("b", Float64, [Some(1.0), Some(2.0), None])
         )
         .unwrap();
         let data_size =
@@ -1078,7 +1078,7 @@ mod test {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
         // Note: number 3 is missing!
-        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(4)])).unwrap();
+        let batch = record_batch!(("a", Int32, [Some(1), Some(2), Some(4)])).unwrap();
         let data_size =
             write_parquet(Arc::clone(&store), "part=1/file.parquet", batch.clone()).await;
 
@@ -1170,7 +1170,7 @@ mod test {
     async fn test_opener_pruning_skipped_on_static_filters() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
-        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch = record_batch!(("a", Int32, [Some(1), Some(2), Some(3)])).unwrap();
         let data_size =
             write_parquet(Arc::clone(&store), "part=1/file.parquet", batch.clone()).await;
 
@@ -1328,7 +1328,7 @@ mod test {
 
         // Test that if no expression rewriter is provided we use a schemaadapter to adapt the data to the expression
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch = record_batch!(("a", Int32, [Some(1), Some(2), Some(3)])).unwrap();
         // Write out the batch to a Parquet file
         let data_size =
             write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
