@@ -862,3 +862,30 @@ select part, k, v from t order by k
 
 statement ok
 DROP TABLE t;
+
+# Regression test for files with stats on some columns and not others
+# See https://github.com/apache/datafusion/pull/18276
+
+query I
+COPY (SELECT 1::int AS a, 2::int as b)
+TO 'test_files/scratch/parquet/mixed_stats.parquet'
+STORED AS PARQUET OPTIONS (
+  'STATISTICS_ENABLED::b' 'none'
+);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/mixed_stats.parquet';
+
+query I
+SELECT b
+FROM t
+WHERE b = 2;
+----
+2
+
+statement ok
+DROP TABLE t;
