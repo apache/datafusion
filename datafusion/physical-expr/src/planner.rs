@@ -488,7 +488,7 @@ mod tests {
         let expr = lit("3230e5d4-888e-408b-b09b-831f44aa0c58");
         let cast_expr = Expr::Cast(Cast::new_from_field(
             Box::new(expr.clone()),
-            extension_field_type.clone(),
+            Arc::clone(&extension_field_type),
         ));
         let err =
             create_physical_expr(&cast_expr, &DFSchema::empty(), &ExecutionProps::new())
@@ -497,7 +497,7 @@ mod tests {
 
         let try_cast_expr = Expr::TryCast(TryCast::new_from_field(
             Box::new(expr.clone()),
-            extension_field_type.clone(),
+            Arc::clone(&extension_field_type),
         ));
         let err = create_physical_expr(
             &try_cast_expr,
