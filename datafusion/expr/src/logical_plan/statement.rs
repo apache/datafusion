@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::FieldRef;
-use datafusion_common::metadata::format_type_and_metadata;
+use datafusion_common::datatype::SerializedTypeView;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use itertools::Itertools as _;
 use std::fmt::{self, Display};
@@ -115,10 +115,7 @@ impl Statement {
                             "Prepare: {name:?} [{}]",
                             fields
                                 .iter()
-                                .map(|f| format_type_and_metadata(
-                                    f.data_type(),
-                                    Some(f.metadata())
-                                ))
+                                .map(|f| SerializedTypeView::from(f).to_string())
                                 .join(", ")
                         )
                     }
