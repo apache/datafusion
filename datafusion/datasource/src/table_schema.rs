@@ -132,6 +132,10 @@ impl TableSchema {
         table_partition_cols: Vec<FieldRef>,
     ) -> TableSchema {
         self.table_partition_cols = table_partition_cols;
+        // Rebuild the table schema with the new partition columns
+        let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
+        builder.extend(self.table_partition_cols.iter().cloned());
+        self.table_schema = Arc::new(builder.finish());
         self
     }
 
