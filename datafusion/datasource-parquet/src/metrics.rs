@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, Time,
 };
 
 /// Stores metrics about the parquet execution for a particular parquet file.
@@ -88,29 +88,58 @@ impl ParquetFileMetrics {
         filename: &str,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Self {
-        let predicate_evaluation_errors = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .counter("predicate_evaluation_errors", partition);
-
+        // -----------------------
+        // 'summary' level metrics
+        // -----------------------
         let row_groups_matched_bloom_filter = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
             .counter("row_groups_matched_bloom_filter", partition);
 
         let row_groups_pruned_bloom_filter = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
             .counter("row_groups_pruned_bloom_filter", partition);
 
         let row_groups_matched_statistics = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
             .counter("row_groups_matched_statistics", partition);
 
         let row_groups_pruned_statistics = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
             .counter("row_groups_pruned_statistics", partition);
+
+        let page_index_rows_pruned = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
+            .counter("page_index_rows_pruned", partition);
+        let page_index_rows_matched = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
+            .counter("page_index_rows_matched", partition);
 
         let bytes_scanned = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
             .counter("bytes_scanned", partition);
+
+        let metadata_load_time = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
+            .subset_time("metadata_load_time", partition);
+
+        let files_ranges_pruned_statistics = MetricBuilder::new(metrics)
+            .with_type(MetricType::SUMMARY)
+            .counter("files_ranges_pruned_statistics", partition);
+
+        // -----------------------
+        // 'dev' level metrics
+        // -----------------------
+        let predicate_evaluation_errors = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("predicate_evaluation_errors", partition);
 
         let pushdown_rows_pruned = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
@@ -129,23 +158,9 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .subset_time("bloom_filter_eval_time", partition);
 
-        let page_index_rows_pruned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .counter("page_index_rows_pruned", partition);
-        let page_index_rows_matched = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .counter("page_index_rows_matched", partition);
-
         let page_index_eval_time = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .subset_time("page_index_eval_time", partition);
-
-        let metadata_load_time = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .subset_time("metadata_load_time", partition);
-
-        let files_ranges_pruned_statistics = MetricBuilder::new(metrics)
-            .counter("files_ranges_pruned_statistics", partition);
 
         let predicate_cache_inner_records = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
