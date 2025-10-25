@@ -75,14 +75,14 @@ impl Display for ScalarAndMetadata {
             .map(|metadata| {
                 metadata
                     .inner()
-                    .into_iter()
+                    .iter()
                     .filter(|(k, _)| {
                         *k != "ARROW:extension:name" && *k != "ARROW:extension:metadata"
                     })
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .collect::<BTreeMap<_, _>>()
             })
-            .unwrap_or(BTreeMap::new());
+            .unwrap_or_default();
 
         match (
             serialized_type.extension_name(),
