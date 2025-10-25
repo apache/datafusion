@@ -165,7 +165,6 @@ impl ScalarUDFImpl for ArrowCastFunc {
         let arg = args.pop().unwrap();
 
         let source_type = info.get_data_type(&arg)?;
-        // TODO: check type equality for real
         let new_expr = if source_type == target_type {
             // the argument's data type is already the correct type
             arg
