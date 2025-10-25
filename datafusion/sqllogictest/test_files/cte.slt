@@ -1040,7 +1040,7 @@ logical_plan
 04)------Projection: Int64(0) AS k, Int64(0) AS v
 05)--------EmptyRelation: rows=1
 06)------Sort: r.v ASC NULLS LAST, fetch=1
-07)--------TableScan: r projection=[k, v]
+07)--------TableScan: r projection=[k, v] preferred_ordering=[r.v ASC NULLS LAST]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--RecursiveQueryExec: name=r, is_distinct=false

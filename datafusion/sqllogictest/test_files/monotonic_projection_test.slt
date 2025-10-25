@@ -42,7 +42,7 @@ ORDER BY a_big ASC, b ASC;
 logical_plan
 01)Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
 02)--Projection: CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[CAST(multiple_ordered_table.a AS Int64) ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [a_big@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
 02)--ProjectionExec: expr=[CAST(a@0 AS Int64) as a_big, b@1 as b]
@@ -58,7 +58,7 @@ ORDER BY a ASC, b ASC;
 logical_plan
 01)Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
 02)--Projection: multiple_ordered_table.a, CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@2 ASC NULLS LAST]
 02)--ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as a_big, b@1 as b]
@@ -79,7 +79,7 @@ ORDER BY a_big ASC, b ASC;
 logical_plan
 01)Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
 02)--Projection: multiple_ordered_table.a, CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[CAST(multiple_ordered_table.a AS Int64) ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [a_big@1 ASC NULLS LAST, b@2 ASC NULLS LAST]
 02)--ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as a_big, b@1 as b]
@@ -96,7 +96,7 @@ ORDER BY a_big ASC, b ASC;
 logical_plan
 01)Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
 02)--Projection: multiple_ordered_table.a, multiple_ordered_table.a AS a_big, multiple_ordered_table.b
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, a@0 as a_big, b@1 as b]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
@@ -110,7 +110,7 @@ ORDER BY a ASC, b ASC;
 logical_plan
 01)Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
 02)--Projection: multiple_ordered_table.a, multiple_ordered_table.a AS a_big, multiple_ordered_table.b
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, a@0 as a_big, b@1 as b]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
@@ -130,7 +130,7 @@ ORDER BY a_str ASC, b ASC;
 logical_plan
 01)Sort: a_str ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
 02)--Projection: CAST(multiple_ordered_table.a AS Utf8View) AS a_str, multiple_ordered_table.b
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[CAST(multiple_ordered_table.a AS Utf8View) ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [a_str@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
 02)--SortExec: expr=[a_str@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[true]
@@ -149,7 +149,7 @@ ORDER BY a + b ASC;
 ----
 logical_plan
 01)Sort: multiple_ordered_table.a + multiple_ordered_table.b ASC NULLS LAST
-02)--TableScan: multiple_ordered_table projection=[a, b]
+02)--TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[multiple_ordered_table.a + multiple_ordered_table.b ASC NULLS LAST]
 physical_plan
 01)SortExec: expr=[a@0 + b@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
@@ -165,7 +165,7 @@ ORDER BY sum_expr ASC;
 logical_plan
 01)Sort: sum_expr ASC NULLS LAST
 02)--Projection: CAST(multiple_ordered_table.a + multiple_ordered_table.b AS Int64) AS sum_expr, multiple_ordered_table.a, multiple_ordered_table.b
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[CAST(multiple_ordered_table.a + multiple_ordered_table.b AS Int64) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [sum_expr@0 ASC NULLS LAST]
 02)--SortExec: expr=[sum_expr@0 ASC NULLS LAST], preserve_partitioning=[true]

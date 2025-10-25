@@ -262,8 +262,9 @@ async fn topk_query() -> Result<()> {
 async fn topk_plan() -> Result<()> {
     let ctx = setup_table(make_topk_context()).await?;
 
+    #[rustfmt::skip]
     let mut expected = ["| logical_plan after topk                               | TopK: k=3                                                                     |",
-        "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |"].join("\n");
+        "|                                                       |   TableScan:salesprojection=[customer_id,revenue]preferred_ordering=[sales.revenueDESCNULLSFIRST]                                  |"].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
     let actual_output = exec_sql(&ctx, &explain_query).await?;

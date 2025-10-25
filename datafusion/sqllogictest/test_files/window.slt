@@ -1382,7 +1382,7 @@ logical_plan
 03)----WindowAggr: windowExpr=[[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
 04)------WindowAggr: windowExpr=[[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
 05)--------Sort: aggregate_test_100.c9 DESC NULLS FIRST, fetch=100
-06)----------TableScan: aggregate_test_100 projection=[c9]
+06)----------TableScan: aggregate_test_100 projection=[c9] preferred_ordering=[aggregate_test_100.c9 DESC NULLS FIRST]
 physical_plan
 01)ProjectionExec: expr=[c9@0 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@2 as sum1, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@1 as sum2]
 02)--GlobalLimitExec: skip=0, fetch=5
@@ -2144,7 +2144,7 @@ logical_plan
 01)Projection: array_agg(aggregate_test_100.c13) AS array_agg1
 02)--Aggregate: groupBy=[[]], aggr=[[array_agg(aggregate_test_100.c13)]]
 03)----Sort: aggregate_test_100.c13 ASC NULLS LAST, fetch=1
-04)------TableScan: aggregate_test_100 projection=[c13]
+04)------TableScan: aggregate_test_100 projection=[c13] preferred_ordering=[aggregate_test_100.c13 ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[array_agg(aggregate_test_100.c13)@0 as array_agg1]
 02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(aggregate_test_100.c13)]

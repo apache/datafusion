@@ -24,9 +24,7 @@ use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     internal_err, plan_err, qualified_name, Column, DFSchema, Result,
 };
@@ -42,8 +40,13 @@ use datafusion_expr::{
 
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
-use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
+use crate::utils::{
+    build_schema_remapping, has_all_column_refs, is_restrict_null_predicate,
+};
 use crate::{OptimizerConfig, OptimizerRule};
+
+// Re-export from here for backwards compatibility; it was moved from this module into `utils`.
+pub use crate::utils::replace_cols_by_name;
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
 /// they are applied as early as possible.
@@ -836,17 +839,10 @@ impl OptimizerRule for PushDownFilter {
                 insert_below(LogicalPlan::Sort(sort), new_filter)
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
-                let mut replace_map = HashMap::new();
-                for (i, (qualifier, field)) in
-                    subquery_alias.input.schema().iter().enumerate()
-                {
-                    let (sub_qualifier, sub_field) =
-                        subquery_alias.schema.qualified_field(i);
-                    replace_map.insert(
-                        qualified_name(sub_qualifier, sub_field.name()),
-                        Expr::Column(Column::new(qualifier.cloned(), field.name())),
-                    );
-                }
+                let replace_map = build_schema_remapping(
+                    &subquery_alias.schema,
+                    subquery_alias.input.schema(),
+                );
                 let new_predicate = replace_cols_by_name(filter.predicate, &replace_map)?;
 
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
@@ -951,15 +947,8 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::Union(ref union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
                 for input in &union.inputs {
-                    let mut replace_map = HashMap::new();
-                    for (i, (qualifier, field)) in input.schema().iter().enumerate() {
-                        let (union_qualifier, union_field) =
-                            union.schema.qualified_field(i);
-                        replace_map.insert(
-                            qualified_name(union_qualifier, union_field.name()),
-                            Expr::Column(Column::new(qualifier.cloned(), field.name())),
-                        );
-                    }
+                    let replace_map =
+                        build_schema_remapping(&union.schema, input.schema());
 
                     let push_predicate =
                         replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
@@ -1386,24 +1375,6 @@ impl PushDownFilter {
     pub fn new() -> Self {
         Self {}
     }
-}
-
-/// replaces columns by its name on the projection.
-pub fn replace_cols_by_name(
-    e: Expr,
-    replace_map: &HashMap<String, Expr>,
-) -> Result<Expr> {
-    e.transform_up(|expr| {
-        Ok(if let Expr::Column(c) = &expr {
-            match replace_map.get(&c.flat_name()) {
-                Some(new_c) => Transformed::yes(new_c.clone()),
-                None => Transformed::no(expr),
-            }
-        } else {
-            Transformed::no(expr)
-        })
-    })
-    .data()
 }
 
 /// check whether the expression uses the columns in `check_map`.
@@ -3123,6 +3094,7 @@ mod tests {
             projection,
             source: Arc::new(test_provider),
             fetch: None,
+            ordering: None,
         });
 
         Ok(LogicalPlanBuilder::from(table_scan))
