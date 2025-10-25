@@ -382,6 +382,16 @@ impl ResultBuilder {
     ) -> Result<()> {
         match &mut self.state {
             Partial { arrays, indices } => {
+                // This is check is only active for debug config because the callers of this method,
+                // `case_when_with_expr` and `case_when_no_expr`, already ensure that
+                // they only calculate a value for each row at most once.
+                #[cfg(debug_assertions)]
+                for row_ix in row_indices.as_primitive::<UInt32Type>().values().iter() {
+                    if indices[*row_ix as usize] != MERGE_NULL_MARKER {
+                        return internal_err!("Duplicate value for row {}", *row_ix);
+                    }
+                }
+
                 let array_index = arrays.len();
                 arrays.push(row_values);
 
