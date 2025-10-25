@@ -309,6 +309,10 @@ select ceil(a), ceil(b), ceil(c) from small_floats;
 1 0 0
 1 0 1
 
+#ceil with scale parameter(should throw error)
+query 
+select ceil(100.1234,1)
+
 ## degrees
 
 # degrees scalar function
@@ -447,6 +451,10 @@ select floor(a), floor(b), floor(c) from signed_integers;
 -3 10000 -978
 2 -1000 123
 4 NULL NULL
+
+#floor with scale parameter(should throw error)
+query
+select floor(100.1234.1)
 
 ## ln
 
