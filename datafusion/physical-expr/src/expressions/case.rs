@@ -16,6 +16,7 @@
 // under the License.
 
 use super::{Column, Literal};
+use crate::expressions::case::ResultState::{Complete, Partial};
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
 use arrow::array::*;
@@ -156,6 +157,10 @@ fn filter_record_batch(
     }
 }
 
+// This function exists purely to be able to use the same call style
+// for `filter_record_batch` and `filter_array` at the point of use.
+// When https://github.com/apache/arrow-rs/pull/8693 is available, replace
+// both with method calls on `FilterPredicate`.
 #[inline(always)]
 fn filter_array(
     array: &dyn Array,
@@ -164,35 +169,60 @@ fn filter_array(
     filter.filter(array)
 }
 
-///
+const MERGE_NULL_MARKER: usize = usize::MAX;
+
 /// Merges elements by index from a list of [`ArrayData`], creating a new [`ColumnarValue`] from
 /// those values.
 ///
-/// Each element in `indices` is the index of an array in `values` offset by 1. `indices` is
-/// processed sequentially. The first occurrence of index value `n` will be mapped to the first
-/// value of array `n - 1`. The second occurrence to the second value, and so on.
+/// Each element in `indices` is the index of an array in `values`. The `indices` array is processed
+/// sequentially. The first occurrence of index value `n` will be mapped to the first
+/// value of the array at index `n`. The second occurrence to the second value, and so on.
+/// An index value of `usize::MAX` is used to indicate null values.
 ///
-/// The index value `0` is used to indicate null values.
+/// # Implementation notes
+///
+/// This algorithm is similar in nature to both `zip` and `interleave`, but there are some important
+/// differences.
+///
+/// In contrast to `zip`, this function supports multiple input arrays. Instead of a boolean
+/// selection vector, an index array is to take values from the input arrays, and a special marker
+/// value is used to indicate null values.
+///
+/// In contrast to `interleave`, this function does not use pairs of indices. The values in
+/// `indices` serve the same purpose as the first value in the pairs passed to `interleave`.
+/// The index in the array is implicit and is derived from the number of times a particular array
+/// index occurs.
+/// The more constrained indexing mechanism used by this algorithm makes it easier to copy values
+/// in contiguous slices. In the example below, the two subsequent elements from array `2` can be
+/// copied in a single operation from the source array instead of copying them one by one.
+/// Long spans of null values are also especially cheap because they do not need to be represented
+/// in an input array.
+///
+/// # Safety
+///
+/// This function does not check that the number of occurrences of any particular array index matches
+/// the length of the corresponding input array. If an array contains more values than required, the
+/// spurious values will be ignored. If an array contains fewer values than necessary, this function
+/// will panic.
+///
+/// # Example
 ///
 /// ```text
-/// ┌─────────────────┐      ┌─────────┐                                  ┌─────────────────┐
-/// │        A        │      │    0    │        merge(                    │       NULL      │
-/// ├─────────────────┤      ├─────────┤          [values0, values1],     ├─────────────────┤
-/// │        D        │      │    2    │          indices                 │        B        │
-/// └─────────────────┘      ├─────────┤        )                         ├─────────────────┤
-///   values array 0         │    2    │      ─────────────────────────▶  │        C        │
-///                          ├─────────┤                                  ├─────────────────┤
-///                          │    1    │                                  │        A        │
-///                          ├─────────┤                                  ├─────────────────┤
-///                          │    1    │                                  │        D        │
-/// ┌─────────────────┐      ├─────────┤                                  ├─────────────────┤
-/// │        B        │      │    2    │                                  │        E        │
-/// ├─────────────────┤      └─────────┘                                  └─────────────────┘
-/// │        C        │
-/// ├─────────────────┤        indices
-/// │        E        │         array                                      result
-/// └─────────────────┘
-///   values array 1
+/// ┌───────────┐  ┌─────────┐                             ┌─────────┐
+/// │┌─────────┐│  │   MAX   │                             │   NULL  │
+/// ││    A    ││  ├─────────┤                             ├─────────┤
+/// │└─────────┘│  │    1    │                             │    B    │
+/// │┌─────────┐│  ├─────────┤                             ├─────────┤
+/// ││    B    ││  │    0    │    merge(values, indices)   │    A    │
+/// │└─────────┘│  ├─────────┤  ─────────────────────────▶ ├─────────┤
+/// │┌─────────┐│  │   MAX   │                             │   NULL  │
+/// ││    C    ││  ├─────────┤                             ├─────────┤
+/// │├─────────┤│  │    2    │                             │    C    │
+/// ││    D    ││  ├─────────┤                             ├─────────┤
+/// │└─────────┘│  │    2    │                             │    D    │
+/// └───────────┘  └─────────┘                             └─────────┘
+///    values        indices                                   result
+///
 /// ```
 fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
     let data_refs = values.iter().collect();
@@ -214,25 +244,39 @@ fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
         let slice_length = end_row_ix - start_row_ix;
 
         // Extend mutable with either nulls or with values from the array.
-        let start_offset = take_offsets[array_ix];
-        let end_offset = start_offset + slice_length;
-        if array_ix == 0 {
+        if array_ix == MERGE_NULL_MARKER {
             mutable.extend_nulls(slice_length);
         } else {
-            mutable.extend(array_ix - 1, start_offset, end_offset);
+            let start_offset = take_offsets[array_ix];
+            let end_offset = start_offset + slice_length;
+            mutable.extend(array_ix, start_offset, end_offset);
+            take_offsets[array_ix] = end_offset;
         }
 
         if end_row_ix == indices.len() {
             break;
         } else {
-            // Update the take_offsets array.
-            take_offsets[array_ix] = end_offset;
             // Set the start_row_ix for the next slice.
             start_row_ix = end_row_ix;
         }
     }
 
     Ok(make_array(mutable.freeze()))
+}
+
+enum ResultState {
+    /// The final result needs to be computed by merging the the data in `arrays`.
+    Partial {
+        // A Vec of partial results that should be merged. `partial_result_indices` contains
+        // indexes into this vec.
+        arrays: Vec<ArrayData>,
+        // Indicates per result row from which array in `partial_results` a value should be taken.
+        // The indexes in this array are offset by +1. The special value 0 indicates null values.
+        indices: Vec<usize>,
+    },
+    /// A single branch matched all input rows. When creating the final result, no further merging
+    /// of partial results is necessary.
+    Complete(ColumnarValue),
 }
 
 /// A builder for constructing result arrays for CASE expressions.
@@ -246,28 +290,22 @@ fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
 /// any merging overhead.
 struct ResultBuilder {
     data_type: DataType,
-    // A Vec of partial results that should be merged. `partial_result_indices` contains
-    // indexes into this vec.
-    partial_results: Vec<ArrayData>,
-    // Indicates per result row from which array in `partial_results` a value should be taken.
-    // The indexes in this array are offset by +1. The special value 0 indicates null values.
-    partial_result_indices: Vec<usize>,
-    // An optional result that is the covering result for all rows.
-    // This is used as an optimisation to avoid the cost of merging when all rows
-    // evaluate to the same case branch.
-    covering_result: Option<ColumnarValue>,
+    row_count: usize,
+    state: ResultState,
 }
 
 impl ResultBuilder {
     /// Creates a new ResultBuilder that will produce arrays of the given data type.
     ///
-    /// The capacity parameter indicates the number of rows in the result.
-    fn new(data_type: &DataType, capacity: usize) -> Self {
+    /// The `row_count` parameter indicates the number of rows in the final result.
+    fn new(data_type: &DataType, row_count: usize) -> Self {
         Self {
             data_type: data_type.clone(),
-            partial_result_indices: vec![0; capacity],
-            partial_results: vec![],
-            covering_result: None,
+            row_count,
+            state: Partial {
+                arrays: vec![],
+                indices: vec![MERGE_NULL_MARKER; row_count],
+            },
         }
     }
 
@@ -283,26 +321,26 @@ impl ResultBuilder {
     ///
     /// The diagram below shows a situation where a when expression matched rows 1 and 4 of the
     /// record batch. The then expression produced the value array `[A, D]`.
-    /// After adding this result, the result array will have been added to `partial_results` and
-    /// `partial_indices` will have been updated at indexes 1 and 4.
+    /// After adding this result, the result array will have been added to [Partial::arrays] and
+    /// [Partial::indices] will have been updated at indexes 1 and 4.
     ///
     /// ```text
     /// ┌─────────┐     ┌─────────┐┌───────────┐                            ┌─────────┐┌───────────┐
-    /// │    A    │     │    0    ││           │                            │    0    ││┌─────────┐│
-    /// ├─────────┤     ├─────────┤│           │                            ├─────────┤││    A    ││
-    /// │    D    │     │    0    ││           │                            │    1    ││├─────────┤│
-    /// └─────────┘     ├─────────┤│           │   add_branch_result(       ├─────────┤││    D    ││
-    ///   value         │    0    ││           │     row indices,           │    0    ││└─────────┘│
-    ///                 ├─────────┤│           │     value                  ├─────────┤│           │
-    ///                 │    0    ││           │   )                        │    0    ││           │
-    /// ┌─────────┐     ├─────────┤│           │ ─────────────────────────▶ ├─────────┤│           │
-    /// │    1    │     │    0    ││           │                            │    1    ││           │
-    /// ├─────────┤     ├─────────┤│           │                            ├─────────┤│           │
-    /// │    4    │     │    0    ││           │                            │    0    ││           │
+    /// │    C    │     │   MAX   ││┌─────────┐│                            │   MAX   ││┌─────────┐│
+    /// ├─────────┤     ├─────────┤││    A    ││                            ├─────────┤││    A    ││
+    /// │    D    │     │   MAX   ││└─────────┘│                            │    2    ││└─────────┘│
+    /// └─────────┘     ├─────────┤│┌─────────┐│   add_branch_result(       ├─────────┤│┌─────────┐│
+    ///   value         │    0    │││    B    ││     row indices,           │    0    │││    B    ││
+    ///                 ├─────────┤│└─────────┘│     value                  ├─────────┤│└─────────┘│
+    ///                 │   MAX   ││           │   )                        │   MAX   ││┌─────────┐│
+    /// ┌─────────┐     ├─────────┤│           │ ─────────────────────────▶ ├─────────┤││    C    ││
+    /// │    1    │     │   MAX   ││           │                            │    2    ││├─────────┤│
+    /// ├─────────┤     ├─────────┤│           │                            ├─────────┤││    D    ││
+    /// │    4    │     │    1    ││           │                            │    1    ││└─────────┘│
     /// └─────────┘     └─────────┘└───────────┘                            └─────────┘└───────────┘
     /// row indices
     ///                   partial     partial                                 partial     partial
-    ///                   indices     results                                 indices     results
+    ///                   indices     arrays                                  indices     arrays
     /// ```
     fn add_branch_result(
         &mut self,
@@ -311,25 +349,25 @@ impl ResultBuilder {
     ) -> Result<()> {
         match value {
             ColumnarValue::Array(a) => {
-                assert_eq!(a.len(), row_indices.len());
-                if row_indices.len() == self.partial_result_indices.len() {
-                    self.set_covering_result(ColumnarValue::Array(a));
+                if a.len() != row_indices.len() {
+                    internal_err!("Array length must match row indices length")
+                } else if row_indices.len() == self.row_count {
+                    self.set_single_result(ColumnarValue::Array(a))
                 } else {
-                    self.add_partial_result(row_indices, a.to_data());
+                    self.add_partial_result(row_indices, a.to_data())
                 }
             }
             ColumnarValue::Scalar(s) => {
-                if row_indices.len() == self.partial_result_indices.len() {
-                    self.set_covering_result(ColumnarValue::Scalar(s));
+                if row_indices.len() == self.row_count {
+                    self.set_single_result(ColumnarValue::Scalar(s))
                 } else {
                     self.add_partial_result(
                         row_indices,
                         s.to_array_of_size(row_indices.len())?.to_data(),
-                    );
+                    )
                 }
             }
         }
-        Ok(())
     }
 
     /// Adds a partial result array.
@@ -337,17 +375,22 @@ impl ResultBuilder {
     /// This method adds the given array data as a partial result and updates the index mapping
     /// to indicate that the specified rows should take their values from this array.
     /// The partial results will be merged into a single array when finish() is called.
-    fn add_partial_result(&mut self, row_indices: &ArrayRef, row_values: ArrayData) {
-        // Covering results and partial results are mutually exclusive.
-        // We can assert this since the case evaluation methods are written to only evaluate
-        // each row of the record batch once.
-        assert!(self.covering_result.is_none());
+    fn add_partial_result(
+        &mut self,
+        row_indices: &ArrayRef,
+        row_values: ArrayData,
+    ) -> Result<()> {
+        match &mut self.state {
+            Partial { arrays, indices } => {
+                let array_index = arrays.len();
+                arrays.push(row_values);
 
-        self.partial_results.push(row_values);
-        let array_index = self.partial_results.len();
-
-        for row_ix in row_indices.as_primitive::<UInt32Type>().values().iter() {
-            self.partial_result_indices[*row_ix as usize] = array_index;
+                for row_ix in row_indices.as_primitive::<UInt32Type>().values().iter() {
+                    indices[*row_ix as usize] = array_index;
+                }
+                Ok(())
+            }
+            Complete(_) => internal_err!("Complete result already set"),
         }
     }
 
@@ -356,39 +399,38 @@ impl ResultBuilder {
     /// This is an optimization for cases where all rows evaluate to the same result.
     /// When a covering result is set, the builder will return it directly from finish()
     /// without any merging overhead.
-    fn set_covering_result(&mut self, value: ColumnarValue) {
-        // Covering results and partial results are mutually exclusive.
-        // We can assert this since the case evaluation methods are written to only evaluate
-        // each row of the record batch once.
-        assert!(self.partial_results.is_empty());
-
-        self.covering_result = Some(value);
+    fn set_single_result(&mut self, value: ColumnarValue) -> Result<()> {
+        match &self.state {
+            Partial { arrays, .. } if !arrays.is_empty() => {
+                internal_err!("Partial result already set")
+            }
+            Complete(_) => internal_err!("Complete result already set"),
+            _ => {
+                self.state = Complete(value);
+                Ok(())
+            }
+        }
     }
 
     /// Finishes building the result and returns the final array.
     fn finish(self) -> Result<ColumnarValue> {
-        match self.covering_result {
-            Some(v) => {
-                // If we have a covering result, we can just return it.
+        match self.state {
+            Complete(v) => {
+                // If we have a complete result, we can just return it.
                 Ok(v)
             }
-            None => match self.partial_results.len() {
-                0 => {
-                    // No covering result and no partial results.
-                    // This can happen for case expressions with no else branch where no rows
-                    // matched.
-                    Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
-                        &self.data_type,
-                    )?))
-                }
-                _ => {
-                    // Merge into a single array.
-                    Ok(ColumnarValue::Array(merge(
-                        &self.partial_results,
-                        &self.partial_result_indices,
-                    )?))
-                }
-            },
+            Partial { arrays, .. } if arrays.is_empty() => {
+                // No complete result and no partial results.
+                // This can happen for case expressions with no else branch where no rows
+                // matched.
+                Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                    &self.data_type,
+                )?))
+            }
+            Partial { arrays, indices } => {
+                // Merge partial results into a single array.
+                Ok(ColumnarValue::Array(merge(&arrays, &indices)?))
+            }
         }
     }
 }
