@@ -320,6 +320,26 @@ async fn test_create_physical_expr() {
     create_simplified_expr_test(lit(1i32) + lit(2i32), "3");
 }
 
+#[test]
+fn test_create_physical_expr_nvl2() {
+    let batch = &TEST_BATCH;
+    let df_schema = DFSchema::try_from(batch.schema()).unwrap();
+    let ctx = SessionContext::new();
+
+    let expect_err = |expr| {
+        let physical_expr = ctx.create_physical_expr(expr, &df_schema).unwrap();
+        let err = physical_expr.evaluate(batch).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("nvl2 should have been simplified to case"),
+            "unexpected error: {err:?}"
+        );
+    };
+
+    expect_err(nvl2(col("i"), lit(1i64), lit(0i64)));
+    expect_err(nvl2(lit(1i64), col("i"), lit(0i64)));
+}
+
 #[tokio::test]
 async fn test_create_physical_expr_coercion() {
     // create_physical_expr does apply type coercion and unwrapping in cast
