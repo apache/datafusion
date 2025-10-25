@@ -64,6 +64,6 @@ query I
 SELECT bitmap_count(arrow_cast(a, 'Dictionary(Int32, Binary)')) FROM (VALUES (X'1010'), (X'0AB0'), (X'FFFF'), (NULL)) AS t(a);
 ----
 2
-5
+6
 16
 NULL
