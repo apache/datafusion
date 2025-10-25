@@ -21,6 +21,7 @@ use std::collections::BinaryHeap;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Deref;
+use std::slice::from_ref;
 use std::sync::Arc;
 
 use crate::sink::DataSink;
@@ -192,12 +193,27 @@ impl DataSource for MemorySourceConfig {
         SchedulingType::Cooperative
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(common::compute_record_batch_statistics(
-            &self.partitions,
-            &self.schema,
-            self.projection.clone(),
-        ))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition) = partition {
+            // Compute statistics for a specific partition
+            if let Some(batches) = self.partitions.get(partition) {
+                Ok(common::compute_record_batch_statistics(
+                    from_ref(batches),
+                    &self.schema,
+                    self.projection.clone(),
+                ))
+            } else {
+                // Invalid partition index
+                Ok(Statistics::new_unknown(&self.projected_schema))
+            }
+        } else {
+            // Compute statistics across all partitions
+            Ok(common::compute_record_batch_statistics(
+                &self.partitions,
+                &self.schema,
+                self.projection.clone(),
+            ))
+        }
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
