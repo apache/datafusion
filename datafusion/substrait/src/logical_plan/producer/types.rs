@@ -41,14 +41,14 @@ pub(crate) fn to_substrait_type(
 
 pub(crate) fn to_substrait_type_from_field(
     producer: &mut impl SubstraitProducer,
-    dt: &FieldRef,
+    field: &FieldRef,
 ) -> datafusion::common::Result<substrait::proto::Type> {
-    let nullability = if dt.is_nullable() {
+    let nullability = if field.is_nullable() {
         r#type::Nullability::Nullable as i32
     } else {
         r#type::Nullability::Required as i32
     };
-    match dt.data_type() {
+    match field.data_type() {
         DataType::Null => {
             let type_anchor = producer.register_type(NULL_TYPE_NAME.to_string());
             Ok(substrait::proto::Type {
@@ -312,11 +312,11 @@ pub(crate) fn to_substrait_type_from_field(
         DataType::Dictionary(key_type, value_type) => {
             let key_type = to_substrait_type_from_field(
                 producer,
-                &Field::new("", key_type.as_ref().clone(), dt.is_nullable()).into(),
+                &Field::new("", key_type.as_ref().clone(), field.is_nullable()).into(),
             )?;
             let value_type = to_substrait_type_from_field(
                 producer,
-                &Field::new("", value_type.as_ref().clone(), dt.is_nullable()).into(),
+                &Field::new("", value_type.as_ref().clone(), field.is_nullable()).into(),
             )?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
@@ -356,7 +356,7 @@ pub(crate) fn to_substrait_type_from_field(
                 precision: *p as i32,
             })),
         }),
-        _ => not_impl_err!("Unsupported cast type: {dt}"),
+        _ => not_impl_err!("Unsupported cast type: {field}"),
     }
 }
 
