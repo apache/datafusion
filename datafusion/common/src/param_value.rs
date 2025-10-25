@@ -115,12 +115,7 @@ impl ParamValues {
 
 impl From<Vec<ScalarValue>> for ParamValues {
     fn from(value: Vec<ScalarValue>) -> Self {
-        Self::List(
-            value
-                .into_iter()
-                .map(|v| ScalarAndMetadata::new(v, None))
-                .collect(),
-        )
+        Self::List(value.into_iter().map(ScalarAndMetadata::from).collect())
     }
 }
 
@@ -131,7 +126,7 @@ where
     fn from(value: Vec<(K, ScalarValue)>) -> Self {
         let value: HashMap<String, ScalarAndMetadata> = value
             .into_iter()
-            .map(|(k, v)| (k.into(), ScalarAndMetadata::new(v, None)))
+            .map(|(k, v)| (k.into(), ScalarAndMetadata::from(v)))
             .collect();
         Self::Map(value)
     }
@@ -144,7 +139,7 @@ where
     fn from(value: HashMap<K, ScalarValue>) -> Self {
         let value: HashMap<String, ScalarAndMetadata> = value
             .into_iter()
-            .map(|(k, v)| (k.into(), ScalarAndMetadata::new(v, None)))
+            .map(|(k, v)| (k.into(), ScalarAndMetadata::from(v)))
             .collect();
         Self::Map(value)
     }

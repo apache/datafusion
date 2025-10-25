@@ -60,7 +60,15 @@ impl ScalarAndMetadata {
         target_type: &DataType,
     ) -> Result<Self, DataFusionError> {
         let new_value = self.value().cast_to(target_type)?;
-        Ok(ScalarAndMetadata::new(new_value, self.metadata.clone()))
+        Ok(Self::new(new_value, self.metadata.clone()))
+    }
+}
+
+/// create a new ScalarAndMetadata from a ScalarValue without
+/// any metadata
+impl From<ScalarValue> for ScalarAndMetadata {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(value, None)
     }
 }
 
