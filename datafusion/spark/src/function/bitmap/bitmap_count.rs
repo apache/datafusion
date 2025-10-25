@@ -23,10 +23,9 @@ use arrow::array::{
     FixedSizeBinaryArray, Int64Array, LargeBinaryArray,
 };
 use arrow::datatypes::DataType::{
-    Binary, BinaryView, Dictionary, FixedSizeBinary, Int64, LargeBinary,
+    Binary, BinaryView, Dictionary, FixedSizeBinary, LargeBinary,
 };
-use arrow::datatypes::{DataType, Int32Type};
-use datafusion_common::cast::as_binary_array;
+use arrow::datatypes::{DataType, Int16Type, Int32Type, Int64Type, Int8Type};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
@@ -72,7 +71,7 @@ impl ScalarUDFImpl for BitmapCount {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Int64)
+        Ok(DataType::Int64)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -91,6 +90,17 @@ macro_rules! downcast_and_count_ones {
     }};
 }
 
+macro_rules! downcast_dict_and_count_ones {
+    ($input_dict:expr, $key_array_type:ident) => {{
+        let dict_array = as_dictionary_array::<$key_array_type>($input_dict);
+        let array = dict_array.downcast_dict::<BinaryArray>().unwrap();
+        Ok(array
+            .into_iter()
+            .map(binary_count_ones)
+            .collect::<Int64Array>())
+    }};
+}
+
 pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [input_array] = take_function_args("bitmap_count", arg)?;
 
@@ -101,22 +111,17 @@ pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
         FixedSizeBinary(_size) => {
             downcast_and_count_ones!(input_array, FixedSizeBinaryArray)
         }
-        Dictionary(k, v) if k.as_ref() == &DataType::Int32 && v.as_ref() == &Binary => {
-            let dict_array = as_dictionary_array::<Int32Type>(input_array);
-            let binary_array = as_binary_array(dict_array.values())?;
-
-            let result: Int64Array = dict_array
-                .keys()
-                .iter()
-                .map(|key| {
-                    key.and_then(|k| {
-                        binary_count_ones(Some(binary_array.value(k as usize)))
-                    })
-                })
-                .collect();
-
-            Ok(result)
-        }
+        Dictionary(k, v) if v.as_ref() == &Binary => match k.as_ref() {
+            DataType::Int8 => downcast_dict_and_count_ones!(input_array, Int8Type),
+            DataType::Int16 => downcast_dict_and_count_ones!(input_array, Int16Type),
+            DataType::Int32 => downcast_dict_and_count_ones!(input_array, Int32Type),
+            DataType::Int64 => downcast_dict_and_count_ones!(input_array, Int64Type),
+            data_type => {
+                internal_err!(
+                    "bitmap_count does not support Dictionary({data_type}, Binary)"
+                )
+            }
+        },
         data_type => {
             internal_err!("bitmap_count does not support {data_type}")
         }
