@@ -195,7 +195,7 @@ fn supports_filters_pushdown_internal(
             let proto_filters = LogicalExprList::decode(filters_serialized)
                 .map_err(|e| DataFusionError::Plan(e.to_string()))?;
 
-            parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec)?
+            parse_exprs(proto_filters.expr.iter(), &default_ctx.task_ctx(), &codec)?
         }
     };
     let filters_borrowed: Vec<&Expr> = filters.iter().collect();
@@ -252,7 +252,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 
                 rresult_return!(parse_exprs(
                     proto_filters.expr.iter(),
-                    &default_ctx,
+                    &default_ctx.task_ctx(),
                     &codec
                 ))
             }

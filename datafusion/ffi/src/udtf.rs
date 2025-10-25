@@ -97,8 +97,11 @@ unsafe extern "C" fn call_fn_wrapper(
 
     let proto_filters = rresult_return!(LogicalExprList::decode(args.as_ref()));
 
-    let args =
-        rresult_return!(parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec));
+    let args = rresult_return!(parse_exprs(
+        proto_filters.expr.iter(),
+        &default_ctx.task_ctx(),
+        &codec
+    ));
 
     let table_provider = rresult_return!(udtf.call(&args));
     RResult::ROk(FFI_TableProvider::new(table_provider, false, runtime))
