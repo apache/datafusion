@@ -296,6 +296,7 @@ impl MetricsSet {
             MetricValue::ElapsedCompute(_) => false,
             MetricValue::SpillCount(_) => false,
             MetricValue::SpilledBytes(_) => false,
+            MetricValue::OutputBytes(_) => false,
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
