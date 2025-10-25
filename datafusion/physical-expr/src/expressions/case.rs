@@ -321,8 +321,8 @@ impl ResultBuilder {
     ///
     /// The diagram below shows a situation where a when expression matched rows 1 and 4 of the
     /// record batch. The then expression produced the value array `[A, D]`.
-    /// After adding this result, the result array will have been added to [Partial::arrays] and
-    /// [Partial::indices] will have been updated at indexes 1 and 4.
+    /// After adding this result, the result array will have been added to `Partial::arrays` and
+    /// `Partial::indices` will have been updated at indexes 1 and 4.
     ///
     /// ```text
     /// ┌─────────┐     ┌─────────┐┌───────────┐                            ┌─────────┐┌───────────┐
