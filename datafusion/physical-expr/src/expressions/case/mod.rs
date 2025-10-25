@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::try_cast;
+mod literal_lookup_table;
+
+use crate::expressions::{try_cast, Column, Literal};
 use crate::PhysicalExpr;
 use std::borrow::Cow;
 use std::hash::Hash;
@@ -31,11 +33,11 @@ use datafusion_common::{
 };
 use datafusion_expr::ColumnarValue;
 
-use super::{Column, Literal};
+use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
-type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
+pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 enum EvalMethod {
@@ -66,7 +68,26 @@ enum EvalMethod {
     ///
     /// CASE WHEN condition THEN expression ELSE expression END
     ExpressionOrExpression,
+
+    /// This is a specialization for [`EvalMethod::WithExpression`] when the value and results are literals
+    ///
+    /// See [`LiteralLookupTable`] for more details
+    WithExprScalarLookupTable(LiteralLookupTable),
 }
+
+// Implement empty hash as the data is derived from PhysicalExprs which are already hashed
+impl Hash for LiteralLookupTable {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
+// Implement always equal as the data is derived from PhysicalExprs which are already compared
+impl PartialEq for LiteralLookupTable {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LiteralLookupTable {}
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with
@@ -142,24 +163,8 @@ impl CaseExpr {
         if when_then_expr.is_empty() {
             exec_err!("There must be at least one WHEN clause")
         } else {
-            let eval_method = if expr.is_some() {
-                EvalMethod::WithExpression
-            } else if when_then_expr.len() == 1
-                && is_cheap_and_infallible(&(when_then_expr[0].1))
-                && else_expr.is_none()
-            {
-                EvalMethod::InfallibleExprOrNull
-            } else if when_then_expr.len() == 1
-                && when_then_expr[0].1.as_any().is::<Literal>()
-                && else_expr.is_some()
-                && else_expr.as_ref().unwrap().as_any().is::<Literal>()
-            {
-                EvalMethod::ScalarOrScalar
-            } else if when_then_expr.len() == 1 && else_expr.is_some() {
-                EvalMethod::ExpressionOrExpression
-            } else {
-                EvalMethod::NoExpression
-            };
+            let eval_method =
+                Self::find_best_eval_method(&expr, &when_then_expr, &else_expr);
 
             Ok(Self {
                 expr,
@@ -167,6 +172,39 @@ impl CaseExpr {
                 else_expr,
                 eval_method,
             })
+        }
+    }
+
+    fn find_best_eval_method(
+        expr: &Option<Arc<dyn PhysicalExpr>>,
+        when_then_expr: &Vec<WhenThen>,
+        else_expr: &Option<Arc<dyn PhysicalExpr>>,
+    ) -> EvalMethod {
+        if expr.is_some() {
+            if let Some(mapping) =
+                LiteralLookupTable::maybe_new(when_then_expr, else_expr)
+            {
+                return EvalMethod::WithExprScalarLookupTable(mapping);
+            }
+
+            return EvalMethod::WithExpression;
+        }
+
+        if when_then_expr.len() == 1
+            && is_cheap_and_infallible(&(when_then_expr[0].1))
+            && else_expr.is_none()
+        {
+            EvalMethod::InfallibleExprOrNull
+        } else if when_then_expr.len() == 1
+            && when_then_expr[0].1.as_any().is::<Literal>()
+            && else_expr.is_some()
+            && else_expr.as_ref().unwrap().as_any().is::<Literal>()
+        {
+            EvalMethod::ScalarOrScalar
+        } else if when_then_expr.len() == 1 && else_expr.is_some() {
+            EvalMethod::ExpressionOrExpression
+        } else {
+            EvalMethod::NoExpression
         }
     }
 
@@ -471,6 +509,28 @@ impl CaseExpr {
 
         Ok(ColumnarValue::Array(zip(&remainder, &else_, &then_value)?))
     }
+
+    fn with_lookup_table(
+        &self,
+        batch: &RecordBatch,
+        scalars_or_null_lookup: &LiteralLookupTable,
+    ) -> Result<ColumnarValue> {
+        let expr = self.expr.as_ref().unwrap();
+        let evaluated_expression = expr.evaluate(batch)?;
+
+        let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
+        let evaluated_expression = evaluated_expression.to_array(1)?;
+
+        let output = scalars_or_null_lookup.create_output(&evaluated_expression)?;
+
+        let result = if is_scalar {
+            ColumnarValue::Scalar(ScalarValue::try_from_array(output.as_ref(), 0)?)
+        } else {
+            ColumnarValue::Array(output)
+        };
+
+        Ok(result)
+    }
 }
 
 impl PhysicalExpr for CaseExpr {
@@ -535,6 +595,9 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression => self.expr_or_expr(batch),
+            EvalMethod::WithExprScalarLookupTable(ref e) => {
+                self.with_lookup_table(batch, e)
+            }
         }
     }
 
