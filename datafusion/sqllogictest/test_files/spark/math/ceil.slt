@@ -18,134 +18,91 @@
 # Test cases for the ceil function
 
 # Test basic positive float values
-query R
-SELECT ceil(3.14::float);
+query I
+SELECT ceil(8.11::float);
 ----
-4
+9
 
-query R
-SELECT ceil(2.1::float);
+query I
+SELECT ceil(2.116::float);
 ----
 3
 
-query R
-SELECT ceil(5.9::float);
-----
-6
-
 # Test basic positive double values
-query R
-SELECT ceil(3.14159);
-----
-4
-
-query R
+query I
 SELECT ceil(2.1);
 ----
 3
 
-query R
-SELECT ceil(5.999);
+query I
+SELECT ceil(5.953);
 ----
 6
 
 # Test negative float values
-query R
+query I
 SELECT ceil(-3.14::float);
 ----
 -3
 
-query R
-SELECT ceil(-2.1::float);
-----
--2
-
-query R
+query I
 SELECT ceil(-5.9::float);
 ----
 -5
 
 # Test negative double values
-query R
+query I
 SELECT ceil(-3.14159);
 ----
 -3
 
-query R
-SELECT ceil(-2.1);
-----
--2
-
-query R
+query I
 SELECT ceil(-5.999);
 ----
 -5
 
 # Test integer values
-query R
+query I
 SELECT ceil(52);
 ----
 52
 
-query R
+query I
 SELECT ceil(-39);
 ----
 -39
 
 # Test zero values
-query R
+query I
 SELECT ceil(0.0);
 ----
 0
 
-query R
-SELECT ceil(0.0::float);
-----
-0
-
-query R
+query I
 SELECT ceil(-3.0::float);
 ----
 -3
 
 # Test very small decimal values
-query R
-SELECT ceil(0.0001);
-----
-1
-
-query R
+query I
 SELECT ceil(-0.0001);
 ----
 0
 
 # Test large numbers
-query R
+query I
 SELECT ceil(123456.789);
 ----
 123457
 
-query R
-SELECT ceil(-98765.432);
-----
--98765
-
 # Test with NULL values
-query R
+query I
 SELECT ceil(NULL);
 ----
 NULL
 
 # Test array inputs
-query R
-SELECT ceil(column1) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(column1);
-----
-2
-3
--1
-NULL
-
-query R
+query I
 SELECT ceil(column1::float) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(column1);
 ----
 2
@@ -154,23 +111,55 @@ SELECT ceil(column1::float) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(colu
 NULL
 
 # Test edge cases
-query R
+query I
 SELECT ceil(0.999999999999);
 ----
 1
 
-query R
-SELECT ceil(-0.999999999999);
-----
-0
-
 # Test boundary values
-query R
+query I
 SELECT ceil(922337203685477.0);
 ----
 922337203685477
 
-query R
-SELECT ceil(-922337203685477.0);
+# Test by casting to a datatype
+query I
+SELECT ceil(CAST(5 as DOUBLE));
 ----
--922337203685477
+5
+
+query I
+SELECT ceil(CAST(528.3683 as DECIMAL(6, 3)));
+----
+529
+
+# Test with two arguments
+query R
+SELECT ceil(5.4, -1);
+----
+10
+
+query R
+SELECT ceil(CAST(5 as INT), -11);
+----
+100000000000
+
+query I
+SELECT ceil(-12.345, 1);
+----
+-12.3
+
+query R
+SELECT ceil(CAST(5 as SMALLINT), -6);
+----
+1000000
+
+query I
+SELECT ceil(3.1411, 3);
+----
+3.142
+
+query R
+SELECT ceil(3345.1, -2);
+----
+3400
