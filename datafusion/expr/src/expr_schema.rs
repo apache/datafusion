@@ -635,12 +635,13 @@ impl ExprSchemable for Expr {
             Expr::Cast(Cast { expr, field }) => expr
                 .to_field(schema)
                 .map(|(_, f)| {
+                    // This currently propagates the nullability of the input
+                    // expression as the resulting physical expression does
+                    // not currently consider the nullability specified here
                     f.as_ref()
                         .clone()
                         .with_data_type(field.data_type().clone())
                         .with_metadata(f.metadata().clone())
-                    // TODO: should nullability be overridden here or derived from the
-                    // input expression?
                 })
                 .map(Arc::new),
             Expr::Placeholder(Placeholder {
