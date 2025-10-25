@@ -21,3 +21,4 @@
 
 // Include tests in csv module
 mod csv;
+mod object_store_access;
