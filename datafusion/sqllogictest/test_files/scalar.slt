@@ -309,8 +309,8 @@ select ceil(a), ceil(b), ceil(c) from small_floats;
 1 0 0
 1 0 1
 
-#ceil with scale parameter(should throw error)
-query 
+#ceil with scale parameter(Scale not supported)
+query error DataFusion error: This feature is not implemented: CEIL with scale is not supported
 select ceil(100.1234,1)
 
 ## degrees
@@ -452,9 +452,9 @@ select floor(a), floor(b), floor(c) from signed_integers;
 2 -1000 123
 4 NULL NULL
 
-#floor with scale parameter(should throw error)
-query
-select floor(100.1234.1)
+#floor with scale parameter(Scale not supported)
+query error DataFusion error: This feature is not implemented: FLOOR with scale is not supported
+select floor(100.1234,1)
 
 ## ln
 
