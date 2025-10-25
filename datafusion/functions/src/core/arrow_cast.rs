@@ -19,6 +19,7 @@
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
 };
@@ -154,6 +155,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
         let arg = args.pop().unwrap();
 
         let source_type = info.get_data_type(&arg)?;
+        // TODO: check type equality for real
         let new_expr = if source_type == target_type {
             // the argument's data type is already the correct type
             arg
@@ -161,7 +163,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
-                data_type: Field::new("", target_type, true).into(),
+                field: target_type.into_nullable_field_ref(),
             })
         };
         // return the newly written argument to DataFusion
