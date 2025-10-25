@@ -3309,14 +3309,14 @@ impl Display for Expr {
                     data_type.data_type(),
                     Some(data_type.metadata()),
                 );
-                write!(f, "CAST({expr} AS {})", formatted)
+                write!(f, "CAST({expr} AS {formatted})")
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
                 let formatted = format_type_and_metadata(
                     data_type.data_type(),
                     Some(data_type.metadata()),
                 );
-                write!(f, "TRY_CAST({expr} AS {})", formatted)
+                write!(f, "TRY_CAST({expr} AS {formatted})")
             }
             Expr::Not(expr) => write!(f, "NOT {expr}"),
             Expr::Negative(expr) => write!(f, "(- {expr})"),
