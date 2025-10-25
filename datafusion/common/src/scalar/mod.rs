@@ -1193,6 +1193,127 @@ impl ScalarValue {
         })
     }
 
+    /// Creates a non-null placeholder value of the given type.
+    ///
+    /// Supports all Arrow data types. The `val` parameter allows generating
+    /// distinct placeholder values
+    pub fn try_new_placeholder(data_type: &DataType, val: i64) -> Result<Self> {
+        let placeholder = match data_type {
+            DataType::Int8 => ScalarValue::Int8(Some(val as i8)),
+            DataType::Int16 => ScalarValue::Int16(Some(val as i16)),
+            DataType::Int32 => ScalarValue::Int32(Some(val as i32)),
+            DataType::Int64 => ScalarValue::Int64(Some(val)),
+            DataType::UInt8 => ScalarValue::UInt8(Some(val as u8)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(val as u16)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(val as u32)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(val as u64)),
+            DataType::Float32 => ScalarValue::Float32(Some(val as f32)),
+            DataType::Float64 => ScalarValue::Float64(Some(val as f64)),
+            DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(val as f32))),
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(val as i128), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => ScalarValue::Decimal256(
+                Some(i256::from_i128(val as i128)),
+                *precision,
+                *scale,
+            ),
+            DataType::Decimal32(precision, scale) => {
+                ScalarValue::Decimal32(Some(val as i32), *precision, *scale)
+            }
+            DataType::Decimal64(precision, scale) => {
+                ScalarValue::Decimal64(Some(val), *precision, *scale)
+            }
+            DataType::Utf8 => ScalarValue::Utf8(Some(val.to_string())),
+            DataType::LargeUtf8 => ScalarValue::LargeUtf8(Some(val.to_string())),
+            DataType::Utf8View => ScalarValue::Utf8View(Some(val.to_string())),
+            DataType::Binary => ScalarValue::Binary(Some(val.to_string().into_bytes())),
+            DataType::LargeBinary => {
+                ScalarValue::LargeBinary(Some(val.to_string().into_bytes()))
+            }
+            DataType::BinaryView => {
+                ScalarValue::BinaryView(Some(val.to_string().into_bytes()))
+            }
+            DataType::FixedSizeBinary(size) => {
+                let mut bytes = val.to_string().into_bytes();
+                bytes.resize(*size as usize, 0);
+                ScalarValue::FixedSizeBinary(*size, Some(bytes))
+            }
+            DataType::Boolean => ScalarValue::Boolean(Some(val % 2 == 1)),
+            DataType::Date32 => ScalarValue::Date32(Some(val as i32)),
+            DataType::Date64 => ScalarValue::Date64(Some(val)),
+            DataType::Time32(_) => ScalarValue::Time32Second(Some(val as i32)),
+            DataType::Time64(_) => ScalarValue::Time64Nanosecond(Some(val)),
+            DataType::Timestamp(unit, tz) => match unit {
+                TimeUnit::Second => ScalarValue::TimestampSecond(Some(val), tz.clone()),
+                TimeUnit::Millisecond => {
+                    ScalarValue::TimestampMillisecond(Some(val), tz.clone())
+                }
+                TimeUnit::Microsecond => {
+                    ScalarValue::TimestampMicrosecond(Some(val), tz.clone())
+                }
+                TimeUnit::Nanosecond => {
+                    ScalarValue::TimestampNanosecond(Some(val), tz.clone())
+                }
+            },
+            DataType::Interval(_) => ScalarValue::IntervalYearMonth(Some(val as i32)),
+            DataType::Duration(_) => ScalarValue::DurationNanosecond(Some(val)),
+            DataType::Null => ScalarValue::Null,
+            DataType::List(field) => {
+                ScalarValue::List(ScalarValue::new_list_nullable(&[], field.data_type()))
+            }
+            DataType::LargeList(field) => ScalarValue::LargeList(
+                ScalarValue::new_large_list(&[], field.data_type()),
+            ),
+            DataType::FixedSizeList(field, size) => {
+                let empty_arr = new_empty_array(field.data_type());
+                let values = Arc::new(
+                    SingleRowListArrayBuilder::new(empty_arr)
+                        .with_nullable(field.is_nullable())
+                        .build_fixed_size_list_array(*size as usize),
+                );
+                ScalarValue::FixedSizeList(values)
+            }
+            DataType::ListView(field) => {
+                // ListView is not supported as a ScalarValue variant yet - use List as workaround
+                ScalarValue::List(ScalarValue::new_list_nullable(&[], field.data_type()))
+            }
+            DataType::LargeListView(field) => {
+                // LargeListView is not supported as a ScalarValue variant yet - use LargeList as workaround
+                ScalarValue::LargeList(ScalarValue::new_large_list(
+                    &[],
+                    field.data_type(),
+                ))
+            }
+            DataType::Struct(fields) => ScalarValue::Struct(
+                new_null_array(&DataType::Struct(fields.clone()), 1)
+                    .as_struct()
+                    .to_owned()
+                    .into(),
+            ),
+            DataType::Union(fields, mode) => {
+                ScalarValue::Union(None, fields.clone(), *mode)
+            }
+            DataType::Map(field, sorted) => ScalarValue::Map(
+                new_null_array(&DataType::Map(Arc::clone(field), *sorted), 1)
+                    .as_map()
+                    .to_owned()
+                    .into(),
+            ),
+            DataType::Dictionary(key_type, value_type) => {
+                // Dictionaries: create placeholder of value type, encoding happens at execution time
+                let value = ScalarValue::try_new_placeholder(value_type, val)?;
+                ScalarValue::Dictionary(key_type.clone(), Box::new(value))
+            }
+            DataType::RunEndEncoded(_run_ends_type, _values_type) => {
+                return _internal_err!(
+                    "Run-end encoded columns are not yet supported for placeholder creation"
+                );
+            }
+        };
+        Ok(placeholder)
+    }
+
     /// Returns a [`ScalarValue::Utf8`] representing `val`
     pub fn new_utf8(val: impl Into<String>) -> Self {
         ScalarValue::from(val.into())

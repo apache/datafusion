@@ -16,12 +16,17 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_datafusion_err, Column, Result};
-use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{
+    not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, Result, ScalarValue,
+};
+use datafusion_expr::logical_plan::LateralTableFunction;
+use datafusion_expr::{Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
-    Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
+    FunctionArg, FunctionArgExpr, Join, JoinConstraint, JoinOperator, ObjectName,
+    TableFactor, TableWithJoins,
 };
 use std::collections::HashSet;
+use std::sync::Arc;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn plan_table_with_joins(
@@ -49,7 +54,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         join: Join,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let right = if is_lateral_join(&join)? {
+        let is_lateral = is_lateral_join(&join)?;
+
+        // For LATERAL joins, check if it's a table function before planning
+        if is_lateral {
+            if let Some(lateral_tf) = self.try_create_lateral_table_function(
+                &left,
+                &join.relation,
+                planner_context,
+            )? {
+                // LateralTableFunction already represents the complete join result
+                return Ok(lateral_tf);
+            }
+        }
+
+        // Normal join planning
+        let right = if is_lateral {
             self.create_relation_subquery(join.relation, planner_context)?
         } else {
             self.create_relation(join.relation, planner_context)?
@@ -176,6 +196,122 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .join_on(right, join_type, [])?
                 .build(),
         }
+    }
+
+    /// Try to create a LateralTableFunction node if the relation is a table function
+    /// with outer references. Returns None if this is not a lateral table function case.
+    fn try_create_lateral_table_function(
+        &self,
+        left: &LogicalPlan,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>> {
+        // Check if this is a table function call (either Table or Function variant)
+        let (tbl_func_name, func_args_vec, alias) = match relation {
+            TableFactor::Table {
+                name,
+                args: Some(func_args),
+                alias,
+                ..
+            } => {
+                let name_str = name
+                    .0
+                    .first()
+                    .and_then(|ident| ident.as_ident())
+                    .ok_or_else(|| plan_datafusion_err!("Invalid table function name"))?
+                    .to_string();
+                (name_str, func_args.args.clone(), alias.as_ref())
+            }
+            TableFactor::Function {
+                name, args, alias, ..
+            } => {
+                let name_str = name
+                    .0
+                    .first()
+                    .and_then(|ident| ident.as_ident())
+                    .ok_or_else(|| plan_datafusion_err!("Invalid function name"))?
+                    .to_string();
+                (name_str, args.clone(), alias.as_ref())
+            }
+            _ => return Ok(None),
+        };
+
+        // Parse arguments to expressions
+        // Use the outer from schema so that column references are properly recognized
+        let schema_for_args = planner_context
+            .outer_from_schema()
+            .unwrap_or_else(|| Arc::new(DFSchema::empty()));
+
+        let args = func_args_vec
+            .iter()
+            .map(|arg| {
+                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
+                    self.sql_expr_to_logical_expr(
+                        expr.clone(),
+                        &schema_for_args,
+                        planner_context,
+                    )
+                } else {
+                    plan_err!("Unsupported function argument type")
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // LATERAL functions evaluate row-by-row when referencing outer columns
+        let has_column_refs = args.iter().any(|expr| {
+            matches!(expr, Expr::Column(_)) || expr.contains_outer()
+        });
+
+        if has_column_refs {
+            // For table functions with outer references, we need to get the schema
+            // but can't actually call the function yet (outer refs not resolved).
+            // We'll replace outer references with placeholder literals to get the schema.
+            let placeholder_args: Vec<Expr> = args
+                .iter()
+                .enumerate()
+                .map(|(idx, arg)| {
+                    if matches!(arg, Expr::Column(_)) || arg.contains_outer() {
+                        let data_type = arg.get_type(&schema_for_args)?;
+
+                        // Use incrementing values (1, 2, 3...) to ensure valid ranges for functions
+                        // like generate_series(start, end) where start < end
+                        let val = (idx + 1) as i64;
+
+                        let placeholder =
+                            ScalarValue::try_new_placeholder(&data_type, val)?;
+
+                        Ok(Expr::Literal(placeholder, None))
+                    } else {
+                        Ok(arg.clone())
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let provider = self
+                .context_provider
+                .get_table_function_source(&tbl_func_name, placeholder_args)?;
+            let tf_schema = provider.schema();
+
+            let qualifier = alias
+                .map(|a| self.ident_normalizer.normalize(a.name.clone()))
+                .unwrap_or_else(|| format!("{tbl_func_name}()"));
+
+            let tf_df_schema =
+                DFSchema::try_from_qualified_schema(qualifier.as_str(), &tf_schema)?;
+
+            let combined_schema = left.schema().join(&tf_df_schema)?;
+
+            let lateral_tf = LateralTableFunction {
+                input: Arc::new(left.clone()),
+                function_name: tbl_func_name.clone(),
+                args,
+                schema: Arc::new(combined_schema),
+                table_function_schema: Arc::new(tf_df_schema),
+            };
+            return Ok(Some(LogicalPlan::LateralTableFunction(lateral_tf)));
+        }
+
+        Ok(None)
     }
 }
 

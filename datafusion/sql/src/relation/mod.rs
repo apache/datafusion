@@ -61,17 +61,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             }
                         })
                         .collect::<Vec<_>>();
-                    let provider = self
-                        .context_provider
-                        .get_table_function_source(&tbl_func_name, args)?;
-                    let plan = LogicalPlanBuilder::scan(
-                        TableReference::Bare {
-                            table: format!("{tbl_func_name}()").into(),
-                        },
-                        provider,
-                        None,
-                    )?
-                    .build()?;
+
+                    let has_outer_references =
+                        args.iter().any(|expr| expr.contains_outer());
+
+                    let plan = if has_outer_references {
+                        return not_impl_err!(
+                            "Table function arguments cannot reference columns without LATERAL keyword. \
+                             Use: FROM other_table, LATERAL table_func(other_table.column)"
+                        );
+                    } else {
+                        let provider = self
+                            .context_provider
+                            .get_table_function_source(&tbl_func_name, args)?;
+                        LogicalPlanBuilder::scan(
+                            TableReference::Bare {
+                                table: format!("{tbl_func_name}()").into(),
+                            },
+                            provider,
+                            None,
+                        )?
+                        .build()?
+                    };
                     (plan, alias)
                 } else {
                     // Normalize name and alias
