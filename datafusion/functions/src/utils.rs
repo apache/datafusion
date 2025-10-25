@@ -143,18 +143,28 @@ where
 {
     Ok(match right {
         ColumnarValue::Scalar(scalar) => {
-            let right_value: R::Native =
-                R::Native::try_from(scalar.clone()).map_err(|_| {
-                    DataFusionError::NotImplemented(format!(
-                        "Cannot convert scalar value {} to {}",
-                        &scalar,
-                        R::DATA_TYPE
-                    ))
-                })?;
-            let left_array = left.as_primitive::<L>();
-            // Bind right value
-            let result =
-                left_array.try_unary::<_, O, _>(|lvalue| fun(lvalue, right_value))?;
+            // Use arrow cast with an one-item array to follow all the casting rules
+            let result = if scalar.is_null() {
+                // Null scalar is castable to any numeric, creating a non-null expression.
+                // Provide null array explicitly to make result null
+                PrimitiveArray::<O>::new_null(1)
+            } else {
+                let right_casted: ArrayRef =
+                    arrow::compute::cast(&scalar.to_array()?, &R::DATA_TYPE)?;
+                let right_value: R::Native = right_casted
+                    .as_any()
+                    .downcast_ref::<PrimitiveArray<R>>()
+                    .ok_or_else(|| {
+                        DataFusionError::NotImplemented(format!(
+                            "Cannot convert scalar value {} to {}",
+                            &scalar,
+                            R::DATA_TYPE
+                        ))
+                    })?
+                    .value(0);
+                let left_array = left.as_primitive::<L>();
+                left_array.try_unary::<_, O, _>(|lvalue| fun(lvalue, right_value))?
+            };
             Arc::new(result) as _
         }
         ColumnarValue::Array(right) => {

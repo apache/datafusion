@@ -348,7 +348,7 @@ impl ScalarUDFImpl for PowerFunc {
             }
             other => {
                 return exec_err!(
-                    "Unsupported data type {other:?} for function {}",
+                    "Unsupported base data type {other:?} for function {}",
                     self.name()
                 )
             }
@@ -413,6 +413,7 @@ mod tests {
         Field, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_SCALE, DECIMAL32_MAX_SCALE,
         DECIMAL64_MAX_SCALE,
     };
+    use arrow_buffer::NullBuffer;
     use datafusion_common::cast::{
         as_decimal128_array, as_decimal256_array, as_decimal32_array, as_decimal64_array,
         as_float64_array, as_int64_array,
@@ -849,6 +850,79 @@ mod tests {
                 } else {
                     panic!("Expected Decimal64 result")
                 }
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_scalar_null() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))), // base
+                ColumnarValue::Scalar(ScalarValue::Null),           // exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints =
+                    as_int64_array(&arr).expect("failed to convert result to an array");
+                assert!(ints.is_null(0));
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_array_null() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 2]))), // base
+                ColumnarValue::Array(Arc::new(Int64Array::from_iter_values_with_nulls(
+                    vec![1, 2, 3],
+                    Some(NullBuffer::from(vec![true, false, true])),
+                ))), // exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints =
+                    as_int64_array(&arr).expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 3);
+                assert!(!ints.is_null(0));
+                assert_eq!(ints.value(0), i64::from(2));
+                assert!(ints.is_null(1));
+                assert!(!ints.is_null(2));
+                assert_eq!(ints.value(2), i64::from(8));
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
