@@ -24,7 +24,10 @@ use arrow::{
     datatypes::{ByteArrayType, DataType},
 };
 use arrow_buffer::{Buffer, OffsetBufferBuilder};
-use base64::{engine::general_purpose, Engine as _};
+use base64::{
+    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
+    Engine as _,
+};
 use datafusion_common::{
     cast::{as_generic_binary_array, as_generic_string_array},
     not_impl_err, plan_err,
@@ -39,6 +42,14 @@ use std::{fmt, str::FromStr};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
+
+// Allow padding characters, but don't require them, and don't generate them.
+const BASE64_ENGINE: GeneralPurpose = GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    GeneralPurposeConfig::new()
+        .with_encode_padding(false)
+        .with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
 
 #[user_doc(
     doc_section(label = "Binary String Functions"),
@@ -302,7 +313,7 @@ fn hex_encode(input: &[u8]) -> String {
 }
 
 fn base64_encode(input: &[u8]) -> String {
-    general_purpose::STANDARD_NO_PAD.encode(input)
+    BASE64_ENGINE.encode(input)
 }
 
 fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
@@ -315,7 +326,7 @@ fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
 }
 
 fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
-    general_purpose::STANDARD_NO_PAD
+    BASE64_ENGINE
         .decode_slice(input, buf)
         .map_err(|e| internal_datafusion_err!("Failed to decode from base64: {e}"))
 }
@@ -364,18 +375,16 @@ where
 impl Encoding {
     fn encode_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
         ColumnarValue::Scalar(match self {
-            Self::Base64 => ScalarValue::Utf8(
-                value.map(|v| general_purpose::STANDARD_NO_PAD.encode(v)),
-            ),
+            Self::Base64 => ScalarValue::Utf8(value.map(|v| BASE64_ENGINE.encode(v))),
             Self::Hex => ScalarValue::Utf8(value.map(hex::encode)),
         })
     }
 
     fn encode_large_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
         ColumnarValue::Scalar(match self {
-            Self::Base64 => ScalarValue::LargeUtf8(
-                value.map(|v| general_purpose::STANDARD_NO_PAD.encode(v)),
-            ),
+            Self::Base64 => {
+                ScalarValue::LargeUtf8(value.map(|v| BASE64_ENGINE.encode(v)))
+            }
             Self::Hex => ScalarValue::LargeUtf8(value.map(hex::encode)),
         })
     }
@@ -411,15 +420,9 @@ impl Encoding {
         };
 
         let out = match self {
-            Self::Base64 => {
-                general_purpose::STANDARD_NO_PAD
-                    .decode(value)
-                    .map_err(|e| {
-                        internal_datafusion_err!(
-                            "Failed to decode value using base64: {e}"
-                        )
-                    })?
-            }
+            Self::Base64 => BASE64_ENGINE.decode(value).map_err(|e| {
+                internal_datafusion_err!("Failed to decode value using base64: {e}")
+            })?,
             Self::Hex => hex::decode(value).map_err(|e| {
                 internal_datafusion_err!("Failed to decode value using hex: {e}")
             })?,
@@ -435,15 +438,9 @@ impl Encoding {
         };
 
         let out = match self {
-            Self::Base64 => {
-                general_purpose::STANDARD_NO_PAD
-                    .decode(value)
-                    .map_err(|e| {
-                        internal_datafusion_err!(
-                            "Failed to decode value using base64: {e}"
-                        )
-                    })?
-            }
+            Self::Base64 => BASE64_ENGINE.decode(value).map_err(|e| {
+                internal_datafusion_err!("Failed to decode value using base64: {e}")
+            })?,
             Self::Hex => hex::decode(value).map_err(|e| {
                 internal_datafusion_err!("Failed to decode value using hex: {e}")
             })?,
