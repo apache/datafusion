@@ -55,29 +55,17 @@ select abs(c1), abs(c2), abs(c3), abs(c4) from test_nullable_integer where datas
 statement ok
 drop table test_nullable_integer
 
-statement ok
-CREATE TABLE test_nullable_float(
-    c1 float,
-    c2 double
-    ) AS VALUES
-    (-1.0, -1.0),
-    (1.0, 1.0),
-    (NULL, NULL),
-    (0., 0.),
-    ('NaN'::double, 'NaN'::double);
-
 # abs: floats
-query RR rowsort
-SELECT abs(c1), abs(c2) from test_nullable_float
+query RRRR
+SELECT abs(-1.0::FLOAT), abs(0.::FLOAT), abs(NULL::FLOAT), abs('NaN'::FLOAT)
 ----
-0 0
-1 1
-1 1
-NULL NULL
-NaN NaN
+1 0 NULL NaN
 
-statement ok
-drop table test_nullable_float
+# abs: doubles
+query RRRR
+SELECT abs(-1.0::DOUBLE), abs(0.::DOUBLE), abs(NULL::DOUBLE), abs('NaN'::DOUBLE)
+----
+1 0 NULL NaN
 
 statement ok
 CREATE TABLE test_nullable_decimal(
