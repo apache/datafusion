@@ -161,22 +161,35 @@ fn nanos_from_timestamp(ts: &Timestamp) -> i64 {
 }
 
 // Test different detail level for config `datafusion.explain.analyze_level`
+
+async fn collect_plan_with_context(
+    sql_str: &str,
+    ctx: &SessionContext,
+    level: ExplainAnalyzeLevel,
+) -> String {
+    {
+        let state = ctx.state_ref();
+        let mut state = state.write();
+        state.config_mut().options_mut().explain.analyze_level = level;
+    }
+    let dataframe = ctx.sql(sql_str).await.unwrap();
+    let batches = dataframe.collect().await.unwrap();
+    arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string()
+}
+
+async fn collect_plan(sql_str: &str, level: ExplainAnalyzeLevel) -> String {
+    let ctx = SessionContext::new();
+    collect_plan_with_context(sql_str, &ctx, level).await
+}
+
 #[tokio::test]
 async fn explain_analyze_level() {
-    async fn collect_plan(level: ExplainAnalyzeLevel) -> String {
-        let mut config = SessionConfig::new();
-        config.options_mut().explain.analyze_level = level;
-        let ctx = SessionContext::new_with_config(config);
-        let sql = "EXPLAIN ANALYZE \
+    let sql = "EXPLAIN ANALYZE \
             SELECT * \
             FROM generate_series(10) as t1(v1) \
             ORDER BY v1 DESC";
-        let dataframe = ctx.sql(sql).await.unwrap();
-        let batches = dataframe.collect().await.unwrap();
-        arrow::util::pretty::pretty_format_batches(&batches)
-            .unwrap()
-            .to_string()
-    }
 
     for (level, needle, should_contain) in [
         (ExplainAnalyzeLevel::Summary, "spill_count", false),
@@ -184,7 +197,35 @@ async fn explain_analyze_level() {
         (ExplainAnalyzeLevel::Dev, "spill_count", true),
         (ExplainAnalyzeLevel::Dev, "output_rows", true),
     ] {
-        let plan = collect_plan(level).await;
+        let plan = collect_plan(sql, level).await;
+        assert_eq!(
+            plan.contains(needle),
+            should_contain,
+            "plan for level {level:?} unexpected content: {plan}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn explain_analyze_level_datasource_parquet() {
+    let table_name = "tpch_lineitem_small";
+    let parquet_path = "tests/data/tpch_lineitem_small.parquet";
+    let sql = format!("EXPLAIN ANALYZE SELECT * FROM {table_name}");
+
+    // Register test parquet file into context
+    let ctx = SessionContext::new();
+    ctx.register_parquet(table_name, parquet_path, ParquetReadOptions::default())
+        .await
+        .expect("register parquet table for explain analyze test");
+
+    for (level, needle, should_contain) in [
+        (ExplainAnalyzeLevel::Summary, "metadata_load_time", true),
+        (ExplainAnalyzeLevel::Summary, "page_index_eval_time", false),
+        (ExplainAnalyzeLevel::Dev, "metadata_load_time", true),
+        (ExplainAnalyzeLevel::Dev, "page_index_eval_time", true),
+    ] {
+        let plan = collect_plan_with_context(&sql, &ctx, level).await;
+
         assert_eq!(
             plan.contains(needle),
             should_contain,
