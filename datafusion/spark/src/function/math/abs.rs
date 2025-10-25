@@ -53,7 +53,7 @@ impl Default for SparkAbs {
 impl SparkAbs {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
 }
