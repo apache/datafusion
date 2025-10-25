@@ -22,7 +22,8 @@ use crate::{
 
 use std::sync::Arc;
 
-use arrow::datatypes::{Schema, SchemaRef};
+use crate::TableSchema;
+use arrow::datatypes::Schema;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -66,7 +67,7 @@ impl FileSource for MockSource {
         Arc::new(Self { ..self.clone() })
     }
 
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn with_schema(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
