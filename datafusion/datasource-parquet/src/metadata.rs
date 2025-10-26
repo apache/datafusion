@@ -299,7 +299,6 @@ impl<'a> DFParquetMetadata<'a> {
                             summarize_min_max_null_counts(
                                 &mut accumulators,
                                 idx,
-                                num_rows,
                                 &stats_converter,
                                 row_groups_metadata,
                             )
@@ -417,7 +416,6 @@ struct StatisticsAccumulators<'a> {
 fn summarize_min_max_null_counts(
     accumulators: &mut StatisticsAccumulators,
     arrow_schema_index: usize,
-    num_rows: usize,
     stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
 ) -> Result<()> {
@@ -449,11 +447,14 @@ fn summarize_min_max_null_counts(
         );
     }
 
-    accumulators.null_counts_array[arrow_schema_index] =
-        Precision::Exact(match sum(&null_counts) {
-            Some(null_count) => null_count as usize,
-            None => num_rows,
-        });
+    accumulators.null_counts_array[arrow_schema_index] = match sum(&null_counts) {
+        Some(null_count) => Precision::Exact(null_count as usize),
+        None => match null_counts.len() {
+            // If sum() returned None we either have no rows or all values are null
+            0 => Precision::Exact(0),
+            _ => Precision::Absent,
+        },
+    };
 
     Ok(())
 }

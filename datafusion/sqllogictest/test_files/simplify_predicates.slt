@@ -230,5 +230,17 @@ logical_plan
 01)Filter: test_data.int_col > Int32(5) AND test_data.int_col > Int32(6) OR test_data.float_col < Float32(10) AND test_data.float_col < Float32(8)
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT * FROM test_data 
+  WHERE int_col > 1 AND int_col < 10
+) WHERE int_col >= 1 AND int_col <= 10;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(1) AND test_data.int_col < Int32(10)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+
 statement ok
 set datafusion.explain.logical_plan_only=false;

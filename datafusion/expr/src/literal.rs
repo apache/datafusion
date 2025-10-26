@@ -17,9 +17,8 @@
 
 //! Literal module contains foundational types that are used to represent literals in DataFusion.
 
-use crate::expr::FieldMetadata;
 use crate::Expr;
-use datafusion_common::ScalarValue;
+use datafusion_common::{metadata::FieldMetadata, ScalarValue};
 
 /// Create a literal expression
 pub fn lit<T: Literal>(n: T) -> Expr {

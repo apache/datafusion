@@ -989,7 +989,7 @@ impl DefaultPhysicalPlanner {
                     struct_type_columns.clone(),
                     schema,
                     options.clone(),
-                ))
+                )?)
             }
 
             // 2 Children
