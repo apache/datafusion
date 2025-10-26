@@ -110,11 +110,11 @@ physical_plan
 08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)------------WorkTableExec: name=nodes
 
-# trivial deduplicating recursive CTE works
+# simple deduplicating recursive CTE works
 query I
 WITH RECURSIVE nodes AS (
-    SELECT 1 as id
-    UNION ALL
+    SELECT id from (VALUES (1), (2)) nodes(id)
+    UNION
     SELECT id + 1 as id
     FROM nodes
     WHERE id < 4
