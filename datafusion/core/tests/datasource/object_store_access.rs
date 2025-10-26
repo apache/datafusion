@@ -27,7 +27,7 @@
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::prelude::{CsvReadOptions, SessionContext};
+use datafusion::prelude::{CsvReadOptions, ParquetReadOptions, SessionContext};
 use futures::stream::BoxStream;
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
@@ -121,8 +121,12 @@ async fn query_multi_csv_file() {
 
 #[tokio::test]
 async fn create_single_parquet_file() {
+    // Note that without a metadata size hint, the parquet reader
+    // must read the file footer to determine row group locations.
+    // And the registration process also does a HEAD request to
+    // determine the file size.
     assert_snapshot!(
-        single_file_parquet_test().await.requests(),
+        single_file_parquet_test(None).await.requests(),
         @r"
     RequestCountingObjectStore()
     Total Requests: 4
@@ -135,9 +139,25 @@ async fn create_single_parquet_file() {
 }
 
 #[tokio::test]
+async fn create_single_parquet_file_with_metadata_size_hint() {
+    // The register parquet process can be optimized with a metadata size hint,
+    // and the request number reduced from 4 to 2.
+    // This is the default behavior for datafusion now.
+    assert_snapshot!(
+        single_file_parquet_test(Some(512 * 1024)).await.requests(),
+        @r"
+    RequestCountingObjectStore()
+    Total Requests: 2
+    - HEAD path=parquet_table.parquet
+    - GET  (range) range=0-2994 path=parquet_table.parquet
+    "
+    );
+}
+
+#[tokio::test]
 async fn query_single_parquet_file() {
     assert_snapshot!(
-        single_file_parquet_test().await.query("select count(distinct a), count(b) from parquet_table").await,
+        single_file_parquet_test(None).await.query("select count(distinct a), count(b) from parquet_table").await,
         @r"
     ------- Query Output (1 rows) -------
     +---------------------------------+------------------------+
@@ -160,7 +180,7 @@ async fn query_single_parquet_file_with_single_predicate() {
     // Note that evaluating predicates requires additional object store requests
     // (to evaluate predicates)
     assert_snapshot!(
-        single_file_parquet_test().await.query("select min(a), max(b) from parquet_table WHERE a > 150").await,
+        single_file_parquet_test(None).await.query("select min(a), max(b) from parquet_table WHERE a > 150").await,
         @r"
     ------- Query Output (1 rows) -------
     +----------------------+----------------------+
@@ -182,7 +202,7 @@ async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
     // Note that evaluating predicates requires additional object store requests
     // (to evaluate predicates)
     assert_snapshot!(
-        single_file_parquet_test().await.query("select min(a), max(b) from parquet_table WHERE a > 50 AND b < 1150").await,
+        single_file_parquet_test(None).await.query("select min(a), max(b) from parquet_table WHERE a > 50 AND b < 1150").await,
         @r"
     ------- Query Output (1 rows) -------
     +----------------------+----------------------+
@@ -242,7 +262,7 @@ async fn multi_file_csv_test() -> Test {
 ///
 /// Column "b": Int32 with values 1000-1100] in row group 1
 /// and [1101-1200] in row group 2
-async fn single_file_parquet_test() -> Test {
+async fn single_file_parquet_test(metadata_size_hint: Option<usize>) -> Test {
     // Create parquet bytes
     let a: ArrayRef = Arc::new(Int32Array::from_iter_values(0..200));
     let b: ArrayRef = Arc::new(Int32Array::from_iter_values(1000..1200));
@@ -261,7 +281,11 @@ async fn single_file_parquet_test() -> Test {
     Test::new()
         .with_bytes("/parquet_table.parquet", buffer)
         .await
-        .register_parquet("parquet_table", "/parquet_table.parquet")
+        .register_parquet(
+            "parquet_table",
+            "/parquet_table.parquet",
+            metadata_size_hint,
+        )
         .await
 }
 
@@ -312,11 +336,23 @@ impl Test {
         self
     }
 
-    /// Register a CSV file at the given path relative to the [`datafusion_test_data`] directory
-    async fn register_parquet(self, table_name: &str, path: &str) -> Self {
+    /// Register a Parquet file at the given path relative to the [`datafusion_test_data`] directory
+    /// Adding metadata_size_hint here for easy testing of parquet metadata read optimizations
+    async fn register_parquet(
+        self,
+        table_name: &str,
+        path: &str,
+        metadata_size_hint: Option<usize>,
+    ) -> Self {
         let path = format!("mem://{path}");
+        let options: ParquetReadOptions<'_> = Default::default();
+
         self.session_context
-            .register_parquet(table_name, path, Default::default())
+            .register_parquet(
+                table_name,
+                path,
+                options.metadata_size_hint(metadata_size_hint),
+            )
             .await
             .unwrap();
         self
