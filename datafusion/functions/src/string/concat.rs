@@ -80,40 +80,89 @@ impl ConcatFunc {
         }
     }
 
-    fn concat_arrays(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    /// Infer the element type from input arguments, even when arrays are null.
+    /// This helps maintain type consistency between planning and execution.
+    fn infer_element_type_from_args(&self, args: &[ColumnarValue]) -> Result<DataType> {
+        // Look for any non-null array to get the element type
+        for arg in args {
+            match arg {
+                ColumnarValue::Array(array) => {
+                    if let DataType::List(field)
+                    | DataType::LargeList(field)
+                    | DataType::FixedSizeList(field, _) = array.data_type()
+                    {
+                        return Ok(field.data_type().clone());
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => match scalar {
+                    ScalarValue::List(list_array) => {
+                        if let DataType::List(field) = list_array.data_type() {
+                            return Ok(field.data_type().clone());
+                        }
+                    }
+                    ScalarValue::LargeList(list_array) => {
+                        if let DataType::LargeList(field) = list_array.data_type() {
+                            return Ok(field.data_type().clone());
+                        }
+                    }
+                    ScalarValue::FixedSizeList(list_array) => {
+                        if let DataType::FixedSizeList(field, _) = list_array.data_type()
+                        {
+                            return Ok(field.data_type().clone());
+                        }
+                    }
+                    _ => {}
+                },
+            }
+        }
+
+        // If no array type found, default to Int32 (common for cast operations)
+        Ok(DataType::Int32)
+    }
+
+    /// Concatenates array arguments into a single array.
+    ///
+    /// This function handles array concatenation by extracting elements from each input array
+    /// and combining them into a single result array. It optimizes for single-row vs multi-row
+    /// processing to avoid unnecessary scalar-to-array conversions.
+    ///
+    /// # Arguments
+    /// * `args` - Array of ColumnarValue inputs (Arrays or Scalar arrays)
+    /// * `num_rows` - Number of rows to process
+    ///
+    /// # Returns
+    /// A ColumnarValue containing a ListArray with concatenated elements
+    fn concat_arrays(
+        &self,
+        args: &[ColumnarValue],
+        num_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return plan_err!("concat requires at least one argument");
         }
-
-        // Simple case: single row - use fast path
-        let num_rows = args
-            .iter()
-            .find_map(|arg| match arg {
-                ColumnarValue::Array(array) => Some(array.len()),
-                _ => None,
-            })
-            .unwrap_or(1);
 
         if num_rows == 1 {
             return self.concat_arrays_single_row(args);
         }
 
-        // Multi-row case: process more carefully to avoid blocking
-        let arrays: Result<Vec<Arc<dyn Array>>> = args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Array(array) => Ok(Arc::clone(array)),
-                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
-            })
-            .collect();
-
-        let arrays = arrays?;
-
-        // Build result using efficient batched operations
-        self.concat_arrays_multi_row(&arrays, num_rows)
+        // Multi-row case: process each row individually to avoid scalar-to-array conversion
+        self.concat_arrays_multi_row(args, num_rows)
     }
 
-    /// Fast path for single-row array concatenation
+    /// Fast path for single-row array concatenation.
+    ///
+    /// When processing only a single row, this optimized path avoids the overhead
+    /// of row-by-row iteration and directly processes all input arrays to extract
+    /// their elements and concatenate them into a single result array.
+    ///
+    /// This method handles both Array and Scalar array inputs by extracting elements
+    /// from each non-null input and combining them using Arrow's compute::concat.
+    ///
+    /// # Arguments
+    /// * `args` - Array of ColumnarValue inputs to concatenate
+    ///
+    /// # Returns
+    /// A ColumnarValue containing a single-element ListArray with all concatenated elements
     fn concat_arrays_single_row(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let mut all_elements = Vec::new();
 
@@ -126,17 +175,48 @@ impl ConcatFunc {
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
-                    let array = scalar.to_array_of_size(1)?;
-                    if !array.is_null(0) {
-                        let elements = self.extract_row_elements(array.as_ref(), 0)?;
-                        all_elements.extend(elements);
+                    if !scalar.is_null() {
+                        // For scalars, create a single-element array directly without conversion
+                        match scalar {
+                            ScalarValue::List(list_array) => {
+                                let elements =
+                                    self.extract_row_elements(list_array.as_ref(), 0)?;
+                                all_elements.extend(elements);
+                            }
+                            ScalarValue::LargeList(list_array) => {
+                                let elements =
+                                    self.extract_row_elements(list_array.as_ref(), 0)?;
+                                all_elements.extend(elements);
+                            }
+                            ScalarValue::FixedSizeList(list_array) => {
+                                let elements =
+                                    self.extract_row_elements(list_array.as_ref(), 0)?;
+                                all_elements.extend(elements);
+                            }
+                            _ => {
+                                return plan_err!(
+                                    "Expected array scalar, got {}",
+                                    scalar.data_type()
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
 
         if all_elements.is_empty() {
-            return plan_err!("No elements to concatenate");
+            // Return empty array when all inputs are null
+            // Try to infer element type from input arguments
+            let element_type = self.infer_element_type_from_args(args)?;
+            let field = Arc::new(arrow::datatypes::Field::new_list_field(
+                element_type.clone(),
+                true,
+            ));
+            let offsets = OffsetBuffer::from_lengths([0]);
+            let empty_values = arrow::array::new_empty_array(&element_type);
+            let result = ListArray::new(field, offsets, empty_values, None);
+            return Ok(ColumnarValue::Array(Arc::new(result)));
         }
 
         let element_refs: Vec<&dyn Array> =
@@ -154,7 +234,24 @@ impl ConcatFunc {
         Ok(ColumnarValue::Array(Arc::new(result)))
     }
 
-    /// Extract elements from a specific row of an array, optimized for performance
+    /// Extract elements from a specific row of an array, optimized for performance.
+    ///
+    /// This function handles the extraction of individual elements from different types
+    /// of list arrays (List, LargeList, FixedSizeList) at a specific row index.
+    /// It returns a vector of single-element arrays for each non-null element found.
+    ///
+    /// The extraction process:
+    /// 1. Checks if the array at the given row is null (returns empty if so)
+    /// 2. Gets the list value at the specified row using the appropriate array type
+    /// 3. Filters out null elements and creates single-element arrays for each
+    /// 4. Returns a vector of arrays ready for concatenation
+    ///
+    /// # Arguments
+    /// * `array` - The input array (must be a List, LargeList, or FixedSizeList)
+    /// * `row_idx` - The row index to extract elements from
+    ///
+    /// # Returns
+    /// A vector of single-element arrays containing the non-null elements from the specified row
     fn extract_row_elements(
         &self,
         array: &dyn Array,
@@ -166,34 +263,16 @@ impl ConcatFunc {
 
         let list_value = match array.data_type() {
             DataType::List(_) => {
-                let list_array =
-                    array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "Failed to downcast to ListArray".to_string(),
-                        )
-                    })?;
+                let list_array = array.as_any().downcast_ref::<ListArray>().unwrap();
                 list_array.value(row_idx)
             }
             DataType::LargeList(_) => {
-                let list_array = array
-                    .as_any()
-                    .downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "Failed to downcast to LargeListArray".to_string(),
-                        )
-                    })?;
+                let list_array = array.as_any().downcast_ref::<LargeListArray>().unwrap();
                 list_array.value(row_idx)
             }
             DataType::FixedSizeList(_, _) => {
-                let list_array = array
-                    .as_any()
-                    .downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "Failed to downcast to FixedSizeListArray".to_string(),
-                        )
-                    })?;
+                let list_array =
+                    array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
                 list_array.value(row_idx)
             }
             _ => return plan_err!("Expected array type, got {}", array.data_type()),
@@ -206,26 +285,102 @@ impl ConcatFunc {
             .collect())
     }
 
-    /// Multi-row array concatenation with efficient batching
+    /// Multi-row array concatenation with efficient batching.
+    ///
+    /// For multiple rows, this method processes each row individually to avoid
+    /// the performance penalty of converting scalar arrays to full arrays for
+    /// the entire batch. It iterates through each row, extracts elements from
+    /// all input arrays at that row index, concatenates them, and builds the
+    /// final result array.
+    ///
+    /// This approach is more memory-efficient for large batches as it processes
+    /// one row at a time rather than materializing all scalar arrays upfront.
+    ///
+    /// # Arguments
+    /// * `args` - Array of ColumnarValue inputs (Arrays or Scalar arrays)
+    /// * `num_rows` - Number of rows to process
+    ///
+    /// # Returns
+    /// A ColumnarValue containing a ListArray with concatenated elements for each row
     fn concat_arrays_multi_row(
         &self,
-        arrays: &[Arc<dyn Array>],
+        args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue> {
         let mut result_arrays = Vec::with_capacity(num_rows);
+        let mut sample_array = None;
 
         for row_idx in 0..num_rows {
             let mut row_elements = Vec::new();
 
-            // Collect elements from this row across all arrays
-            for array in arrays {
-                let elements = self.extract_row_elements(array.as_ref(), row_idx)?;
-                row_elements.extend(elements);
+            // Collect elements from this row across all args
+            // Process each input argument for the current row, accumulating elements
+            for arg in args {
+                match arg {
+                    ColumnarValue::Array(array) => {
+                        // Keep track of a sample array for result type inference
+                        if sample_array.is_none() {
+                            sample_array = Some(Arc::clone(array));
+                        }
+                        // Extract elements from this row if not null
+                        if !array.is_null(row_idx) {
+                            let elements =
+                                self.extract_row_elements(array.as_ref(), row_idx)?;
+                            row_elements.extend(elements);
+                        }
+                    }
+                    ColumnarValue::Scalar(scalar) => {
+                        // Scalar arrays are repeated for each row - extract from index 0
+                        if !scalar.is_null() {
+                            match scalar {
+                                ScalarValue::List(list_array) => {
+                                    if sample_array.is_none() {
+                                        sample_array = Some(
+                                            Arc::clone(list_array) as Arc<dyn Array>
+                                        );
+                                    }
+                                    let elements = self
+                                        .extract_row_elements(list_array.as_ref(), 0)?;
+                                    row_elements.extend(elements);
+                                }
+                                ScalarValue::LargeList(list_array) => {
+                                    if sample_array.is_none() {
+                                        sample_array = Some(
+                                            Arc::clone(list_array) as Arc<dyn Array>
+                                        );
+                                    }
+                                    let elements = self
+                                        .extract_row_elements(list_array.as_ref(), 0)?;
+                                    row_elements.extend(elements);
+                                }
+                                ScalarValue::FixedSizeList(list_array) => {
+                                    if sample_array.is_none() {
+                                        sample_array = Some(
+                                            Arc::clone(list_array) as Arc<dyn Array>
+                                        );
+                                    }
+                                    let elements = self
+                                        .extract_row_elements(list_array.as_ref(), 0)?;
+                                    row_elements.extend(elements);
+                                }
+                                _ => {
+                                    return plan_err!(
+                                        "Expected array scalar, got {}",
+                                        scalar.data_type()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
+            // Build concatenated result for this row
             if row_elements.is_empty() {
+                // No elements found - record as null/empty for this row
                 result_arrays.push(None);
             } else {
+                // Concatenate all collected elements using Arrow's efficient concat
                 let element_refs: Vec<&dyn Array> =
                     row_elements.iter().map(|a| a.as_ref()).collect();
                 let concatenated = compute::concat(&element_refs)?;
@@ -234,17 +389,38 @@ impl ConcatFunc {
         }
 
         // Build the final result array
-        self.build_list_array_result(result_arrays, &arrays[0], num_rows)
+        if let Some(sample) = sample_array {
+            self.build_list_array_result(result_arrays, &sample)
+        } else {
+            plan_err!("No sample array found for result construction")
+        }
     }
 
-    /// Build a ListArray result from concatenated elements
+    /// Build a ListArray result from concatenated elements.
+    ///
+    /// This function constructs the final ListArray from a vector of concatenated
+    /// arrays (one per row). It handles the complex process of:
+    /// 1. Determining the element type from a sample input array
+    /// 2. Building efficient offset arrays to track list boundaries
+    /// 3. Concatenating all values into a single flat values array
+    /// 4. Constructing the final ListArray with proper metadata
+    ///
+    /// The function handles null rows (empty concatenations) by using empty
+    /// ranges in the offset array, which Arrow interprets as empty lists.
+    ///
+    /// # Arguments
+    /// * `result_arrays` - Vector of concatenated arrays for each row (None for empty rows)
+    /// * `sample_array` - Sample input array used to determine element type
+    ///
+    /// # Returns
+    /// A ColumnarValue containing a ListArray with all concatenated results
     fn build_list_array_result(
         &self,
         result_arrays: Vec<Option<Arc<dyn Array>>>,
         sample_array: &dyn Array,
-        _num_rows: usize,
     ) -> Result<ColumnarValue> {
         // Determine element type from sample array
+        // Extract the inner element type from the list wrapper to create the result field
         let element_type = match sample_array.data_type() {
             DataType::List(field)
             | DataType::LargeList(field)
@@ -258,26 +434,33 @@ impl ConcatFunc {
         ));
 
         // Build values and offsets efficiently
+        // Create the flat values array and offset array that defines list boundaries
         let mut values_vec = Vec::new();
-        let mut offsets = vec![0i32];
+        let mut offsets = vec![0i32]; // Start with offset 0
         let mut current_offset = 0i32;
 
         for result in result_arrays {
             match result {
                 Some(array) => {
+                    // Add this array's length to the current offset
                     current_offset += array.len() as i32;
                     values_vec.push(array);
                 }
                 None => {
-                    // Empty array for null result
+                    // Empty array for null result - offset doesn't change
+                    // This creates an empty list in the final result
                 }
             }
+            // Record the ending offset for this list
             offsets.push(current_offset);
         }
 
+        // Create the final flat values array containing all concatenated elements
         let values = if values_vec.is_empty() {
+            // All rows were empty - create an empty array of the correct type
             arrow::array::new_empty_array(&element_type)
         } else {
+            // Concatenate all row results into a single flat array
             let array_refs: Vec<&dyn Array> =
                 values_vec.iter().map(|a| a.as_ref()).collect();
             compute::concat(&array_refs)?
@@ -314,11 +497,54 @@ impl ScalarUDFImpl for ConcatFunc {
             return plan_err!("concat requires at least one argument");
         }
 
-        // Arrays need no coercion
-        for dt in arg_types {
-            if matches!(dt, List(_) | LargeList(_) | FixedSizeList(_, _)) {
-                return Ok(arg_types.to_vec());
+        // Check if we have array types - all inputs must be arrays if any are arrays
+        let has_arrays = arg_types
+            .iter()
+            .any(|dt| matches!(dt, List(_) | LargeList(_) | FixedSizeList(_, _)));
+        let _has_strings = arg_types
+            .iter()
+            .any(|dt| matches!(dt, Utf8View | Utf8 | LargeUtf8 | _));
+
+        if has_arrays {
+            // If we have arrays, validate that ALL inputs are arrays or NULL
+            for dt in arg_types {
+                if !matches!(dt, List(_) | LargeList(_) | FixedSizeList(_, _) | Null) {
+                    return plan_err!("Cannot mix array and non-array arguments in concat function. Found array type and {}", dt);
+                }
             }
+
+            // Coerce arrays to a common element type
+            // Find the first non-null, non-empty array type to use as target
+            let mut target_element_type = None;
+            for dt in arg_types {
+                if let List(field) | LargeList(field) | FixedSizeList(field, _) = dt {
+                    if !matches!(field.data_type(), Null) {
+                        target_element_type = Some(field.data_type().clone());
+                        break;
+                    }
+                }
+            }
+
+            // If we found a target type, coerce all List<Null> to that type
+            if let Some(target_type) = target_element_type {
+                let coerced_types: Vec<DataType> = arg_types
+                    .iter()
+                    .map(|dt| match dt {
+                        List(field) if matches!(field.data_type(), Null) => {
+                            List(Arc::new(arrow::datatypes::Field::new(
+                                "item",
+                                target_type.clone(),
+                                true,
+                            )))
+                        }
+                        _ => dt.clone(),
+                    })
+                    .collect();
+                return Ok(coerced_types);
+            }
+
+            // No target type found (all are null or empty), return as-is
+            return Ok(arg_types.to_vec());
         }
 
         let coerced_types = arg_types
@@ -334,15 +560,34 @@ impl ScalarUDFImpl for ConcatFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
 
-        // Arrays return list type
-        for data_type in arg_types {
-            if let List(field) | LargeList(field) | FixedSizeList(field, _) = data_type {
-                return Ok(List(Arc::new(arrow::datatypes::Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                ))));
+        // Check if we have any arrays (ignoring nulls)
+        let array_types: Vec<&DataType> = arg_types
+            .iter()
+            .filter(|dt| matches!(dt, List(_) | LargeList(_) | FixedSizeList(_, _)))
+            .collect();
+
+        if !array_types.is_empty() {
+            // We have arrays - return list type based on first non-null array
+            for data_type in array_types {
+                if let List(field) | LargeList(field) | FixedSizeList(field, _) =
+                    data_type
+                {
+                    return Ok(List(Arc::new(arrow::datatypes::Field::new(
+                        "item",
+                        field.data_type().clone(),
+                        true,
+                    ))));
+                }
             }
+        }
+
+        // Check if all arguments are null (for cast operations like CAST(NULL AS INT[]))
+        if arg_types.iter().all(|dt| matches!(dt, Null)) {
+            // When all are null, we need to determine from context or use a default
+            // For now, return List<Int32> as a reasonable default
+            return Ok(List(Arc::new(arrow::datatypes::Field::new(
+                "item", Int32, true,
+            ))));
         }
 
         let mut dt = &Utf8;
@@ -354,15 +599,21 @@ impl ScalarUDFImpl for ConcatFunc {
         Ok(dt.clone())
     }
 
-    /// Concatenates strings or arrays
+    /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
+    /// concat('abcde', 2, NULL, 22) = 'abcde222'
+    ///
+    /// Also supports array concatenation: concat([1, 2], [3, 4]) = [1, 2, 3, 4]
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
+        let ScalarFunctionArgs {
+            args, number_rows, ..
+        } = args;
 
         if args.is_empty() {
             return plan_err!("concat requires at least one argument");
         }
 
-        // Fast array detection - early exit on first array found
+        // Fast array detection - if ANY argument is an array type, route to array concatenation logic
+        // This allows the function to handle both string concat and array concat seamlessly
         for arg in &args {
             let is_array = match arg {
                 ColumnarValue::Array(array) => matches!(
@@ -379,7 +630,7 @@ impl ScalarUDFImpl for ConcatFunc {
                 ),
             };
             if is_array {
-                return self.concat_arrays(&args);
+                return self.concat_arrays(&args, number_rows);
             }
         }
 
@@ -435,7 +686,9 @@ impl ScalarUDFImpl for ConcatFunc {
                 DataType::LargeUtf8 => {
                     Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
                 }
-                other => plan_err!("Unsupported datatype: {other}"),
+                other => {
+                    plan_err!("Concat function does not support datatype of {other}")
+                }
             };
         }
 
@@ -491,7 +744,9 @@ impl ScalarUDFImpl for ConcatFunc {
                             };
                             columns.push(column);
                         }
-                        other => return plan_err!("Unsupported datatype: {other}"),
+                        other => {
+                            return plan_err!("Input was {other} which is not a supported datatype for concat function")
+                        }
                     };
                 }
                 _ => return plan_err!("Unsupported argument type: {}", arg.data_type()),
@@ -539,7 +794,14 @@ impl ScalarUDFImpl for ConcatFunc {
         }
     }
 
-    /// Simplify the `concat` function by concatenating literals and filtering nulls
+    /// Simplify the `concat` function by
+    /// 1. filtering out all `null` literals
+    /// 2. concatenating contiguous literal arguments
+    ///
+    /// For example:
+    /// `concat(col(a), 'hello ', 'world', col(b), null)`
+    /// will be optimized to
+    /// `concat(col(a), 'hello world', col(b))`
     fn simplify(
         &self,
         args: Vec<Expr>,
