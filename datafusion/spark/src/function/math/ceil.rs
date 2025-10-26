@@ -18,7 +18,7 @@
 
 use std::any::Any;
 use std::sync::Arc;
-use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray, Float64Array};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, DECIMAL128_MAX_PRECISION};
 use arrow::datatypes::DataType::{Decimal128, Float32, Float64, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64};
 use datafusion_common::{exec_err, Result};
@@ -99,11 +99,7 @@ impl ScalarUDFImpl for SparkCeil {
                 let (new_precision, new_scale) = round_decimal_base(*precision as i32, *scale as i32, 0);
                 Ok(Decimal128(new_precision, new_scale))
             }
-            (Decimal128(precision, scale), true) => {
-                // Use target scale for output, validated in spark_ceil
-                let (new_precision, new_scale) = round_decimal_base(*precision as i32, *scale as i32, *scale as i32);
-                Ok(Decimal128(new_precision, new_scale))
-            }
+            (Decimal128(_precision, _scale), true) => Ok(Float64),
             _ => Ok(Int64),
         }
     }
@@ -221,14 +217,19 @@ fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
                             let result_array = decimal_array.unary::<_, arrow::datatypes::Decimal128Type>(
                                 |value: i128| div_ceil(value, factor),
                             );
-                            Ok(Arc::new(result_array.with_precision_and_scale(new_precision, new_scale)?))
+                            let decimal_result = result_array.with_precision_and_scale(new_precision, new_scale)?;
+                            let scale_factor = 10_f64.powi(new_scale as i32);
+                            let float_values: Vec<Option<f64>> = decimal_result.iter().map(|v| v.map(|x| (x as f64) / scale_factor)).collect();
+                            Ok(Arc::new(Float64Array::from(float_values)))
                         } else {
                             let s_i8 = s as i8;
                             let factor = 10_i128.pow_wrapping((*value_scale - s_i8) as u32);
                             let result_array = decimal_array.unary::<_, arrow::datatypes::Decimal128Type>(
                                 |value: i128| div_ceil(value, factor),
                             );
-                            Ok(Arc::new(result_array.with_precision_and_scale(new_precision, 0)?))
+                            let decimal_result = result_array.with_precision_and_scale(new_precision, 0)?;
+                            let float_values: Vec<Option<f64>> = decimal_result.iter().map(|v| v.map(|x| x as f64)).collect();
+                            Ok(Arc::new(Float64Array::from(float_values)))
                         }
                     }
                 }
@@ -355,13 +356,12 @@ mod test {
     #[test]
     fn test_ceil_decimal_with_scale() -> Result<()> {
         let input = vec![Some(31411_i128), Some(-12345_i128)];
-        let value_array = Arc::new(Decimal128Array::from(input).with_precision_and_scale(10, 4)?) as ArrayRef;
+        let value_array = Arc::new(Decimal128Array::from(input).with_precision_and_scale(5, 4)?) as ArrayRef;
         let scale_array = Arc::new(Int64Array::from(vec![Some(3_i64)])) as ArrayRef;
         let result = spark_ceil(&[value_array, scale_array])?;
-        let result_array = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        assert_eq!(result_array.value(0), 3142); // ceil(3.1411, 3) = 3.142
-        assert_eq!(result_array.value(1), -1230); // ceil(-12.345, 1) = -12.3
-        assert_eq!(result_array.scale(), 3);
+        let result_array = result.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(result_array.value(0), 3.142); // ceil(3.1411, 3) = 3.142
+        assert_eq!(result_array.value(1), -1.234); // ceil(-1.2345, 3) = -1.234
         Ok(())
     }
 }
