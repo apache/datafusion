@@ -34,9 +34,9 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 use std::borrow::Cow;
+use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
-use std::fmt::{Debug, Formatter};
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
