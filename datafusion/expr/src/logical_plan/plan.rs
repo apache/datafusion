@@ -1473,6 +1473,13 @@ impl LogicalPlan {
                 }
             })
         })
+        .map(|transformed_plan| {
+            if transformed_plan.transformed {
+                transformed_plan.map_data(|plan| plan.recompute_schema())
+            } else {
+                Ok(transformed_plan)
+            }
+        })?
         .map(|res| res.data)
     }
 
