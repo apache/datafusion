@@ -580,6 +580,7 @@
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Configuration Settings</a></li>
 
 
+
 <li class="toctree-l1"><a class="reference internal" href="explain-usage.html">Reading Explain Plans</a></li>
 <li class="toctree-l1"><a class="reference internal" href="metrics.html">Metrics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
@@ -1299,6 +1300,65 @@ set <code class="docutils literal notranslate"><span class="pre">target_partitio
 </pre></div>
 </div>
 </section>
+<section id="join-queries">
+<h2>Join Queries<a class="headerlink" href="#join-queries" title="Link to this heading">#</a></h2>
+<p>Currently Apache Datafusion supports the following join algorithms:</p>
+<ul class="simple">
+<li><p>Nested Loop Join</p></li>
+<li><p>Sort Merge Join</p></li>
+<li><p>Hash Join</p></li>
+<li><p>Symmetric Hash Join</p></li>
+<li><p>Piecewise Merge Join (experimental)</p></li>
+</ul>
+<p>The physical planner will choose the appropriate algorithm based on the statistics + join
+condition of the two tables.</p>
+</section>
+</section>
+<section id="join-algorithm-optimizer-configurations">
+<h1>Join Algorithm Optimizer Configurations<a class="headerlink" href="#join-algorithm-optimizer-configurations" title="Link to this heading">#</a></h1>
+<p>You can modify join optimization behavior in your queries by setting specific configuration values.
+Use the following command to update a configuration:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="o">&lt;</span><span class="n">configuration_name</span><span class="o">&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Example</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">prefer_hash_join</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">false</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Adjusting the following configuration values influences how the optimizer selects the join algorithm
+used to execute your SQL query:</p>
+<section id="join-optimizer-configurations">
+<h2>Join Optimizer Configurations<a class="headerlink" href="#join-optimizer-configurations" title="Link to this heading">#</a></h2>
+<p>Adjusting the following configuration values influences how the optimizer selects the join algorithm
+used to execute your SQL query.</p>
+<section id="allow-symmetric-joins-without-pruning-bool-default-true">
+<h3>allow_symmetric_joins_without_pruning (bool, default = true)<a class="headerlink" href="#allow-symmetric-joins-without-pruning-bool-default-true" title="Link to this heading">#</a></h3>
+<p>Controls whether symmetric hash joins are allowed for unbounded data sources even when their inputs
+lack ordering or filtering.</p>
+<ul class="simple">
+<li><p>If disabled, the <code class="docutils literal notranslate"><span class="pre">SymmetricHashJoin</span></code> operator cannot prune its internal buffers to be produced only at the end of execution.</p></li>
+</ul>
+</section>
+<section id="prefer-hash-join-bool-default-true">
+<h3>prefer_hash_join (bool, default = true)<a class="headerlink" href="#prefer-hash-join-bool-default-true" title="Link to this heading">#</a></h3>
+<p>Determines whether the optimizer prefers Hash Join over Sort Merge Join during physical plan selection.</p>
+<ul class="simple">
+<li><p>true: favors HashJoin for faster execution when sufficient memory is available.</p></li>
+<li><p>false: allows SortMergeJoin to be chosen when more memory-efficient execution is needed.</p></li>
+</ul>
+</section>
+<section id="enable-piecewise-merge-join-bool-default-false">
+<h3>enable_piecewise_merge_join (bool, default = false)<a class="headerlink" href="#enable-piecewise-merge-join-bool-default-false" title="Link to this heading">#</a></h3>
+<p>Enables the experimental Piecewise Merge Join algorithm.</p>
+<ul class="simple">
+<li><p>When enabled, the physical planner may select PiecewiseMergeJoin if there is exactly one range
+filter in the join condition.</p></li>
+<li><p>Piecewise Merge Join is faster than Nested Loop Join performance wise for single range filter
+except for cases where it is joining two large tables (num_rows &gt; 100,000) that are approximately
+equal in size.</p></li>
+</ul>
+</section>
+</section>
 </section>
 
 
@@ -1361,6 +1421,16 @@ set <code class="docutils literal notranslate"><span class="pre">target_partitio
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#tuning-guide">Tuning Guide</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#short-queries">Short Queries</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#memory-limited-queries">Memory-limited Queries</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#join-queries">Join Queries</a></li>
+</ul>
+</li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#join-algorithm-optimizer-configurations">Join Algorithm Optimizer Configurations</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#join-optimizer-configurations">Join Optimizer Configurations</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#allow-symmetric-joins-without-pruning-bool-default-true">allow_symmetric_joins_without_pruning (bool, default = true)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prefer-hash-join-bool-default-true">prefer_hash_join (bool, default = true)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-piecewise-merge-join-bool-default-false">enable_piecewise_merge_join (bool, default = false)</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
