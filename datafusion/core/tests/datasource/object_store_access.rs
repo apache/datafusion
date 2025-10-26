@@ -125,8 +125,11 @@ async fn create_single_parquet_file() {
     // must read the file footer to determine row group locations.
     // And the registration process also does a HEAD request to
     // determine the file size.
+    // Here we are setting to 1 to mock the None case, because setting to None,
+    // the register_parquet function will set it to default None, which will not
+    // override the default global option 512*1024.
     assert_snapshot!(
-        single_file_parquet_test(None).await.requests(),
+        single_file_parquet_test(Some(1)).await.requests(),
         @r"
     RequestCountingObjectStore()
     Total Requests: 4

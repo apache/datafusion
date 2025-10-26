@@ -283,7 +283,7 @@ impl Default for ParquetReadOptions<'_> {
             schema: None,
             file_sort_order: vec![],
             file_decryption_properties: None,
-            metadata_size_hint: Some(512 * 1024), // 512 KiB
+            metadata_size_hint: None,
         }
     }
 }
@@ -615,8 +615,10 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         if let Some(file_decryption_properties) = &self.file_decryption_properties {
             options.crypto.file_decryption = Some(file_decryption_properties.clone());
         }
-        // This can be overridden per-read in ParquetReadOptions.
-        options.global.metadata_size_hint = self.metadata_size_hint;
+        // This can be overridden per-read in ParquetReadOptions, if setting.
+        if let Some(metadata_size_hint) = self.metadata_size_hint {
+            options.global.metadata_size_hint = Some(metadata_size_hint);
+        }
 
         let mut file_format = ParquetFormat::new().with_options(options);
 
