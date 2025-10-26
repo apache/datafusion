@@ -36,6 +36,7 @@ use itertools::Itertools;
 use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
+use std::fmt::{Debug, Formatter};
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -100,7 +101,7 @@ pub struct CaseExpr {
 }
 
 impl std::fmt::Display for CaseExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "CASE ")?;
         if let Some(e) = &self.expr {
             write!(f, "{e} ")?;
@@ -169,8 +170,6 @@ fn filter_array(
     filter.filter(array)
 }
 
-const MERGE_NULL_MARKER: usize = usize::MAX;
-
 /// Merges elements by index from a list of [`ArrayData`], creating a new [`ColumnarValue`] from
 /// those values.
 ///
@@ -224,7 +223,7 @@ const MERGE_NULL_MARKER: usize = usize::MAX;
 ///    values        indices                                   result
 ///
 /// ```
-fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
+fn merge(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
     let data_refs = values.iter().collect();
     let mut mutable = MutableArrayData::new(data_refs, true, indices.len());
 
@@ -244,13 +243,14 @@ fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
         let slice_length = end_row_ix - start_row_ix;
 
         // Extend mutable with either nulls or with values from the array.
-        if array_ix == MERGE_NULL_MARKER {
-            mutable.extend_nulls(slice_length);
-        } else {
-            let start_offset = take_offsets[array_ix];
-            let end_offset = start_offset + slice_length;
-            mutable.extend(array_ix, start_offset, end_offset);
-            take_offsets[array_ix] = end_offset;
+        match array_ix.index() {
+            None => mutable.extend_nulls(slice_length),
+            Some(index) => {
+                let start_offset = take_offsets[index];
+                let end_offset = start_offset + slice_length;
+                mutable.extend(index, start_offset, end_offset);
+                take_offsets[index] = end_offset;
+            }
         }
 
         if end_row_ix == indices.len() {
@@ -264,6 +264,64 @@ fn merge(values: &[ArrayData], indices: &[usize]) -> Result<ArrayRef> {
     Ok(make_array(mutable.freeze()))
 }
 
+/// An index into the partial results array that's more compact than `usize`.
+///
+/// `u32::MAX` is reserved as a special 'none' value. This is used instead of
+/// `Option` to keep the array of indices as compact as possible.
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct PartialResultIndex {
+    index: u32,
+}
+
+const NONE_VALUE: u32 = u32::MAX;
+
+impl PartialResultIndex {
+    /// Returns the 'none' placeholder value.
+    fn none() -> Self {
+        Self { index: NONE_VALUE }
+    }
+
+    /// Creates a new partial result index.
+    ///
+    /// If the provide value is greater than or equal to `u32::MAX`
+    /// an error will be returned.
+    fn try_new(index: usize) -> Result<Self> {
+        let Ok(index) = u32::try_from(index) else {
+            return internal_err!("Partial result index exceeds limit");
+        };
+
+        if index == NONE_VALUE {
+            return internal_err!("Partial result index exceeds limit");
+        }
+
+        Ok(Self { index })
+    }
+
+    /// Determines if this index is the 'none' placeholder value or not.
+    fn is_none(&self) -> bool {
+        self.index == NONE_VALUE
+    }
+
+    /// Returns `Some(index)` if this value is not the 'none' placeholder, `None` otherwise.
+    fn index(&self) -> Option<usize> {
+        if self.is_none() {
+            None
+        } else {
+            Some(self.index as usize)
+        }
+    }
+}
+
+impl Debug for PartialResultIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.is_none() {
+            write!(f, "null")
+        } else {
+            write!(f, "{}", self.index)
+        }
+    }
+}
+
 enum ResultState {
     /// The final result needs to be computed by merging the the data in `arrays`.
     Partial {
@@ -271,8 +329,7 @@ enum ResultState {
         // indexes into this vec.
         arrays: Vec<ArrayData>,
         // Indicates per result row from which array in `partial_results` a value should be taken.
-        // The indexes in this array are offset by +1. The special value 0 indicates null values.
-        indices: Vec<usize>,
+        indices: Vec<PartialResultIndex>,
     },
     /// A single branch matched all input rows. When creating the final result, no further merging
     /// of partial results is necessary.
@@ -304,7 +361,7 @@ impl ResultBuilder {
             row_count,
             state: Partial {
                 arrays: vec![],
-                indices: vec![MERGE_NULL_MARKER; row_count],
+                indices: vec![PartialResultIndex::none(); row_count],
             },
         }
     }
@@ -387,12 +444,16 @@ impl ResultBuilder {
                 // they only calculate a value for each row at most once.
                 #[cfg(debug_assertions)]
                 for row_ix in row_indices.as_primitive::<UInt32Type>().values().iter() {
-                    if indices[*row_ix as usize] != MERGE_NULL_MARKER {
+                    if !indices[*row_ix as usize].is_none() {
                         return internal_err!("Duplicate value for row {}", *row_ix);
                     }
                 }
 
                 let array_index = arrays.len();
+                let Ok(array_index) = PartialResultIndex::try_new(array_index) else {
+                    return internal_err!("Partial result count exceeds limit");
+                };
+
                 arrays.push(row_values);
 
                 for row_ix in row_indices.as_primitive::<UInt32Type>().values().iter() {
@@ -974,7 +1035,7 @@ impl PhysicalExpr for CaseExpr {
         }
     }
 
-    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "CASE ")?;
         if let Some(e) = &self.expr {
             e.fmt_sql(f)?;
