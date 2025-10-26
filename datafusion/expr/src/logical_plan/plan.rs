@@ -1474,6 +1474,9 @@ impl LogicalPlan {
             })
         })
         .map(|transformed_plan| {
+            // Recompute plan's schema, because replacing params by values
+            // can provide schema and type information for certain queries
+            // i.e. `SELECT $1, $2`.
             if transformed_plan.transformed {
                 transformed_plan.map_data(|plan| plan.recompute_schema())
             } else {
