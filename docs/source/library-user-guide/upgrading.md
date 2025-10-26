@@ -120,8 +120,7 @@ See [issue #17713] for more details.
 
 `DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the
 _execution plan_ of the query. With this release, `DESCRIBE query` now outputs
-the computed _schema_ of the query, consistent with the behavior of `DESCRIBE
-table_name`.
+the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
 
 ## DataFusion `50.0.0`
 
