@@ -449,10 +449,7 @@ impl ResultBuilder {
                     }
                 }
 
-                let array_index = arrays.len();
-                let Ok(array_index) = PartialResultIndex::try_new(array_index) else {
-                    return internal_err!("Partial result count exceeds limit");
-                };
+                let array_index = PartialResultIndex::try_new(arrays.len())?;
 
                 arrays.push(row_values);
 
