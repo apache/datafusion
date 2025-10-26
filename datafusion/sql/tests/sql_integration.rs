@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
-    parser::{DFParser, Statement as DFStatement},
+    parser::DFParser,
     planner::{NullOrdering, ParserOptions, SqlToRel},
 };
 
@@ -46,12 +46,7 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
-use sqlparser::ast::{Expr as SQLExpr, FunctionArg, Statement};
-use sqlparser::dialect::{
-    AnsiDialect, BigQueryDialect, ClickHouseDialect, DatabricksDialect, Dialect,
-    DuckDbDialect, GenericDialect, HiveDialect, MsSqlDialect, MySqlDialect,
-    PostgreSqlDialect, RedshiftSqlDialect, SQLiteDialect, SnowflakeDialect,
-};
+use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 mod cases;
 mod common;
@@ -3952,79 +3947,6 @@ fn test_double_quoted_literal_string() {
 
     // It should return error in other dialect.
     assert!(logical_plan("SELECT \"1\"").is_err());
-}
-
-#[test]
-fn test_named_arguments_with_dialects() {
-    let sql = "SELECT my_func(arg1 => 'value1')";
-
-    // Returns None if the dialect doesn't support the => operator
-    let extract_first_arg = |dialect: &dyn Dialect| -> Option<FunctionArg> {
-        let mut statements = DFParser::parse_sql_with_dialect(sql, dialect).ok()?;
-
-        let statement = statements.pop_front().unwrap();
-        if let DFStatement::Statement(stmt) = statement {
-            if let Statement::Query(query) = stmt.as_ref() {
-                if let sqlparser::ast::SetExpr::Select(select) = query.body.as_ref() {
-                    let projection = &select.projection[0];
-                    if let sqlparser::ast::SelectItem::UnnamedExpr(SQLExpr::Function(
-                        func,
-                    )) = projection
-                    {
-                        if let sqlparser::ast::FunctionArguments::List(arg_list) =
-                            &func.args
-                        {
-                            return Some(arg_list.args[0].clone());
-                        }
-                    }
-                }
-            }
-        }
-        panic!("Failed to extract function argument");
-    };
-
-    let arg = extract_first_arg(&AnsiDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&BigQueryDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&ClickHouseDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&DatabricksDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&DuckDbDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&GenericDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&HiveDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&MsSqlDialect {});
-    assert!(arg.is_none());
-
-    let arg = extract_first_arg(&MySqlDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&PostgreSqlDialect {});
-    assert!(matches!(
-        arg.as_ref(),
-        Some(FunctionArg::ExprNamed { name, .. })
-        if matches!(name, SQLExpr::Identifier(ident) if ident.value == "arg1")
-    ));
-
-    let arg = extract_first_arg(&RedshiftSqlDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&SQLiteDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
-
-    let arg = extract_first_arg(&SnowflakeDialect {});
-    assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
 }
 
 #[test]

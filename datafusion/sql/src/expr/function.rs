@@ -707,23 +707,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             // PostgreSQL dialect uses ExprNamed variant with expression for name
             FunctionArg::ExprNamed {
-                name,
+                name: SQLExpr::Identifier(name),
                 arg: FunctionArgExpr::Expr(arg),
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = match name {
-                    SQLExpr::Identifier(ident) => crate::utils::normalize_ident(ident),
-                    _ => {
-                        return plan_err!(
-                            "Named argument must use a simple identifier, got: {name:?}"
-                        )
-                    }
-                };
+                let arg_name = crate::utils::normalize_ident(name);
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::ExprNamed {
-                name,
+                name: SQLExpr::Identifier(name),
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
             } => {
@@ -732,14 +725,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = match name {
-                    SQLExpr::Identifier(ident) => crate::utils::normalize_ident(ident),
-                    _ => {
-                        return plan_err!(
-                            "Named argument must use a simple identifier, got: {name:?}"
-                        )
-                    }
-                };
+                let arg_name = crate::utils::normalize_ident(name);
                 Ok((expr, Some(arg_name)))
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
