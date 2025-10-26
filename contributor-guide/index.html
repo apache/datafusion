@@ -611,7 +611,6 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Introduction</a></li>
 
-
 <li class="toctree-l1"><a class="reference internal" href="communication.html">Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="development_environment.html">Development Environment</a></li>
 <li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture</a></li>
@@ -795,9 +794,8 @@ convention but encourage its use if you want your PR to feature in the correct s
 <p>The change log generator will also look at GitHub labels such as <code class="docutils literal notranslate"><span class="pre">bug</span></code>, <code class="docutils literal notranslate"><span class="pre">enhancement</span></code>, or <code class="docutils literal notranslate"><span class="pre">api</span> <span class="pre">change</span></code>, and labels
 do take priority over the conventional commit approach, allowing maintainers to re-categorize PRs after they have been merged.</p>
 </section>
-</section>
 <section id="reviewing-pull-requests">
-<h1>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Link to this heading">#</a></h1>
+<h2>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Link to this heading">#</a></h2>
 <p>Some helpful links:</p>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+">PRs Waiting for Review</a> on GitHub</p></li>
@@ -810,6 +808,7 @@ do take priority over the conventional commit approach, allowing maintainers to 
 <li><p>Is the feature or fix covered sufficiently with tests (see the <a class="reference internal" href="testing.html"><span class="std std-doc">Testing</span></a> section)?</p></li>
 <li><p>Is the code clear, and fits the style of the existing codebase?</p></li>
 </ol>
+</section>
 <section id="performance-improvements">
 <h2>Performance Improvements<a class="headerlink" href="#performance-improvements" title="Link to this heading">#</a></h2>
 <p>Performance improvements are always welcome: performance is a key DataFusion
@@ -846,6 +845,29 @@ benchmark, and then a PR with the code change that improves the benchmark.</p>
 <h2>Stale PRs<a class="headerlink" href="#stale-prs" title="Link to this heading">#</a></h2>
 <p>Pull requests will be marked with a <code class="docutils literal notranslate"><span class="pre">stale</span></code> label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the <code class="docutils literal notranslate"><span class="pre">stale</span></code> label.</p>
+</section>
+<section id="ai-assisted-contributions">
+<h2>AI-Assisted contributions<a class="headerlink" href="#ai-assisted-contributions" title="Link to this heading">#</a></h2>
+<p>DataFusion has the following policy for AI-assisted PRs:</p>
+<ul class="simple">
+<li><p>The PR author should <strong>understand the core ideas</strong> behind the implementation <strong>end-to-end</strong>, and be able to justify the design and code during review.</p></li>
+<li><p><strong>Calls out unknowns and assumptions</strong>. It’s okay to not fully understand some bits of AI generated code. You should comment on these cases and point them out to reviewers so that they can use their knowledge of the codebase to clear up any concerns. For example, you might comment “calling this function here seems to work but I’m not familiar with how it works internally, I wonder if there’s a race condition if it is called concurrently”.</p></li>
+</ul>
+<section id="why-fully-ai-generated-prs-without-understanding-are-not-helpful">
+<h3>Why fully AI-generated PRs without understanding are not helpful<a class="headerlink" href="#why-fully-ai-generated-prs-without-understanding-are-not-helpful" title="Link to this heading">#</a></h3>
+<p>Today, AI tools cannot reliably make complex changes to DataFusion on their own, which is why we rely on pull requests and code review.</p>
+<p>The purposes of code review are:</p>
+<ol class="arabic simple">
+<li><p>Finish the intended task.</p></li>
+<li><p>Share knowledge between authors and reviewers, as a long-term investment in the project. For this reason, even if someone familiar with the codebase can finish a task quickly, we’re still happy to help a new contributor work on it even if it takes longer.</p></li>
+</ol>
+<p>An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.</p>
+<p>Please understand the reviewing capacity is <strong>very limited</strong> for the project, so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.</p>
+</section>
+<section id="better-ways-to-contribute-than-an-ai-dump">
+<h3>Better ways to contribute than an “AI dump”<a class="headerlink" href="#better-ways-to-contribute-than-an-ai-dump" title="Link to this heading">#</a></h3>
+<p>It’s recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.</p>
+</section>
 </section>
 </section>
 
@@ -908,12 +930,15 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pull-request-overview">Pull Request Overview</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#creating-pull-requests">Creating Pull Requests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conventional-commits-labeling-prs">Conventional Commits &amp; Labeling PRs</a></li>
-</ul>
-</li>
-<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#reviewing-pull-requests">Reviewing Pull Requests</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reviewing-pull-requests">Reviewing Pull Requests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#performance-improvements">Performance Improvements</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#major-and-minor-prs">“Major” and “Minor” PRs</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stale-prs">Stale PRs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ai-assisted-contributions">AI-Assisted contributions</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#why-fully-ai-generated-prs-without-understanding-are-not-helpful">Why fully AI-generated PRs without understanding are not helpful</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#better-ways-to-contribute-than-an-ai-dump">Better ways to contribute than an “AI dump”</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
