@@ -140,5 +140,5 @@ name Utf8View YES
 name_count Int64 NO
 
 # Describing a statement that's not a query is not supported
-statement error Unsupported statement type for DESCRIBE
+statement error Describing statements other than SELECT not supported
 DESCRIBE CREATE TABLE test_desc_table (id INT, name VARCHAR);

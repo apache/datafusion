@@ -248,9 +248,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 ..
             } => match *statement {
                 Statement::Query(query) => self.describe_query_to_plan(*query),
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported statement type for DESCRIBE: {statement:?}",
-                ))),
+                _ => {
+                    not_impl_err!("Describing statements other than SELECT not supported")
+                }
             },
             Statement::Explain {
                 verbose,
