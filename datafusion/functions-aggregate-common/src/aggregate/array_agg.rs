@@ -82,7 +82,7 @@ impl<T: OffsetSizeTrait + Clone> AggGroupAccumulator<T> {
         if self.stacked_group_indices.is_empty() {
             let offsets = OffsetBuffer::from_lengths(vec![0; stop_at_group + 1]);
             return Ok(GenericListArray::<T>::new(
-                self.inner_field.clone(),
+                Arc::clone(&self.inner_field),
                 offsets,
                 new_empty_array(self.inner_field.data_type()),
                 None,
@@ -541,7 +541,6 @@ mod tests {
                 None,
             );
 
-
             assert_eq!(6, acc2.max_seen_group);
             assert_eq!(3, acc2.groups_consumed);
             assert_eq!(vec![expected_final_state], final_state);
@@ -604,7 +603,6 @@ mod tests {
                 vec![0, 0, 3, 6, 6, 6],
                 None,
             );
-
 
             assert_eq!(6, acc2.max_seen_group);
             assert_eq!(5, acc2.groups_consumed);

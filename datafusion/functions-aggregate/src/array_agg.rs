@@ -112,19 +112,17 @@ impl AggregateUDFImpl for ArrayAgg {
     ) -> Result<Box<dyn datafusion_expr::GroupsAccumulator>> {
         match acc_args.return_field.data_type() {
             DataType::List(field) => {
-                return Ok(Box::new(AggGroupAccumulator::<i32>::new(
-                    field.clone(),
-                )));
+                Ok(Box::new(AggGroupAccumulator::<i32>::new(Arc::clone(field)))
+                    as Box<dyn datafusion_expr::GroupsAccumulator>)
             }
             DataType::LargeList(field) => {
-                return Ok(Box::new(AggGroupAccumulator::<i64>::new(
-                    field.clone(),
-                )));
+                Ok(Box::new(AggGroupAccumulator::<i64>::new(Arc::clone(field)))
+                    as Box<dyn datafusion_expr::GroupsAccumulator>)
             }
             _ => {
-                return internal_err!("expects list field");
+                internal_err!("expects list field")
             }
-        };
+        }
     }
 
     fn signature(&self) -> &Signature {
