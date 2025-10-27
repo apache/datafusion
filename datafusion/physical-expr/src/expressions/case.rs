@@ -391,26 +391,25 @@ impl ResultBuilder {
     ///
     /// The diagram below shows a situation where a when expression matched rows 1 and 4 of the
     /// record batch. The then expression produced the value array `[A, D]`.
-    /// After adding this result, the result array will have been added to `Partial::arrays` and
-    /// `Partial::indices` will have been updated at indexes 1 and 4.
+    /// After adding this result, the result array will have been added to `partial arrays` and
+    /// `partial indices` will have been updated at indexes `1` and `4`.
     ///
     /// ```text
-    /// ┌─────────┐     ┌─────────┐┌───────────┐                            ┌─────────┐┌───────────┐
-    /// │    C    │     │   None  ││┌─────────┐│                            │   None  ││┌─────────┐│
-    /// ├─────────┤     ├─────────┤││    A    ││                            ├─────────┤││    A    ││
-    /// │    D    │     │   None  ││└─────────┘│                            │    2    ││└─────────┘│
-    /// └─────────┘     ├─────────┤│┌─────────┐│   add_branch_result(       ├─────────┤│┌─────────┐│
-    ///   value         │    0    │││    B    ││     row indices,           │    0    │││    B    ││
-    ///                 ├─────────┤│└─────────┘│     value                  ├─────────┤│└─────────┘│
-    ///                 │   None  ││           │   )                        │   None  ││┌─────────┐│
-    /// ┌─────────┐     ├─────────┤│           │ ─────────────────────────▶ ├─────────┤││    C    ││
-    /// │    1    │     │   None  ││           │                            │    2    ││├─────────┤│
-    /// ├─────────┤     ├─────────┤│           │                            ├─────────┤││    D    ││
-    /// │    4    │     │    1    ││           │                            │    1    ││└─────────┘│
-    /// └─────────┘     └─────────┘└───────────┘                            └─────────┘└───────────┘
-    /// row indices
-    ///                   partial     partial                                 partial     partial
-    ///                   indices     arrays                                  indices     arrays
+    ///  ┌─────────┐     ┌─────────┐┌───────────┐                            ┌─────────┐┌───────────┐
+    ///  │    C    │     │ 0: None ││┌ 0 ──────┐│                            │ 0: None ││┌ 0 ──────┐│
+    ///  ├─────────┤     ├─────────┤││    A    ││                            ├─────────┤││    A    ││
+    ///  │    D    │     │ 1: None ││└─────────┘│                            │ 1:  2   ││└─────────┘│
+    ///  └─────────┘     ├─────────┤│┌ 1 ──────┐│   add_branch_result(       ├─────────┤│┌ 1 ──────┐│
+    ///   matching       │ 2:  0   │││    B    ││     row indices,           │ 2:  0   │││    B    ││
+    /// 'then' values    ├─────────┤│└─────────┘│     value                  ├─────────┤│└─────────┘│
+    ///                  │ 3: None ││           │   )                        │ 3: None ││┌ 2 ──────┐│
+    ///  ┌─────────┐     ├─────────┤│           │ ─────────────────────────▶ ├─────────┤││    C    ││
+    ///  │    1    │     │ 4: None ││           │                            │ 4:  2   ││├─────────┤│
+    ///  ├─────────┤     ├─────────┤│           │                            ├─────────┤││    D    ││
+    ///  │    4    │     │ 5:  1   ││           │                            │ 5:  1   ││└─────────┘│
+    ///  └─────────┘     └─────────┘└───────────┘                            └─────────┘└───────────┘
+    /// row indices        partial     partial                                 partial     partial
+    ///                    indices     arrays                                  indices     arrays
     /// ```
     fn add_branch_result(
         &mut self,
