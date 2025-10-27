@@ -129,7 +129,7 @@ async fn create_single_parquet_file_default() {
     // which is enough to fetch the entire footer metadata and PageIndex
     // in a single GET request.
     let test = Test::new().with_single_file_parquet().await;
-    // expect 1 get request to read the footer metadata and page index
+    // expect 1 get request which reads the footer metadata and page index
     assert_snapshot!(
         test.requests(),
         @r"
@@ -142,19 +142,53 @@ async fn create_single_parquet_file_default() {
 }
 
 #[tokio::test]
-async fn create_single_parquet_file_small_prefetc() {
-    // configure a prefetch size that is large enough for the footer
-    // metadata but not the PageIndex
-    // (number from the test below with no_prefetch)
+async fn create_single_parquet_file_too_small_prefetch() {
+    // configure a prefetch size that is too small to fetch the footer
+    // metadata
     //
-    // Ranges:
+    // Using the ranges from  the test below (with no_prefetch),
+    // pick a number less than 730:
+    // --------
+    // 2286-2294: (8 bytes) footer + length
+    // 2264-2986: (722 bytes) footer metadata
+    let test = Test::new()
+        .with_parquet_metadata_size_hint(Some(500))
+        .with_single_file_parquet()
+        .await;
+    // expect three get requests:
+    // 1. read the footer hint (not enough for the footer metadata)
+    // 2. Read the footer metadata
+    // 3. reads the PageIndex
+    assert_snapshot!(
+        test.requests(),
+        @r"
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - HEAD path=parquet_table.parquet
+    - GET  (range) range=2494-2994 path=parquet_table.parquet
+    - GET  (range) range=2264-2986 path=parquet_table.parquet
+    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    "
+    );
+}
+
+#[tokio::test]
+async fn create_single_parquet_file_small_prefetch() {
+    // configure a prefetch size that is large enough for the footer
+    // metadata but **not** the PageIndex
+    //
+    // Using the ranges from from the test below (with no_prefetch),
+    // the 730 is determined as follows:
+    // --------
     // 2286-2294: (8 bytes) footer + length
     // 2264-2986: (722 bytes) footer metadata
     let test = Test::new()
         .with_parquet_metadata_size_hint(Some(730))
         .with_single_file_parquet()
         .await;
-    // expect two get requests to read the footer metadata and page index
+    // expect two get requests:
+    // 1. read the footer metadata
+    // 2. reads the PageIndex
     assert_snapshot!(
         test.requests(),
         @r"
