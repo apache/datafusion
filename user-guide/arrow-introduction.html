@@ -1,0 +1,1012 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Gentle Arrow Introduction &#8212; Apache DataFusion  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=de50bcb9" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/arrow-introduction';</script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Expression API" href="expressions.html" />
+    <link rel="prev" title="DataFrame API" href="dataframe.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://apache.org">
+    Apache Software Foundation
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/licenses/">
+    License
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/foundation/sponsorship.html">
+    Donate
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/foundation/thanks.html">
+    Thanks
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/security/">
+    Security
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://github.com/apache/datafusion">
+    GitHub and Issue Tracker
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://crates.io/crates/datafusion">
+    crates.io
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://docs.rs/datafusion/latest/datafusion/">
+    API Docs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/blog/">
+    Blog
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+    Code of conduct
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../download.html">
+    Download
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="introduction.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="example-usage.html">
+    Example Usage
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="features.html">
+    Features
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="concepts-readings-events.html">
+    Concepts, Readings, Events
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="crate-configuration.html">
+    Crate Configuration
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="cli/index.html">
+    DataFusion CLI
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="dataframe.html">
+    DataFrame API
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="#">
+    Gentle Arrow Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="expressions.html">
+    Expression API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="sql/index.html">
+    SQL Reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="configs.html">
+    Configuration Settings
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="explain-usage.html">
+    Reading Explain Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="metrics.html">
+    Metrics
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="faq.html">
+    Frequently Asked Questions
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/index.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/upgrading.html">
+    Upgrade Guides
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/extensions.html">
+    Extensions List
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/using-the-sql-api.html">
+    Using the SQL API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/working-with-exprs.html">
+    Working with Exprs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/using-the-dataframe-api.html">
+    Using the DataFrame API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/building-logical-plans.html">
+    Building Logical Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/catalogs.html">
+    Catalogs, Schemas, and Tables
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/functions/index.html">
+    Functions
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/custom-table-providers.html">
+    Custom Table Provider
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/table-constraints.html">
+    Table Constraint Enforcement
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/extending-operators.html">
+    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/profiling.html">
+    Profiling Cookbook
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/query-optimizer.html">
+    DataFusion Query Optimizer
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/index.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/communication.html">
+    Communication
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/development_environment.html">
+    Development Environment
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/architecture.html">
+    Architecture
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/testing.html">
+    Testing
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/api-health.html">
+    API health policy
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/howtos.html">
+    HOWTOs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/roadmap.html">
+    Roadmap and Improvement Proposals
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/governance.html">
+    Governance
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/inviting.html">
+    Inviting New Committers and PMC Members
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/specification/index.html">
+    Specifications
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/gsoc/index.html">
+    Google Summer of Code (GSOC)
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/ballista/">
+    DataFusion Ballista
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/comet/">
+    DataFusion Comet
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/python/">
+    DataFusion Python
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><p>
+  <a href="../index.html">
+    <img src="../_static/images/original.svg" class="logo light-logo" alt="logo">
+    <img src="../_static/images/original_dark.svg" class="logo dark-logo" alt="logo">
+  </a>
+</p>
+<p>
+  <form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+    <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+  </form>
+</p>
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/index.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/upgrading.html">Upgrade Guides</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extending-operators.html">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/query-optimizer.html">DataFusion Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/communication.html">Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Gentle Arrow Introduction</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="gentle-arrow-introduction">
+<h1>Gentle Arrow Introduction<a class="headerlink" href="#gentle-arrow-introduction" title="Link to this heading">#</a></h1>
+<nav class="contents local" id="contents">
+<ul class="simple">
+<li><p><a class="reference internal" href="#overview" id="id1">Overview</a></p></li>
+<li><p><a class="reference internal" href="#columnar-layout" id="id2">Columnar Layout</a></p></li>
+<li><p><a class="reference internal" href="#recordbatch" id="id3"><code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a></p></li>
+<li><p><a class="reference internal" href="#streaming-through-the-engine" id="id4">Streaming Through the Engine</a></p></li>
+<li><p><a class="reference internal" href="#creating-arrayref-and-recordbatches" id="id5">Creating <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> and <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code>es</a></p></li>
+<li><p><a class="reference internal" href="#working-with-arrayref-and-recordbatch" id="id6">Working with <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> and <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a></p></li>
+<li><p><a class="reference internal" href="#common-pitfalls" id="id7">Common Pitfalls</a></p></li>
+<li><p><a class="reference internal" href="#further-reading" id="id8">Further reading</a></p></li>
+</ul>
+</nav>
+<section id="overview">
+<h2><a class="toc-backref" href="#id1" role="doc-backlink">Overview</a><a class="headerlink" href="#overview" title="Link to this heading">#</a></h2>
+<p>DataFusion uses <a class="reference external" href="https://arrow.apache.org/docs/index.html">Apache Arrow</a> as its native in-memory format, so anyone using DataFusion will likely interact with Arrow at some point. This guide introduces the key Arrow concepts you need to know to effectively use DataFusion.</p>
+<p>Apache Arrow defines a standardized columnar representation for in-memory data. This enables different systems and languages (e.g., Rust and Python) to share data with zero-copy interchange, avoiding serialization overhead. In addition to zero copy interchange, Arrow also standardizes best practice columnar data representation enabling high performance analytical processing through vectorized execution.</p>
+</section>
+<section id="columnar-layout">
+<h2><a class="toc-backref" href="#id2" role="doc-backlink">Columnar Layout</a><a class="headerlink" href="#columnar-layout" title="Link to this heading">#</a></h2>
+<p>Quick visual: row-major (left) vs Arrow’s columnar layout (right). For a deeper primer, see the <a class="reference external" href="https://jorgecarleitao.github.io/arrow2/main/guide/arrow.html#what-is-apache-arrow">arrow2 guide</a>.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Traditional Row Storage:          Arrow Columnar Storage:
+┌──────────────────┐              ┌─────────┬─────────┬──────────┐
+│ id │ name │ age  │              │   id    │  name   │   age    │
+├────┼──────┼──────┤              ├─────────┼─────────┼──────────┤
+│ 1  │  A   │  30  │              │ [1,2,3] │ [A,B,C] │[30,25,35]│
+│ 2  │  B   │  25  │              └─────────┴─────────┴──────────┘
+│ 3  │  C   │  35  │                   ↑          ↑         ↑
+└──────────────────┘              Int32Array StringArray Int32Array
+(read entire rows)                (process entire columns at once)
+</pre></div>
+</div>
+</section>
+<section id="recordbatch">
+<h2><a class="toc-backref" href="#id3" role="doc-backlink"><code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a><a class="headerlink" href="#recordbatch" title="Link to this heading">#</a></h2>
+<p>Arrow’s standard unit for packaging data is the <strong><a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html"><code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a></strong>.</p>
+<p>A <strong><a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html"><code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a></strong> represents a horizontal slice of a table—a collection of equal-length columnar arrays that conform to a defined schema. Each column within the slice is a contiguous Arrow array, and all columns have the same number of rows (length). This chunked, immutable unit enables efficient streaming and parallel execution.</p>
+<p>Think of it as having two perspectives:</p>
+<ul class="simple">
+<li><p><strong>Columnar inside</strong>: Each column (<code class="docutils literal notranslate"><span class="pre">id</span></code>, <code class="docutils literal notranslate"><span class="pre">name</span></code>, <code class="docutils literal notranslate"><span class="pre">age</span></code>) is a contiguous array optimized for vectorized operations</p></li>
+<li><p><strong>Row-chunked externally</strong>: The batch represents a chunk of rows (e.g., rows 1-1000), making it a manageable unit for streaming</p></li>
+</ul>
+<p>RecordBatches are <strong>immutable snapshots</strong>—once created, they cannot be modified. Any transformation produces a <em>new</em> RecordBatch, enabling safe parallel processing without locks or coordination overhead.</p>
+<p>This design allows DataFusion to process streams of row-based chunks while gaining maximum performance from the columnar layout.</p>
+</section>
+<section id="streaming-through-the-engine">
+<h2><a class="toc-backref" href="#id4" role="doc-backlink">Streaming Through the Engine</a><a class="headerlink" href="#streaming-through-the-engine" title="Link to this heading">#</a></h2>
+<p>DataFusion processes queries as pull-based pipelines where operators request batches from their inputs. This streaming approach enables early result production, bounds memory usage (spilling to disk only when necessary), and naturally supports parallel execution across multiple CPU cores.</p>
+<p>For example, given the following query:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="s1">&#39;data.parquet&#39;</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span>
+</pre></div>
+</div>
+<p>The DataFusion Pipeline looks like this:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>┌─────────────┐    ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐    ┌──────────┐
+│ Parquet     │───▶│ Scan         │───▶│ Filter         │───▶│ Projection       │───▶│ Results  │
+│ File        │    │ Operator     │    │ Operator       │    │ Operator         │    │          │
+└─────────────┘    └──────────────┘    └────────────────┘    └──────────────────┘    └──────────┘
+                   (reads data)        (id &gt; 10)             (keeps &quot;name&quot; col)
+                   RecordBatch ───▶    RecordBatch ────▶     RecordBatch ────▶        RecordBatch
+</pre></div>
+</div>
+<p>In this pipeline, <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html"><code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a>es are the “packages” of columnar data that flow between the different stages of query execution. Each operator processes batches incrementally, enabling the system to produce results before reading the entire input.</p>
+</section>
+<section id="creating-arrayref-and-recordbatches">
+<h2><a class="toc-backref" href="#id5" role="doc-backlink">Creating <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> and <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code>es</a><a class="headerlink" href="#creating-arrayref-and-recordbatches" title="Link to this heading">#</a></h2>
+<p>Sometimes you need to create Arrow data programmatically rather than reading from files.</p>
+<p>The first thing needed is creating an Arrow Array, for each column. [arrow-rs] provides array builders and <code class="docutils literal notranslate"><span class="pre">From</span></code> impls to create arrays from Rust vectors.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">arrow</span><span class="p">::</span><span class="n">array</span><span class="p">::{</span><span class="n">StringArray</span><span class="p">,</span><span class="w"> </span><span class="n">Int32Array</span><span class="p">};</span>
+<span class="c1">// Create an Int32Array from a vector of i32 values</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">ids</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Int32Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
+<span class="c1">// There are similar constructors for other array types, e.g., StringArray, Float64Array, etc.</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">StringArray</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="nb">Some</span><span class="p">(</span><span class="s">&quot;alice&quot;</span><span class="p">),</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="s">&quot;carol&quot;</span><span class="p">)]);</span>
+</pre></div>
+</div>
+<p>Every element in an Arrow array can be “null” (aka missing). Often, arrays are
+created from <code class="docutils literal notranslate"><span class="pre">Option&lt;T&gt;</span></code> values to indicate nullability (e.g., <code class="docutils literal notranslate"><span class="pre">Some(&quot;alice&quot;)</span></code>
+vs <code class="docutils literal notranslate"><span class="pre">None</span></code> above).</p>
+<p>Note: You’ll see <a class="reference external" href="https://doc.rust-lang.org/std/sync/struct.Arc.html"><code class="docutils literal notranslate"><span class="pre">Arc</span></code></a> used frequently in the code—Arrow arrays are wrapped in
+<a class="reference external" href="https://doc.rust-lang.org/std/sync/struct.Arc.html"><code class="docutils literal notranslate"><span class="pre">Arc</span></code></a> (atomically reference-counted pointers) to enable cheap, thread-safe
+sharing across operators and tasks. <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html"><code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code></a> is simply a type alias for
+<code class="docutils literal notranslate"><span class="pre">Arc&lt;dyn</span> <span class="pre">Array&gt;</span></code>. To create an <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code>, wrap your array in <code class="docutils literal notranslate"><span class="pre">Arc::new(...)</span></code> as shown below.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+<span class="c1">// To get an ArrayRef, wrap the Int32Array in an Arc.</span>
+<span class="c1">// (note you will often have to explicitly type annotate to ArrayRef)</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">arr</span><span class="p">:</span><span class="w"> </span><span class="nc">ArrayRef</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Int32Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]));</span>
+
+<span class="c1">// you can also store Strings and other types in ArrayRefs</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">arr</span><span class="p">:</span><span class="w"> </span><span class="nc">ArrayRef</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
+<span class="w">  </span><span class="n">StringArray</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="nb">Some</span><span class="p">(</span><span class="s">&quot;alice&quot;</span><span class="p">),</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="s">&quot;carol&quot;</span><span class="p">)])</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>To create a <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html"><code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a>, you need to define its <a class="reference external" href="https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html"><code class="docutils literal notranslate"><span class="pre">Schema</span></code></a> (the column names and types) and provide the corresponding columns as <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html"><code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code></a>s as shown below:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">arrow_schema</span><span class="p">::{</span><span class="n">DataType</span><span class="p">,</span><span class="w"> </span><span class="n">Field</span><span class="p">,</span><span class="w"> </span><span class="n">Schema</span><span class="p">};</span>
+
+<span class="c1">// Create the columns as Arrow arrays</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">ids</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Int32Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">StringArray</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="nb">Some</span><span class="p">(</span><span class="s">&quot;alice&quot;</span><span class="p">),</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="s">&quot;carol&quot;</span><span class="p">)]);</span>
+<span class="c1">// Create the schema</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Schema</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span><span class="w"> </span><span class="c1">// false means non-nullable</span>
+<span class="w">    </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// true means nullable</span>
+<span class="p">]));</span>
+<span class="c1">// Assemble the columns</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">cols</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">ArrayRef</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">      </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ids</span><span class="p">),</span>
+<span class="w">      </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">names</span><span class="p">)</span>
+<span class="p">];</span>
+<span class="c1">// Finally, create the RecordBatch</span>
+<span class="n">RecordBatch</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">schema</span><span class="p">,</span><span class="w"> </span><span class="n">cols</span><span class="p">).</span><span class="n">expect</span><span class="p">(</span><span class="s">&quot;Failed to create RecordBatch&quot;</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="working-with-arrayref-and-recordbatch">
+<h2><a class="toc-backref" href="#id6" role="doc-backlink">Working with <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> and <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a><a class="headerlink" href="#working-with-arrayref-and-recordbatch" title="Link to this heading">#</a></h2>
+<p>Most DataFusion APIs are in terms of <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html"><code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code></a> and <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html"><code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a>. To work with the
+underlying data, you typically downcast the <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html"><code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code></a> to its concrete type
+(e.g., <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/array/struct.Int32Array.html"><code class="docutils literal notranslate"><span class="pre">Int32Array</span></code></a>).</p>
+<p>To do so either use the <code class="docutils literal notranslate"><span class="pre">as_any().downcast_ref::&lt;T&gt;()</span></code> method or the
+<code class="docutils literal notranslate"><span class="pre">as_::&lt;T&gt;()</span></code> helper method from the <a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/cast/trait.AsArray.html">AsArray</a> trait.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// First check the data type of the array</span>
+<span class="k">match</span><span class="w"> </span><span class="n">arr</span><span class="p">.</span><span class="n">data_type</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="o">&amp;</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">         </span><span class="c1">// Downcast to Int32Array</span>
+<span class="w">         </span><span class="kd">let</span><span class="w"> </span><span class="n">int_array</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">arr</span><span class="p">.</span><span class="n">as_primitive</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Int32Type</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">         </span><span class="c1">// Now you can access Int32Array methods</span>
+<span class="w">         </span><span class="k">for</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="mi">0</span><span class="o">..</span><span class="n">int_array</span><span class="p">.</span><span class="n">len</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">              </span><span class="fm">println!</span><span class="p">(</span><span class="s">&quot;Value at index {}: {}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">int_array</span><span class="p">.</span><span class="n">value</span><span class="p">(</span><span class="n">i</span><span class="p">));</span>
+<span class="w">         </span><span class="p">}</span>
+<span class="w">   </span><span class="p">}</span>
+<span class="w">    </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">println</span><span class="w"> </span><span class="o">!</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;Array is not of type Int32&quot;</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The following two downcasting methods are equivalent:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Downcast to Int32Array using as_any</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">int_array1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">arr</span><span class="p">.</span><span class="n">as_any</span><span class="p">().</span><span class="n">downcast_ref</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Int32Array</span><span class="o">&gt;</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
+<span class="c1">// This is the same as using the as_::&lt;T&gt;() helper</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">int_array2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">arr</span><span class="p">.</span><span class="n">as_primitive</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Int32Type</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="fm">assert_eq!</span><span class="p">(</span><span class="n">int_array1</span><span class="p">,</span><span class="w"> </span><span class="n">int_array2</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="common-pitfalls">
+<h2><a class="toc-backref" href="#id7" role="doc-backlink">Common Pitfalls</a><a class="headerlink" href="#common-pitfalls" title="Link to this heading">#</a></h2>
+<p>When working with Arrow and RecordBatches, watch out for these common issues:</p>
+<ul class="simple">
+<li><p><strong>Schema consistency</strong>: All batches in a stream must share the exact same <a class="reference external" href="https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html"><code class="docutils literal notranslate"><span class="pre">Schema</span></code></a>. For example, you can’t have one batch where a column is <a class="reference external" href="https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int32"><code class="docutils literal notranslate"><span class="pre">Int32</span></code></a> and the next where it’s <a class="reference external" href="https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int64"><code class="docutils literal notranslate"><span class="pre">Int64</span></code></a>, even if the values would fit</p></li>
+<li><p><strong>Immutability</strong>: Arrays are immutable—to “modify” data, you must build new arrays or new RecordBatches. For instance, to change a value in an array, you’d create a new array with the updated value</p></li>
+<li><p><strong>Row by Row Processing</strong>: Avoid iterating over Arrays element by element when possible, and use Arrow’s built-in <a class="reference external" href="https://docs.rs/arrow/latest/arrow/compute/index.html">compute kernels</a> instead</p></li>
+<li><p><strong>Type mismatches</strong>: Mixed input types across files may require explicit casts. For example, a string column <code class="docutils literal notranslate"><span class="pre">&quot;123&quot;</span></code> from a CSV file won’t automatically join with an integer column <code class="docutils literal notranslate"><span class="pre">123</span></code> from a Parquet file—you’ll need to cast one to match the other. Use Arrow’s <a class="reference external" href="https://docs.rs/arrow/latest/arrow/compute/fn.cast.html"><code class="docutils literal notranslate"><span class="pre">cast</span></code></a> kernel where appropriate</p></li>
+<li><p><strong>Batch size assumptions</strong>: Don’t assume a particular batch size; always iterate until the stream ends. One file might produce 8192-row batches while another produces 1024-row batches</p></li>
+</ul>
+</section>
+<section id="further-reading">
+<h2><a class="toc-backref" href="#id8" role="doc-backlink">Further reading</a><a class="headerlink" href="#further-reading" title="Link to this heading">#</a></h2>
+<p><strong>Arrow Documentation:</strong></p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://arrow.apache.org/docs/format/Intro.html">Arrow Format Introduction</a> - Understand the Arrow specification and why it enables zero-copy data sharing</p></li>
+<li><p><a class="reference external" href="https://arrow.apache.org/docs/format/Columnar.html">Arrow Columnar Format</a> - Deep dive into memory layout for performance optimization</p></li>
+<li><p><a class="reference external" href="https://docs.rs/arrow/latest/arrow/">Arrow Rust Documentation</a> - Complete API reference for the Rust implementation</p></li>
+</ul>
+<p><strong>Key API References:</strong></p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html">RecordBatch</a> - The fundamental data structure for columnar data (a table slice)</p></li>
+<li><p><a class="reference external" href="https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html">ArrayRef</a> - Represents a reference-counted Arrow array (single column)</p></li>
+<li><p><a class="reference external" href="https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html">DataType</a> - Enum of all supported Arrow data types (e.g., Int32, Utf8)</p></li>
+<li><p><a class="reference external" href="https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html">Schema</a> - Describes the structure of a RecordBatch (column names and types)</p></li>
+</ul>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="dataframe.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">DataFrame API</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="expressions.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Expression API</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview">Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#columnar-layout">Columnar Layout</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recordbatch"><code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#streaming-through-the-engine">Streaming Through the Engine</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#creating-arrayref-and-recordbatches">Creating <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> and <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code>es</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#working-with-arrayref-and-recordbatch">Working with <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> and <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#common-pitfalls">Common Pitfalls</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#further-reading">Further reading</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/arrow-introduction.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/user-guide/arrow-introduction.md.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>

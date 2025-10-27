@@ -45,7 +45,7 @@
     <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/dataframe';</script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Expression API" href="expressions.html" />
+    <link rel="next" title="Gentle Arrow Introduction" href="arrow-introduction.html" />
     <link rel="prev" title="CLI Specific Functions" href="cli/functions.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -234,6 +234,13 @@
 <li class="nav-item current active">
   <a class="nav-link nav-internal" href="#">
     DataFrame API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="arrow-introduction.html">
+    Gentle Arrow Introduction
   </a>
 </li>
 
@@ -558,6 +565,7 @@
 </ul>
 </details></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arrow-introduction.html">Gentle Arrow Introduction</a></li>
 <li class="toctree-l1"><a class="reference internal" href="expressions.html">Expression API</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="sql/data_types.html">Data Types</a></li>
@@ -716,6 +724,8 @@
 -->
 <section id="dataframe-api">
 <h1>DataFrame API<a class="headerlink" href="#dataframe-api" title="Link to this heading">#</a></h1>
+<section id="dataframe-overview">
+<h2>DataFrame overview<a class="headerlink" href="#dataframe-overview" title="Link to this heading">#</a></h2>
 <p>A DataFrame represents a logical set of rows with the same named columns,
 similar to a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html">Pandas DataFrame</a> or <a class="reference external" href="https://spark.apache.org/docs/latest/sql-programming-guide.html">Spark DataFrame</a>.</p>
 <p>DataFrames are typically created by calling a method on <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html"><code class="docutils literal notranslate"><span class="pre">SessionContext</span></code></a>, such
@@ -731,6 +741,7 @@ See the <a class="reference internal" href="../library-user-guide/using-the-data
 <p>The DataFrame API is well documented in the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html">API reference on docs.rs</a>.
 Please refer to the <a class="reference internal" href="expressions.html"><span class="doc std std-doc">Expressions Reference</span></a> for more information on
 building logical expressions (<code class="docutils literal notranslate"><span class="pre">Expr</span></code>) to use with the DataFrame API.</p>
+</section>
 <section id="example">
 <h2>Example<a class="headerlink" href="#example" title="Link to this heading">#</a></h2>
 <p>The DataFrame struct is part of DataFusion’s <code class="docutils literal notranslate"><span class="pre">prelude</span></code> and can be imported with
@@ -817,11 +828,11 @@ the following statement.</p>
       </div>
     </a>
     <a class="right-next"
-       href="expressions.html"
+       href="arrow-introduction.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Expression API</p>
+        <p class="prev-next-title">Gentle Arrow Introduction</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -844,6 +855,7 @@ the following statement.</p>
   </div>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-overview">DataFrame overview</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example">Example</a></li>
 </ul>
   </nav></div>
