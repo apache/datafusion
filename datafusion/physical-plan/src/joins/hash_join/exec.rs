@@ -26,7 +26,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBoundsAccumulator};
+use crate::joins::hash_join::shared_bounds::{
+    ColumnBounds, ColumnFilterData, SharedBoundsAccumulator,
+};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
@@ -53,7 +55,6 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
 };
-use datafusion_physical_expr::bloom_filter::Sbbf;
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
@@ -105,15 +106,12 @@ pub(super) struct JoinLeftData {
     /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
     /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
     _reservation: MemoryReservation,
-    /// Bounds computed from the build side for dynamic filter pushdown
-    pub(super) bounds: Option<Vec<ColumnBounds>>,
-    /// Bloom filters computed from the build side for dynamic filter pushdown
-    pub(super) bloom_filters: Option<Vec<Sbbf>>,
+    /// Filter data (bounds + bloom filters) computed from the build side for dynamic filter pushdown
+    pub(super) column_filters: Option<Vec<ColumnFilterData>>,
 }
 
 impl JoinLeftData {
     /// Create a new `JoinLeftData` from its parts
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         hash_map: Box<dyn JoinHashMapType>,
         batch: RecordBatch,
@@ -121,8 +119,7 @@ impl JoinLeftData {
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
-        bounds: Option<Vec<ColumnBounds>>,
-        bloom_filters: Option<Vec<Sbbf>>,
+        column_filters: Option<Vec<ColumnFilterData>>,
     ) -> Self {
         Self {
             hash_map,
@@ -131,8 +128,7 @@ impl JoinLeftData {
             visited_indices_bitmap,
             probe_threads_counter,
             _reservation: reservation,
-            bounds,
-            bloom_filters,
+            column_filters,
         }
     }
 
@@ -1291,19 +1287,16 @@ impl CollectLeftAccumulator {
         Ok(())
     }
 
-    /// Finalizes the accumulation and returns the computed bounds and bloom filter.
+    /// Finalizes the accumulation and returns the computed filter data.
     ///
     /// Consumes self to extract the final min and max values from the accumulators
-    /// and the built bloom filter.
+    /// and the bloom filter builder.
     ///
     /// # Returns
-    /// A tuple of (`ColumnBounds`, `Sbbf`) containing the minimum/maximum values and bloom filter
-    fn evaluate(mut self) -> Result<(ColumnBounds, Sbbf)> {
+    /// `ColumnFilterData` containing the bounds and bloom filter builder
+    fn evaluate(mut self) -> Result<ColumnFilterData> {
         let bounds = ColumnBounds::new(self.min.evaluate()?, self.max.evaluate()?);
-        let bloom_filter_expr = self.bloom_filter.finish(Arc::clone(&self.expr));
-        // Extract the Sbbf from the BloomFilterExpr
-        let bloom_filter = bloom_filter_expr.bloom_filter().clone();
-        Ok((bounds, bloom_filter))
+        Ok(ColumnFilterData::new(bounds, self.bloom_filter))
     }
 }
 
@@ -1495,18 +1488,16 @@ async fn collect_left_input(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Compute bounds and bloom filters for dynamic filter if enabled
-    let (bounds, bloom_filters) = match bounds_accumulators {
+    // Compute filter data (bounds + bloom filters) for dynamic filter if enabled
+    let column_filters = match bounds_accumulators {
         Some(accumulators) if num_rows > 0 => {
-            let results: Vec<_> = accumulators
+            let column_filters: Vec<_> = accumulators
                 .into_iter()
                 .map(CollectLeftAccumulator::evaluate)
                 .collect::<Result<Vec<_>>>()?;
-            // Separate bounds and bloom filters
-            let (bounds, bloom_filters): (Vec<_>, Vec<_>) = results.into_iter().unzip();
-            (Some(bounds), Some(bloom_filters))
+            Some(column_filters)
         }
-        _ => (None, None),
+        _ => None,
     };
 
     let data = JoinLeftData::new(
@@ -1516,8 +1507,7 @@ async fn collect_left_input(
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,
-        bounds,
-        bloom_filters,
+        column_filters,
     );
 
     Ok(data)

@@ -39,8 +39,9 @@ use std::sync::Arc;
 /// let mut builder = BloomFilterBuilder::new(1000, 0.01)?;
 /// builder.insert_scalar(&ScalarValue::Int32(Some(42)))?;
 /// builder.insert_array(&int_array)?;
-/// let expr = builder.finish(col_expr)?;
+/// let expr = builder.build(&col_expr);
 /// ```
+#[derive(Clone, Debug)]
 pub struct BloomFilterBuilder {
     /// The underlying bloom filter
     sbbf: Sbbf,
@@ -251,15 +252,16 @@ impl BloomFilterBuilder {
         Ok(())
     }
 
-    /// Finish building and create a `BloomFilterExpr`
+    /// Build a `BloomFilterExpr` from this builder
     ///
-    /// This consumes the builder and returns a static PhysicalExpr
-    /// that checks values against the constructed bloom filter.
+    /// This method does not consume the builder, allowing multiple
+    /// `BloomFilterExpr` instances to be created with different expressions
+    /// but sharing the same bloom filter data.
     ///
     /// # Arguments
     /// * `expr` - The expression to evaluate and check against the bloom filter
-    pub fn finish(self, expr: Arc<dyn PhysicalExpr>) -> BloomFilterExpr {
-        BloomFilterExpr::new(expr, self.sbbf)
+    pub fn build(&self, expr: Arc<dyn PhysicalExpr>) -> BloomFilterExpr {
+        BloomFilterExpr::new(expr, self.sbbf.clone())
     }
 }
 
@@ -280,17 +282,14 @@ pub struct BloomFilterExpr {
 }
 
 impl BloomFilterExpr {
-    /// Create a new bloom filter expression
-    pub fn new(expr: Arc<dyn PhysicalExpr>, bloom_filter: Sbbf) -> Self {
+    /// Create a new bloom filter expression (internal use only)
+    ///
+    /// Users should create bloom filter expressions through `BloomFilterBuilder::build()`
+    pub(crate) fn new(expr: Arc<dyn PhysicalExpr>, bloom_filter: Sbbf) -> Self {
         Self {
             expr,
             bloom_filter: Arc::new(bloom_filter),
         }
-    }
-
-    /// Get a reference to the underlying bloom filter
-    pub fn bloom_filter(&self) -> &Sbbf {
-        &self.bloom_filter
     }
 
     /// Check a scalar value against the bloom filter
@@ -609,7 +608,7 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let expr = col("a", &schema)?;
-        let bloom_expr = builder.finish(expr);
+        let bloom_expr = builder.build(expr);
 
         // Check that inserted values are found
         assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(1))));
@@ -634,7 +633,7 @@ mod tests {
         // Create the expression
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let expr = col("a", &schema)?;
-        let bloom_expr = Arc::new(builder.finish(expr));
+        let bloom_expr = Arc::new(builder.build(expr));
 
         // Create a test batch with values [1, 2, 4, 5]
         let test_array = Arc::new(Int32Array::from(vec![1, 2, 4, 5])) as ArrayRef;
@@ -668,7 +667,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
         let expr = col("s", &schema)?;
-        let bloom_expr = Arc::new(builder.finish(expr));
+        let bloom_expr = Arc::new(builder.build(expr));
 
         let test_array =
             Arc::new(StringArray::from(vec!["hello", "world", "foo"])) as ArrayRef;
@@ -702,7 +701,7 @@ mod tests {
             false,
         )]));
         let expr = col("d", &schema)?;
-        let bloom_expr = Arc::new(builder.finish(expr));
+        let bloom_expr = Arc::new(builder.build(expr));
 
         // Create test array with decimal values
         let test_array = Arc::new(

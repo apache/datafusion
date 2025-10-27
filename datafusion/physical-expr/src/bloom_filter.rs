@@ -119,7 +119,7 @@ impl std::ops::IndexMut<usize> for Block {
 /// an element is a member of a set. False positive matches are possible, but
 /// false negatives are not.
 #[derive(Debug, Clone)]
-pub struct Sbbf(Vec<Block>);
+pub(crate) struct Sbbf(Vec<Block>);
 
 impl Sbbf {
     /// Create a new Sbbf with given number of distinct values and false positive probability.

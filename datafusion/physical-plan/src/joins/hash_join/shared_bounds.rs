@@ -27,9 +27,8 @@ use crate::ExecutionPlanProperties;
 
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::bloom_filter::Sbbf;
 use datafusion_physical_expr::expressions::{
-    lit, BinaryExpr, BloomFilterExpr, DynamicFilterPhysicalExpr,
+    lit, BinaryExpr, BloomFilterBuilder, DynamicFilterPhysicalExpr,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
@@ -43,7 +42,7 @@ use tokio::sync::Barrier;
 pub(crate) struct ColumnBounds {
     /// The minimum value observed for this column
     min: ScalarValue,
-    /// The maximum value observed for this column  
+    /// The maximum value observed for this column
     max: ScalarValue,
 }
 
@@ -53,43 +52,50 @@ impl ColumnBounds {
     }
 }
 
+/// Filter data for a single join key column, combining bounds and bloom filter.
+/// Used in dynamic filter pushdown for comprehensive filtering.
+#[derive(Debug, Clone)]
+pub(crate) struct ColumnFilterData {
+    /// Min/max bounds for range filtering
+    pub(crate) bounds: ColumnBounds,
+    /// Bloom filter builder for membership testing
+    pub(crate) bloom_filter: BloomFilterBuilder,
+}
+
+impl ColumnFilterData {
+    pub(crate) fn new(bounds: ColumnBounds, bloom_filter: BloomFilterBuilder) -> Self {
+        Self {
+            bounds,
+            bloom_filter,
+        }
+    }
+}
+
 /// Represents the bounds for all join key columns from a single partition.
-/// This contains the min/max values and bloom filters computed from one partition's build-side data.
+/// This contains the filter data (min/max values and bloom filters) computed from one partition's build-side data.
 #[derive(Debug, Clone)]
 pub(crate) struct PartitionBounds {
     /// Partition identifier for debugging and determinism (not strictly necessary)
     partition: usize,
-    /// Min/max bounds for each join key column in this partition.
+    /// Filter data (bounds + bloom filter) for each join key column in this partition.
     /// Index corresponds to the join key expression index.
-    column_bounds: Vec<ColumnBounds>,
-    /// Bloom filters for each join key column in this partition.
-    /// Index corresponds to the join key expression index.
-    bloom_filters: Vec<Sbbf>,
+    column_filters: Vec<ColumnFilterData>,
 }
 
 impl PartitionBounds {
-    pub(crate) fn new(
-        partition: usize,
-        column_bounds: Vec<ColumnBounds>,
-        bloom_filters: Vec<Sbbf>,
-    ) -> Self {
+    pub(crate) fn new(partition: usize, column_filters: Vec<ColumnFilterData>) -> Self {
         Self {
             partition,
-            column_bounds,
-            bloom_filters,
+            column_filters,
         }
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.column_bounds.len()
+        self.column_filters.len()
     }
 
-    pub(crate) fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
-        self.column_bounds.get(index)
-    }
-
-    pub(crate) fn get_bloom_filter(&self, index: usize) -> Option<&Sbbf> {
-        self.bloom_filters.get(index)
+    pub(crate) fn get_column_filter(&self, index: usize) -> Option<&ColumnFilterData> {
+        self.column_filters.get(index)
     }
 }
 
@@ -215,43 +221,32 @@ impl SharedBoundsAccumulator {
             let mut column_predicates = Vec::with_capacity(partition_bounds.len());
 
             for (col_idx, right_expr) in self.on_right.iter().enumerate() {
-                if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
+                if let Some(filter_data) = partition_bounds.get_column_filter(col_idx) {
                     // Create predicate: col >= min AND col <= max
                     let min_expr = Arc::new(BinaryExpr::new(
                         Arc::clone(right_expr),
                         Operator::GtEq,
-                        lit(column_bounds.min.clone()),
+                        lit(filter_data.bounds.min.clone()),
                     )) as Arc<dyn PhysicalExpr>;
                     let max_expr = Arc::new(BinaryExpr::new(
                         Arc::clone(right_expr),
                         Operator::LtEq,
-                        lit(column_bounds.max.clone()),
+                        lit(filter_data.bounds.max.clone()),
                     )) as Arc<dyn PhysicalExpr>;
                     let range_expr =
                         Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
                             as Arc<dyn PhysicalExpr>;
 
                     // Create bloom filter check: col IN BLOOM_FILTER
-                    if let Some(bloom_filter) = partition_bounds.get_bloom_filter(col_idx)
-                    {
-                        let bloom_expr = Arc::new(BloomFilterExpr::new(
-                            Arc::clone(right_expr),
-                            bloom_filter.clone(),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
+                    let bloom_expr = Arc::new(filter_data.bloom_filter.build(Arc::clone(
+                        right_expr,
+                    ))) as Arc<dyn PhysicalExpr>;
 
-                        // Combine range and bloom filter: (range_expr AND bloom_expr)
-                        let combined_expr = Arc::new(BinaryExpr::new(
-                            range_expr,
-                            Operator::And,
-                            bloom_expr,
-                        ))
+                    // Combine range and bloom filter: (range_expr AND bloom_expr)
+                    let combined_expr =
+                        Arc::new(BinaryExpr::new(range_expr, Operator::And, bloom_expr))
                             as Arc<dyn PhysicalExpr>;
-                        column_predicates.push(combined_expr);
-                    } else {
-                        // If no bloom filter, just use range expression
-                        column_predicates.push(range_expr);
-                    }
+                    column_predicates.push(combined_expr);
                 }
             }
 
@@ -283,8 +278,8 @@ impl SharedBoundsAccumulator {
     /// Report bounds from a completed partition and update dynamic filter if all partitions are done
     ///
     /// This method coordinates the dynamic filter updates across all partitions. It stores the
-    /// bounds and bloom filters from the current partition, increments the completion counter, and when all
-    /// partitions have reported, creates an OR'd filter from individual partition bounds and bloom filters.
+    /// filter data from the current partition, increments the completion counter, and when all
+    /// partitions have reported, creates an OR'd filter from individual partition filter data.
     ///
     /// This method is async and uses a [`tokio::sync::Barrier`] to wait for all partitions
     /// to report their bounds. Once that occurs, the method will resolve for all callers and the
@@ -299,19 +294,17 @@ impl SharedBoundsAccumulator {
     ///
     /// # Arguments
     /// * `left_side_partition_id` - The identifier for the **left-side** partition reporting its bounds
-    /// * `partition_bounds` - The bounds computed by this partition (if any)
-    /// * `bloom_filters` - The bloom filters computed by this partition (if any)
+    /// * `column_filters` - The filter data computed by this partition (if any)
     ///
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed
     pub(crate) async fn report_partition_bounds(
         &self,
         left_side_partition_id: usize,
-        partition_bounds: Option<Vec<ColumnBounds>>,
-        bloom_filters: Option<Vec<Sbbf>>,
+        column_filters: Option<Vec<ColumnFilterData>>,
     ) -> Result<()> {
-        // Store bounds and bloom filters in the accumulator - this runs once per partition
-        if let (Some(bounds), Some(filters)) = (partition_bounds, bloom_filters) {
+        // Store filter data in the accumulator - this runs once per partition
+        if let Some(filters) = column_filters {
             let mut guard = self.inner.lock();
 
             let should_push = if let Some(last_bound) = guard.bounds.last() {
@@ -324,11 +317,9 @@ impl SharedBoundsAccumulator {
             };
 
             if should_push {
-                guard.bounds.push(PartitionBounds::new(
-                    left_side_partition_id,
-                    bounds,
-                    filters,
-                ));
+                guard
+                    .bounds
+                    .push(PartitionBounds::new(left_side_partition_id, filters));
             }
         }
 
