@@ -204,6 +204,22 @@ impl AsBytes for bool {
     }
 }
 
+impl AsBytes for i8 {
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(self as *const i8 as *const u8, size_of::<i8>())
+        }
+    }
+}
+
+impl AsBytes for i16 {
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(self as *const i16 as *const u8, size_of::<i16>())
+        }
+    }
+}
+
 impl AsBytes for i32 {
     fn as_bytes(&self) -> &[u8] {
         unsafe {
@@ -216,6 +232,20 @@ impl AsBytes for i64 {
     fn as_bytes(&self) -> &[u8] {
         unsafe {
             std::slice::from_raw_parts(self as *const i64 as *const u8, size_of::<i64>())
+        }
+    }
+}
+
+impl AsBytes for u8 {
+    fn as_bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self as *const u8, size_of::<u8>()) }
+    }
+}
+
+impl AsBytes for u16 {
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(self as *const u16 as *const u8, size_of::<u16>())
         }
     }
 }

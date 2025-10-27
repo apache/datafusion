@@ -1326,7 +1326,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -         CoalesceBatchesExec: target_batch_size=8192
     -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
+    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND a@0 IN BLOOM_FILTER AND b@1 >= ba AND b@1 <= bb AND b@1 IN BLOOM_FILTER ]
     "
     );
 
