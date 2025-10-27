@@ -390,7 +390,7 @@ impl Default for PruningMetrics {
 }
 
 impl PruningMetrics {
-    /// create a new counter
+    /// create a new PruningMetrics
     pub fn new() -> Self {
         Self {
             pruned: Arc::new(AtomicUsize::new(0)),
@@ -398,21 +398,21 @@ impl PruningMetrics {
         }
     }
 
-    /// Add `n` to the metric's value
+    /// Add `n` to the metric's pruned value
     pub fn add_pruned(&self, n: usize) {
         // relaxed ordering for operations on `value` poses no issues
         // we're purely using atomic ops with no associated memory ops
         self.pruned.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Add `n` to the metric's value
+    /// Add `n` to the metric's matched value
     pub fn add_matched(&self, n: usize) {
         // relaxed ordering for operations on `value` poses no issues
         // we're purely using atomic ops with no associated memory ops
         self.matched.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Subtract `n` to the metric's value.
+    /// Subtract `n` to the metric's matched value.
     pub fn subtract_matched(&self, n: usize) {
         // relaxed ordering for operations on `value` poses no issues
         // we're purely using atomic ops with no associated memory ops

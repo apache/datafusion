@@ -251,16 +251,12 @@ impl<'a> MetricBuilder<'a> {
         timestamp
     }
 
+    /// Consumes self and creates a new `PruningMetrics`
     pub fn pruning_metrics(
         self,
         name: impl Into<Cow<'static, str>>,
         partition: usize,
     ) -> PruningMetrics {
-        // let count = Count::new();
-        // self.with_partition(partition)
-        //     .build(MetricValue::OutputBytes(count.clone()));
-        // count
-
         let pruning_metrics = PruningMetrics::new();
         self.with_partition(partition)
             .build(MetricValue::PruningMetrics {
