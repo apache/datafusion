@@ -125,6 +125,57 @@ Users may need to update their paths to account for these changes.
 
 See [issue #17713] for more details.
 
+### `FileScanConfig::projection` renamed to `FileScanConfig::projection_exprs`
+
+The `projection` field in `FileScanConfig` has been renamed to `projection_exprs` and its type has changed from `Option<Vec<usize>>` to `Option<ProjectionExprs>`. This change enables more powerful projection pushdown capabilities by supporting arbitrary physical expressions rather than just column indices.
+
+**Impact on direct field access:**
+
+If you directly access the `projection` field:
+
+```rust
+# /* comment to avoid running
+let config: FileScanConfig = ...;
+let projection = config.projection;
+# */
+```
+
+You should update to:
+
+```rust
+# /* comment to avoid running
+let config: FileScanConfig = ...;
+let projection_exprs = config.projection_exprs;
+# */
+```
+
+**Impact on builders:**
+
+The `FileScanConfigBuilder::with_projection()` method has been deprecated in favor of `with_projection_indices()`:
+
+```diff
+let config = FileScanConfigBuilder::new(url, schema, file_source)
+-   .with_projection(Some(vec![0, 2, 3]))
++   .with_projection_indices(Some(vec![0, 2, 3]))
+    .build();
+```
+
+Note: `with_projection()` still works but is deprecated and will be removed in a future release.
+
+**What is `ProjectionExprs`?**
+
+`ProjectionExprs` is a new type that represents a list of physical expressions for projection. While it can be constructed from column indices (which is what `with_projection_indices` does internally), it also supports arbitrary physical expressions, enabling advanced features like expression evaluation during scanning.
+
+You can access column indices from `ProjectionExprs` using its methods if needed:
+
+```rust
+# /* comment to avoid running
+let projection_exprs: ProjectionExprs = ...;
+// Get the column indices if the projection only contains simple column references
+let indices = projection_exprs.column_indices();
+# */
+```
+
 ### `DESCRIBE query` support
 
 `DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the

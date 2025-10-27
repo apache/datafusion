@@ -118,7 +118,7 @@ mod tests {
         ))
         .with_file_compression_type(file_compression_type)
         .with_newlines_in_values(false)
-        .with_projection(Some(vec![0, 2, 4]))
+        .with_projection_indices(Some(vec![0, 2, 4]))
         .build();
 
         assert_eq!(13, config.file_schema().fields().len());
@@ -183,7 +183,7 @@ mod tests {
         ))
         .with_newlines_in_values(false)
         .with_file_compression_type(file_compression_type.to_owned())
-        .with_projection(Some(vec![4, 0, 2]))
+        .with_projection_indices(Some(vec![4, 0, 2]))
         .build();
         assert_eq!(13, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
@@ -373,7 +373,7 @@ mod tests {
         .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
         // We should be able to project on the partition column
         // Which is supposed to be after the file fields
-        .with_projection(Some(vec![0, num_file_schema_fields]))
+        .with_projection_indices(Some(vec![0, num_file_schema_fields]))
         .build();
 
         // we don't have `/date=xx/` in the path but that is ok because
