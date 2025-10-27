@@ -210,7 +210,7 @@ As part of this change, the `FileSource::with_schema()` method signature has cha
          Arc::new(Self {
 -            schema: Some(schema),
 +            // Use schema.file_schema() to get the file schema without partition columns
-+            schema: Some(Arc::clone(&schema.file_schema())),
++            schema: Some(Arc::clone(schema.file_schema())),
              ..self.clone()
          })
      }
@@ -219,16 +219,18 @@ As part of this change, the `FileSource::with_schema()` method signature has cha
 
 For implementations that need access to partition columns:
 
-```rust
+```rust,ignore
 fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
     Arc::new(Self {
-        file_schema: Arc::clone(&schema.file_schema()),
+        file_schema: Arc::clone(schema.file_schema()),
         partition_cols: schema.table_partition_cols().clone(),
-        table_schema: Arc::clone(&schema.table_schema()),
+        table_schema: Arc::clone(schema.table_schema()),
         ..self.clone()
     })
 }
 ```
+
+**Note**: Most `FileSource` implementations only need to store the file schema (without partition columns), as shown in the first example. The second pattern of storing all three schema components is typically only needed for advanced use cases where you need access to different schema representations for different operations (e.g., ParquetSource uses the file schema for building pruning predicates but needs the table schema for filter pushdown logic).
 
 **Using `TableSchema` directly:**
 
@@ -253,9 +255,9 @@ let partition_cols = vec![
 let table_schema = TableSchema::new(file_schema, partition_cols);
 
 // Access different schema representations
-let file_schema = table_schema.file_schema();      // Schema without partition columns
-let table_schema = table_schema.table_schema();     // Complete schema with partition columns
-let partition_cols = table_schema.table_partition_cols(); // Just the partition columns
+let file_schema_ref = table_schema.file_schema();      // Schema without partition columns
+let full_schema = table_schema.table_schema();          // Complete schema with partition columns
+let partition_cols_ref = table_schema.table_partition_cols(); // Just the partition columns
 ```
 
 ## DataFusion `50.0.0`
