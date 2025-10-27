@@ -149,6 +149,49 @@ impl ProjectionExprs {
         }
     }
 
+    /// Creates a [`ProjectionExpr`] from a list of column indices.
+    ///
+    /// This is a convenience method for creating simple column-only projections, where each projection expression is a reference to a column
+    /// in the input schema.
+    ///
+    /// # Behavior
+    /// - Ordering: the output projection preserves the exact order of indices provided in the input slice
+    ///   For example, `[2, 0, 1]` will produce projections for columns 2, 0, then 1 in that order
+    /// - Duplicates: Duplicate indices are allowed and will create multiple projection expressions referencing the same source column
+    ///   For example, `[0, 0]` creates 2 separate projections both referencing column 0
+    ///
+    /// # Panics
+    /// Panics if any index in `indices` is out of bounds for the provided schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use arrow::datatypes::{Schema, Field, DataType};
+    /// use datafusion_physical_expr::projection::ProjectionExprs;
+    ///
+    /// // Create a schema with three columns
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Utf8, false),
+    ///     Field::new("c", DataType::Float64, false),
+    /// ]));
+    ///
+    /// // Project columns at indices 2 and 0 (c and a) - ordering is preserved
+    /// let projection = ProjectionExprs::from_indices(&[2, 0], &schema);
+    ///
+    /// // This creates: SELECT c@2 AS c, a@0 AS a
+    /// assert_eq!(projection.as_ref().len(), 2);
+    /// assert_eq!(projection.as_ref()[0].alias, "c");
+    /// assert_eq!(projection.as_ref()[1].alias, "a");
+    ///
+    /// // Duplicate indices are allowed
+    /// let projection_with_dups = ProjectionExprs::from_indices(&[0, 0, 1], &schema);
+    /// assert_eq!(projection_with_dups.as_ref().len(), 3);
+    /// assert_eq!(projection_with_dups.as_ref()[0].alias, "a");
+    /// assert_eq!(projection_with_dups.as_ref()[1].alias, "a"); // duplicate
+    /// assert_eq!(projection_with_dups.as_ref()[2].alias, "b");
+    /// ```
     pub fn from_indices(indices: &[usize], schema: &SchemaRef) -> Self {
         let projection_exprs = indices.iter().map(|&i| {
             let field = schema.field(i);
