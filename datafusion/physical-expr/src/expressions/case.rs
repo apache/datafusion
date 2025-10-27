@@ -176,7 +176,7 @@ fn filter_array(
 /// Each element in `indices` is the index of an array in `values`. The `indices` array is processed
 /// sequentially. The first occurrence of index value `n` will be mapped to the first
 /// value of the array at index `n`. The second occurrence to the second value, and so on.
-/// An index value of `usize::MAX` is used to indicate null values.
+/// An index value where `PartialResultIndex::is_none` is `true` is used to indicate null values.
 ///
 /// # Implementation notes
 ///
@@ -208,19 +208,19 @@ fn filter_array(
 ///
 /// ```text
 /// ┌───────────┐  ┌─────────┐                             ┌─────────┐
-/// │┌─────────┐│  │   MAX   │                             │   NULL  │
+/// │┌─────────┐│  │   None  │                             │   NULL  │
 /// ││    A    ││  ├─────────┤                             ├─────────┤
 /// │└─────────┘│  │    1    │                             │    B    │
 /// │┌─────────┐│  ├─────────┤                             ├─────────┤
 /// ││    B    ││  │    0    │    merge(values, indices)   │    A    │
 /// │└─────────┘│  ├─────────┤  ─────────────────────────▶ ├─────────┤
-/// │┌─────────┐│  │   MAX   │                             │   NULL  │
+/// │┌─────────┐│  │   None  │                             │   NULL  │
 /// ││    C    ││  ├─────────┤                             ├─────────┤
 /// │├─────────┤│  │    2    │                             │    C    │
 /// ││    D    ││  ├─────────┤                             ├─────────┤
 /// │└─────────┘│  │    2    │                             │    D    │
 /// └───────────┘  └─────────┘                             └─────────┘
-///    values        indices                                   result
+///    values        indices                                  result
 ///
 /// ```
 fn merge(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
@@ -283,7 +283,7 @@ impl PartialResultIndex {
 
     /// Creates a new partial result index.
     ///
-    /// If the provide value is greater than or equal to `u32::MAX`
+    /// If the provided value is greater than or equal to `u32::MAX`
     /// an error will be returned.
     fn try_new(index: usize) -> Result<Self> {
         let Ok(index) = u32::try_from(index) else {
@@ -347,6 +347,7 @@ enum ResultState {
 /// any merging overhead.
 struct ResultBuilder {
     data_type: DataType,
+    /// The number of rows in the final result.
     row_count: usize,
     state: ResultState,
 }
@@ -383,15 +384,15 @@ impl ResultBuilder {
     ///
     /// ```text
     /// ┌─────────┐     ┌─────────┐┌───────────┐                            ┌─────────┐┌───────────┐
-    /// │    C    │     │   MAX   ││┌─────────┐│                            │   MAX   ││┌─────────┐│
+    /// │    C    │     │   None  ││┌─────────┐│                            │   None  ││┌─────────┐│
     /// ├─────────┤     ├─────────┤││    A    ││                            ├─────────┤││    A    ││
-    /// │    D    │     │   MAX   ││└─────────┘│                            │    2    ││└─────────┘│
+    /// │    D    │     │   None  ││└─────────┘│                            │    2    ││└─────────┘│
     /// └─────────┘     ├─────────┤│┌─────────┐│   add_branch_result(       ├─────────┤│┌─────────┐│
     ///   value         │    0    │││    B    ││     row indices,           │    0    │││    B    ││
     ///                 ├─────────┤│└─────────┘│     value                  ├─────────┤│└─────────┘│
-    ///                 │   MAX   ││           │   )                        │   MAX   ││┌─────────┐│
+    ///                 │   None  ││           │   )                        │   None  ││┌─────────┐│
     /// ┌─────────┐     ├─────────┤│           │ ─────────────────────────▶ ├─────────┤││    C    ││
-    /// │    1    │     │   MAX   ││           │                            │    2    ││├─────────┤│
+    /// │    1    │     │   None  ││           │                            │    2    ││├─────────┤│
     /// ├─────────┤     ├─────────┤│           │                            ├─────────┤││    D    ││
     /// │    4    │     │    1    ││           │                            │    1    ││└─────────┘│
     /// └─────────┘     └─────────┘└───────────┘                            └─────────┘└───────────┘
