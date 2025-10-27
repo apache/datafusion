@@ -151,13 +151,8 @@ impl Sbbf {
         (((hash >> 32).saturating_mul(self.0.len() as u64)) >> 32) as usize
     }
 
-    /// Insert a value into the filter
-    pub fn insert<T: AsBytes + ?Sized>(&mut self, value: &T) {
-        self.insert_hash(hash_as_bytes(value));
-    }
-
     /// Insert a hash into the filter
-    fn insert_hash(&mut self, hash: u64) {
+    pub(crate) fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].insert(hash as u32)
     }
@@ -170,7 +165,7 @@ impl Sbbf {
     /// Check if a hash is in the filter. May return
     /// true for values that were never inserted ("false positive")
     /// but will always return false if a hash has not been inserted.
-    fn check_hash(&self, hash: u64) -> bool {
+    pub(crate) fn check_hash(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].check(hash as u32)
     }

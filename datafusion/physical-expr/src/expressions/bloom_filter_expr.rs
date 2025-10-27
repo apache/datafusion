@@ -19,10 +19,12 @@
 
 use crate::bloom_filter::Sbbf;
 use crate::PhysicalExpr;
+use ahash::RandomState;
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use std::any::Any;
 use std::fmt;
@@ -58,286 +60,19 @@ impl BloomFilterBuilder {
         Ok(Self { sbbf })
     }
 
-    /// Insert a single scalar value into the bloom filter
-    pub fn insert_scalar(&mut self, value: &ScalarValue) -> Result<()> {
-        if value.is_null() {
-            return Ok(());
-        }
-
-        match value {
-            ScalarValue::Boolean(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::Int8(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::Int16(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::Int32(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::Int64(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::UInt8(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::UInt16(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::UInt32(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::UInt64(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::Float32(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::Float64(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) => {
-                self.sbbf.insert(v.as_str())
-            }
-            ScalarValue::Utf8View(Some(v)) => self.sbbf.insert(v.as_str()),
-            ScalarValue::Binary(Some(v))
-            | ScalarValue::LargeBinary(Some(v))
-            | ScalarValue::FixedSizeBinary(_, Some(v)) => self.sbbf.insert(v.as_slice()),
-            ScalarValue::BinaryView(Some(v)) => self.sbbf.insert(v.as_slice()),
-            ScalarValue::Decimal32(Some(v), _, _) => self.sbbf.insert(v),
-            ScalarValue::Decimal64(Some(v), _, _) => self.sbbf.insert(v),
-            ScalarValue::Decimal128(Some(v), _, _) => self.sbbf.insert(v),
-            ScalarValue::Decimal256(Some(v), _, _) => {
-                // Convert i256 to bytes
-                let bytes = v.to_be_bytes();
-                self.sbbf.insert(&bytes)
-            }
-            ScalarValue::Date32(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::Date64(Some(v)) => self.sbbf.insert(v),
-            ScalarValue::TimestampSecond(Some(v), _)
-            | ScalarValue::TimestampMillisecond(Some(v), _)
-            | ScalarValue::TimestampMicrosecond(Some(v), _)
-            | ScalarValue::TimestampNanosecond(Some(v), _) => self.sbbf.insert(v),
-            _ => {
-                return exec_err!(
-                    "Unsupported data type for bloom filter: {}",
-                    value.data_type()
-                )
-            }
-        }
-        Ok(())
-    }
-
-    /// Insert all non-null values from an array into the bloom filter
+    /// Insert all values from an array into the bloom filter
     pub fn insert_array(&mut self, array: &ArrayRef) -> Result<()> {
-        use arrow::array::*;
-        use arrow::datatypes::DataType;
+        // Use create_hashes to compute hash values for all array types
+        // This handles Dictionary, Struct, Null, and all other types uniformly
+        let mut hashes = vec![0u64; array.len()];
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        create_hashes(&[Arc::clone(array)], &random_state, &mut hashes)?;
 
-        match array.data_type() {
-            DataType::Boolean => {
-                let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Int8 => {
-                let array = array.as_any().downcast_ref::<Int8Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Int16 => {
-                let array = array.as_any().downcast_ref::<Int16Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Int32 => {
-                let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Int64 => {
-                let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::UInt8 => {
-                let array = array.as_any().downcast_ref::<UInt8Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::UInt16 => {
-                let array = array.as_any().downcast_ref::<UInt16Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::UInt32 => {
-                let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::UInt64 => {
-                let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Float32 => {
-                let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Float64 => {
-                let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Utf8 => {
-                let array = array.as_any().downcast_ref::<StringArray>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(array.value(i));
-                    }
-                }
-            }
-            DataType::LargeUtf8 => {
-                let array = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(array.value(i));
-                    }
-                }
-            }
-            DataType::Utf8View => {
-                let array = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(array.value(i));
-                    }
-                }
-            }
-            DataType::Binary => {
-                let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(array.value(i));
-                    }
-                }
-            }
-            DataType::LargeBinary => {
-                let array = array.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(array.value(i));
-                    }
-                }
-            }
-            DataType::BinaryView => {
-                let array = array.as_any().downcast_ref::<BinaryViewArray>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(array.value(i));
-                    }
-                }
-            }
-            DataType::FixedSizeBinary(_) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<FixedSizeBinaryArray>()
-                    .unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(array.value(i));
-                    }
-                }
-            }
-            DataType::Decimal128(_, _) => {
-                let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Decimal256(_, _) => {
-                let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        let bytes = array.value(i).to_be_bytes();
-                        self.sbbf.insert(&bytes);
-                    }
-                }
-            }
-            DataType::Date32 => {
-                let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Date64 => {
-                let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
-                for i in 0..array.len() {
-                    if !array.is_null(i) {
-                        self.sbbf.insert(&array.value(i));
-                    }
-                }
-            }
-            DataType::Timestamp(_, _) => {
-                // All timestamp types store i64 values internally
-                // Try each timestamp array type
-                if let Some(ts_array) =
-                    array.as_any().downcast_ref::<TimestampSecondArray>()
-                {
-                    for i in 0..ts_array.len() {
-                        if !ts_array.is_null(i) {
-                            self.sbbf.insert(&ts_array.value(i));
-                        }
-                    }
-                } else if let Some(ts_array) =
-                    array.as_any().downcast_ref::<TimestampMillisecondArray>()
-                {
-                    for i in 0..ts_array.len() {
-                        if !ts_array.is_null(i) {
-                            self.sbbf.insert(&ts_array.value(i));
-                        }
-                    }
-                } else if let Some(ts_array) =
-                    array.as_any().downcast_ref::<TimestampMicrosecondArray>()
-                {
-                    for i in 0..ts_array.len() {
-                        if !ts_array.is_null(i) {
-                            self.sbbf.insert(&ts_array.value(i));
-                        }
-                    }
-                } else if let Some(ts_array) =
-                    array.as_any().downcast_ref::<TimestampNanosecondArray>()
-                {
-                    for i in 0..ts_array.len() {
-                        if !ts_array.is_null(i) {
-                            self.sbbf.insert(&ts_array.value(i));
-                        }
-                    }
-                }
-            }
-            _ => {
-                return exec_err!(
-                    "Unsupported data type for bloom filter: {}",
-                    array.data_type()
-                )
-            }
+        // Insert each hash into the bloom filter
+        for hash in hashes {
+            self.sbbf.insert_hash(hash);
         }
+
         Ok(())
     }
 
@@ -427,296 +162,16 @@ impl BloomFilterExpr {
 
     /// Check an array against the bloom filter
     fn check_array(&self, array: &ArrayRef) -> Result<BooleanArray> {
-        use arrow::array::*;
-        use arrow::datatypes::DataType;
+        // Use create_hashes to compute hash values for all array types
+        // This handles Dictionary, Struct, Null, and all other types uniformly
+        let mut hashes = vec![0u64; array.len()];
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        create_hashes(&[Arc::clone(array)], &random_state, &mut hashes)?;
 
-        let len = array.len();
-        let mut builder = BooleanArray::builder(len);
-
-        match array.data_type() {
-            DataType::Boolean => {
-                let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Int8 => {
-                let array = array.as_any().downcast_ref::<Int8Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Int16 => {
-                let array = array.as_any().downcast_ref::<Int16Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Int32 => {
-                let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Int64 => {
-                let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::UInt8 => {
-                let array = array.as_any().downcast_ref::<UInt8Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::UInt16 => {
-                let array = array.as_any().downcast_ref::<UInt16Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::UInt32 => {
-                let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::UInt64 => {
-                let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Float32 => {
-                let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Float64 => {
-                let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Utf8 => {
-                let array = array.as_any().downcast_ref::<StringArray>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(array.value(i)));
-                    }
-                }
-            }
-            DataType::LargeUtf8 => {
-                let array = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(array.value(i)));
-                    }
-                }
-            }
-            DataType::Utf8View => {
-                let array = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(array.value(i)));
-                    }
-                }
-            }
-            DataType::Binary => {
-                let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(array.value(i)));
-                    }
-                }
-            }
-            DataType::LargeBinary => {
-                let array = array.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(array.value(i)));
-                    }
-                }
-            }
-            DataType::BinaryView => {
-                let array = array.as_any().downcast_ref::<BinaryViewArray>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(array.value(i)));
-                    }
-                }
-            }
-            DataType::FixedSizeBinary(_) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<FixedSizeBinaryArray>()
-                    .unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(array.value(i)));
-                    }
-                }
-            }
-            DataType::Decimal128(_, _) => {
-                let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Decimal256(_, _) => {
-                let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        let bytes = array.value(i).to_be_bytes();
-                        builder.append_value(self.bloom_filter.check(&bytes));
-                    }
-                }
-            }
-            DataType::Date32 => {
-                let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Date64 => {
-                let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
-                for i in 0..len {
-                    if array.is_null(i) {
-                        builder.append_value(false);
-                    } else {
-                        builder.append_value(self.bloom_filter.check(&array.value(i)));
-                    }
-                }
-            }
-            DataType::Timestamp(_, _) => {
-                // All timestamp types store i64 values internally
-                // Try each timestamp array type
-                if let Some(ts_array) =
-                    array.as_any().downcast_ref::<TimestampSecondArray>()
-                {
-                    for i in 0..len {
-                        if ts_array.is_null(i) {
-                            builder.append_value(false);
-                        } else {
-                            builder.append_value(
-                                self.bloom_filter.check(&ts_array.value(i)),
-                            );
-                        }
-                    }
-                } else if let Some(ts_array) =
-                    array.as_any().downcast_ref::<TimestampMillisecondArray>()
-                {
-                    for i in 0..len {
-                        if ts_array.is_null(i) {
-                            builder.append_value(false);
-                        } else {
-                            builder.append_value(
-                                self.bloom_filter.check(&ts_array.value(i)),
-                            );
-                        }
-                    }
-                } else if let Some(ts_array) =
-                    array.as_any().downcast_ref::<TimestampMicrosecondArray>()
-                {
-                    for i in 0..len {
-                        if ts_array.is_null(i) {
-                            builder.append_value(false);
-                        } else {
-                            builder.append_value(
-                                self.bloom_filter.check(&ts_array.value(i)),
-                            );
-                        }
-                    }
-                } else if let Some(ts_array) =
-                    array.as_any().downcast_ref::<TimestampNanosecondArray>()
-                {
-                    for i in 0..len {
-                        if ts_array.is_null(i) {
-                            builder.append_value(false);
-                        } else {
-                            builder.append_value(
-                                self.bloom_filter.check(&ts_array.value(i)),
-                            );
-                        }
-                    }
-                }
-            }
-            _ => {
-                return internal_err!(
-                    "Unsupported data type for bloom filter check: {}",
-                    array.data_type()
-                )
-            }
+        // Check each hash against the bloom filter
+        let mut builder = BooleanArray::builder(array.len());
+        for hash in hashes {
+            builder.append_value(self.bloom_filter.check_hash(hash));
         }
 
         Ok(builder.finish())
@@ -801,6 +256,20 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::datatypes::{Field, Schema};
+
+    // Helper trait to add insert_scalar for tests
+    trait BloomFilterBuilderTestExt {
+        fn insert_scalar(&mut self, value: &ScalarValue) -> Result<()>;
+    }
+
+    impl BloomFilterBuilderTestExt for BloomFilterBuilder {
+        /// Insert a single scalar value by converting to array and using insert_array
+        /// This is less efficient but sufficient for tests
+        fn insert_scalar(&mut self, value: &ScalarValue) -> Result<()> {
+            let array = value.to_array()?;
+            self.insert_array(&array)
+        }
+    }
 
     #[test]
     fn test_bloom_filter_builder() -> Result<()> {
