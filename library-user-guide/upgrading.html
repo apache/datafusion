@@ -812,6 +812,38 @@ This follows the pattern for the AVRO, CSV, JSON, and Parquet data sources.
 Users may need to update their paths to account for these changes.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/17713">issue #17713</a> for more details.</p>
 </section>
+<section id="filescanconfig-projection-renamed-to-filescanconfig-projection-exprs">
+<h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection</span></code> renamed to <code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection_exprs</span></code><a class="headerlink" href="#filescanconfig-projection-renamed-to-filescanconfig-projection-exprs" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">projection</span></code> field in <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> has been renamed to <code class="docutils literal notranslate"><span class="pre">projection_exprs</span></code> and its type has changed from <code class="docutils literal notranslate"><span class="pre">Option&lt;Vec&lt;usize&gt;&gt;</span></code> to <code class="docutils literal notranslate"><span class="pre">Option&lt;ProjectionExprs&gt;</span></code>. This change enables more powerful projection pushdown capabilities by supporting arbitrary physical expressions rather than just column indices.</p>
+<p><strong>Impact on direct field access:</strong></p>
+<p>If you directly access the <code class="docutils literal notranslate"><span class="pre">projection</span></code> field:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="p">:</span><span class="w"> </span><span class="nc">FileScanConfig</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">projection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">projection</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>You should update to:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="p">:</span><span class="w"> </span><span class="nc">FileScanConfig</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">projection_exprs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">projection_exprs</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>Impact on builders:</strong></p>
+<p>The <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_projection()</span></code> method has been deprecated in favor of <code class="docutils literal notranslate"><span class="pre">with_projection_indices()</span></code>:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>let config = FileScanConfigBuilder::new(url, schema, file_source)
+<span class="gd">-   .with_projection(Some(vec![0, 2, 3]))</span>
+<span class="gi">+   .with_projection_indices(Some(vec![0, 2, 3]))</span>
+<span class="w"> </span>   .build();
+</pre></div>
+</div>
+<p>Note: <code class="docutils literal notranslate"><span class="pre">with_projection()</span></code> still works but is deprecated and will be removed in a future release.</p>
+<p><strong>What is <code class="docutils literal notranslate"><span class="pre">ProjectionExprs</span></code>?</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">ProjectionExprs</span></code> is a new type that represents a list of physical expressions for projection. While it can be constructed from column indices (which is what <code class="docutils literal notranslate"><span class="pre">with_projection_indices</span></code> does internally), it also supports arbitrary physical expressions, enabling advanced features like expression evaluation during scanning.</p>
+<p>You can access column indices from <code class="docutils literal notranslate"><span class="pre">ProjectionExprs</span></code> using its methods if needed:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">projection_exprs</span><span class="p">:</span><span class="w"> </span><span class="nc">ProjectionExprs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.;</span>
+<span class="c1">// Get the column indices if the projection only contains simple column references</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">indices</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">projection_exprs</span><span class="p">.</span><span class="n">column_indices</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
 <section id="describe-query-support">
 <h3><code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">query</span></code> support<a class="headerlink" href="#describe-query-support" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">query</span></code> was previously an alias for <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">query</span></code>, which outputs the
@@ -1772,6 +1804,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sessionstate-s-sql-to-statement-method-takes-dialect-rather-than-a-str"><code class="docutils literal notranslate"><span class="pre">SessionState</span></code>’s <code class="docutils literal notranslate"><span class="pre">sql_to_statement</span></code> method takes <code class="docutils literal notranslate"><span class="pre">Dialect</span></code> rather than a <code class="docutils literal notranslate"><span class="pre">str</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reorganization-of-listingtable-into-datafusion-catalog-listing-crate">Reorganization of <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> into <code class="docutils literal notranslate"><span class="pre">datafusion-catalog-listing</span></code> crate</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reorganization-of-arrowsource-into-datafusion-datasource-arrow-crate">Reorganization of <code class="docutils literal notranslate"><span class="pre">ArrowSource</span></code> into <code class="docutils literal notranslate"><span class="pre">datafusion-datasource-arrow</span></code> crate</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filescanconfig-projection-renamed-to-filescanconfig-projection-exprs"><code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection</span></code> renamed to <code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection_exprs</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#describe-query-support"><code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">query</span></code> support</a></li>
 </ul>
 </li>
