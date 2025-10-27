@@ -126,7 +126,7 @@ use log::{debug, warn};
 /// let file_source = Arc::new(ParquetSource::new());
 /// let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
-///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
+///   .with_projection_indices(Some(vec![2, 3])) // project columns 2 and 3
 ///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
 ///   .with_file(PartitionedFile::new("file1.parquet", 1234))
 ///   // Read /tmp/file2.parquet 56 bytes and /tmp/file3.parquet 78 bytes
@@ -234,7 +234,7 @@ pub struct FileScanConfig {
 ///     // Set a limit of 1000 rows
 ///     .with_limit(Some(1000))
 ///     // Project only the first column
-///     .with_projection(Some(vec![0]))
+///     .with_projection_indices(Some(vec![0]))
 ///     // Add partition columns
 ///     .with_table_partition_cols(vec![
 ///         Field::new("date", DataType::Utf8, false),
@@ -328,7 +328,18 @@ impl FileScanConfigBuilder {
 
     /// Set the columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
-    pub fn with_projection(mut self, indices: Option<Vec<usize>>) -> Self {
+    ///
+    /// # Deprecated
+    /// Use [`Self::with_projection_indices`] instead. This method will be removed in a future release.
+    #[deprecated(since = "51.0.0", note = "Use with_projection_indices instead")]
+    pub fn with_projection(self, indices: Option<Vec<usize>>) -> Self {
+        self.with_projection_indices(indices)
+    }
+
+    /// Set the columns on which to project the data using column indices.
+    ///
+    /// Indexes that are higher than the number of columns of `file_schema` refer to `table_partition_cols`.
+    pub fn with_projection_indices(mut self, indices: Option<Vec<usize>>) -> Self {
         self.projection_indices = indices;
         self
     }
@@ -464,8 +475,10 @@ impl FileScanConfigBuilder {
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
 
-        let projection = projection_indices.as_ref().map(|indices| {
-            ProjectionExprs::from_indices(indices, table_schema.table_schema())
+        // Convert projection indices to ProjectionExprs using the final table schema
+        // (which now includes partition columns if they were added)
+        let projection_exprs = projection_indices.map(|indices| {
+            ProjectionExprs::from_indices(&indices, table_schema.table_schema())
         });
 
         FileScanConfig {
@@ -473,7 +486,7 @@ impl FileScanConfigBuilder {
             table_schema,
             file_source,
             limit,
-            projection_exprs: projection,
+            projection_exprs,
             constraints,
             file_groups,
             output_ordering,
@@ -666,7 +679,7 @@ impl DataSource for FileScanConfig {
             Arc::new(
                 FileScanConfigBuilder::from(file_scan)
                     // Assign projected statistics to source
-                    .with_projection(Some(new_projections))
+                    .with_projection_indices(Some(new_projections))
                     .with_source(source)
                     .build(),
             ) as _
@@ -2138,7 +2151,7 @@ mod tests {
             file_schema,
             Arc::new(MockSource::default()),
         )
-        .with_projection(projection)
+        .with_projection_indices(projection)
         .with_statistics(statistics)
         .with_table_partition_cols(table_partition_cols)
         .build()
@@ -2191,7 +2204,7 @@ mod tests {
         // Build with various configurations
         let config = builder
             .with_limit(Some(1000))
-            .with_projection(Some(vec![0, 1]))
+            .with_projection_indices(Some(vec![0, 1]))
             .with_table_partition_cols(vec![Field::new(
                 "date",
                 wrap_partition_type_in_dict(DataType::Utf8),
@@ -2251,7 +2264,7 @@ mod tests {
             Arc::clone(&file_schema),
             Arc::clone(&file_source),
         )
-        .with_projection(Some(vec![0, 1, 2]))
+        .with_projection_indices(Some(vec![0, 1, 2]))
         .build();
 
         // Simulate projection being updated. Since the filter has already been pushed down,
@@ -2358,7 +2371,7 @@ mod tests {
             Arc::clone(&schema),
             Arc::clone(&file_source),
         )
-        .with_projection(Some(vec![0, 2]))
+        .with_projection_indices(Some(vec![0, 2]))
         .with_limit(Some(10))
         .with_table_partition_cols(partition_cols.clone())
         .with_file(file.clone())

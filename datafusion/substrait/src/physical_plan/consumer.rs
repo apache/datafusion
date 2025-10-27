@@ -151,8 +151,8 @@ pub async fn from_substrait_rel(
                                 .iter()
                                 .map(|item| item.field as usize)
                                 .collect();
-                            base_config_builder =
-                                base_config_builder.with_projection(Some(column_indices));
+                            base_config_builder = base_config_builder
+                                .with_projection_indices(Some(column_indices));
                         }
                     }
 
