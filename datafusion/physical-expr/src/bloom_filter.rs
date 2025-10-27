@@ -28,7 +28,7 @@
 //! The implementation below is adapted from:
 //! arrow-rs/parquet/src/bloom_filter/mod.rs
 //!
-//! One thing to consider is if we can make this implementaion compatible with Parquet's
+//! One thing to consider is if we can make this implementation compatible with Parquet's
 //! byte for byte (it currently is not) so that we can do binary intersection of bloom filters
 //! between DataFusion and Parquet.
 
