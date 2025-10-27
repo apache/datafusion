@@ -182,7 +182,7 @@ pub struct FileScanConfig {
     /// Each expression in the projection can reference columns from both the file
     /// schema and table partition columns. If `None`, all columns from the table
     /// schema are projected.
-    pub projection: Option<ProjectionExprs>,
+    pub projection_exprs: Option<ProjectionExprs>,
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
@@ -473,7 +473,7 @@ impl FileScanConfigBuilder {
             table_schema,
             file_source,
             limit,
-            projection,
+            projection_exprs: projection,
             constraints,
             file_groups,
             output_ordering,
@@ -497,7 +497,9 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             file_compression_type: Some(config.file_compression_type),
             new_lines_in_values: Some(config.new_lines_in_values),
             limit: config.limit,
-            projection_indices: config.projection.map(|p| p.ordered_column_indices()),
+            projection_indices: config
+                .projection_exprs
+                .map(|p| p.ordered_column_indices()),
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
@@ -655,7 +657,7 @@ impl DataSource for FileScanConfig {
             let new_projections = new_projections_for_columns(
                 projection,
                 &file_scan
-                    .projection
+                    .projection_exprs
                     .as_ref()
                     .map(|p| p.ordered_column_indices())
                     .unwrap_or_else(|| (0..self.file_schema().fields().len()).collect()),
@@ -710,7 +712,7 @@ impl FileScanConfig {
     }
 
     fn projection_indices(&self) -> Vec<usize> {
-        match &self.projection {
+        match &self.projection_exprs {
             Some(proj) => proj.ordered_column_indices(),
             None => (0..self.file_schema().fields().len()
                 + self.table_partition_cols().len())
@@ -808,7 +810,7 @@ impl FileScanConfig {
 
     /// Project the schema, constraints, and the statistics on the given column indices
     pub fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
-        if self.projection.is_none() && self.table_partition_cols().is_empty() {
+        if self.projection_exprs.is_none() && self.table_partition_cols().is_empty() {
             return (
                 Arc::clone(self.file_schema()),
                 self.constraints.clone(),
@@ -829,7 +831,7 @@ impl FileScanConfig {
     pub fn projected_file_column_names(&self) -> Option<Vec<String>> {
         let fields = self.file_schema().fields();
 
-        self.projection.as_ref().map(|p| {
+        self.projection_exprs.as_ref().map(|p| {
             let column_indices = p.ordered_column_indices();
 
             column_indices
@@ -863,7 +865,7 @@ impl FileScanConfig {
     }
 
     pub fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
-        self.projection.as_ref().map(|p| {
+        self.projection_exprs.as_ref().map(|p| {
             p.ordered_column_indices()
                 .into_iter()
                 .filter(|&i| i < self.file_schema().fields().len())
@@ -1404,7 +1406,7 @@ fn get_projected_output_ordering(
             }
 
             let indices = base_config
-                .projection
+                .projection_exprs
                 .as_ref()
                 .map(|p| p.ordered_column_indices());
 
@@ -2213,7 +2215,7 @@ mod tests {
         assert_eq!(*config.file_schema(), file_schema);
         assert_eq!(config.limit, Some(1000));
         assert_eq!(
-            config.projection.as_ref().map(|p| p.column_indices()),
+            config.projection_exprs.as_ref().map(|p| p.column_indices()),
             Some(vec![0, 1])
         );
         assert_eq!(config.table_partition_cols().len(), 1);
@@ -2298,7 +2300,10 @@ mod tests {
         assert_eq!(config.object_store_url, object_store_url);
         assert_eq!(*config.file_schema(), file_schema);
         assert_eq!(config.limit, None);
-        assert_eq!(config.projection.as_ref().map(|p| p.column_indices()), None);
+        assert_eq!(
+            config.projection_exprs.as_ref().map(|p| p.column_indices()),
+            None
+        );
         assert!(config.table_partition_cols().is_empty());
         assert!(config.file_groups.is_empty());
         assert_eq!(
@@ -2372,7 +2377,10 @@ mod tests {
         assert_eq!(new_config.object_store_url, object_store_url);
         assert_eq!(*new_config.file_schema(), schema);
         assert_eq!(
-            new_config.projection.as_ref().map(|p| p.column_indices()),
+            new_config
+                .projection_exprs
+                .as_ref()
+                .map(|p| p.column_indices()),
             Some(vec![0, 2])
         );
         assert_eq!(new_config.limit, Some(10));
