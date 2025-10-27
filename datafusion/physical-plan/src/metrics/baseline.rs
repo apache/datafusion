@@ -21,6 +21,8 @@ use std::task::Poll;
 
 use arrow::record_batch::RecordBatch;
 
+use crate::spill::get_record_batch_memory_size;
+
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
 use datafusion_common::Result;
 
@@ -53,6 +55,16 @@ pub struct BaselineMetrics {
 
     /// output rows: the total output rows
     output_rows: Count,
+
+    /// Memory usage of all output batches.
+    ///
+    /// Note: This value may be overestimated. If multiple output `RecordBatch`
+    /// instances share underlying memory buffers, their sizes will be counted
+    /// multiple times.
+    /// Issue: <https://github.com/apache/datafusion/issues/16841>
+    output_bytes: Count,
+    // Remember to update `docs/source/user-guide/metrics.md` when updating comments
+    // or adding new metrics
 }
 
 impl BaselineMetrics {
@@ -71,6 +83,9 @@ impl BaselineMetrics {
             output_rows: MetricBuilder::new(metrics)
                 .with_type(super::MetricType::SUMMARY)
                 .output_rows(partition),
+            output_bytes: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .output_bytes(partition),
         }
     }
 
@@ -84,6 +99,7 @@ impl BaselineMetrics {
             end_time: Default::default(),
             elapsed_compute: self.elapsed_compute.clone(),
             output_rows: Default::default(),
+            output_bytes: Default::default(),
         }
     }
 
@@ -211,6 +227,8 @@ impl RecordOutput for usize {
 impl RecordOutput for RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
+        let n_bytes = get_record_batch_memory_size(&self);
+        bm.output_bytes.add(n_bytes);
         self
     }
 }
@@ -218,6 +236,8 @@ impl RecordOutput for RecordBatch {
 impl RecordOutput for &RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
+        let n_bytes = get_record_batch_memory_size(self);
+        bm.output_bytes.add(n_bytes);
         self
     }
 }
