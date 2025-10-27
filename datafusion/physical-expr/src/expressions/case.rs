@@ -224,6 +224,13 @@ fn filter_array(
 ///
 /// ```
 fn merge(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
+    #[cfg(debug_assertions)]
+    for ix in indices {
+        if let Some(index) = ix.index() {
+            assert!(index < values.len(), "Index out of bounds: {} >= {}", index, values.len());
+        }
+    }
+
     let data_refs = values.iter().collect();
     let mut mutable = MutableArrayData::new(data_refs, true, indices.len());
 
