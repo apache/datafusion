@@ -1924,25 +1924,31 @@ mod tests {
     }
 
     #[test]
-    fn test_first_value_merge_with_is_set_nulls() -> Result<()> {
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "first_value: is_set flags contain nulls")]
+    fn test_first_value_merge_with_is_set_nulls() {
         // Test data with corrupted is_set flag
         let value = Arc::new(StringArray::from(vec![Some("first_string")])) as ArrayRef;
         let corrupted_flag = Arc::new(BooleanArray::from(vec![None])) as ArrayRef;
 
-        // Test TrivialFirstValueAccumulator
+        // Test TrivialFirstValueAccumulator - should panic
         let mut trivial_accumulator =
-            TrivialFirstValueAccumulator::try_new(&DataType::Utf8, false)?;
-        let trivial_states = vec![value.clone(), corrupted_flag.clone()];
-        let result = trivial_accumulator.merge_batch(&trivial_states);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+            TrivialFirstValueAccumulator::try_new(&DataType::Utf8, false).unwrap();
+        let trivial_states = vec![value, corrupted_flag];
+        trivial_accumulator.merge_batch(&trivial_states).unwrap();
+    }
 
-        // Test FirstValueAccumulator (with ordering)
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "first_value: is_set flags contain nulls")]
+    fn test_first_value_ordered_merge_with_is_set_nulls() {
+        // Test data with corrupted is_set flag
+        let value = Arc::new(StringArray::from(vec![Some("first_string")])) as ArrayRef;
+        let corrupted_flag = Arc::new(BooleanArray::from(vec![None])) as ArrayRef;
+
+        // Test FirstValueAccumulator (with ordering) - should panic
         let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
-        let ordering_expr = col("ordering", &schema)?;
+        let ordering_expr = col("ordering", &schema).unwrap();
         let mut ordered_accumulator = FirstValueAccumulator::try_new(
             &DataType::Utf8,
             &[DataType::Int64],
@@ -1953,39 +1959,38 @@ mod tests {
             .unwrap(),
             false,
             false,
-        )?;
+        ).unwrap();
         let ordering = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
         let ordered_states = vec![value, ordering, corrupted_flag];
-        let result = ordered_accumulator.merge_batch(&ordered_states);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
-
-        Ok(())
+        ordered_accumulator.merge_batch(&ordered_states).unwrap();
     }
 
     #[test]
-    fn test_last_value_merge_with_is_set_nulls() -> Result<()> {
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "last_value: is_set flags contain nulls")]
+    fn test_last_value_merge_with_is_set_nulls() {
         // Test data with corrupted is_set flag
         let value = Arc::new(StringArray::from(vec![Some("last_string")])) as ArrayRef;
         let corrupted_flag = Arc::new(BooleanArray::from(vec![None])) as ArrayRef;
 
-        // Test TrivialLastValueAccumulator
+        // Test TrivialLastValueAccumulator - should panic
         let mut trivial_accumulator =
-            TrivialLastValueAccumulator::try_new(&DataType::Utf8, false)?;
-        let trivial_states = vec![value.clone(), corrupted_flag.clone()];
-        let result = trivial_accumulator.merge_batch(&trivial_states);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+            TrivialLastValueAccumulator::try_new(&DataType::Utf8, false).unwrap();
+        let trivial_states = vec![value, corrupted_flag];
+        trivial_accumulator.merge_batch(&trivial_states).unwrap();
+    }
 
-        // Test LastValueAccumulator (with ordering)
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "last_value: is_set flags contain nulls")]
+    fn test_last_value_ordered_merge_with_is_set_nulls() {
+        // Test data with corrupted is_set flag
+        let value = Arc::new(StringArray::from(vec![Some("last_string")])) as ArrayRef;
+        let corrupted_flag = Arc::new(BooleanArray::from(vec![None])) as ArrayRef;
+
+        // Test LastValueAccumulator (with ordering) - should panic
         let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
-        let ordering_expr = col("ordering", &schema)?;
+        let ordering_expr = col("ordering", &schema).unwrap();
         let mut ordered_accumulator = LastValueAccumulator::try_new(
             &DataType::Utf8,
             &[DataType::Int64],
@@ -1996,16 +2001,9 @@ mod tests {
             .unwrap(),
             false,
             false,
-        )?;
+        ).unwrap();
         let ordering = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
         let ordered_states = vec![value, ordering, corrupted_flag];
-        let result = ordered_accumulator.merge_batch(&ordered_states);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
-
-        Ok(())
+        ordered_accumulator.merge_batch(&ordered_states).unwrap();
     }
 }
