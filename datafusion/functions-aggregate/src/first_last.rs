@@ -1488,9 +1488,10 @@ fn validate_is_set_flags(flags: &BooleanArray, function_name: &str) -> Result<()
         .map(|nulls| nulls.null_count() > 0)
         .unwrap_or_default()
     {
-        return Err(DataFusionError::Internal(
-            format!("{}: is_set flags contain nulls", function_name),
-        ));
+        return Err(DataFusionError::Internal(format!(
+            "{}: is_set flags contain nulls",
+            function_name
+        )));
     }
     Ok(())
 }
@@ -1949,7 +1950,10 @@ mod tests {
         let trivial_states = vec![value.clone(), corrupted_flag.clone()];
         let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("is_set flags contain nulls"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is_set flags contain nulls"));
 
         // Test FirstValueAccumulator (with ordering)
         let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
@@ -1960,14 +1964,19 @@ mod tests {
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: ordering_expr,
                 options: SortOptions::default(),
-            }]).unwrap(),
-            false, false,
+            }])
+            .unwrap(),
+            false,
+            false,
         )?;
         let ordering = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
         let ordered_states = vec![value, ordering, corrupted_flag];
         let result = ordered_accumulator.merge_batch(&ordered_states);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("is_set flags contain nulls"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is_set flags contain nulls"));
 
         Ok(())
     }
@@ -1984,7 +1993,10 @@ mod tests {
         let trivial_states = vec![value.clone(), corrupted_flag.clone()];
         let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("is_set flags contain nulls"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is_set flags contain nulls"));
 
         // Test LastValueAccumulator (with ordering)
         let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
@@ -1995,14 +2007,19 @@ mod tests {
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: ordering_expr,
                 options: SortOptions::default(),
-            }]).unwrap(),
-            false, false,
+            }])
+            .unwrap(),
+            false,
+            false,
         )?;
         let ordering = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
         let ordered_states = vec![value, ordering, corrupted_flag];
         let result = ordered_accumulator.merge_batch(&ordered_states);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("is_set flags contain nulls"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is_set flags contain nulls"));
 
         Ok(())
     }
