@@ -79,6 +79,14 @@ impl BloomFilterBuilder {
             | ScalarValue::LargeBinary(Some(v))
             | ScalarValue::FixedSizeBinary(_, Some(v)) => self.sbbf.insert(v.as_slice()),
             ScalarValue::BinaryView(Some(v)) => self.sbbf.insert(v.as_slice()),
+            ScalarValue::Decimal32(Some(v), _, _) => self.sbbf.insert(v),
+            ScalarValue::Decimal64(Some(v), _, _) => self.sbbf.insert(v),
+            ScalarValue::Decimal128(Some(v), _, _) => self.sbbf.insert(v),
+            ScalarValue::Decimal256(Some(v), _, _) => {
+                // Convert i256 to bytes
+                let bytes = v.to_be_bytes();
+                self.sbbf.insert(&bytes)
+            }
             _ => {
                 return exec_err!(
                     "Unsupported data type for bloom filter: {}",
@@ -210,6 +218,29 @@ impl BloomFilterBuilder {
                     }
                 }
             }
+            DataType::Decimal128(_, _) => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Decimal128Array>()
+                    .unwrap();
+                for i in 0..array.len() {
+                    if !array.is_null(i) {
+                        self.sbbf.insert(&array.value(i));
+                    }
+                }
+            }
+            DataType::Decimal256(_, _) => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Decimal256Array>()
+                    .unwrap();
+                for i in 0..array.len() {
+                    if !array.is_null(i) {
+                        let bytes = array.value(i).to_be_bytes();
+                        self.sbbf.insert(&bytes);
+                    }
+                }
+            }
             _ => {
                 return exec_err!(
                     "Unsupported data type for bloom filter: {}",
@@ -257,6 +288,11 @@ impl BloomFilterExpr {
         }
     }
 
+    /// Get a reference to the underlying bloom filter
+    pub fn bloom_filter(&self) -> &Sbbf {
+        &self.bloom_filter
+    }
+
     /// Check a scalar value against the bloom filter
     fn check_scalar(&self, value: &ScalarValue) -> bool {
         if value.is_null() {
@@ -281,6 +317,13 @@ impl BloomFilterExpr {
                 self.bloom_filter.check(v.as_slice())
             }
             ScalarValue::BinaryView(Some(v)) => self.bloom_filter.check(v.as_slice()),
+            ScalarValue::Decimal32(Some(v), _, _) => self.bloom_filter.check(v),
+            ScalarValue::Decimal64(Some(v), _, _) => self.bloom_filter.check(v),
+            ScalarValue::Decimal128(Some(v), _, _) => self.bloom_filter.check(v),
+            ScalarValue::Decimal256(Some(v), _, _) => {
+                let bytes = v.to_be_bytes();
+                self.bloom_filter.check(&bytes)
+            }
             _ => true, // Unsupported types default to "might be present"
         }
     }
@@ -434,6 +477,33 @@ impl BloomFilterExpr {
                         builder.append_value(false);
                     } else {
                         builder.append_value(self.bloom_filter.check(array.value(i)));
+                    }
+                }
+            }
+            DataType::Decimal128(_, _) => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Decimal128Array>()
+                    .unwrap();
+                for i in 0..len {
+                    if array.is_null(i) {
+                        builder.append_value(false);
+                    } else {
+                        builder.append_value(self.bloom_filter.check(&array.value(i)));
+                    }
+                }
+            }
+            DataType::Decimal256(_, _) => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Decimal256Array>()
+                    .unwrap();
+                for i in 0..len {
+                    if array.is_null(i) {
+                        builder.append_value(false);
+                    } else {
+                        let bytes = array.value(i).to_be_bytes();
+                        builder.append_value(self.bloom_filter.check(&bytes));
                     }
                 }
             }
@@ -613,6 +683,48 @@ mod tests {
 
         assert!(result_bool.value(0)); // "hello" is in the filter
         assert!(result_bool.value(1)); // "world" is in the filter
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_bloom_filter_with_decimals() -> Result<()> {
+        use arrow::array::Decimal128Array;
+
+        // Build a bloom filter with decimal values
+        let mut builder = BloomFilterBuilder::new(100, 0.01)?;
+        builder.insert_scalar(&ScalarValue::Decimal128(Some(12345), 10, 2))?;
+        builder.insert_scalar(&ScalarValue::Decimal128(Some(67890), 10, 2))?;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Decimal128(10, 2),
+            false,
+        )]));
+        let expr = col("d", &schema)?;
+        let bloom_expr = Arc::new(builder.finish(expr));
+
+        // Create test array with decimal values
+        let test_array = Arc::new(
+            Decimal128Array::from(vec![12345, 67890, 11111])
+                .with_precision_and_scale(10, 2)?,
+        ) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![test_array])?;
+
+        // Evaluate the expression
+        let result = bloom_expr.evaluate(&batch)?;
+        let result_array = result.into_array(3)?;
+        let result_bool = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        // Values that were inserted should be found
+        assert!(result_bool.value(0)); // 12345 is in the filter
+        assert!(result_bool.value(1)); // 67890 is in the filter
+
+        // Value 11111 was not inserted, but might be a false positive
+        // We can't assert it's false without making the test flaky
 
         Ok(())
     }

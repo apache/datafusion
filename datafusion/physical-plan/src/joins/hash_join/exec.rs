@@ -53,6 +53,7 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
 };
+use datafusion_physical_expr::bloom_filter::Sbbf;
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
@@ -72,7 +73,9 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::expressions::{lit, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::expressions::{
+    lit, BloomFilterBuilder, DynamicFilterPhysicalExpr,
+};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
@@ -104,10 +107,13 @@ pub(super) struct JoinLeftData {
     _reservation: MemoryReservation,
     /// Bounds computed from the build side for dynamic filter pushdown
     pub(super) bounds: Option<Vec<ColumnBounds>>,
+    /// Bloom filters computed from the build side for dynamic filter pushdown
+    pub(super) bloom_filters: Option<Vec<Sbbf>>,
 }
 
 impl JoinLeftData {
     /// Create a new `JoinLeftData` from its parts
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         hash_map: Box<dyn JoinHashMapType>,
         batch: RecordBatch,
@@ -116,6 +122,7 @@ impl JoinLeftData {
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
         bounds: Option<Vec<ColumnBounds>>,
+        bloom_filters: Option<Vec<Sbbf>>,
     ) -> Self {
         Self {
             hash_map,
@@ -125,6 +132,7 @@ impl JoinLeftData {
             probe_threads_counter,
             _reservation: reservation,
             bounds,
+            bloom_filters,
         }
     }
 
@@ -1207,14 +1215,14 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
-/// Accumulator for collecting min/max bounds from build-side data during hash join.
+/// Accumulator for collecting min/max bounds and bloom filters from build-side data during hash join.
 ///
 /// This struct encapsulates the logic for progressively computing column bounds
-/// (minimum and maximum values) for a specific join key expression as batches
+/// (minimum and maximum values) and bloom filters for a specific join key expression as batches
 /// are processed during the build phase of a hash join.
 ///
-/// The bounds are used for dynamic filter pushdown optimization, where filters
-/// based on the actual data ranges can be pushed down to the probe side to
+/// The bounds and bloom filters are used for dynamic filter pushdown optimization, where filters
+/// based on the actual data ranges and membership can be pushed down to the probe side to
 /// eliminate unnecessary data early.
 struct CollectLeftAccumulator {
     /// The physical expression to evaluate for each batch
@@ -1223,6 +1231,8 @@ struct CollectLeftAccumulator {
     min: MinAccumulator,
     /// Accumulator for tracking the maximum value across all batches
     max: MaxAccumulator,
+    /// Bloom filter builder for membership testing
+    bloom_filter: BloomFilterBuilder,
 }
 
 impl CollectLeftAccumulator {
@@ -1249,17 +1259,23 @@ impl CollectLeftAccumulator {
             .data_type(schema)
             // Min/Max can operate on dictionary data but expect to be initialized with the underlying value type
             .map(|dt| dictionary_value_type(&dt))?;
+
+        // Create bloom filter with default parameters
+        // NDV (number of distinct values) = 10000, FPP (false positive probability) = 0.01 (1%)
+        let bloom_filter = BloomFilterBuilder::new(10000, 0.01)?;
+
         Ok(Self {
             expr,
             min: MinAccumulator::try_new(&data_type)?,
             max: MaxAccumulator::try_new(&data_type)?,
+            bloom_filter,
         })
     }
 
     /// Updates the accumulators with values from a new batch.
     ///
-    /// Evaluates the expression on the batch and updates both min and max
-    /// accumulators with the resulting values.
+    /// Evaluates the expression on the batch and updates min, max, and bloom filter
+    /// with the resulting values.
     ///
     /// # Arguments
     /// * `batch` - The record batch to process
@@ -1270,20 +1286,24 @@ impl CollectLeftAccumulator {
         let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
         self.min.update_batch(std::slice::from_ref(&array))?;
         self.max.update_batch(std::slice::from_ref(&array))?;
+        // Insert values into bloom filter
+        self.bloom_filter.insert_array(&array)?;
         Ok(())
     }
 
-    /// Finalizes the accumulation and returns the computed bounds.
+    /// Finalizes the accumulation and returns the computed bounds and bloom filter.
     ///
-    /// Consumes self to extract the final min and max values from the accumulators.
+    /// Consumes self to extract the final min and max values from the accumulators
+    /// and the built bloom filter.
     ///
     /// # Returns
-    /// The `ColumnBounds` containing the minimum and maximum values observed
-    fn evaluate(mut self) -> Result<ColumnBounds> {
-        Ok(ColumnBounds::new(
-            self.min.evaluate()?,
-            self.max.evaluate()?,
-        ))
+    /// A tuple of (`ColumnBounds`, `Sbbf`) containing the minimum/maximum values and bloom filter
+    fn evaluate(mut self) -> Result<(ColumnBounds, Sbbf)> {
+        let bounds = ColumnBounds::new(self.min.evaluate()?, self.max.evaluate()?);
+        let bloom_filter_expr = self.bloom_filter.finish(Arc::clone(&self.expr));
+        // Extract the Sbbf from the BloomFilterExpr
+        let bloom_filter = bloom_filter_expr.bloom_filter().clone();
+        Ok((bounds, bloom_filter))
     }
 }
 
@@ -1475,16 +1495,18 @@ async fn collect_left_input(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Compute bounds for dynamic filter if enabled
-    let bounds = match bounds_accumulators {
+    // Compute bounds and bloom filters for dynamic filter if enabled
+    let (bounds, bloom_filters) = match bounds_accumulators {
         Some(accumulators) if num_rows > 0 => {
-            let bounds = accumulators
+            let results: Vec<_> = accumulators
                 .into_iter()
                 .map(CollectLeftAccumulator::evaluate)
                 .collect::<Result<Vec<_>>>()?;
-            Some(bounds)
+            // Separate bounds and bloom filters
+            let (bounds, bloom_filters): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+            (Some(bounds), Some(bloom_filters))
         }
-        _ => None,
+        _ => (None, None),
     };
 
     let data = JoinLeftData::new(
@@ -1495,6 +1517,7 @@ async fn collect_left_input(
         AtomicUsize::new(probe_threads_count),
         reservation,
         bounds,
+        bloom_filters,
     );
 
     Ok(data)

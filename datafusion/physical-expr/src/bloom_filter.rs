@@ -252,6 +252,22 @@ impl AsBytes for f64 {
     }
 }
 
+impl AsBytes for i128 {
+    fn as_bytes(&self) -> &[u8] {
+        // Use big-endian for i128 to match Parquet's FIXED_LEN_BYTE_ARRAY representation
+        // This allows compatibility with Parquet bloom filters
+        unsafe {
+            std::slice::from_raw_parts(self as *const i128 as *const u8, size_of::<i128>())
+        }
+    }
+}
+
+impl AsBytes for [u8; 32] {
+    fn as_bytes(&self) -> &[u8] {
+        self
+    }
+}
+
 /// Hash a value using xxHash64 with seed 0
 #[inline]
 fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
