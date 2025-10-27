@@ -356,8 +356,19 @@ impl IntoCastField for &Field {
 }
 
 impl IntoCastField for DataType {
-    fn into_cast_field(self, _expr: &Expr) -> FieldRef {
-        Arc::new(Field::new("", self, true))
+    fn into_cast_field(self, expr: &Expr) -> FieldRef {
+        let nullable = infer_cast_nullability(expr);
+        Arc::new(Field::new("", self, nullable))
+    }
+}
+
+fn infer_cast_nullability(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(value, _) => value.is_null(),
+        Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
+            field.is_nullable()
+        }
+        _ => true,
     }
 }
 
@@ -375,11 +386,15 @@ pub fn try_cast<F>(expr: Expr, field: F) -> Expr
 where
     F: IntoCastField,
 {
-    let mut field = field.into_cast_field(&expr);
-    if !field.is_nullable() {
-        field = Arc::new(field.as_ref().clone().with_nullable(true));
+    let field = field.into_cast_field(&expr);
+    if field.is_nullable() {
+        Expr::TryCast(TryCast::new(Box::new(expr), field))
+    } else {
+        Expr::TryCast(TryCast::new(
+            Box::new(expr),
+            Arc::new(field.as_ref().clone().with_nullable(true)),
+        ))
     }
-    Expr::TryCast(TryCast::new(Box::new(expr), field))
 }
 
 /// Create is null expression
