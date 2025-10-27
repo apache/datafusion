@@ -443,7 +443,30 @@
 //! other operators read a single [`RecordBatch`] from their input to produce a
 //! single [`RecordBatch`] as output.
 //!
-//! For example, given this SQL query:
+//! For example, given this SQL:
+//!
+//! ```sql
+//! SELECT name FROM 'data.parquet' WHERE id > 10
+//! ```
+//!
+//! An simplified DataFusion execution plan is shown below. It first reads
+//! data from the Parquet file, then applies the filter, then the projection,
+//! and finally produces output. Each step processes one [`RecordBatch`] at a
+//! time. Multiple batches are processed concurrently on different CPU cores
+//! for plans with multiple partitions.
+//!
+//! ```text
+//! ┌─────────────┐    ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐    ┌──────────┐
+//! │ Parquet     │───▶│ DataSource   │───▶│ FilterExec     │───▶│ ProjectionExec   │───▶│ Results  │
+//! │ File        │    │              │    │                │    │                  │    │          │
+//! └─────────────┘    └──────────────┘    └────────────────┘    └──────────────────┘    └──────────┘
+//!                    (reads data)        (id > 10)             (keeps "name" col)
+//!                    RecordBatch ───▶    RecordBatch ────▶     RecordBatch ────▶        RecordBatch
+//! ```
+//!
+//! DataFusion uses the classic "pull" based control flow (explained more in the
+//! next section) to implement streaming execution. As an example,
+//! consider the following SQL query:
 //!
 //! ```sql
 //! SELECT date_trunc('month', time) FROM data WHERE id IN (10,20,30);
@@ -897,6 +920,12 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 // For example, if `user_guide_expressions(line 123)` fails,
 // go to `docs/source/user-guide/expressions.md` to find the relevant problem.
 //
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/arrow-introduction.md",
+    user_guide_arrow_introduction
+);
+
 #[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/user-guide/concepts-readings-events.md",
