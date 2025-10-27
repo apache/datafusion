@@ -438,6 +438,10 @@ impl ResultBuilder {
         row_indices: &ArrayRef,
         row_values: ArrayData,
     ) -> Result<()> {
+        if row_indices.null_count() != 0 {
+            return internal_err!("Row indices must not contain nulls");
+        }
+
         match &mut self.state {
             Partial { arrays, indices } => {
                 // This is check is only active for debug config because the callers of this method,
