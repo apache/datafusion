@@ -1485,8 +1485,7 @@ impl Accumulator for LastValueAccumulator {
 fn validate_is_set_flags(flags: &BooleanArray, function_name: &str) -> Result<()> {
     if flags.null_count() > 0 {
         return Err(DataFusionError::Internal(format!(
-            "{}: is_set flags contain nulls",
-            function_name
+            "{function_name}: is_set flags contain nulls"
         )));
     }
     Ok(())
