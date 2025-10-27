@@ -35,7 +35,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use num_traits::real::Real;
+use num_traits::sign::Signed;
 
 type MathArrayFunction = fn(&ArrayRef) -> Result<ArrayRef>;
 
