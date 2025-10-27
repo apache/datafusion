@@ -30,7 +30,10 @@ use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
 use std::sync::Arc;
 
-/// <https://spark.apache.org/docs/latest/api/sql/index.html#ceil>
+/// Spark-compatible CEIL function implementation.
+/// Returns the smallest integer that is greater than or equal to the input value.
+/// Optionally takes a scale parameter to control decimal precision.
+/// Reference: <https://spark.apache.org/docs/latest/api/sql/index.html#ceil>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
@@ -47,24 +50,28 @@ impl SparkCeil {
         Self {
             signature: Signature::one_of(
                 vec![
-                    // ceil(expr)
+                    // Single argument: ceil(expr) for basic numeric types
                     TypeSignature::Uniform(
                         1,
                         vec![Float32, Float64, Int64, Decimal128(38, 10)],
                     ),
-                    // ceil(expr, scale) - scale can be any integer type
+                    // Two arguments: ceil(expr, scale) where scale can be any integer type
+                    // Float32 with various integer scale types
                     TypeSignature::Exact(vec![Float32, Int8]),
                     TypeSignature::Exact(vec![Float32, Int16]),
                     TypeSignature::Exact(vec![Float32, Int32]),
                     TypeSignature::Exact(vec![Float32, Int64]),
+                    // Float64 with various integer scale types
                     TypeSignature::Exact(vec![Float64, Int8]),
                     TypeSignature::Exact(vec![Float64, Int16]),
                     TypeSignature::Exact(vec![Float64, Int32]),
                     TypeSignature::Exact(vec![Float64, Int64]),
+                    // Int64 with various integer scale types (scale has no effect on integers)
                     TypeSignature::Exact(vec![Int64, Int8]),
                     TypeSignature::Exact(vec![Int64, Int16]),
                     TypeSignature::Exact(vec![Int64, Int32]),
                     TypeSignature::Exact(vec![Int64, Int64]),
+                    // Decimal128 with various integer scale types
                     TypeSignature::Exact(vec![Decimal128(38, 10), Int8]),
                     TypeSignature::Exact(vec![Decimal128(38, 10), Int16]),
                     TypeSignature::Exact(vec![Decimal128(38, 10), Int32]),
@@ -89,6 +96,9 @@ impl ScalarUDFImpl for SparkCeil {
         &self.signature
     }
 
+    /// Determines the return type based on input argument types.
+    /// For single argument (no scale): floats return Int64, integers stay Int64, decimals adjust precision/scale.
+    /// For two arguments (with scale): floats keep their type, decimals become Float64.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.is_empty() {
             return exec_err!("ceil expects at least 1 argument");
@@ -104,12 +114,13 @@ impl ScalarUDFImpl for SparkCeil {
             (Float64, true) => Ok(Float64),
             (Int64, _) => Ok(Int64),
             (Decimal128(precision, scale), false) => {
+                // For decimals without scale, compute new precision/scale for integer result
                 let (new_precision, new_scale) =
                     round_decimal_base(*precision as i32, *scale as i32, 0);
                 Ok(Decimal128(new_precision, new_scale))
             }
-            (Decimal128(_precision, _scale), true) => Ok(Float64),
-            _ => Ok(Int64),
+            (Decimal128(_precision, _scale), true) => Ok(Float64), // With scale, convert to float
+            _ => Ok(Int64), // Fallback for unsupported types
         }
     }
 
@@ -118,42 +129,55 @@ impl ScalarUDFImpl for SparkCeil {
     }
 }
 
+/// Calculates the new precision and scale for decimal operations.
+/// Used to determine the appropriate decimal representation after ceiling operations.
+/// Ensures the result fits within Decimal128 constraints.
 fn round_decimal_base(precision: i32, _scale: i32, target_scale: i32) -> (u8, i8) {
+    // Clamp target scale to valid range and ensure non-negative
     let scale = if target_scale < -38 {
         0
     } else {
         target_scale.max(0) as i8
     };
+    // Calculate new precision based on target scale, ensuring it doesn't exceed max
     let new_precision = precision
         .max(target_scale + 1)
         .min(DECIMAL128_MAX_PRECISION as i32) as u8;
     (new_precision, scale)
 }
 
+/// Core implementation of the Spark CEIL function.
+/// Handles ceiling operations for different data types with optional scale parameter.
+/// Supports Float32, Float64, Int64, and Decimal128 types.
 fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 1 || args.len() > 2 {
+    // Validate argument count
+    if args.is_empty() || args.len() > 2 {
         return exec_err!("ceil expects 1 or 2 arguments, got {}", args.len());
     }
 
     let value_array: &dyn Array = args[0].as_ref();
+
+    // Extract scale parameter if provided (second argument)
     let scale = if args.len() == 2 {
         let scale_array = args[1].as_ref();
+        // Scale must be a single scalar value, not an array
         if scale_array.is_empty() || scale_array.len() != 1 {
             return exec_err!(
                 "scale parameter must be a single integer value, got array of length {}",
                 scale_array.len()
             );
         }
+        // Extract the scale value from the array, supporting various integer types
         let s = match scale_array.data_type() {
             Int8 => scale_array
                 .as_primitive::<arrow::datatypes::Int8Type>()
-                .value(0) as i32,
+                .value(0) as i32, // Cast to i32 for uniform handling
             Int16 => scale_array
                 .as_primitive::<arrow::datatypes::Int16Type>()
                 .value(0) as i32,
             Int32 => scale_array
                 .as_primitive::<arrow::datatypes::Int32Type>()
-                .value(0),
+                .value(0), // Already i32
             Int64 => scale_array
                 .as_primitive::<arrow::datatypes::Int64Type>()
                 .value(0) as i32,
@@ -175,10 +199,12 @@ fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
         };
         Some(s)
     } else {
-        None
+        None // No scale provided
     };
 
+    // Perform ceiling operation based on data type and scale parameter
     match (args[0].data_type(), scale) {
+        // Float32 without scale: ceil to nearest integer, return as Int64
         (Float32, None) => {
             let array = value_array
                 .as_primitive::<arrow::datatypes::Float32Type>()
@@ -187,15 +213,17 @@ fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
             });
             Ok(Arc::new(array))
         }
+        // Float32 with scale: ceil to specified decimal places, return as Float32
         (Float32, Some(s)) => {
-            let scale_factor = 10_f32.powi(s);
+            let scale_factor = 10_f32.powi(s); // 10^scale for decimal place adjustment
             let array = value_array
                 .as_primitive::<arrow::datatypes::Float32Type>()
                 .unary::<_, arrow::datatypes::Float32Type>(|value: f32| {
-                (value * scale_factor).ceil() / scale_factor
+                (value * scale_factor).ceil() / scale_factor // Scale, ceil, then unscale
             });
             Ok(Arc::new(array))
         }
+        // Float64 without scale: ceil to nearest integer, return as Int64
         (Float64, None) => {
             let array = value_array
                 .as_primitive::<arrow::datatypes::Float64Type>()
@@ -204,31 +232,39 @@ fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
             });
             Ok(Arc::new(array))
         }
+        // Float64 with scale: ceil to specified decimal places, return as Float64
         (Float64, Some(s)) => {
-            let scale_factor = 10_f64.powi(s);
+            let scale_factor = 10_f64.powi(s); // 10^scale for decimal place adjustment
             let array = value_array
                 .as_primitive::<arrow::datatypes::Float64Type>()
                 .unary::<_, arrow::datatypes::Float64Type>(|value: f64| {
-                (value * scale_factor).ceil() / scale_factor
+                (value * scale_factor).ceil() / scale_factor // Scale, ceil, then unscale
             });
             Ok(Arc::new(array))
         }
+        // Int64: integers are already "ceiled", return unchanged regardless of scale
         (Int64, None) => Ok(Arc::clone(&args[0])),
         (Int64, Some(_)) => Ok(Arc::clone(&args[0])),
+        // Decimal128: handle decimals with scale > 0 (fractional part exists)
         (Decimal128(precision, value_scale), scale_param) => {
             if *value_scale > 0 {
                 match scale_param {
+                    // Without scale parameter: ceil to integer
                     None => {
                         let decimal_array = value_array
                             .as_primitive::<arrow::datatypes::Decimal128Type>();
+                        // Calculate divisor to separate integer and fractional parts
                         let div = 10_i128.pow_wrapping((*value_scale) as u32);
+                        // Ceil by dividing, applying ceil to quotient, then converting to i64
                         let result_array = decimal_array
                             .unary::<_, arrow::datatypes::Int64Type>(|value: i128| {
                                 div_ceil(value, div) as i64
                             });
                         Ok(Arc::new(result_array))
                     }
+                    // With scale parameter: ceil to specified decimal places
                     Some(s) => {
+                        // Validate that target scale doesn't exceed input scale
                         if s > *value_scale as i32 {
                             return exec_err!(
                                 "scale {} cannot be greater than input scale {}",
@@ -236,10 +272,13 @@ fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
                                 *value_scale
                             );
                         }
+                        // Calculate new precision and scale for the result
                         let (new_precision, new_scale) =
                             round_decimal_base(*precision as i32, *value_scale as i32, s);
                         let decimal_array = value_array
                             .as_primitive::<arrow::datatypes::Decimal128Type>();
+
+                        // Handle positive scale (decimal places)
                         if s >= 0 {
                             let s_i8 = s as i8;
                             if s_i8 > *value_scale {
@@ -292,7 +331,6 @@ fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-// Helper function to calculate the ceil for Decimals
 #[inline]
 fn div_ceil(a: i128, b: i128) -> i128 {
     if b == 0 {
@@ -407,6 +445,7 @@ mod test {
     }
 
     #[test]
+    // this scenario passes as UT but fails in slt.
     fn test_ceil_decimal_with_scale() -> Result<()> {
         let input = vec![Some(31411_i128), Some(-12345_i128)];
         let value_array =
