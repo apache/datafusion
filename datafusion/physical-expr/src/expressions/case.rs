@@ -410,14 +410,14 @@ impl ResultBuilder {
                 if a.len() != row_indices.len() {
                     internal_err!("Array length must match row indices length")
                 } else if row_indices.len() == self.row_count {
-                    self.set_single_result(ColumnarValue::Array(a))
+                    self.set_complete_result(ColumnarValue::Array(a))
                 } else {
                     self.add_partial_result(row_indices, a.to_data())
                 }
             }
             ColumnarValue::Scalar(s) => {
                 if row_indices.len() == self.row_count {
-                    self.set_single_result(ColumnarValue::Scalar(s))
+                    self.set_complete_result(ColumnarValue::Scalar(s))
                 } else {
                     self.add_partial_result(
                         row_indices,
@@ -463,19 +463,19 @@ impl ResultBuilder {
                 }
                 Ok(())
             }
-            Complete(_) => internal_err!("Complete result already set"),
+            Complete(_) => internal_err!("Cannot add a partial result when complete result is already set"),
         }
     }
 
-    /// Sets a covering result that applies to all rows.
+    /// Sets a result that applies to all rows.
     ///
     /// This is an optimization for cases where all rows evaluate to the same result.
-    /// When a covering result is set, the builder will return it directly from finish()
+    /// When a complete result is set, the builder will return it directly from finish()
     /// without any merging overhead.
-    fn set_single_result(&mut self, value: ColumnarValue) -> Result<()> {
+    fn set_complete_result(&mut self, value: ColumnarValue) -> Result<()> {
         match &self.state {
             Partial { arrays, .. } if !arrays.is_empty() => {
-                internal_err!("Partial result already set")
+                internal_err!("Cannot set a complete result when there are already partial results")
             }
             Complete(_) => internal_err!("Complete result already set"),
             _ => {
