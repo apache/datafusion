@@ -275,7 +275,7 @@ struct RecursiveQueryStream {
     reservation: MemoryReservation,
     /// If the distinct flag is set, then we use this hash table to remove duplicates from result and work tables
     distinct_deduplicator: Option<DistinctDeduplicator>,
-    // /// Metrics.
+    /// Metrics.
     baseline_metrics: BaselineMetrics,
 }
 
@@ -415,7 +415,6 @@ impl Stream for RecursiveQueryStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        // TODO: we should use this poll to record some metrics!
         if let Some(static_stream) = &mut self.static_stream {
             // While the static term's stream is available, we'll be forwarding the batches from it (also
             // saving them for the initial iteration of the recursive term).
@@ -472,10 +471,13 @@ impl DistinctDeduplicator {
         })
     }
 
+    /// Remove duplicated rows from the given batch, keeping a state between batches.
+    ///
+    /// We use a hash table to allocate new group ids for the new rows.
+    /// [`GroupValues`] allocate increasing group ids.
+    /// Hence, if groups (i.e., rows) are now, then they have ids >= length before interning, we keep them.
+    /// We also detect duplicates by enforcing that group ids are increasing.
     fn deduplicate(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-        // We use the hash table to allocate new group ids.
-        // If they are new, i.e., if they have ids >= length before interning, we keep them.
-        // We also detect duplicates by enforcing that group ids are increasing.
         let size_before = self.group_values.len();
         self.intern_output_buffer.reserve(batch.num_rows());
         self.group_values
@@ -488,7 +490,7 @@ impl DistinctDeduplicator {
     }
 }
 
-/// Return a mask, each element true if the value is greater than all previous ones and greater or equal than the min_value
+/// Return a mask, each element being true if, and only if, the element is greater than all previous elements and greater or equal than the provided min_value
 fn are_increasing_mask(values: &[usize], mut min_value: usize) -> BooleanArray {
     let mut output = BooleanBuilder::with_capacity(values.len());
     for value in values {
