@@ -22,7 +22,7 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
-    is_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
+    is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
 };
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::error::ArrowError;
@@ -586,7 +586,7 @@ impl CaseExpr {
         let mut remainder_batch = Cow::Borrowed(batch);
 
         // evaluate the base expression
-        let mut base_value = self
+        let mut base_values = self
             .expr
             .as_ref()
             .unwrap()
@@ -597,19 +597,25 @@ impl CaseExpr {
         // Since each when expression is tested against the base expression using the equality
         // operator, null base values can never match any when expression. `x = NULL` is falsy,
         // for all possible values of `x`.
-        let base_nulls = is_null(base_value.as_ref())?;
-        if base_nulls.true_count() > 0 {
+        if base_values.null_count() > 0 {
+            // Use `is_not_null` since this is a cheap clone of the null buffer from 'base_value'.
+            // We already checked there are nulls, so we can be sure a new buffer will not be
+            // created.
+            let base_not_nulls = is_not_null(base_values.as_ref())?;
+            let base_all_null = base_values.null_count() == remainder_batch.num_rows();
+
             // If there is an else expression, use that as the default value for the null rows
             // Otherwise the default `null` value from the result builder will be used.
             if let Some(e) = self.else_expr() {
                 let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
 
-                if base_nulls.true_count() == remainder_batch.num_rows() {
+                if base_all_null {
                     // All base values were null, so no need to filter
                     let nulls_value = expr.evaluate(&remainder_batch)?;
                     result_builder.add_branch_result(&remainder_rows, nulls_value)?;
                 } else {
-                    let nulls_filter = create_filter(&base_nulls);
+                    // Filter out the null rows and evaluate the else expression for those
+                    let nulls_filter = create_filter(&not(&base_not_nulls)?);
                     let nulls_batch =
                         filter_record_batch(&remainder_batch, &nulls_filter)?;
                     let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
@@ -618,22 +624,22 @@ impl CaseExpr {
                 }
             }
 
-            // All base values were null, so we can return early
-            if base_nulls.true_count() == remainder_batch.num_rows() {
+            // All base values are null, so we can return early
+            if base_all_null {
                 return result_builder.finish();
             }
 
             // Remove the null rows from the remainder batch
-            let not_null_filter = create_filter(&not(&base_nulls)?);
+            let not_null_filter = create_filter(&base_not_nulls);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &not_null_filter)?);
             remainder_rows = filter_array(&remainder_rows, &not_null_filter)?;
-            base_value = filter_array(&base_value, &not_null_filter)?;
+            base_values = filter_array(&base_values, &not_null_filter)?;
         }
 
         // The types of case and when expressions will be coerced to match.
         // We only need to check if the base_value is nested.
-        let base_value_is_nested = base_value.data_type().is_nested();
+        let base_value_is_nested = base_values.data_type().is_nested();
 
         for i in 0..self.when_then_expr.len() {
             // Evaluate the 'when' predicate for the remainder batch
@@ -641,11 +647,11 @@ impl CaseExpr {
             let when_expr = &self.when_then_expr[i].0;
             let when_value = match when_expr.evaluate(&remainder_batch)? {
                 ColumnarValue::Array(a) => {
-                    compare_with_eq(&a, &base_value, base_value_is_nested)
+                    compare_with_eq(&a, &base_values, base_value_is_nested)
                 }
                 ColumnarValue::Scalar(s) => {
                     let scalar = Scalar::new(s.to_array()?);
-                    compare_with_eq(&scalar, &base_value, base_value_is_nested)
+                    compare_with_eq(&scalar, &base_values, base_value_is_nested)
                 }
             }?;
 
@@ -693,7 +699,7 @@ impl CaseExpr {
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
-            base_value = filter_array(&base_value, &next_filter)?;
+            base_values = filter_array(&base_values, &next_filter)?;
         }
 
         // If we reached this point, some rows were left unmatched.
