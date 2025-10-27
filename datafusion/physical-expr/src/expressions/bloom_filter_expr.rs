@@ -116,48 +116,15 @@ impl BloomFilterExpr {
     }
 
     /// Check a scalar value against the bloom filter
-    fn check_scalar(&self, value: &ScalarValue) -> bool {
-        if value.is_null() {
-            return false;
+    fn check_scalar(&self, value: &ScalarValue) -> Result<bool> {
+        let array = value.to_array()?;
+        let result = self.check_array(&array)?;
+        // Since the array has length 1, return the first value
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(result.len(), 1);
         }
-
-        match value {
-            ScalarValue::Boolean(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::Int8(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::Int16(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::Int32(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::Int64(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::UInt8(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::UInt16(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::UInt32(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::UInt64(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::Float32(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::Float64(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) => {
-                self.bloom_filter.check(v.as_str())
-            }
-            ScalarValue::Utf8View(Some(v)) => self.bloom_filter.check(v.as_str()),
-            ScalarValue::Binary(Some(v))
-            | ScalarValue::LargeBinary(Some(v))
-            | ScalarValue::FixedSizeBinary(_, Some(v)) => {
-                self.bloom_filter.check(v.as_slice())
-            }
-            ScalarValue::BinaryView(Some(v)) => self.bloom_filter.check(v.as_slice()),
-            ScalarValue::Decimal32(Some(v), _, _) => self.bloom_filter.check(v),
-            ScalarValue::Decimal64(Some(v), _, _) => self.bloom_filter.check(v),
-            ScalarValue::Decimal128(Some(v), _, _) => self.bloom_filter.check(v),
-            ScalarValue::Decimal256(Some(v), _, _) => {
-                let bytes = v.to_be_bytes();
-                self.bloom_filter.check(&bytes)
-            }
-            ScalarValue::Date32(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::Date64(Some(v)) => self.bloom_filter.check(v),
-            ScalarValue::TimestampSecond(Some(v), _)
-            | ScalarValue::TimestampMillisecond(Some(v), _)
-            | ScalarValue::TimestampMicrosecond(Some(v), _)
-            | ScalarValue::TimestampNanosecond(Some(v), _) => self.bloom_filter.check(v),
-            _ => true, // Unsupported types default to "might be present"
-        }
+        Ok(result.value(0))
     }
 
     /// Check an array against the bloom filter
@@ -223,7 +190,7 @@ impl PhysicalExpr for BloomFilterExpr {
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             ColumnarValue::Scalar(scalar) => {
-                let result = self.check_scalar(&scalar);
+                let result = self.check_scalar(&scalar)?;
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result))))
             }
         }
@@ -285,9 +252,9 @@ mod tests {
         let bloom_expr = builder.build(expr);
 
         // Check that inserted values are found
-        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(1))));
-        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(2))));
-        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(3))));
+        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(1)))?);
+        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(2)))?);
+        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(3)))?);
 
         // A value that wasn't inserted might not be found
         // (but could be a false positive, so we can't assert false)

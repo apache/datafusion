@@ -27,10 +27,13 @@
 //!
 //! The implementation below is adapted from:
 //! arrow-rs/parquet/src/bloom_filter/mod.rs
+//! 
+//! One thing to consider is if we can make this implementaion compatible with Parquet's
+//! byte for byte (it currently is not) so that we can do binary intersection of bloom filters
+//! between DataFusion and Parquet.
 
 use datafusion_common::{internal_err, Result};
 use std::mem::size_of;
-use twox_hash::XxHash64;
 
 /// Salt values as defined in the Parquet specification
 /// Although we don't *need* to follow the Parquet spec here, using the same
@@ -51,9 +54,6 @@ const SALT: [u32; 8] = [
 const BITSET_MIN_LENGTH: usize = 32;
 /// Maximum bitset length in bytes
 const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
-
-/// Hash seed for xxHash
-const SEED: u64 = 0;
 
 /// Each block is 256 bits, broken up into eight contiguous "words", each consisting of 32 bits.
 /// Each word is thought of as an array of bits; each bit is either "set" or "not set".
@@ -155,11 +155,6 @@ impl Sbbf {
     pub(crate) fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].insert(hash as u32)
-    }
-
-    /// Check if a value is probably present or definitely absent in the filter
-    pub fn check<T: AsBytes + ?Sized>(&self, value: &T) -> bool {
-        self.check_hash(hash_as_bytes(value))
     }
 
     /// Check if a hash is in the filter. May return
@@ -296,12 +291,6 @@ impl AsBytes for [u8; 32] {
     }
 }
 
-/// Hash a value using xxHash64 with seed 0
-#[inline]
-fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
-    XxHash64::oneshot(SEED, value.as_bytes())
-}
-
 /// Calculate optimal number of bytes, bounded by min/max and rounded to power of 2
 #[inline]
 fn optimal_num_of_bytes(num_bytes: usize) -> usize {
@@ -324,11 +313,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hash_bytes() {
-        assert_eq!(hash_as_bytes(""), 17241709254077376921);
-    }
-
-    #[test]
     fn test_mask_set_quick_check() {
         for i in 0..1_000 {
             let result = Block::mask(i);
@@ -342,15 +326,6 @@ mod tests {
             let mut block = Block::ZERO;
             block.insert(i);
             assert!(block.check(i));
-        }
-    }
-
-    #[test]
-    fn test_sbbf_insert_and_check() {
-        let mut sbbf = Sbbf(vec![Block::ZERO; 1_000]);
-        for i in 0..10_000 {
-            sbbf.insert(&i);
-            assert!(sbbf.check(&i));
         }
     }
 
