@@ -2687,7 +2687,7 @@ async fn write_table_with_order() -> Result<()> {
         "tablecol1",
         cast(
             col("tablecol1"),
-            Arc::new(Field::new("tablecol1", DataType::Utf8, false)),
+            Arc::new(Field::new("tablecol1", DataType::Utf8View, false)),
         ),
     )?;
 

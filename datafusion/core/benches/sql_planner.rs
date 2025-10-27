@@ -107,7 +107,7 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                         &c_name,
                         cast(
                             c.clone(),
-                            Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                            Arc::new(Field::new(&c_name, DataType::Utf8, true)),
                         ),
                     )
                     .unwrap()
@@ -124,7 +124,7 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                                     c.clone(),
                                     Arc::new(Field::new(&c_name, DataType::Int32, true)),
                                 ) - lit(i + 3),
-                                Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                                Arc::new(Field::new(&c_name, DataType::Utf8, true)),
                             ),
                         )
                         .otherwise(c.clone())
@@ -177,7 +177,7 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                             ),
                             cast(
                                 c.clone(),
-                                Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                                Arc::new(Field::new(&c_name, DataType::Utf8View, true)),
                             ),
                         )
                         .otherwise(Literal(ScalarValue::Date32(None), None))
@@ -222,7 +222,7 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                             to_timestamp(vec![c.clone(), lit("%Y-%m-%d %H:%M:%S")]),
                             Arc::new(Field::new(
                                 &c_name,
-                                DataType::Timestamp(Nanosecond, None),
+                                DataType::Timestamp(Nanosecond, Some("UTC".into())),
                                 true,
                             )),
                         ),

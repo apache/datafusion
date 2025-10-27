@@ -512,7 +512,7 @@ mod test {
             col("a"),
             Expr::Cast(Cast::new(
                 Box::new(col("a")),
-                Arc::new(Field::new("a", DataType::Int64, false)),
+                Arc::new(Field::new("a", DataType::Int32, false)),
             )),
         );
 
