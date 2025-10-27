@@ -967,6 +967,18 @@ impl Accumulator for FirstValueAccumulator {
         // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
         let flags = states[is_set_idx].as_boolean();
+
+        // Check for null values in boolean flags - this should never happen
+        if flags
+            .nulls()
+            .map(|nulls| nulls.null_count() > 0)
+            .unwrap_or_default()
+        {
+            return Err(DataFusionError::Internal(
+                "first_value: is_set flags contain nulls".to_string(),
+            ));
+        }
+
         let filtered_states =
             filter_states_according_to_is_set(&states[0..is_set_idx], flags)?;
         // 1..is_set_idx range corresponds to ordering section
@@ -1297,6 +1309,18 @@ impl Accumulator for TrivialLastValueAccumulator {
         // LAST_VALUE(last1, last2, last3, ...)
         // Second index contains is_set flag.
         let flags = states[1].as_boolean();
+
+        // Check for null values in boolean flags - this should never happen
+        if flags
+            .nulls()
+            .map(|nulls| nulls.null_count() > 0)
+            .unwrap_or_default()
+        {
+            return Err(DataFusionError::Internal(
+                "last_value: is_set flags contain nulls".to_string(),
+            ));
+        }
+
         let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
         if let Some(last) = filtered_states.last() {
             if !last.is_empty() {
@@ -1442,6 +1466,18 @@ impl Accumulator for LastValueAccumulator {
         // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
         let flags = states[is_set_idx].as_boolean();
+
+        // Check for null values in boolean flags - this should never happen
+        if flags
+            .nulls()
+            .map(|nulls| nulls.null_count() > 0)
+            .unwrap_or_default()
+        {
+            return Err(DataFusionError::Internal(
+                "last_value: is_set flags contain nulls".to_string(),
+            ));
+        }
+
         let filtered_states =
             filter_states_according_to_is_set(&states[0..is_set_idx], flags)?;
         // 1..is_set_idx range corresponds to ordering section
@@ -1513,7 +1549,7 @@ mod tests {
     use std::iter::repeat_with;
 
     use arrow::{
-        array::{BooleanArray, Int64Array, ListArray, StringArray, StringViewArray},
+        array::{BooleanArray, Int64Array, ListArray, StringArray},
         compute::SortOptions,
         datatypes::Schema,
     };
@@ -1929,18 +1965,70 @@ mod tests {
 
     #[test]
     fn test_first_value_merge_with_is_set_nulls() -> Result<()> {
-        let mut accumulator =
-            TrivialFirstValueAccumulator::try_new(&DataType::Utf8, false)?;
-
-        let value1 = Arc::new(StringArray::from(vec![Some("first_string")])) as ArrayRef;
+        // Test data with corrupted is_set flag
+        let value = Arc::new(StringArray::from(vec![Some("first_string")])) as ArrayRef;
         let corrupted_flag = Arc::new(BooleanArray::from(vec![None])) as ArrayRef;
 
-        let states = vec![value1, corrupted_flag];
-        let result = accumulator.merge_batch(&states);
+        // Test TrivialFirstValueAccumulator
+        let mut trivial_accumulator =
+            TrivialFirstValueAccumulator::try_new(&DataType::Utf8, false)?;
+        let trivial_states = vec![value.clone(), corrupted_flag.clone()];
+        let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("is_set flags contain nulls"));
 
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("is_set flags contain nulls"));
+        // Test FirstValueAccumulator (with ordering)
+        let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
+        let ordering_expr = col("ordering", &schema)?;
+        let mut ordered_accumulator = FirstValueAccumulator::try_new(
+            &DataType::Utf8,
+            &[DataType::Int64],
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: ordering_expr,
+                options: SortOptions::default(),
+            }]).unwrap(),
+            false, false,
+        )?;
+        let ordering = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let ordered_states = vec![value, ordering, corrupted_flag];
+        let result = ordered_accumulator.merge_batch(&ordered_states);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("is_set flags contain nulls"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_last_value_merge_with_is_set_nulls() -> Result<()> {
+        // Test data with corrupted is_set flag
+        let value = Arc::new(StringArray::from(vec![Some("last_string")])) as ArrayRef;
+        let corrupted_flag = Arc::new(BooleanArray::from(vec![None])) as ArrayRef;
+
+        // Test TrivialLastValueAccumulator
+        let mut trivial_accumulator =
+            TrivialLastValueAccumulator::try_new(&DataType::Utf8, false)?;
+        let trivial_states = vec![value.clone(), corrupted_flag.clone()];
+        let result = trivial_accumulator.merge_batch(&trivial_states);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("is_set flags contain nulls"));
+
+        // Test LastValueAccumulator (with ordering)
+        let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
+        let ordering_expr = col("ordering", &schema)?;
+        let mut ordered_accumulator = LastValueAccumulator::try_new(
+            &DataType::Utf8,
+            &[DataType::Int64],
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: ordering_expr,
+                options: SortOptions::default(),
+            }]).unwrap(),
+            false, false,
+        )?;
+        let ordering = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let ordered_states = vec![value, ordering, corrupted_flag];
+        let result = ordered_accumulator.merge_batch(&ordered_states);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("is_set flags contain nulls"));
 
         Ok(())
     }
