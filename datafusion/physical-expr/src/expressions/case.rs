@@ -463,7 +463,9 @@ impl ResultBuilder {
                 }
                 Ok(())
             }
-            Complete(_) => internal_err!("Cannot add a partial result when complete result is already set"),
+            Complete(_) => internal_err!(
+                "Cannot add a partial result when complete result is already set"
+            ),
         }
     }
 
@@ -475,7 +477,9 @@ impl ResultBuilder {
     fn set_complete_result(&mut self, value: ColumnarValue) -> Result<()> {
         match &self.state {
             Partial { arrays, .. } if !arrays.is_empty() => {
-                internal_err!("Cannot set a complete result when there are already partial results")
+                internal_err!(
+                    "Cannot set a complete result when there are already partial results"
+                )
             }
             Complete(_) => internal_err!("Complete result already set"),
             _ => {
