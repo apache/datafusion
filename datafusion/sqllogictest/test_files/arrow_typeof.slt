@@ -61,13 +61,13 @@ Decimal128(38, 10)
 query T
 SELECT arrow_typeof(now()::timestamp)
 ----
-Timestamp(Nanosecond, None)
+Timestamp(ns)
 
 # arrow_typeof_timestamp_utc
 query T
 SELECT arrow_typeof(now())
 ----
-Timestamp(Nanosecond, Some("+00:00"))
+Timestamp(ns, "+00:00")
 
 # arrow_typeof_timestamp_date32(
 query T
@@ -98,7 +98,7 @@ SELECT arrow_cast('1')
 query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string
 SELECT arrow_cast('1', 43)
 
-query error Error unrecognized word: unknown
+query error DataFusion error: Execution error: Unsupported type 'unknown'\. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'\. Error unknown token: unknown
 SELECT arrow_cast('1', 'unknown')
 
 # Round Trip tests:
@@ -130,7 +130,7 @@ SELECT
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, Some("+08:00"))')) as col_tstz_ns,
   arrow_typeof(arrow_cast('foo', 'Dictionary(Int32, Utf8)')) as col_dict
 ----
-Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float16 Float32 Float64 Utf8 LargeUtf8 Utf8View Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Timestamp(Second, Some("+08:00")) Timestamp(Millisecond, Some("+08:00")) Timestamp(Microsecond, Some("+08:00")) Timestamp(Nanosecond, Some("+08:00")) Dictionary(Int32, Utf8)
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float16 Float32 Float64 Utf8 LargeUtf8 Utf8View Binary LargeBinary Timestamp(s) Timestamp(ms) Timestamp(µs) Timestamp(ns) Timestamp(s, "+08:00") Timestamp(ms, "+08:00") Timestamp(µs, "+08:00") Timestamp(ns, "+08:00") Dictionary(Int32, Utf8)
 
 
 
@@ -255,7 +255,7 @@ SELECT
   arrow_typeof(col_ts_ns)
   FROM foo;
 ----
-Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None)
+Timestamp(s) Timestamp(ms) Timestamp(µs) Timestamp(ns)
 
 
 statement ok
@@ -316,7 +316,7 @@ select arrow_cast(interval '30 minutes', 'Duration(Second)');
 ----
 0 days 0 hours 30 mins 0 secs
 
-query error DataFusion error: This feature is not implemented: Unsupported CAST from Utf8 to Duration\(Second\)
+query error DataFusion error: This feature is not implemented: Unsupported CAST from Utf8 to Duration\(s\)
 select arrow_cast('30 minutes', 'Duration(Second)');
 
 
@@ -357,12 +357,12 @@ select arrow_cast(make_array(1, 2, 3), 'List(Int64)');
 query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'List(Int64)'));
 ----
-List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable Int64)
 
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'), 'List(List(Int64))'));
 ----
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable List(nullable Int64))
 
 ## LargeList
 
@@ -380,12 +380,12 @@ select arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)');
 query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'));
 ----
-LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+LargeList(nullable Int64)
 
 query T
 select arrow_typeof(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'));
 ----
-LargeList(Field { name: "item", data_type: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+LargeList(nullable LargeList(nullable Int64))
 
 ## FixedSizeList
 
@@ -417,7 +417,7 @@ select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)');
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 'FixedSizeList(3, Int64)'));
 ----
-FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
+FixedSizeList(3 x nullable Int64)
 
 query ?
 select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');
