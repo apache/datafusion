@@ -35,7 +35,7 @@ use datafusion_common::exec_datafusion_err;
 use datafusion_proto::{
     physical_plan::{
         from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,
-        DefaultPhysicalExtensionCodec,
+        DecodeContext, DefaultPhysicalExtensionCodec,
     },
     protobuf::PhysicalExprNode,
 };
@@ -137,6 +137,8 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
 
     fn try_from(value: FFI_PartitionEvaluatorArgs) -> Result<Self> {
         let default_ctx = SessionContext::new();
+        let task_ctx = default_ctx.task_ctx();
+        let decode_ctx = DecodeContext::new(&task_ctx);
         let codec = DefaultPhysicalExtensionCodec {};
 
         let schema: SchemaRef = value.schema.into();
@@ -148,9 +150,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .collect::<std::result::Result<Vec<_>, prost::DecodeError>>()
             .map_err(|e| exec_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
             .iter()
-            .map(|expr_node| {
-                parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)
-            })
+            .map(|expr_node| parse_physical_expr(expr_node, &decode_ctx, &schema, &codec))
             .collect::<Result<Vec<_>>>()?;
 
         let input_fields = input_exprs

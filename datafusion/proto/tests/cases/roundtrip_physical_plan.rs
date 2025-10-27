@@ -56,7 +56,6 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
@@ -114,7 +113,7 @@ use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    AsExecutionPlan, DecodeContext, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 
@@ -142,8 +141,10 @@ fn roundtrip_test_and_return(
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
             .expect("to proto");
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = DecodeContext::new(&task_ctx);
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), codec)
+        .try_into_physical_plan(&decode_ctx, codec)
         .expect("from proto");
 
     pretty_assertions::assert_eq!(
@@ -775,6 +776,71 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_expr_deduplication() -> Result<()> {
+    use datafusion_proto::physical_plan::DecodeContext;
+    use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+
+    let field_a = Field::new("a", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    // Create a single column expression that will be reused
+    let col_expr = col("a", &schema)?;
+
+    // Use the same expression twice in a binary expression (a = a)
+    let binary_expr = binary(
+        Arc::clone(&col_expr),
+        Operator::Eq,
+        Arc::clone(&col_expr),
+        &schema,
+    )?;
+
+    let filter_exec = Arc::new(FilterExec::try_new(
+        binary_expr,
+        Arc::new(EmptyExec::new(schema.clone())),
+    )?);
+
+    // Perform roundtrip
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto =
+        protobuf::PhysicalPlanNode::try_from_physical_plan(filter_exec.clone(), &codec)?;
+
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = DecodeContext::new(&task_ctx);
+    let result_exec_plan = proto.try_into_physical_plan(&decode_ctx, &codec)?;
+
+    // Verify the plans are equivalent
+    pretty_assertions::assert_eq!(
+        format!("{filter_exec:?}"),
+        format!("{result_exec_plan:?}")
+    );
+
+    // Verify deduplication: extract the binary expression from the filter
+    let result_filter = result_exec_plan
+        .as_any()
+        .downcast_ref::<FilterExec>()
+        .expect("should be FilterExec");
+
+    let result_binary = result_filter
+        .predicate()
+        .as_any()
+        .downcast_ref::<BinaryExpr>()
+        .expect("should be BinaryExpr");
+
+    // Check that left and right expressions share the same Arc pointer
+    // (this proves deduplication worked)
+    let left_ptr = Arc::as_ptr(result_binary.left()).addr();
+    let right_ptr = Arc::as_ptr(result_binary.right()).addr();
+
+    assert_eq!(
+        left_ptr, right_ptr,
+        "Left and right expressions should share the same Arc after deduplication"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
@@ -1027,7 +1093,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             _buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
-            _ctx: &TaskContext,
+            _ctx: &DecodeContext,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unreachable!()
         }
@@ -1135,7 +1201,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _ctx: &TaskContext,
+        _ctx: &DecodeContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("No extension codec provided")
     }
@@ -1738,8 +1804,10 @@ async fn roundtrip_coalesce() -> Result<()> {
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = DecodeContext::new(&task_ctx);
     let restored =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+        node.try_into_physical_plan(&decode_ctx, &DefaultPhysicalExtensionCodec {})?;
 
     assert_eq!(
         plan.schema(),
@@ -1774,8 +1842,10 @@ async fn roundtrip_generate_series() -> Result<()> {
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = DecodeContext::new(&task_ctx);
     let restored =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+        node.try_into_physical_plan(&decode_ctx, &DefaultPhysicalExtensionCodec {})?;
 
     assert_eq!(
         plan.schema(),
@@ -1896,8 +1966,10 @@ async fn roundtrip_physical_plan_node() {
         PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
             .unwrap();
 
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = DecodeContext::new(&task_ctx);
     let plan = node
-        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
+        .try_into_physical_plan(&decode_ctx, &DefaultPhysicalExtensionCodec {})
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
@@ -1976,8 +2048,9 @@ async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
                 PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
             // deserialize the physical plan
-            let _deserialized_plan =
-                proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+            let task_ctx = ctx.task_ctx();
+            let decode_ctx = DecodeContext::new(&task_ctx);
+            let _deserialized_plan = proto.try_into_physical_plan(&decode_ctx, &codec)?;
         }
     }
 
@@ -2096,7 +2169,9 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
     // This will fail with the bug, but should succeed when fixed
-    let _deserialized_plan = proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = DecodeContext::new(&task_ctx);
+    let _deserialized_plan = proto.try_into_physical_plan(&decode_ctx, &codec)?;
     Ok(())
 }
 
@@ -2124,8 +2199,10 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = DecodeContext::new(&task_ctx);
     let unoptimized =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+        node.try_into_physical_plan(&decode_ctx, &DefaultPhysicalExtensionCodec {})?;
 
     let physical_planner =
         datafusion::physical_planner::DefaultPhysicalPlanner::default();
