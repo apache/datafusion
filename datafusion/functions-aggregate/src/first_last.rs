@@ -810,17 +810,7 @@ impl Accumulator for TrivialFirstValueAccumulator {
         // Second index contains is_set flag.
         if !self.is_set {
             let flags = states[1].as_boolean();
-
-            // Check for null values in boolean flags - this should never happen
-            if flags
-                .nulls()
-                .map(|nulls| nulls.null_count() > 0)
-                .unwrap_or_default()
-            {
-                return Err(DataFusionError::Internal(
-                    "first_value: is_set flags contain nulls".to_string(),
-                ));
-            }
+            validate_is_set_flags(flags, "first_value")?;
 
             let filtered_states =
                 filter_states_according_to_is_set(&states[0..1], flags)?;
@@ -967,17 +957,7 @@ impl Accumulator for FirstValueAccumulator {
         // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
         let flags = states[is_set_idx].as_boolean();
-
-        // Check for null values in boolean flags - this should never happen
-        if flags
-            .nulls()
-            .map(|nulls| nulls.null_count() > 0)
-            .unwrap_or_default()
-        {
-            return Err(DataFusionError::Internal(
-                "first_value: is_set flags contain nulls".to_string(),
-            ));
-        }
+        validate_is_set_flags(flags, "first_value")?;
 
         let filtered_states =
             filter_states_according_to_is_set(&states[0..is_set_idx], flags)?;
@@ -1309,17 +1289,7 @@ impl Accumulator for TrivialLastValueAccumulator {
         // LAST_VALUE(last1, last2, last3, ...)
         // Second index contains is_set flag.
         let flags = states[1].as_boolean();
-
-        // Check for null values in boolean flags - this should never happen
-        if flags
-            .nulls()
-            .map(|nulls| nulls.null_count() > 0)
-            .unwrap_or_default()
-        {
-            return Err(DataFusionError::Internal(
-                "last_value: is_set flags contain nulls".to_string(),
-            ));
-        }
+        validate_is_set_flags(flags, "last_value")?;
 
         let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
         if let Some(last) = filtered_states.last() {
@@ -1466,17 +1436,7 @@ impl Accumulator for LastValueAccumulator {
         // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
         let flags = states[is_set_idx].as_boolean();
-
-        // Check for null values in boolean flags - this should never happen
-        if flags
-            .nulls()
-            .map(|nulls| nulls.null_count() > 0)
-            .unwrap_or_default()
-        {
-            return Err(DataFusionError::Internal(
-                "last_value: is_set flags contain nulls".to_string(),
-            ));
-        }
+        validate_is_set_flags(flags, "last_value")?;
 
         let filtered_states =
             filter_states_according_to_is_set(&states[0..is_set_idx], flags)?;
@@ -1519,6 +1479,20 @@ impl Accumulator for LastValueAccumulator {
             + ScalarValue::size_of_vec(&self.orderings)
             - size_of_val(&self.orderings)
     }
+}
+
+/// Validates that is_set flags do not contain NULL values.
+fn validate_is_set_flags(flags: &BooleanArray, function_name: &str) -> Result<()> {
+    if flags
+        .nulls()
+        .map(|nulls| nulls.null_count() > 0)
+        .unwrap_or_default()
+    {
+        return Err(DataFusionError::Internal(
+            format!("{}: is_set flags contain nulls", function_name),
+        ));
+    }
+    Ok(())
 }
 
 /// Filters states according to the `is_set` flag at the last column and returns
