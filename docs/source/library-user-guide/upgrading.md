@@ -25,6 +25,15 @@
 
 You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
 
+### `arrow` / `parquet` updated to 57.0.0
+
+### Upgrade to arrow `57.0.0` and parquet `57.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `57.0.0`, including several dependent crates such as `prost`,
+`tonic`, `pyo3`, and `substrait`. . See the [release
+notes](https://github.com/apache/arrow-rs/releases/tag/57.0.0) for more details.
+
 ### `MSRV` updated to 1.87.0
 
 The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
@@ -166,6 +175,13 @@ let projection_exprs: ProjectionExprs = ...;
 let indices = projection_exprs.column_indices();
 # */
 ```
+
+### `DESCRIBE query` support
+
+`DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the
+_execution plan_ of the query. With this release, `DESCRIBE query` now outputs
+the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
