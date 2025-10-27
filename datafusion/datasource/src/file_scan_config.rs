@@ -2645,7 +2645,7 @@ mod tests {
             Arc::clone(&schema),
             Arc::new(MockSource::default()),
         )
-        .with_projection(Some(vec![0, 2])) // Only project columns 0 and 2
+        .with_projection_indices(Some(vec![0, 2])) // Only project columns 0 and 2
         .with_file_groups(vec![file_group])
         .build();
 
