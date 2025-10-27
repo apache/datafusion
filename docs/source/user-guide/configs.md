@@ -98,7 +98,7 @@ The following configuration settings are available:
 | datafusion.execution.parquet.dictionary_page_size_limit                 | 1048576                   | (writing) Sets best effort maximum dictionary page size, in bytes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | datafusion.execution.parquet.statistics_enabled                         | page                      | (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | datafusion.execution.parquet.max_row_group_size                         | 1048576                   | (writing) Target maximum number of rows in each row group (defaults to 1M rows). Writing larger row groups requires more memory to write, but can get better compression and be faster to read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| datafusion.execution.parquet.created_by                                 | datafusion version 50.2.0 | (writing) Sets "created by" property                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| datafusion.execution.parquet.created_by                                 | datafusion version 50.3.0 | (writing) Sets "created by" property                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | datafusion.execution.parquet.column_index_truncate_length               | 64                        | (writing) Sets column index truncate length                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | datafusion.execution.parquet.statistics_truncate_length                 | 64                        | (writing) Sets statistics truncate length. If NULL, uses default parquet writer setting                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | datafusion.execution.parquet.data_page_row_count_limit                  | 20000                     | (writing) Sets best effort maximum number of rows in data page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -253,3 +253,63 @@ SET datafusion.execution.batch_size = 1024;
 ```
 
 [`fairspillpool`]: https://docs.rs/datafusion/latest/datafusion/execution/memory_pool/struct.FairSpillPool.html
+
+## Join Queries
+
+Currently Apache Datafusion supports the following join algorithms:
+
+- Nested Loop Join
+- Sort Merge Join
+- Hash Join
+- Symmetric Hash Join
+- Piecewise Merge Join (experimental)
+
+The physical planner will choose the appropriate algorithm based on the statistics + join
+condition of the two tables.
+
+# Join Algorithm Optimizer Configurations
+
+You can modify join optimization behavior in your queries by setting specific configuration values.
+Use the following command to update a configuration:
+
+```sql
+SET datafusion.optimizer.<configuration_name>;
+```
+
+Example
+
+```sql
+SET datafusion.optimizer.prefer_hash_join = false;
+```
+
+Adjusting the following configuration values influences how the optimizer selects the join algorithm
+used to execute your SQL query:
+
+## Join Optimizer Configurations
+
+Adjusting the following configuration values influences how the optimizer selects the join algorithm
+used to execute your SQL query.
+
+### allow_symmetric_joins_without_pruning (bool, default = true)
+
+Controls whether symmetric hash joins are allowed for unbounded data sources even when their inputs
+lack ordering or filtering.
+
+- If disabled, the `SymmetricHashJoin` operator cannot prune its internal buffers to be produced only at the end of execution.
+
+### prefer_hash_join (bool, default = true)
+
+Determines whether the optimizer prefers Hash Join over Sort Merge Join during physical plan selection.
+
+- true: favors HashJoin for faster execution when sufficient memory is available.
+- false: allows SortMergeJoin to be chosen when more memory-efficient execution is needed.
+
+### enable_piecewise_merge_join (bool, default = false)
+
+Enables the experimental Piecewise Merge Join algorithm.
+
+- When enabled, the physical planner may select PiecewiseMergeJoin if there is exactly one range
+  filter in the join condition.
+- Piecewise Merge Join is faster than Nested Loop Join performance wise for single range filter
+  except for cases where it is joining two large tables (num_rows > 100,000) that are approximately
+  equal in size.

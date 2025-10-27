@@ -158,7 +158,7 @@ ORDER BY 1,2;
 33 44
 44 55
 
-query TT 
+query TT
 EXPLAIN
 SELECT t1.t1_id, t2.t2_id
 FROM join_t1 t1
