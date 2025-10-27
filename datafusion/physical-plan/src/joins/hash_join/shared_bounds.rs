@@ -420,14 +420,14 @@ impl SharedBuildAccumulator {
                         let lookup_hash_expr = Arc::new(HashExpr::new(
                             self.on_right.clone(),
                             HASH_JOIN_SEED,
-                            format!("hash_join_p{}", partition_id),
+                            format!("hash_join_p{partition_id}"),
                         ))
                             as Arc<dyn PhysicalExpr>;
 
                         let hash_lookup_expr = Arc::new(HashTableLookupExpr::new(
                             lookup_hash_expr,
                             hash_map,
-                            format!("lookup_p{}", partition_id),
+                            format!("lookup_p{partition_id}"),
                         ))
                             as Arc<dyn PhysicalExpr>;
 
