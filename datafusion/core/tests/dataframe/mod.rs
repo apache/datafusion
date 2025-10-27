@@ -6459,10 +6459,10 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
         "ticker",
         "first_value(value)[first_value]",
         "timestamp@0",
-        "is_set",
+        "first_value(value)[first_value_is_set]",
         "last_value(value)[last_value]",
         "timestamp@0",
-        "is_set",
+        "last_value(value)[last_value_is_set]",
     ];
 
     let binding = partial_agg.schema();
