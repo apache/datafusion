@@ -227,7 +227,12 @@ fn merge(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRe
     #[cfg(debug_assertions)]
     for ix in indices {
         if let Some(index) = ix.index() {
-            assert!(index < values.len(), "Index out of bounds: {} >= {}", index, values.len());
+            assert!(
+                index < values.len(),
+                "Index out of bounds: {} >= {}",
+                index,
+                values.len()
+            );
         }
     }
 
@@ -671,30 +676,28 @@ impl CaseExpr {
                 }
             }?;
 
-            let when_match_count = when_value.true_count();
+            // `true_count` ignores `true` values where the validity bit is not set, so there's
+            // no need to call `prep_null_mask_filter`.
+            let when_true_count = when_value.true_count();
 
             // If the 'when' predicate did not match any rows, continue to the next branch immediately
-            if when_match_count == 0 {
+            if when_true_count == 0 {
                 continue;
             }
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
-            if when_match_count == remainder_batch.num_rows() {
+            if when_true_count == remainder_batch.num_rows() {
                 let then_expression = &self.when_then_expr[i].1;
                 let then_value = then_expression.evaluate(&remainder_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
                 return result_builder.finish();
             }
 
-            // Make sure 'NULL' is treated as false
-            let when_value = match when_value.null_count() {
-                0 => when_value,
-                _ => prep_null_mask_filter(&when_value),
-            };
-
             // Filter the remainder batch based on the 'when' value
             // This results in a batch containing only the rows that need to be evaluated
             // for the current branch
+            // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
+            // this unconditionally.
             let then_filter = create_filter(&when_value);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
@@ -710,7 +713,14 @@ impl CaseExpr {
             }
 
             // Prepare the next when branch (or the else branch)
-            let next_selection = not(&when_value)?;
+            let next_selection = match when_value.null_count() {
+                0 => not(&when_value),
+                _ => {
+                    // `prep_null_mask_filter` is required to ensure the not operation treats nulls
+                    // as false
+                    not(&prep_null_mask_filter(&when_value))
+                }
+            }?;
             let next_filter = create_filter(&next_selection);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
@@ -758,31 +768,29 @@ impl CaseExpr {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
 
-            let when_match_count = when_value.true_count();
+            // `true_count` ignores `true` values where the validity bit is not set, so there's
+            // no need to call `prep_null_mask_filter`.
+            let when_true_count = when_value.true_count();
 
             // If the 'when' predicate did not match any rows, continue to the next branch immediately
-            if when_match_count == 0 {
+            if when_true_count == 0 {
                 continue;
             }
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
-            if when_match_count == remainder_batch.num_rows() {
+            if when_true_count == remainder_batch.num_rows() {
                 let then_expression = &self.when_then_expr[i].1;
                 let then_value = then_expression.evaluate(&remainder_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
                 return result_builder.finish();
             }
 
-            // Make sure 'NULL' is treated as false
-            let when_value = match when_value.null_count() {
-                0 => Cow::Borrowed(when_value),
-                _ => Cow::Owned(prep_null_mask_filter(when_value)),
-            };
-
             // Filter the remainder batch based on the 'when' value
             // This results in a batch containing only the rows that need to be evaluated
             // for the current branch
-            let then_filter = create_filter(&when_value);
+            // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
+            // this unconditionally.
+            let then_filter = create_filter(when_value);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
@@ -797,7 +805,13 @@ impl CaseExpr {
             }
 
             // Prepare the next when branch (or the else branch)
-            let next_selection = not(&when_value)?;
+            let next_selection = match when_value.null_count() {
+                0 => not(when_value),
+                _ => {
+                    // `prep_null_mask_filter` is required to ensure the not operation treats nulls as false
+                    not(&prep_null_mask_filter(when_value))
+                }
+            }?;
             let next_filter = create_filter(&next_selection);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
