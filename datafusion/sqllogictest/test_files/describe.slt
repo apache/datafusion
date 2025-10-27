@@ -116,3 +116,29 @@ col1 Int32 YES
 # Test error cases
 statement error
 DESC nonexistent_table;
+
+##########
+# Describe statement
+##########
+
+# Test describing the schema of a simple statement
+query TTT
+DESCRIBE SELECT 1;
+----
+Int64(1) Int64 NO
+
+# Insert some data into the existing test table...
+statement ok
+INSERT INTO test_desc_table (id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie'), (4, 'Alice');
+
+# ... and describe the schema of a more complex query
+query TTT
+DESCRIBE SELECT name, COUNT(*) AS name_count FROM test_desc_table
+    GROUP BY name HAVING COUNT(*) > 1 ORDER BY name_count DESC;
+----
+name Utf8View YES
+name_count Int64 NO
+
+# Describing a statement that's not a query is not supported
+statement error Describing statements other than SELECT not supported
+DESCRIBE CREATE TABLE test_desc_table (id INT, name VARCHAR);
