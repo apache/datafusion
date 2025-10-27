@@ -35,7 +35,9 @@ use datafusion_common::HashMap;
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
-pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
+pub use value::{
+    Count, Gauge, MetricValue, PruningMetrics, ScopedTimerGuard, Time, Timestamp,
+};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.
@@ -302,6 +304,7 @@ impl MetricsSet {
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
+            MetricValue::PruningMetrics { .. } => false,
             MetricValue::Custom { .. } => false,
         })
     }
