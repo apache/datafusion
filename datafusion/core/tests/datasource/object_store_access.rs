@@ -146,7 +146,8 @@ async fn create_single_parquet_file_prefetch() {
     // Explicitly specify a prefetch hint that is adequate for the footer and page index
     let test = Test::new()
         .with_parquet_metadata_size_hint(Some(1000))
-        .with_single_file_parquet().await;
+        .with_single_file_parquet()
+        .await;
     // expect 1 1000 byte request which reads the footer metadata and page index
     assert_snapshot!(
         test.requests(),
@@ -158,7 +159,6 @@ async fn create_single_parquet_file_prefetch() {
     "
     );
 }
-
 
 #[tokio::test]
 async fn create_single_parquet_file_too_small_prefetch() {
