@@ -281,6 +281,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-avro"
+version = "57.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfabe428b25092f4f45f019d21a7a6b8d65b10458a120d00f8ee1843404dfe14"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
+ "indexmap 2.12.0",
+ "rand 0.9.2",
+ "serde",
+ "serde_json",
+ "strum_macros 0.27.2",
+ "uuid",
+]
+
+[[package]]
 name = "arrow-buffer"
 version = "57.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2041,8 +2058,8 @@ dependencies = [
 name = "datafusion-datasource-avro"
 version = "50.3.0"
 dependencies = [
- "apache-avro",
  "arrow",
+ "arrow-avro",
  "async-trait",
  "bytes",
  "datafusion-common",
