@@ -142,6 +142,25 @@ async fn create_single_parquet_file_default() {
 }
 
 #[tokio::test]
+async fn create_single_parquet_file_prefetch() {
+    // Explicitly specify a prefetch hint that is adequate for the footer and page index
+    let test = Test::new()
+        .with_parquet_metadata_size_hint(Some(1000))
+        .with_single_file_parquet().await;
+    // expect 1 1000 byte request which reads the footer metadata and page index
+    assert_snapshot!(
+        test.requests(),
+        @r"
+    RequestCountingObjectStore()
+    Total Requests: 2
+    - HEAD path=parquet_table.parquet
+    - GET  (range) range=1994-2994 path=parquet_table.parquet
+    "
+    );
+}
+
+
+#[tokio::test]
 async fn create_single_parquet_file_too_small_prefetch() {
     // configure a prefetch size that is too small to fetch the footer
     // metadata
@@ -156,7 +175,7 @@ async fn create_single_parquet_file_too_small_prefetch() {
         .with_single_file_parquet()
         .await;
     // expect three get requests:
-    // 1. read the footer hint (not enough for the footer metadata)
+    // 1. read the footer (500 bytes per hint, not enough for the footer metadata)
     // 2. Read the footer metadata
     // 3. reads the PageIndex
     assert_snapshot!(
@@ -177,13 +196,15 @@ async fn create_single_parquet_file_small_prefetch() {
     // configure a prefetch size that is large enough for the footer
     // metadata but **not** the PageIndex
     //
-    // Using the ranges from from the test below (with no_prefetch),
-    // the 730 is determined as follows:
+    // Using the ranges from the test below (with no_prefetch),
+    // the 730 is determined as follows;
     // --------
     // 2286-2294: (8 bytes) footer + length
     // 2264-2986: (722 bytes) footer metadata
     let test = Test::new()
-        .with_parquet_metadata_size_hint(Some(730))
+        // 740 is enough to get both the footer + length (8 bytes)
+        // but not the entire PageIndex
+        .with_parquet_metadata_size_hint(Some(740))
         .with_single_file_parquet()
         .await;
     // expect two get requests:
@@ -195,7 +216,7 @@ async fn create_single_parquet_file_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 3
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=2264-2994 path=parquet_table.parquet
+    - GET  (range) range=2254-2994 path=parquet_table.parquet
     - GET  (range) range=2124-2264 path=parquet_table.parquet
     "
     );
