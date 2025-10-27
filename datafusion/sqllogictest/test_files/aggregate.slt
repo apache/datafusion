@@ -7595,3 +7595,50 @@ NULL NULL NULL NULL
 
 statement ok
 drop table distinct_avg;
+
+
+statement ok
+CREATE TABLE test_array_agg_table AS
+SELECT 
+    arrow_cast(r, 'UInt32') AS c1,
+    arrow_cast(
+      case when r % 2 == 0 then r/2
+      else r
+      end 
+    , 'UInt64') AS c2
+FROM range(1, 10001) AS t(r);
+
+# TODO: run explain and ensure partial aggregation is enabled
+
+
+
+
+query I?
+select c2, array_agg(c1) filter (where c1%2 = 0) from test_array_agg_table group by c2 order by c2 asc limit 10;
+----
+1 [2]
+2 [4]
+3 [6]
+4 [8]
+5 [10]
+6 [12]
+7 [14]
+8 [16]
+9 [18]
+10 [20]
+
+
+
+query I??
+select c2, array_agg(c1),array_agg(c1) filter (where c1%2 = 0) from (
+  select * from  test_array_agg_table order by c2 asc limit 10
+) group by c2 order by c2;
+----
+1 [2, 1] [2]
+2 [4] [4]
+3 [6, 3] [6]
+4 [8] [8]
+5 [10, 5] [10]
+6 [12] [12]
+7 [7] []
+
