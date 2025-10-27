@@ -632,9 +632,9 @@ impl LogicalPlan {
             }) => Projection::try_new(expr, input).map(LogicalPlan::Projection),
             LogicalPlan::Dml(_) => Ok(self),
             LogicalPlan::Copy(_) => Ok(self),
-            LogicalPlan::Values(Values { schema, values }) => {
-                // todo it isn't clear why the schema is not recomputed here
-                Ok(LogicalPlan::Values(Values { schema, values }))
+            LogicalPlan::Values(Values { values, schema: _ }) => {
+                // TODO: docs why we compute this
+                LogicalPlanBuilder::values(values)?.build()
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
@@ -1449,7 +1449,7 @@ impl LogicalPlan {
         self.transform_up_with_subqueries(|plan| {
             let schema = Arc::clone(plan.schema());
             let name_preserver = NamePreserver::new(&plan);
-            plan.map_expressions(|e| {
+            let transformed_plan = plan.map_expressions(|e| {
                 let (e, has_placeholder) = e.infer_placeholder_types(&schema)?;
                 if !has_placeholder {
                     // Performance optimization:
@@ -1471,18 +1471,17 @@ impl LogicalPlan {
                     // Preserve name to avoid breaking column references to this expression
                     Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
                 }
-            })
-        })
-        .map(|transformed_plan| {
-            // Recompute plan's schema, because replacing params by values
-            // can provide schema and type information for certain queries
-            // i.e. `SELECT $1, $2`.
-            if transformed_plan.transformed {
+            });
+
+            // TODO: docs, explain why we do this
+            // TODO: lazily compute upon transformed
+            // TODO: `recompute_schema` doesn't work for children ?
+            if let Ok(transformed_plan) = transformed_plan {
                 transformed_plan.map_data(|plan| plan.recompute_schema())
             } else {
-                Ok(transformed_plan)
+                transformed_plan
             }
-        })?
+        })
         .map(|res| res.data)
     }
 
