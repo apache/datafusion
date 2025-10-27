@@ -687,7 +687,7 @@ impl DataSource for FileScanConfig {
             .as_ref()
             .map(|p| p.ordered_column_indices());
 
-        // pass the new projections to the file source, along wiht the current projection
+        // pass the new projections to the file source, along with the current projection
         // the file source will merge them if possible
         let res = self.file_source().try_pushdown_projections(
             &new_projection_exprs,
