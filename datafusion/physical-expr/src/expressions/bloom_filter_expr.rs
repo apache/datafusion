@@ -39,9 +39,9 @@ use std::sync::Arc;
 /// let mut builder = BloomFilterBuilder::new(1000, 0.01)?;
 /// builder.insert_scalar(&ScalarValue::Int32(Some(42)))?;
 /// builder.insert_array(&int_array)?;
-/// let expr = builder.build(&col_expr);
+/// let expr = builder.build(col_expr);  // Consumes builder
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct BloomFilterBuilder {
     /// The underlying bloom filter
     sbbf: Sbbf,
@@ -220,10 +220,7 @@ impl BloomFilterBuilder {
                 }
             }
             DataType::Decimal128(_, _) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<Decimal128Array>()
-                    .unwrap();
+                let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
                 for i in 0..array.len() {
                     if !array.is_null(i) {
                         self.sbbf.insert(&array.value(i));
@@ -231,10 +228,7 @@ impl BloomFilterBuilder {
                 }
             }
             DataType::Decimal256(_, _) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<Decimal256Array>()
-                    .unwrap();
+                let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
                 for i in 0..array.len() {
                     if !array.is_null(i) {
                         let bytes = array.value(i).to_be_bytes();
@@ -252,16 +246,15 @@ impl BloomFilterBuilder {
         Ok(())
     }
 
-    /// Build a `BloomFilterExpr` from this builder
+    /// Build a `BloomFilterExpr` from this builder, consuming the builder.
     ///
-    /// This method does not consume the builder, allowing multiple
-    /// `BloomFilterExpr` instances to be created with different expressions
-    /// but sharing the same bloom filter data.
+    /// This consumes the builder and moves the bloom filter data into the expression,
+    /// avoiding any clones of the (potentially large) bloom filter.
     ///
     /// # Arguments
     /// * `expr` - The expression to evaluate and check against the bloom filter
-    pub fn build(&self, expr: Arc<dyn PhysicalExpr>) -> BloomFilterExpr {
-        BloomFilterExpr::new(expr, self.sbbf.clone())
+    pub fn build(self, expr: Arc<dyn PhysicalExpr>) -> BloomFilterExpr {
+        BloomFilterExpr::new(expr, self.sbbf)
     }
 }
 
@@ -480,10 +473,7 @@ impl BloomFilterExpr {
                 }
             }
             DataType::Decimal128(_, _) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<Decimal128Array>()
-                    .unwrap();
+                let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
                 for i in 0..len {
                     if array.is_null(i) {
                         builder.append_value(false);
@@ -493,10 +483,7 @@ impl BloomFilterExpr {
                 }
             }
             DataType::Decimal256(_, _) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<Decimal256Array>()
-                    .unwrap();
+                let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
                 for i in 0..len {
                     if array.is_null(i) {
                         builder.append_value(false);
@@ -724,6 +711,98 @@ mod tests {
 
         // Value 11111 was not inserted, but might be a false positive
         // We can't assert it's false without making the test flaky
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_bloom_filter_negative_lookups() -> Result<()> {
+        use arrow::array::{Float64Array, Int32Array, StringArray};
+
+        // Test Int32: Use extremely low FPP (0.00001) to make false positives negligible
+        let mut builder = BloomFilterBuilder::new(10, 0.00001)?;
+        for i in 1..=10 {
+            builder.insert_scalar(&ScalarValue::Int32(Some(i)))?;
+        }
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let expr = col("a", &schema)?;
+        let bloom_expr = Arc::new(builder.build(expr));
+
+        // Test values far outside the inserted range (1000-1099)
+        let test_values: Vec<i32> = (1000..1100).collect();
+        let test_array = Arc::new(Int32Array::from(test_values)) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![test_array])?;
+        let result = bloom_expr.evaluate(&batch)?;
+        let result_array = result.into_array(100)?;
+        let result_bool = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        for i in 0..100 {
+            assert!(
+                !result_bool.value(i),
+                "Int32 value {} should not match",
+                i + 1000
+            );
+        }
+
+        // Test Float64
+        let mut builder = BloomFilterBuilder::new(10, 0.00001)?;
+        for i in 0..10 {
+            builder.insert_scalar(&ScalarValue::Float64(Some(i as f64 * 0.5)))?;
+        }
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, false)]));
+        let expr = col("f", &schema)?;
+        let bloom_expr = Arc::new(builder.build(expr));
+
+        let test_values: Vec<f64> = (100..200).map(|i| i as f64 * 10.0).collect();
+        let test_array = Arc::new(Float64Array::from(test_values)) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![test_array])?;
+        let result = bloom_expr.evaluate(&batch)?;
+        let result_array = result.into_array(100)?;
+        let result_bool = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        for i in 0..100 {
+            assert!(
+                !result_bool.value(i),
+                "Float64 value {} should not match",
+                (i + 100) as f64 * 10.0
+            );
+        }
+
+        // Test Strings
+        let mut builder = BloomFilterBuilder::new(5, 0.00001)?;
+        builder.insert_scalar(&ScalarValue::Utf8(Some("apple".to_string())))?;
+        builder.insert_scalar(&ScalarValue::Utf8(Some("banana".to_string())))?;
+        builder.insert_scalar(&ScalarValue::Utf8(Some("cherry".to_string())))?;
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let expr = col("s", &schema)?;
+        let bloom_expr = Arc::new(builder.build(expr));
+
+        let test_strings = vec![
+            "zebra",
+            "yak",
+            "xylophone",
+            "walrus",
+            "vulture",
+            "umbrella",
+            "tiger",
+            "snake",
+        ];
+        let test_array = Arc::new(StringArray::from(test_strings.clone())) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![test_array])?;
+        let result = bloom_expr.evaluate(&batch)?;
+        let result_array = result.into_array(8)?;
+        let result_bool = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        for (i, s) in test_strings.iter().enumerate() {
+            assert!(!result_bool.value(i), "String '{}' should not match", s);
+        }
 
         Ok(())
     }

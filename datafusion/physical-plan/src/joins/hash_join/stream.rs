@@ -419,7 +419,8 @@ impl HashJoinStream {
                 PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
             };
 
-            let column_filters = left_data.column_filters.clone();
+            // Take ownership of column_filters to avoid cloning
+            let column_filters = left_data.column_filters.lock().take();
             self.bounds_waiter = Some(OnceFut::new(async move {
                 bounds_accumulator
                     .report_partition_bounds(left_side_partition_id, column_filters)

@@ -55,6 +55,7 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
 };
+use parking_lot::Mutex;
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
@@ -82,7 +83,6 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
-use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 const HASH_JOIN_SEED: RandomState =
@@ -106,8 +106,9 @@ pub(super) struct JoinLeftData {
     /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
     /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
     _reservation: MemoryReservation,
-    /// Filter data (bounds + bloom filters) computed from the build side for dynamic filter pushdown
-    pub(super) column_filters: Option<Vec<ColumnFilterData>>,
+    /// Filter data (bounds + bloom filters) computed from the build side for dynamic filter pushdown.
+    /// Wrapped in Mutex<Option<>> to allow taking ownership when reporting to the accumulator.
+    pub(super) column_filters: Mutex<Option<Vec<ColumnFilterData>>>,
 }
 
 impl JoinLeftData {
@@ -128,7 +129,7 @@ impl JoinLeftData {
             visited_indices_bitmap,
             probe_threads_counter,
             _reservation: reservation,
-            column_filters,
+            column_filters: Mutex::new(column_filters),
         }
     }
 

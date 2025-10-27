@@ -257,7 +257,10 @@ impl AsBytes for i128 {
         // Use big-endian for i128 to match Parquet's FIXED_LEN_BYTE_ARRAY representation
         // This allows compatibility with Parquet bloom filters
         unsafe {
-            std::slice::from_raw_parts(self as *const i128 as *const u8, size_of::<i128>())
+            std::slice::from_raw_parts(
+                self as *const i128 as *const u8,
+                size_of::<i128>(),
+            )
         }
     }
 }

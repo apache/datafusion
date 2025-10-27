@@ -32,7 +32,6 @@ use datafusion_physical_expr::expressions::{
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use itertools::Itertools;
 use parking_lot::Mutex;
 use tokio::sync::Barrier;
 
@@ -54,7 +53,7 @@ impl ColumnBounds {
 
 /// Filter data for a single join key column, combining bounds and bloom filter.
 /// Used in dynamic filter pushdown for comprehensive filtering.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ColumnFilterData {
     /// Min/max bounds for range filtering
     pub(crate) bounds: ColumnBounds,
@@ -73,13 +72,13 @@ impl ColumnFilterData {
 
 /// Represents the bounds for all join key columns from a single partition.
 /// This contains the filter data (min/max values and bloom filters) computed from one partition's build-side data.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct PartitionBounds {
     /// Partition identifier for debugging and determinism (not strictly necessary)
-    partition: usize,
+    pub(crate) partition: usize,
     /// Filter data (bounds + bloom filter) for each join key column in this partition.
     /// Index corresponds to the join key expression index.
-    column_filters: Vec<ColumnFilterData>,
+    pub(crate) column_filters: Vec<ColumnFilterData>,
 }
 
 impl PartitionBounds {
@@ -88,14 +87,6 @@ impl PartitionBounds {
             partition,
             column_filters,
         }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.column_filters.len()
-    }
-
-    pub(crate) fn get_column_filter(&self, index: usize) -> Option<&ColumnFilterData> {
-        self.column_filters.get(index)
     }
 }
 
@@ -123,8 +114,9 @@ impl PartitionBounds {
 /// All fields use a single mutex to ensure correct coordination between concurrent
 /// partition executions.
 pub(crate) struct SharedBoundsAccumulator {
-    /// Shared state protected by a single mutex to avoid ordering concerns
-    inner: Mutex<SharedBoundsState>,
+    /// Shared state protected by a single mutex to avoid ordering concerns.
+    /// After filter creation, this becomes None as the state is consumed.
+    inner: Mutex<Option<SharedBoundsState>>,
     barrier: Barrier,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
@@ -187,9 +179,9 @@ impl SharedBoundsAccumulator {
             PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
         };
         Self {
-            inner: Mutex::new(SharedBoundsState {
+            inner: Mutex::new(Some(SharedBoundsState {
                 bounds: Vec::with_capacity(expected_calls),
-            }),
+            })),
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
             on_right,
@@ -205,49 +197,58 @@ impl SharedBoundsAccumulator {
     /// ((col0 >= p0_min0 AND col0 <= p0_max0 AND col0 IN BLOOM_FILTER_0 AND col1 >= p0_min1 AND col1 <= p0_max1 AND col1 IN BLOOM_FILTER_1)
     ///  OR
     ///  (col0 >= p1_min0 AND col0 <= p1_max0 AND col0 IN BLOOM_FILTER_0 AND col1 >= p1_min1 AND col1 <= p1_max1 AND col1 IN BLOOM_FILTER_1))
+    ///
+    /// This method consumes the bounds to allow moving bloom filter builders.
     pub(crate) fn create_filter_from_partition_bounds(
         &self,
-        bounds: &[PartitionBounds],
+        mut bounds: Vec<PartitionBounds>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         if bounds.is_empty() {
             return Ok(lit(true));
         }
 
+        // Sort by partition for determinism
+        bounds.sort_by_key(|b| b.partition);
+
         // Create a predicate for each partition
         let mut partition_predicates = Vec::with_capacity(bounds.len());
 
-        for partition_bounds in bounds.iter().sorted_by_key(|b| b.partition) {
+        for partition_bounds in bounds.into_iter() {
             // Create range predicates and bloom filter checks for each join key in this partition
-            let mut column_predicates = Vec::with_capacity(partition_bounds.len());
+            let mut column_predicates =
+                Vec::with_capacity(partition_bounds.column_filters.len());
 
-            for (col_idx, right_expr) in self.on_right.iter().enumerate() {
-                if let Some(filter_data) = partition_bounds.get_column_filter(col_idx) {
-                    // Create predicate: col >= min AND col <= max
-                    let min_expr = Arc::new(BinaryExpr::new(
-                        Arc::clone(right_expr),
-                        Operator::GtEq,
-                        lit(filter_data.bounds.min.clone()),
-                    )) as Arc<dyn PhysicalExpr>;
-                    let max_expr = Arc::new(BinaryExpr::new(
-                        Arc::clone(right_expr),
-                        Operator::LtEq,
-                        lit(filter_data.bounds.max.clone()),
-                    )) as Arc<dyn PhysicalExpr>;
-                    let range_expr =
-                        Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
-                            as Arc<dyn PhysicalExpr>;
+            // Consume column_filters by taking ownership
+            for (col_idx, filter_data) in
+                partition_bounds.column_filters.into_iter().enumerate()
+            {
+                let right_expr = &self.on_right[col_idx];
 
-                    // Create bloom filter check: col IN BLOOM_FILTER
-                    let bloom_expr = Arc::new(filter_data.bloom_filter.build(Arc::clone(
-                        right_expr,
-                    ))) as Arc<dyn PhysicalExpr>;
+                // Create predicate: col >= min AND col <= max
+                let min_expr = Arc::new(BinaryExpr::new(
+                    Arc::clone(right_expr),
+                    Operator::GtEq,
+                    lit(filter_data.bounds.min.clone()),
+                )) as Arc<dyn PhysicalExpr>;
+                let max_expr = Arc::new(BinaryExpr::new(
+                    Arc::clone(right_expr),
+                    Operator::LtEq,
+                    lit(filter_data.bounds.max.clone()),
+                )) as Arc<dyn PhysicalExpr>;
+                let range_expr =
+                    Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
+                        as Arc<dyn PhysicalExpr>;
 
-                    // Combine range and bloom filter: (range_expr AND bloom_expr)
-                    let combined_expr =
-                        Arc::new(BinaryExpr::new(range_expr, Operator::And, bloom_expr))
-                            as Arc<dyn PhysicalExpr>;
-                    column_predicates.push(combined_expr);
-                }
+                // Create bloom filter check by consuming the builder
+                let bloom_expr =
+                    Arc::new(filter_data.bloom_filter.build(Arc::clone(right_expr)))
+                        as Arc<dyn PhysicalExpr>;
+
+                // Combine range and bloom filter: (range_expr AND bloom_expr)
+                let combined_expr =
+                    Arc::new(BinaryExpr::new(range_expr, Operator::And, bloom_expr))
+                        as Arc<dyn PhysicalExpr>;
+                column_predicates.push(combined_expr);
             }
 
             // Combine all column predicates for this partition with AND
@@ -306,8 +307,11 @@ impl SharedBoundsAccumulator {
         // Store filter data in the accumulator - this runs once per partition
         if let Some(filters) = column_filters {
             let mut guard = self.inner.lock();
+            let state = guard
+                .as_mut()
+                .expect("SharedBoundsState should exist during partition reporting");
 
-            let should_push = if let Some(last_bound) = guard.bounds.last() {
+            let should_push = if let Some(last_bound) = state.bounds.last() {
                 // In `PartitionMode::CollectLeft`, all streams on the left side share the same partition id (0).
                 // Since this function can be called multiple times for that same partition, we must deduplicate
                 // by checking against the last recorded bound.
@@ -317,7 +321,7 @@ impl SharedBoundsAccumulator {
             };
 
             if should_push {
-                guard
+                state
                     .bounds
                     .push(PartitionBounds::new(left_side_partition_id, filters));
             }
@@ -325,10 +329,16 @@ impl SharedBoundsAccumulator {
 
         if self.barrier.wait().await.is_leader() {
             // All partitions have reported, so we can update the filter
-            let inner = self.inner.lock();
-            if !inner.bounds.is_empty() {
+            // Take ownership of the state (consuming it)
+            let state = self
+                .inner
+                .lock()
+                .take()
+                .expect("SharedBoundsState should exist when creating filter");
+
+            if !state.bounds.is_empty() {
                 let filter_expr =
-                    self.create_filter_from_partition_bounds(&inner.bounds)?;
+                    self.create_filter_from_partition_bounds(state.bounds)?;
                 self.dynamic_filter.update(filter_expr)?;
             }
         }
