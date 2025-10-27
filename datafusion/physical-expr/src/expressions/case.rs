@@ -798,7 +798,7 @@ impl CaseExpr {
 
             // If this is the last 'when' branch and there is no 'else' expression, there's no
             // point in calculating the remaining rows.
-            if i == self.when_then_expr.len() - 1 && self.else_expr.is_none() {
+            if self.else_expr.is_none() && i == self.when_then_expr.len() - 1 {
                 return result_builder.finish();
             }
 
@@ -806,7 +806,8 @@ impl CaseExpr {
             let next_selection = match when_value.null_count() {
                 0 => not(when_value),
                 _ => {
-                    // `prep_null_mask_filter` is required to ensure the not operation treats nulls as false
+                    // `prep_null_mask_filter` is required to ensure the not operation treats nulls
+                    // as false
                     not(&prep_null_mask_filter(when_value))
                 }
             }?;
