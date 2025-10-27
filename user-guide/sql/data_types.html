@@ -744,7 +744,16 @@ the <code class="docutils literal notranslate"><span class="pre">arrow_typeof</s
 </div>
 <p>You can cast a SQL expression to a specific Arrow type using the <code class="docutils literal notranslate"><span class="pre">arrow_cast</span></code> function
 For example, to cast the output of <code class="docutils literal notranslate"><span class="pre">now()</span></code> to a <code class="docutils literal notranslate"><span class="pre">Timestamp</span></code> with second precision:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">now</span><span class="p">(),</span><span class="w"> </span><span class="s1">&#39;Timestamp(Second, None)&#39;</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">now</span><span class="p">(),</span><span class="w"> </span><span class="s1">&#39;Timestamp(s)&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="ss">&quot;now()&quot;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">now</span><span class="p">()</span><span class="w">               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2025</span><span class="o">-</span><span class="mi">10</span><span class="o">-</span><span class="mi">24</span><span class="n">T20</span><span class="p">:</span><span class="mi">02</span><span class="p">:</span><span class="mi">45</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+<p>The older syntax still works as well:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">now</span><span class="p">(),</span><span class="w"> </span><span class="s1">&#39;Timestamp(Second, None)&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="ss">&quot;now()&quot;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">now</span><span class="p">()</span><span class="w">               </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
