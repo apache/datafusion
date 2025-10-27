@@ -2084,10 +2084,7 @@ mod test {
         )?);
         let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).gt(lit(13i64)));
-        let expected = is_true(
-            cast(lit(12i32), Arc::new(Field::new("a", DataType::Int64, true)))
-                .gt(lit(13i64)),
-        );
+        let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
         assert_eq!(expected, result);
 
@@ -2098,10 +2095,7 @@ mod test {
         )?);
         let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
-        let expected = is_true(
-            cast(lit(12i32), Arc::new(Field::new("a", DataType::Int64, true)))
-                .eq(lit(13i64)),
-        );
+        let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
         assert_eq!(expected, result);
 
@@ -2112,10 +2106,7 @@ mod test {
         )?);
         let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).lt(lit(13i64)));
-        let expected = is_true(
-            cast(lit(12i32), Arc::new(Field::new("a", DataType::Int64, true)))
-                .lt(lit(13i64)),
-        );
+        let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
         assert_eq!(expected, result);
 
@@ -2154,10 +2145,7 @@ mod test {
         schema: &DFSchemaRef,
     ) -> Box<Expr> {
         if &expr.get_type(schema).unwrap() != data_type {
-            Box::new(cast(
-                *expr,
-                Arc::new(Field::new("casted_expr", data_type.clone(), true)),
-            ))
+            Box::new(cast(*expr, data_type.clone()))
         } else {
             expr
         }
