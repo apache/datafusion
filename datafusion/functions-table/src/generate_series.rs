@@ -256,7 +256,7 @@ impl GenerateSeriesTable {
                 batch_size,
                 include_end: *include_end,
                 name,
-                projection
+                projection,
             })),
             GenSeriesArgs::TimestampArgs {
                 start,
@@ -297,7 +297,7 @@ impl GenerateSeriesTable {
                     batch_size,
                     include_end: *include_end,
                     name,
-                    projection
+                    projection,
                 }))
             }
             GenSeriesArgs::DateArgs {
@@ -327,7 +327,7 @@ impl GenerateSeriesTable {
                 batch_size,
                 include_end: *include_end,
                 name,
-                projection
+                projection,
             })),
         };
 
@@ -403,7 +403,7 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
         let projected = match self.projection.as_ref() {
             Some(projection) => batch.project(projection)?,
-            None => batch
+            None => batch,
         };
         Ok(Some(projected))
     }
