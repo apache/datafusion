@@ -1238,10 +1238,15 @@ impl CollectLeftAccumulator {
     /// # Arguments
     /// * `expr` - The physical expression to track bounds for
     /// * `schema` - The schema of the input data
+    /// * `random_state` - Random state for consistent hashing
     ///
     /// # Returns
     /// A new `CollectLeftAccumulator` instance configured for the expression's data type
-    fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Result<Self> {
+    fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+        random_state: RandomState,
+    ) -> Result<Self> {
         /// Recursively unwraps dictionary types to get the underlying value type.
         fn dictionary_value_type(data_type: &DataType) -> DataType {
             match data_type {
@@ -1259,7 +1264,7 @@ impl CollectLeftAccumulator {
 
         // Create bloom filter with default parameters
         // NDV (number of distinct values) = 1000, FPP (false positive probability) = 0.05 (5%)
-        let bloom_filter = BloomFilterBuilder::new(1000, 0.05)?;
+        let bloom_filter = BloomFilterBuilder::new(1000, 0.05, random_state)?;
 
         Ok(Self {
             expr,
@@ -1271,8 +1276,8 @@ impl CollectLeftAccumulator {
 
     /// Updates the accumulators with values from a new batch.
     ///
-    /// Evaluates the expression on the batch and updates min, max, and bloom filter
-    /// with the resulting values.
+    /// Evaluates the expression on the batch and updates min and max bounds.
+    /// Bloom filter population is deferred to Pass 2 to reuse hash computations.
     ///
     /// # Arguments
     /// * `batch` - The record batch to process
@@ -1283,8 +1288,7 @@ impl CollectLeftAccumulator {
         let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
         self.min.update_batch(std::slice::from_ref(&array))?;
         self.max.update_batch(std::slice::from_ref(&array))?;
-        // Insert values into bloom filter
-        self.bloom_filter.insert_array(&array)?;
+        // Bloom filter population deferred to Pass 2 to reuse hash table hashes
         Ok(())
     }
 
@@ -1318,6 +1322,7 @@ impl BuildSideState {
         on_left: Vec<Arc<dyn PhysicalExpr>>,
         schema: &SchemaRef,
         should_compute_bounds: bool,
+        random_state: &RandomState,
     ) -> Result<Self> {
         Ok(Self {
             batches: Vec::new(),
@@ -1329,7 +1334,11 @@ impl BuildSideState {
                     on_left
                         .iter()
                         .map(|expr| {
-                            CollectLeftAccumulator::try_new(Arc::clone(expr), schema)
+                            CollectLeftAccumulator::try_new(
+                                Arc::clone(expr),
+                                schema,
+                                random_state.clone(),
+                            )
                         })
                         .collect::<Result<Vec<_>>>()
                 })
@@ -1388,6 +1397,7 @@ async fn collect_left_input(
         on_left.clone(),
         &schema,
         should_compute_bounds,
+        &random_state,
     )?;
 
     let state = left_stream
@@ -1421,7 +1431,7 @@ async fn collect_left_input(
         num_rows,
         metrics,
         mut reservation,
-        bounds_accumulators,
+        mut bounds_accumulators,
     } = state;
 
     // Estimation of memory size, required for hashtable, prior to allocation.
@@ -1463,6 +1473,14 @@ async fn collect_left_input(
             0,
             true,
         )?;
+
+        // Populate bloom filters with computed hashes to avoid redundant hash computation
+        if let Some(ref mut accumulators) = bounds_accumulators {
+            for accumulator in accumulators.iter_mut() {
+                accumulator.bloom_filter.insert_hashes(&hashes_buffer);
+            }
+        }
+
         offset += batch.num_rows();
     }
     // Merge all batches into a single batch, so we can directly index into the arrays

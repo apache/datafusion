@@ -38,15 +38,17 @@ use std::sync::Arc;
 ///
 /// # Example
 /// ```ignore
-/// let mut builder = BloomFilterBuilder::new(1000, 0.01)?;
-/// builder.insert_scalar(&ScalarValue::Int32(Some(42)))?;
-/// builder.insert_array(&int_array)?;
+/// let random_state = RandomState::with_seeds(0, 0, 0, 0);
+/// let mut builder = BloomFilterBuilder::new(1000, 0.01, random_state)?;
+/// builder.insert_hashes(&hashes)?;
 /// let expr = builder.build(col_expr);  // Consumes builder
 /// ```
 #[derive(Debug)]
 pub struct BloomFilterBuilder {
     /// The underlying bloom filter
     sbbf: Sbbf,
+    /// Random state for consistent hashing
+    random_state: RandomState,
 }
 
 impl BloomFilterBuilder {
@@ -55,25 +57,24 @@ impl BloomFilterBuilder {
     /// # Arguments
     /// * `ndv` - Expected number of distinct values
     /// * `fpp` - Desired false positive probability (0.0 to 1.0)
-    pub fn new(ndv: u64, fpp: f64) -> Result<Self> {
+    /// * `random_state` - Random state for consistent hashing across build and probe phases
+    pub fn new(ndv: u64, fpp: f64, random_state: RandomState) -> Result<Self> {
         let sbbf = Sbbf::new_with_ndv_fpp(ndv, fpp)?;
-        Ok(Self { sbbf })
+        Ok(Self { sbbf, random_state })
     }
 
-    /// Insert all values from an array into the bloom filter
-    pub fn insert_array(&mut self, array: &ArrayRef) -> Result<()> {
-        // Use create_hashes to compute hash values for all array types
-        // This handles Dictionary, Struct, Null, and all other types uniformly
-        let mut hashes = vec![0u64; array.len()];
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        create_hashes(&[Arc::clone(array)], &random_state, &mut hashes)?;
-
-        // Insert each hash into the bloom filter
-        for hash in hashes {
+    /// Insert pre-computed hash values into the bloom filter
+    ///
+    /// This method allows reusing hash values that were already computed
+    /// for other purposes (e.g., hash table insertion), avoiding redundant
+    /// hash computation.
+    ///
+    /// # Arguments
+    /// * `hashes` - Pre-computed hash values to insert
+    pub fn insert_hashes(&mut self, hashes: &[u64]) {
+        for &hash in hashes {
             self.sbbf.insert_hash(hash);
         }
-
-        Ok(())
     }
 
     /// Build a `BloomFilterExpr` from this builder, consuming the builder.
@@ -84,7 +85,7 @@ impl BloomFilterBuilder {
     /// # Arguments
     /// * `expr` - The expression to evaluate and check against the bloom filter
     pub fn build(self, expr: Arc<dyn PhysicalExpr>) -> BloomFilterExpr {
-        BloomFilterExpr::new(expr, self.sbbf)
+        BloomFilterExpr::new(expr, self.sbbf, self.random_state)
     }
 }
 
@@ -102,16 +103,23 @@ pub struct BloomFilterExpr {
     expr: Arc<dyn PhysicalExpr>,
     /// The bloom filter to check against
     bloom_filter: Arc<Sbbf>,
+    /// Random state for consistent hashing
+    random_state: RandomState,
 }
 
 impl BloomFilterExpr {
     /// Create a new bloom filter expression (internal use only)
     ///
     /// Users should create bloom filter expressions through `BloomFilterBuilder::build()`
-    pub(crate) fn new(expr: Arc<dyn PhysicalExpr>, bloom_filter: Sbbf) -> Self {
+    pub(crate) fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        bloom_filter: Sbbf,
+        random_state: RandomState,
+    ) -> Self {
         Self {
             expr,
             bloom_filter: Arc::new(bloom_filter),
+            random_state,
         }
     }
 
@@ -132,8 +140,7 @@ impl BloomFilterExpr {
         // Use create_hashes to compute hash values for all array types
         // This handles Dictionary, Struct, Null, and all other types uniformly
         let mut hashes = vec![0u64; array.len()];
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        create_hashes(&[Arc::clone(array)], &random_state, &mut hashes)?;
+        create_hashes(&[Arc::clone(array)], &self.random_state, &mut hashes)?;
 
         // Check each hash against the bloom filter
         let mut builder = BooleanArray::builder(array.len());
@@ -210,6 +217,7 @@ impl PhysicalExpr for BloomFilterExpr {
         Ok(Arc::new(BloomFilterExpr {
             expr: Arc::clone(&children[0]),
             bloom_filter: Arc::clone(&self.bloom_filter),
+            random_state: self.random_state.clone(),
         }))
     }
 
@@ -230,17 +238,21 @@ mod tests {
     }
 
     impl BloomFilterBuilderTestExt for BloomFilterBuilder {
-        /// Insert a single scalar value by converting to array and using insert_array
+        /// Insert a single scalar value by converting to array and computing hashes
         /// This is less efficient but sufficient for tests
         fn insert_scalar(&mut self, value: &ScalarValue) -> Result<()> {
             let array = value.to_array()?;
-            self.insert_array(&array)
+            let mut hashes = vec![0u64; array.len()];
+            create_hashes(&[array], &self.random_state, &mut hashes)?;
+            self.insert_hashes(&hashes);
+            Ok(())
         }
     }
 
     #[test]
     fn test_bloom_filter_builder() -> Result<()> {
-        let mut builder = BloomFilterBuilder::new(100, 0.01)?;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut builder = BloomFilterBuilder::new(100, 0.01, random_state)?;
 
         // Insert some values
         builder.insert_scalar(&ScalarValue::Int32(Some(1)))?;
@@ -267,9 +279,16 @@ mod tests {
         use arrow::array::Int32Array;
 
         // Build a bloom filter with values 1, 2, 3
-        let mut builder = BloomFilterBuilder::new(100, 0.01)?;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut builder = BloomFilterBuilder::new(100, 0.01, random_state)?;
         let training_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-        builder.insert_array(&training_array)?;
+        let mut hashes = vec![0u64; training_array.len()];
+        create_hashes(
+            &[Arc::clone(&training_array)],
+            &builder.random_state,
+            &mut hashes,
+        )?;
+        builder.insert_hashes(&hashes);
 
         // Create the expression
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -302,7 +321,8 @@ mod tests {
     fn test_bloom_filter_with_strings() -> Result<()> {
         use arrow::array::StringArray;
 
-        let mut builder = BloomFilterBuilder::new(100, 0.01)?;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut builder = BloomFilterBuilder::new(100, 0.01, random_state)?;
         builder.insert_scalar(&ScalarValue::Utf8(Some("hello".to_string())))?;
         builder.insert_scalar(&ScalarValue::Utf8(Some("world".to_string())))?;
 
@@ -332,7 +352,8 @@ mod tests {
         use arrow::array::Decimal128Array;
 
         // Build a bloom filter with decimal values
-        let mut builder = BloomFilterBuilder::new(100, 0.01)?;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut builder = BloomFilterBuilder::new(100, 0.01, random_state)?;
         builder.insert_scalar(&ScalarValue::Decimal128(Some(12345), 10, 2))?;
         builder.insert_scalar(&ScalarValue::Decimal128(Some(67890), 10, 2))?;
 
@@ -374,7 +395,8 @@ mod tests {
         use arrow::array::{Float64Array, Int32Array, StringArray};
 
         // Test Int32: Use extremely low FPP (0.00001) to make false positives negligible
-        let mut builder = BloomFilterBuilder::new(10, 0.00001)?;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut builder = BloomFilterBuilder::new(10, 0.00001, random_state.clone())?;
         for i in 1..=10 {
             builder.insert_scalar(&ScalarValue::Int32(Some(i)))?;
         }
@@ -401,7 +423,7 @@ mod tests {
         }
 
         // Test Float64
-        let mut builder = BloomFilterBuilder::new(10, 0.00001)?;
+        let mut builder = BloomFilterBuilder::new(10, 0.00001, random_state.clone())?;
         for i in 0..10 {
             builder.insert_scalar(&ScalarValue::Float64(Some(i as f64 * 0.5)))?;
         }
@@ -428,7 +450,7 @@ mod tests {
         }
 
         // Test Strings
-        let mut builder = BloomFilterBuilder::new(5, 0.00001)?;
+        let mut builder = BloomFilterBuilder::new(5, 0.00001, random_state)?;
         builder.insert_scalar(&ScalarValue::Utf8(Some("apple".to_string())))?;
         builder.insert_scalar(&ScalarValue::Utf8(Some("banana".to_string())))?;
         builder.insert_scalar(&ScalarValue::Utf8(Some("cherry".to_string())))?;
