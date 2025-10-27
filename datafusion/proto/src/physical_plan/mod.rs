@@ -1759,7 +1759,7 @@ impl protobuf::PhysicalPlanNode {
             unnest.struct_type_columns.iter().map(|c| *c as _).collect(),
             Arc::new(convert_required!(unnest.schema)?),
             into_required!(unnest.options)?,
-        )))
+        )?))
     }
 
     fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {

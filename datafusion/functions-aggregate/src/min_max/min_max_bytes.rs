@@ -20,7 +20,8 @@ use arrow::array::{
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::hash_map::Entry;
+use datafusion_common::{internal_err, HashMap, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::mem::size_of;
@@ -391,14 +392,6 @@ struct MinMaxBytesState {
     total_data_bytes: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum MinMaxLocation<'a> {
-    /// the min/max value is stored in the existing `min_max` array
-    ExistingMinMax,
-    /// the min/max value is stored in the input array at the given index
-    Input(&'a [u8]),
-}
-
 /// Implement the MinMaxBytesAccumulator with a comparison function
 /// for comparing strings
 impl MinMaxBytesState {
@@ -450,7 +443,7 @@ impl MinMaxBytesState {
         // Minimize value copies by calculating the new min/maxes for each group
         // in this batch (either the existing min/max or the new input value)
         // and updating the owned values in `self.min_maxes` at most once
-        let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
+        let mut locations = HashMap::<usize, &[u8]>::with_capacity(group_indices.len());
 
         // Figure out the new min value for each group
         for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
@@ -459,32 +452,29 @@ impl MinMaxBytesState {
                 continue; // skip nulls
             };
 
-            let existing_val = match locations[group_index] {
-                // previous input value was the min/max, so compare it
-                MinMaxLocation::Input(existing_val) => existing_val,
-                MinMaxLocation::ExistingMinMax => {
-                    let Some(existing_val) = self.min_max[group_index].as_ref() else {
-                        // no existing min/max, so this is the new min/max
-                        locations[group_index] = MinMaxLocation::Input(new_val);
-                        continue;
-                    };
-                    existing_val.as_ref()
+            match locations.entry(group_index) {
+                Entry::Occupied(mut occupied_entry) => {
+                    if cmp(new_val, occupied_entry.get()) {
+                        occupied_entry.insert(new_val);
+                    }
+                }
+                Entry::Vacant(vacant_entry) => {
+                    if let Some(old_val) = self.min_max[group_index].as_ref() {
+                        if cmp(new_val, old_val) {
+                            vacant_entry.insert(new_val);
+                        }
+                    } else {
+                        vacant_entry.insert(new_val);
+                    }
                 }
             };
-
-            // Compare the new value to the existing value, replacing if necessary
-            if cmp(new_val, existing_val) {
-                locations[group_index] = MinMaxLocation::Input(new_val);
-            }
         }
 
         // Update self.min_max with any new min/max values we found in the input
-        for (group_index, location) in locations.iter().enumerate() {
-            match location {
-                MinMaxLocation::ExistingMinMax => {}
-                MinMaxLocation::Input(new_val) => self.set_value(group_index, new_val),
-            }
+        for (group_index, location) in locations.iter() {
+            self.set_value(*group_index, location);
         }
+
         Ok(())
     }
 

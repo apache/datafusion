@@ -519,3 +519,79 @@ query I
 SELECT case when false then 1 / 0 else 1 / 1 end;
 ----
 1
+
+# Else branch evaluation with case expression, 1 when branch, null input
+query I
+SELECT CASE a WHEN 'a' THEN 0 ELSE 1 END FROM (VALUES (NULL)) t(a)
+----
+1
+
+# Else branch evaluation with case expression, 2 when branches, null input
+query I
+SELECT CASE a WHEN 'a' THEN 0 WHEN 'b' THEN 1 ELSE 2 END FROM (VALUES (NULL)) t(a)
+----
+2
+
+# Else branch evaluation without case expression, 1 when branch, null input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 ELSE 1 END FROM (VALUES (NULL)) t(a)
+----
+1
+
+# Else branch evaluation without case expression, 2 when branches, null input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 WHEN a = 'b' THEN 1 ELSE 2 END FROM (VALUES (NULL)) t(a)
+----
+2
+
+# Else branch evaluation with case expression, 1 when branch, non-null input
+query I
+SELECT CASE a WHEN 'a' THEN 0 ELSE 1 END FROM (VALUES ('z')) t(a)
+----
+1
+
+# Else branch evaluation with case expression, 2 when branches, non-null input
+query I
+SELECT CASE a WHEN 'a' THEN 0 WHEN 'b' THEN 1 ELSE 2 END FROM (VALUES ('z')) t(a)
+----
+2
+
+# Else branch evaluation without case expression, 1 when branch, non-null input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 ELSE 1 END FROM (VALUES ('z')) t(a)
+----
+1
+
+# Else branch evaluation without case expression, 2 when branches, non-null input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 WHEN a = 'b' THEN 1 ELSE 2 END FROM (VALUES ('z')) t(a)
+----
+2
+
+# Else branch evaluation with case expression, 1 when branch, mixed input
+query I
+SELECT CASE a WHEN 'a' THEN 0 ELSE 1 END FROM (VALUES (NULL), ('z')) t(a)
+----
+1
+1
+
+# Else branch evaluation with case expression, 2 when branches, mixed input
+query I
+SELECT CASE a WHEN 'a' THEN 0 WHEN 'b' THEN 1 ELSE 2 END FROM (VALUES (NULL), ('z')) t(a)
+----
+2
+2
+
+# Else branch evaluation without case expression, 1 when branch, mixed input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 ELSE 1 END FROM (VALUES (NULL), ('z')) t(a)
+----
+1
+1
+
+# Else branch evaluation without case expression, 2 when branches, mixed input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 WHEN a = 'b' THEN 1 ELSE 2 END FROM (VALUES (NULL), ('z')) t(a)
+----
+2
+2

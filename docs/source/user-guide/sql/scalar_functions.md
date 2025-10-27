@@ -2409,6 +2409,8 @@ The `current_date()` return value is determined at query time and will return th
 
 ```sql
 current_date()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_date();
 ```
 
 #### Aliases
@@ -2417,12 +2419,16 @@ current_date()
 
 ### `current_time`
 
-Returns the current UTC time.
+Returns the current time in the session time zone.
 
 The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
 
+The session time zone can be set using the statement 'SET datafusion.execution.time_zone = desired time zone'. The time zone can be a value like +00:00, 'Europe/London' etc.
+
 ```sql
 current_time()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_time();
 ```
 
 ### `current_timestamp`
@@ -4966,16 +4972,26 @@ arrow_cast(expression, datatype)
 #### Example
 
 ```sql
-> select arrow_cast(-5, 'Int8') as a,
+> select
+  arrow_cast(-5,    'Int8') as a,
   arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
-  arrow_cast('bar', 'LargeUtf8') as c,
-  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
-  ;
-+----+-----+-----+---------------------------+
-| a  | b   | c   | d                         |
-+----+-----+-----+---------------------------+
-| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
-+----+-----+-----+---------------------------+
+  arrow_cast('bar', 'LargeUtf8') as c;
+
++----+-----+-----+
+| a  | b   | c   |
++----+-----+-----+
+| -5 | foo | bar |
++----+-----+-----+
+
+> select
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(µs, "+08:00")') as d,
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(µs)') as e;
+
++---------------------------+---------------------+
+| d                         | e                   |
++---------------------------+---------------------+
+| 2023-01-02T12:53:02+08:00 | 2023-01-02T12:53:02 |
++---------------------------+---------------------+
 ```
 
 ### `arrow_typeof`

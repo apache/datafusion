@@ -109,5 +109,3 @@ DROP TABLE test_shuffle_list_types;
 
 statement ok
 DROP TABLE test_shuffle_fixed_size;
-
-

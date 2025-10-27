@@ -515,16 +515,16 @@ pub fn serialize_file_scan_config(
     // Fields must be added to the schema so that they can persist in the protobuf,
     // and then they are to be removed from the schema in `parse_protobuf_file_scan_config`
     let mut fields = conf
-        .file_schema
+        .file_schema()
         .fields()
         .iter()
         .cloned()
         .collect::<Vec<_>>();
-    fields.extend(conf.table_partition_cols.iter().cloned());
+    fields.extend(conf.table_partition_cols().iter().cloned());
 
     let schema = Arc::new(
         arrow::datatypes::Schema::new(fields.clone())
-            .with_metadata(conf.file_schema.metadata.clone()),
+            .with_metadata(conf.file_schema().metadata.clone()),
     );
 
     Ok(protobuf::FileScanExecConf {
@@ -540,7 +540,7 @@ pub fn serialize_file_scan_config(
             .collect(),
         schema: Some(schema.as_ref().try_into()?),
         table_partition_cols: conf
-            .table_partition_cols
+            .table_partition_cols()
             .iter()
             .map(|x| x.name().clone())
             .collect::<Vec<_>>(),
