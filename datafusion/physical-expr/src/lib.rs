@@ -31,6 +31,7 @@ pub mod binary_map {
     pub use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
 }
 pub mod async_scalar_function;
+pub mod bloom_filter;
 pub mod equivalence;
 pub mod expressions;
 pub mod intervals;
