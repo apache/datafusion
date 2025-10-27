@@ -4837,6 +4837,42 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_placeholder_values_relation_valid_schema() {
+        // SELECT a, b FROM (VALUES ($1, $2)) AS t(a, b);
+        let plan =
+            LogicalPlanBuilder::values(vec![vec![placeholder("$1"), placeholder("$2")]])
+                .unwrap()
+                .project(vec![col("column1").alias("a"), col("column2").alias("b")])
+                .unwrap()
+                .alias("t")
+                .unwrap()
+                .project(vec![col("a"), col("b")])
+                .unwrap()
+                .build()
+                .unwrap();
+
+        // original
+        assert_snapshot!(plan.display_indent_schema(), @r#"
+        Projection: t.a, t.b [a:Null;N, b:Null;N]
+          SubqueryAlias: t [a:Null;N, b:Null;N]
+            Projection: column1 AS a, column2 AS b [a:Null;N, b:Null;N]
+              Values: ($1, $2) [column1:Null;N, column2:Null;N]
+        "#);
+
+        let plan = plan
+            .with_param_values(vec![ScalarValue::from(1i32), ScalarValue::from("s")])
+            .unwrap();
+
+        // replaced
+        assert_snapshot!(plan.display_indent_schema(), @r#"
+        Projection: t.a, t.b [a:Int32;N, b:Utf8;N]
+          SubqueryAlias: t [a:Int32;N, b:Utf8;N]
+            Projection: column1 AS a, column2 AS b [a:Int32;N, b:Utf8;N]
+              Values: (Int32(1) AS $1, Utf8("s") AS $2) [column1:Int32;N, column2:Utf8;N]
+        "#);
+    }
+
+    #[test]
     fn test_replace_placeholder_empty_relation_valid_schema() {
         // SELECT $1, $2;
         let plan = LogicalPlanBuilder::empty(false)
