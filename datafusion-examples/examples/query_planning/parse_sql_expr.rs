@@ -32,10 +32,10 @@ use datafusion::{
 /// The code in this example shows how to:
 ///
 /// 1. [`simple_session_context_parse_sql_expr_demo`]: Parse a simple SQL text into a logical
-///     expression using a schema at [`SessionContext`].
+///   expression using a schema at [`SessionContext`].
 ///
 /// 2. [`simple_dataframe_parse_sql_expr_demo`]: Parse a simple SQL text into a logical expression
-///     using a schema at [`DataFrame`].
+///   using a schema at [`DataFrame`].
 ///
 /// 3. [`query_parquet_demo`]: Query a parquet file using the parsed_sql_expr from a DataFrame.
 ///
