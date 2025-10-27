@@ -200,11 +200,6 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 unused_qualifications = "deny"
 
 
-# FIXME - TEMPORARY override arrow-avro for testing
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "d49f017fe1c6712ba32e2222c6f031278b588ca5" }
-arrow-avro = { git = "https://github.com/apache/arrow-rs.git", rev = "d49f017fe1c6712ba32e2222c6f031278b588ca5" }
-
 # --------------------
 # Compilation Profiles
 # --------------------
