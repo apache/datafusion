@@ -72,7 +72,8 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.",
-    syntax_example = "range(start[, stop, step])",
+    syntax_example = "range(stop)
+range(start, stop[, step])",
     sql_example = r#"```sql
 > select range(2, 10, 3);
 +-----------------------------------+
@@ -106,7 +107,8 @@ struct RangeDoc {}
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Similar to the range function, but it includes the upper bound.",
-    syntax_example = "generate_series(start[, stop, step])",
+    syntax_example = "generate_series(stop)
+generate_series(start, stop[, step])",
     sql_example = r#"```sql
 > select generate_series(1,3);
 +------------------------------------+

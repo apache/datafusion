@@ -4182,7 +4182,8 @@ flatten(array)
 Similar to the range function, but it includes the upper bound.
 
 ```sql
-generate_series(start[, stop, step])
+generate_series(stop)
+generate_series(start, stop[, step])
 ```
 
 #### Arguments
@@ -4402,7 +4403,8 @@ _Alias of [make_array](#make_array)._
 Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.
 
 ```sql
-range(start[, stop, step])
+range(stop)
+range(start, stop[, step])
 ```
 
 #### Arguments
