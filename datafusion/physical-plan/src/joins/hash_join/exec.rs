@@ -1258,8 +1258,8 @@ impl CollectLeftAccumulator {
             .map(|dt| dictionary_value_type(&dt))?;
 
         // Create bloom filter with default parameters
-        // NDV (number of distinct values) = 10000, FPP (false positive probability) = 0.01 (1%)
-        let bloom_filter = BloomFilterBuilder::new(10000, 0.01)?;
+        // NDV (number of distinct values) = 1000, FPP (false positive probability) = 0.05 (5%)
+        let bloom_filter = BloomFilterBuilder::new(1000, 0.05)?;
 
         Ok(Self {
             expr,
