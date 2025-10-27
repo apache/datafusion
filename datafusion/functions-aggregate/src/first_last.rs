@@ -1481,13 +1481,9 @@ impl Accumulator for LastValueAccumulator {
     }
 }
 
-/// Validates that is_set flags do not contain NULL values.
+/// Validates that `is_set flags` do not contain NULL values.
 fn validate_is_set_flags(flags: &BooleanArray, function_name: &str) -> Result<()> {
-    if flags
-        .nulls()
-        .map(|nulls| nulls.null_count() > 0)
-        .unwrap_or_default()
-    {
+    if flags.null_count() > 0 {
         return Err(DataFusionError::Internal(format!(
             "{}: is_set flags contain nulls",
             function_name
