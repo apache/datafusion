@@ -116,6 +116,12 @@ Users may need to update their paths to account for these changes.
 
 See [issue #17713] for more details.
 
+### `DESCRIBE query` support
+
+`DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the
+_execution plan_ of the query. With this release, `DESCRIBE query` now outputs
+the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables

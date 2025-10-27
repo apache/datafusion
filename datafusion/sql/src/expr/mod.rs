@@ -20,9 +20,10 @@ use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
 use sqlparser::ast::{
-    AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
-    DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
-    StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
+    AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
+    DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
+    ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript, TrimWhereField,
+    TypedString, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -498,14 +499,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 self.sql_grouping_sets_to_expr(exprs, schema, planner_context)
             }
 
-            SQLExpr::Floor {
-                expr,
-                field: _field,
-            } => self.sql_fn_name_to_expr(*expr, "floor", schema, planner_context),
-            SQLExpr::Ceil {
-                expr,
-                field: _field,
-            } => self.sql_fn_name_to_expr(*expr, "ceil", schema, planner_context),
+            SQLExpr::Floor { expr, field } => match field {
+                CeilFloorKind::DateTimeField(DateTimeField::NoDateTime) => {
+                    self.sql_fn_name_to_expr(*expr, "floor", schema, planner_context)
+                }
+                CeilFloorKind::DateTimeField(_) => {
+                    not_impl_err!("FLOOR with datetime is not supported")
+                }
+                CeilFloorKind::Scale(_) => {
+                    not_impl_err!("FLOOR with scale is not supported")
+                }
+            },
+            SQLExpr::Ceil { expr, field } => match field {
+                CeilFloorKind::DateTimeField(DateTimeField::NoDateTime) => {
+                    self.sql_fn_name_to_expr(*expr, "ceil", schema, planner_context)
+                }
+                CeilFloorKind::DateTimeField(_) => {
+                    not_impl_err!("CEIL with datetime is not supported")
+                }
+                CeilFloorKind::Scale(_) => {
+                    not_impl_err!("CEIL with scale is not supported")
+                }
+            },
             SQLExpr::Overlay {
                 expr,
                 overlay_what,

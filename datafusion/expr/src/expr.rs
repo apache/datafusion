@@ -47,6 +47,7 @@ use sqlparser::ast::{
 
 // Moved in 51.0.0 to datafusion_common
 pub use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::metadata::ScalarAndMetadata;
 
 // This mirrors sqlparser::ast::NullTreatment but we need our own variant
 // for when the sql feature is disabled.
@@ -421,6 +422,14 @@ impl From<Column> for Expr {
 impl From<WindowFunction> for Expr {
     fn from(value: WindowFunction) -> Self {
         Expr::WindowFunction(Box::new(value))
+    }
+}
+
+/// Create an [`Expr`] from an [`ScalarAndMetadata`]
+impl From<ScalarAndMetadata> for Expr {
+    fn from(value: ScalarAndMetadata) -> Self {
+        let (value, metadata) = value.into_inner();
+        Expr::Literal(value, metadata)
     }
 }
 
