@@ -794,8 +794,7 @@ pub enum GetFieldAccess {
 pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
-    /// The `DataType` the expression will yield
-    // pub data_type: DataType,
+    /// Field describing the result of the cast, including metadata
     pub field: FieldRef,
 }
 
@@ -811,7 +810,7 @@ impl Cast {
 pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
-    /// The `DataType` the expression will yield
+    /// Field describing the result of the cast, including metadata
     pub field: FieldRef,
 }
 

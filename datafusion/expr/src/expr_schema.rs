@@ -580,12 +580,13 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => expr
-                .to_field(schema)
-                .map(|(_, f)| {
-                    f.as_ref().clone().with_data_type(field.data_type().clone())
-                })
-                .map(Arc::new),
+            Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => {
+                let (_, input_field) = expr.to_field(schema)?;
+                let mut combined_metadata = FieldMetadata::from(input_field.metadata());
+                combined_metadata.extend(FieldMetadata::from(field.metadata()));
+                let field = combined_metadata.add_to_field(field.as_ref().clone());
+                Ok(Arc::new(field))
+            }
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
@@ -595,7 +596,6 @@ impl ExprSchemable for Expr {
             | Expr::Not(_)
             | Expr::Between(_)
             | Expr::Case(_)
-            | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::Wildcard { .. }
@@ -782,6 +782,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::expr::{Cast, TryCast};
     use crate::{col, lit, out_ref_col_with_metadata};
 
     use datafusion_common::{internal_err, DFSchema, ScalarValue};
@@ -970,6 +971,63 @@ mod tests {
             expr_alias.data_type_and_nullable(&schema).unwrap(),
             (DataType::Utf8, false)
         );
+    }
+
+    #[test]
+    fn test_cast_metadata_overrides() {
+        let source_meta = FieldMetadata::from(HashMap::from([
+            ("source".to_string(), "value".to_string()),
+            ("shared".to_string(), "source".to_string()),
+        ]));
+        let cast_meta = FieldMetadata::from(HashMap::from([
+            ("shared".to_string(), "cast".to_string()),
+            ("cast".to_string(), "value".to_string()),
+        ]));
+
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_metadata(source_meta.clone());
+
+        let cast_field = Arc::new(
+            Field::new("ignored", DataType::Utf8, true)
+                .with_metadata(cast_meta.to_hashmap()),
+        );
+
+        let expr = col("foo");
+        let cast_expr = Expr::Cast(Cast::new(Box::new(expr), Arc::clone(&cast_field)));
+
+        let mut expected = source_meta.clone();
+        expected.extend(cast_meta.clone());
+        assert_eq!(expected, cast_expr.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_try_cast_metadata_overrides() {
+        let source_meta = FieldMetadata::from(HashMap::from([
+            ("source".to_string(), "value".to_string()),
+            ("shared".to_string(), "source".to_string()),
+        ]));
+        let cast_meta = FieldMetadata::from(HashMap::from([
+            ("shared".to_string(), "cast".to_string()),
+            ("cast".to_string(), "value".to_string()),
+        ]));
+
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_metadata(source_meta.clone());
+
+        let cast_field = Arc::new(
+            Field::new("ignored", DataType::Utf8, true)
+                .with_metadata(cast_meta.to_hashmap()),
+        );
+
+        let expr = col("foo");
+        let cast_expr =
+            Expr::TryCast(TryCast::new(Box::new(expr), Arc::clone(&cast_field)));
+
+        let mut expected = source_meta.clone();
+        expected.extend(cast_meta.clone());
+        assert_eq!(expected, cast_expr.metadata(&schema).unwrap());
     }
 
     #[derive(Debug)]
