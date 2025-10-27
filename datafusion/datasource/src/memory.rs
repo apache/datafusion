@@ -35,9 +35,7 @@ use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
-use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
-};
+use datafusion_physical_plan::projection::ProjectionExpr;
 use datafusion_physical_plan::{
     common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
     SendableRecordBatchStream, Statistics,
@@ -228,25 +226,29 @@ impl DataSource for MemorySourceConfig {
     fn try_swapping_with_projection(
         &self,
         projection: &[ProjectionExpr],
-    ) -> Result<Option<Arc<dyn DataSource>>> {
-        // If there is any non-column or alias-carrier expression, Projection should not be removed.
-        // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        all_alias_free_columns(projection)
-            .then(|| {
-                let all_projections = (0..self.schema.fields().len()).collect();
-                let new_projections = new_projections_for_columns(
-                    projection,
-                    self.projection().as_ref().unwrap_or(&all_projections),
-                );
+    ) -> Result<crate::source::ProjectionPushdownResult> {
+        use datafusion_physical_plan::projection::{
+            all_alias_free_columns, new_projections_for_columns,
+        };
 
-                MemorySourceConfig::try_new(
-                    self.partitions(),
-                    self.original_schema(),
-                    Some(new_projections),
-                )
-                .map(|s| Arc::new(s) as Arc<dyn DataSource>)
-            })
-            .transpose()
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        if !all_alias_free_columns(projection) {
+            return Ok(None);
+        }
+
+        let all_projections: Vec<usize> = (0..self.schema.fields().len()).collect();
+        let new_projections = new_projections_for_columns(
+            projection,
+            self.projection().as_ref().unwrap_or(&all_projections),
+        );
+
+        let new_source = MemorySourceConfig::try_new(
+            self.partitions(),
+            self.original_schema(),
+            Some(new_projections),
+        )?;
+
+        Ok(Some((Arc::new(new_source) as Arc<dyn DataSource>, None)))
     }
 }
 

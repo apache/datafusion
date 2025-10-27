@@ -18,6 +18,7 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
+use crate::file::ProjectionPushdownResult;
 use crate::file_groups::FileGroup;
 #[allow(unused_imports)]
 use crate::schema_adapter::SchemaAdapterFactory;
@@ -44,16 +45,14 @@ use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
-};
+use datafusion_physical_plan::projection::ProjectionExpr;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     filter_pushdown::FilterPushdownPropagation,
@@ -679,42 +678,42 @@ impl DataSource for FileScanConfig {
     fn try_swapping_with_projection(
         &self,
         projection: &[ProjectionExpr],
-    ) -> Result<Option<Arc<dyn DataSource>>> {
-        // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
+    ) -> Result<crate::source::ProjectionPushdownResult> {
+        let new_projection_exprs = ProjectionExprs::from(projection);
 
-        // Must be all column references, with no table partition columns (which can not be projected)
-        let partitioned_columns_in_proj = projection.iter().any(|proj_expr| {
-            proj_expr
-                .expr
-                .as_any()
-                .downcast_ref::<Column>()
-                .map(|expr| expr.index() >= self.file_schema().fields().len())
-                .unwrap_or(false)
-        });
+        // get current projection indices if they exist
+        let current_projection = self
+            .projection_exprs
+            .as_ref()
+            .map(|p| p.ordered_column_indices());
 
-        // If there is any non-column or alias-carrier expression, Projection should not be removed.
-        let no_aliases = all_alias_free_columns(projection);
+        // pass the new projections to the file source, along wiht the current projection
+        // the file source will merge them if possible
+        let res = self.file_source().try_pushdown_projections(
+            &new_projection_exprs,
+            self.file_schema(),
+            current_projection.as_deref(),
+        )?;
 
-        Ok((no_aliases && !partitioned_columns_in_proj).then(|| {
-            let file_scan = self.clone();
-            let source = Arc::clone(&file_scan.file_source);
-            let new_projections = new_projections_for_columns(
-                projection,
-                &file_scan
-                    .projection_exprs
-                    .as_ref()
-                    .map(|p| p.ordered_column_indices())
-                    .unwrap_or_else(|| (0..self.file_schema().fields().len()).collect()),
-            );
+        match res {
+            ProjectionPushdownResult::None => Ok(None),
+            ProjectionPushdownResult::Partial {
+                new_file_source,
+                remaining_projections,
+                new_projection_indices,
+            } => {
+                let mut builder = FileScanConfigBuilder::from(self.clone());
 
-            Arc::new(
-                FileScanConfigBuilder::from(file_scan)
-                    // Assign projected statistics to source
-                    .with_projection_indices(Some(new_projections))
-                    .with_source(source)
-                    .build(),
-            ) as _
-        }))
+                if let Some(new_source) = new_file_source {
+                    builder = builder.with_source(new_source);
+                }
+
+                builder = builder.with_projection_indices(new_projection_indices);
+
+                let new_config = Arc::new(builder.build()) as Arc<dyn DataSource>;
+                Ok(Some((new_config, remaining_projections)))
+            }
+        }
     }
 
     fn try_pushdown_filters(
@@ -2300,7 +2299,7 @@ mod tests {
 
         // Simulate projection being updated. Since the filter has already been pushed down,
         // the new projection won't include the filtered column.
-        let data_source = config
+        let (data_source, _remaining_projections) = config
             .try_swapping_with_projection(&[ProjectionExpr::new(
                 col("c3", &file_schema).unwrap(),
                 "c3".to_string(),

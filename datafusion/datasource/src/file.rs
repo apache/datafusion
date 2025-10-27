@@ -29,9 +29,14 @@ use crate::schema_adapter::SchemaAdapterFactory;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, Result, Statistics};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns,
+};
 use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
@@ -129,6 +134,47 @@ pub trait FileSource: Send + Sync {
         ))
     }
 
+    fn try_pushdown_projections(
+        &self,
+        projection_exprs: &ProjectionExprs,
+        file_schema: &SchemaRef,
+        current_projection: Option<&[usize]>,
+    ) -> Result<ProjectionPushdownResult> {
+        let projection_slice: Vec<_> = projection_exprs.iter().cloned().collect();
+
+        // check if there are any partition columns in projection (columns beyond file schema)
+        let partitioned_columns_in_proj = projection_slice.iter().any(|proj_expr| {
+            proj_expr
+                .expr
+                .as_any()
+                .downcast_ref::<Column>()
+                .map(|expr| expr.index() >= file_schema.fields().len())
+                .unwrap_or(false)
+        });
+
+        // if there are any non-column or alias-carrier expressions, projection should not be removed
+        let no_aliases = all_alias_free_columns(&projection_slice);
+
+        if !no_aliases || partitioned_columns_in_proj {
+            return Ok(ProjectionPushdownResult::None);
+        }
+
+        let all_projections: Vec<usize> = (0..file_schema.fields().len()).collect();
+        let source_projection = current_projection.unwrap_or(&all_projections);
+
+        let new_projection_indices =
+            new_projections_for_columns(&projection_slice, source_projection);
+
+        // return a partial projection with the new projection indices
+        // if `new_file_source` is None, it means the file source doesn't change,
+        // rather the new projection is updated in `FileScanConfig`
+        Ok(ProjectionPushdownResult::Partial {
+            new_file_source: None,
+            remaining_projections: None,
+            new_projection_indices: Some(new_projection_indices),
+        })
+    }
+
     /// Set optional schema adapter factory.
     ///
     /// [`SchemaAdapterFactory`] allows user to specify how fields from the
@@ -154,4 +200,13 @@ pub trait FileSource: Send + Sync {
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }
+}
+
+pub enum ProjectionPushdownResult {
+    None,
+    Partial {
+        new_file_source: Option<Arc<dyn FileSource>>,
+        remaining_projections: Option<ProjectionExprs>,
+        new_projection_indices: Option<Vec<usize>>,
+    },
 }
