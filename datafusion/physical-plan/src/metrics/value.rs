@@ -622,10 +622,9 @@ impl MetricValue {
                 .map(|nanos| nanos as usize)
                 .unwrap_or(0),
             // This function is a utility for aggregating metrics, for complex metric
-            // like `PruningMetrics`, implement it inside `MetricsSet` directly.
-            Self::PruningMetrics { .. } => {
-                unreachable!()
-            }
+            // like `PruningMetrics`, this function is not supposed to get called.
+            // Metrics aggregation for them are implemented inside `MetricsSet` directly.
+            Self::PruningMetrics { .. } => 0,
             Self::Custom { value, .. } => value.as_usize(),
         }
     }

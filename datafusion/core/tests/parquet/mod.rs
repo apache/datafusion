@@ -37,7 +37,7 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
-use datafusion_physical_plan::{metrics::MetricValue, Metric};
+use datafusion_physical_plan::metrics::MetricValue;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
