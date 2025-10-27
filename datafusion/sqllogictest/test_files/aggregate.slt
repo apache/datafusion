@@ -7608,7 +7608,22 @@ SELECT
     , 'UInt64') AS c2
 FROM range(1, 10001) AS t(r);
 
-# TODO: run explain and ensure partial aggregation is enabled
+# This test is to ensure that partial aggregation is enabled
+# for the query
+query TT
+explain select c2, array_agg(c1) filter (where c1%2 = 0) from test_array_agg_table group by c2 order by c2 asc limit 10;
+logical_plan
+01)Sort: test_array_agg_table.c2 ASC NULLS LAST, fetch=10
+02)--Aggregate: groupBy=[[test_array_agg_table.c2]], aggr=[[array_agg(test_array_agg_table.c1) FILTER (WHERE CAST(test_array_agg_table.c1 AS Int64) % Int64(2) = Int64(0)) AS array_agg(test_array_agg_table.c1) FILTER (WHERE test_array_agg_table.c1 % Int64(2) = Int64(0))]]
+03)----TableScan: test_array_agg_table projection=[c1, c2]
+physical_plan
+01)SortPreservingMergeExec: [c2@0 ASC NULLS LAST], fetch=10
+02)--SortExec: TopK(fetch=10), expr=[c2@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[array_agg(test_array_agg_table.c1) FILTER (WHERE test_array_agg_table.c1 % Int64(2) = Int64(0))]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[array_agg(test_array_agg_table.c1) FILTER (WHERE test_array_agg_table.c1 % Int64(2) = Int64(0))]
+07)------------DataSourceExec: partitions=4, partition_sizes=[1, 1, 0, 0]
 
 
 
