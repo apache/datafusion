@@ -79,7 +79,7 @@ SET TIME ZONE = '+08'
 query T
 select arrow_typeof(now());
 ----
-Timestamp(Nanosecond, Some("+08"))
+Timestamp(ns, "+08")
 
 query I
 SELECT count(1) result FROM (SELECT now() as n) a WHERE n > '2000-01-01'::date;
@@ -691,11 +691,11 @@ select
 ----
 08:09:10.123456789 13:14:15.123456 13:14:15.123 13:14:15
 
-query error Cannot cast string 'not a time' to value of Time64\(Nanosecond\) type
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64\(ns\) type
 SELECT TIME 'not a time' as time;
 
 # invalid time
-query error Cannot cast string '24:01:02' to value of Time64\(Nanosecond\) type
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64\(ns\) type
 SELECT TIME '24:01:02' as time;
 
 # invalid timezone
@@ -908,7 +908,7 @@ from (values
 query T
 SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
 ----
-Timestamp(Microsecond, None)
+Timestamp(µs)
 
 query P
 SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
@@ -926,7 +926,7 @@ from (values
 query T
 SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
 ----
-Timestamp(Millisecond, None)
+Timestamp(ms)
 
 query P
 SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
@@ -944,7 +944,7 @@ from (values
 query T
 SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
 ----
-Timestamp(Second, None)
+Timestamp(s)
 
 # month interval with INTERVAL keyword in date_bin with default start time
 query P
@@ -1540,24 +1540,24 @@ from timestamp_utc; -- have to convert to utc prior to converting to berlin
 query PT
 select ts, arrow_typeof(ts) from timestamp_utc order by ts;
 ----
-2024-10-27T00:00:00Z Timestamp(Nanosecond, Some("UTC"))
-2024-10-27T00:30:00Z Timestamp(Nanosecond, Some("UTC"))
-2024-10-27T01:30:00Z Timestamp(Nanosecond, Some("UTC"))
-2024-10-27T02:00:00Z Timestamp(Nanosecond, Some("UTC"))
-2024-10-27T02:30:00Z Timestamp(Nanosecond, Some("UTC"))
-2024-10-27T03:00:00Z Timestamp(Nanosecond, Some("UTC"))
-2024-10-27T03:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T00:00:00Z Timestamp(ns, "UTC")
+2024-10-27T00:30:00Z Timestamp(ns, "UTC")
+2024-10-27T01:30:00Z Timestamp(ns, "UTC")
+2024-10-27T02:00:00Z Timestamp(ns, "UTC")
+2024-10-27T02:30:00Z Timestamp(ns, "UTC")
+2024-10-27T03:00:00Z Timestamp(ns, "UTC")
+2024-10-27T03:30:00Z Timestamp(ns, "UTC")
 
 query PT
 select ts, arrow_typeof(ts) from timestamp_berlin order by ts;
 ----
-2024-10-27T02:00:00+02:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
-2024-10-27T02:30:00+02:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
-2024-10-27T02:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
-2024-10-27T03:00:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
-2024-10-27T03:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
-2024-10-27T04:00:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
-2024-10-27T04:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T02:00:00+02:00 Timestamp(ns, "Europe/Berlin")
+2024-10-27T02:30:00+02:00 Timestamp(ns, "Europe/Berlin")
+2024-10-27T02:30:00+01:00 Timestamp(ns, "Europe/Berlin")
+2024-10-27T03:00:00+01:00 Timestamp(ns, "Europe/Berlin")
+2024-10-27T03:30:00+01:00 Timestamp(ns, "Europe/Berlin")
+2024-10-27T04:00:00+01:00 Timestamp(ns, "Europe/Berlin")
+2024-10-27T04:30:00+01:00 Timestamp(ns, "Europe/Berlin")
 
 #  date trunc in utc with DST
 query PPPP
@@ -1624,24 +1624,24 @@ from timestamp_utc; -- have to convert to utc prior to converting to Sau Paulo
 query PT
 select ts, arrow_typeof(ts) from timestamp_utc order by ts;
 ----
-2018-11-04T01:00:00Z Timestamp(Nanosecond, Some("UTC"))
-2018-11-04T01:30:00Z Timestamp(Nanosecond, Some("UTC"))
-2018-11-04T02:30:00Z Timestamp(Nanosecond, Some("UTC"))
-2018-11-04T03:00:00Z Timestamp(Nanosecond, Some("UTC"))
-2018-11-04T03:30:00Z Timestamp(Nanosecond, Some("UTC"))
-2018-11-04T04:00:00Z Timestamp(Nanosecond, Some("UTC"))
-2018-11-04T04:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T01:00:00Z Timestamp(ns, "UTC")
+2018-11-04T01:30:00Z Timestamp(ns, "UTC")
+2018-11-04T02:30:00Z Timestamp(ns, "UTC")
+2018-11-04T03:00:00Z Timestamp(ns, "UTC")
+2018-11-04T03:30:00Z Timestamp(ns, "UTC")
+2018-11-04T04:00:00Z Timestamp(ns, "UTC")
+2018-11-04T04:30:00Z Timestamp(ns, "UTC")
 
 query PT
 select ts, arrow_typeof(ts) from timestamp_sao_paulo order by ts;
 ----
-2018-11-03T22:00:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
-2018-11-03T22:30:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
-2018-11-03T23:30:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
-2018-11-04T01:00:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
-2018-11-04T01:30:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
-2018-11-04T02:00:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
-2018-11-04T02:30:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-03T22:00:00-03:00 Timestamp(ns, "America/Sao_Paulo")
+2018-11-03T22:30:00-03:00 Timestamp(ns, "America/Sao_Paulo")
+2018-11-03T23:30:00-03:00 Timestamp(ns, "America/Sao_Paulo")
+2018-11-04T01:00:00-02:00 Timestamp(ns, "America/Sao_Paulo")
+2018-11-04T01:30:00-02:00 Timestamp(ns, "America/Sao_Paulo")
+2018-11-04T02:00:00-02:00 Timestamp(ns, "America/Sao_Paulo")
+2018-11-04T02:30:00-02:00 Timestamp(ns, "America/Sao_Paulo")
 
 #  date trunc in utc with DST
 query PPPP
@@ -1797,7 +1797,7 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-query error DataFusion error: Error during planning: Cannot get result type for temporal operation Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\): Invalid argument error: Invalid timestamp arithmetic operation: Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\)
+query error DataFusion error: Error during planning: Cannot get result type for temporal operation Timestamp\(ns\) \+ Timestamp\(ns\): Invalid argument error: Invalid timestamp arithmetic operation: Timestamp\(ns\) \+ Timestamp\(ns\)
 SELECT ts1 + ts2
 FROM foo;
 
@@ -2256,7 +2256,7 @@ SET TIME ZONE = '+00'
 query T
 SELECT arrow_typeof(time) FROM foo LIMIT 1
 ----
-Timestamp(Nanosecond, Some("+05:00"))
+Timestamp(ns, "+05:00")
 
 # check date_trunc
 query P
@@ -2271,27 +2271,27 @@ SELECT date_trunc('day', time) FROM foo
 query T
 SELECT arrow_typeof(date_trunc('day', time)) FROM foo LIMIT 1
 ----
-Timestamp(Nanosecond, Some("+05:00"))
+Timestamp(ns, "+05:00")
 
 query T
 select arrow_typeof(date_trunc('minute', to_timestamp_seconds(61)))
 ----
-Timestamp(Second, None)
+Timestamp(s)
 
 query T
 select arrow_typeof(date_trunc('second', to_timestamp_millis(61)))
 ----
-Timestamp(Millisecond, None)
+Timestamp(ms)
 
 query T
 select arrow_typeof(date_trunc('millisecond', to_timestamp_micros(61)))
 ----
-Timestamp(Microsecond, None)
+Timestamp(µs)
 
 query T
 select arrow_typeof(date_trunc('microsecond', to_timestamp(61)))
 ----
-Timestamp(Nanosecond, None)  
+Timestamp(ns)
 
 # check date_bin
 query P
@@ -2306,7 +2306,7 @@ SELECT date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00') FROM foo
 query T
 SELECT arrow_typeof(date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00')) FROM foo LIMIT 1
 ----
-Timestamp(Nanosecond, Some("+05:00"))
+Timestamp(ns, "+05:00")
 
 
 # timestamp comparison with and without timezone
@@ -2348,7 +2348,7 @@ true true true true true true true true true true true true true
 query TTT
 SELECT arrow_typeof(to_timestamp(1)), arrow_typeof(to_timestamp(null)), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000'))
 ----
-Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
+Timestamp(ns) Timestamp(ns) Timestamp(ns)
 
 # verify timestamp output types using timestamp literal syntax
 query BBBBBB
@@ -2384,7 +2384,7 @@ NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:5
 query TTT
 SELECT arrow_typeof(to_timestamp(1, '%c', '%s')), arrow_typeof(to_timestamp(null, '%+', '%s')), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000', '%Y-%m-%d %H:%M:%S%.f'))
 ----
-Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
+Timestamp(ns) Timestamp(ns) Timestamp(ns)
 
 # to_timestamp with invalid formatting
 query error input contains invalid characters
@@ -2690,8 +2690,8 @@ SELECT t1.ts, t1.ts + INTERVAL '1' SECOND FROM t1;
 query PT
 SELECT t1.ts::timestamptz, arrow_typeof(t1.ts::timestamptz) FROM t1;
 ----
-2018-07-01T06:00:00Z Timestamp(Nanosecond, Some("+00"))
-2018-07-01T07:00:00Z Timestamp(Nanosecond, Some("+00"))
+2018-07-01T06:00:00Z Timestamp(ns, "+00")
+2018-07-01T07:00:00Z Timestamp(ns, "+00")
 
 query D
 SELECT 0::TIME
@@ -3281,7 +3281,7 @@ from (
   select '2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels' as time
 );
 ----
-2024-04-01T00:00:20+02:00 Timestamp(Nanosecond, Some("Europe/Brussels")) 2024-04-01T00:00:20 Timestamp(Nanosecond, None)
+2024-04-01T00:00:20+02:00 Timestamp(ns, "Europe/Brussels") 2024-04-01T00:00:20 Timestamp(ns)
 
 # use to_local_time() in date_bin()
 query P
@@ -3326,53 +3326,53 @@ from t;
 query PPT
 select column1, to_local_time(column1::timestamp), arrow_typeof(to_local_time(column1::timestamp)) from t_utc;
 ----
-NULL NULL Timestamp(Nanosecond, None)
-2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
-2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
-2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
-2024-04-01T00:00:01Z 2024-04-01T00:00:01 Timestamp(Nanosecond, None)
-2024-05-01T00:00:01Z 2024-05-01T00:00:01 Timestamp(Nanosecond, None)
-2024-06-01T00:00:01Z 2024-06-01T00:00:01 Timestamp(Nanosecond, None)
-2024-07-01T00:00:01Z 2024-07-01T00:00:01 Timestamp(Nanosecond, None)
-2024-08-01T00:00:01Z 2024-08-01T00:00:01 Timestamp(Nanosecond, None)
-2024-09-01T00:00:01Z 2024-09-01T00:00:01 Timestamp(Nanosecond, None)
-2024-10-01T00:00:01Z 2024-10-01T00:00:01 Timestamp(Nanosecond, None)
-2024-11-01T00:00:01Z 2024-11-01T00:00:01 Timestamp(Nanosecond, None)
-2024-12-01T00:00:01Z 2024-12-01T00:00:01 Timestamp(Nanosecond, None)
+NULL NULL Timestamp(ns)
+2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(ns)
+2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(ns)
+2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(ns)
+2024-04-01T00:00:01Z 2024-04-01T00:00:01 Timestamp(ns)
+2024-05-01T00:00:01Z 2024-05-01T00:00:01 Timestamp(ns)
+2024-06-01T00:00:01Z 2024-06-01T00:00:01 Timestamp(ns)
+2024-07-01T00:00:01Z 2024-07-01T00:00:01 Timestamp(ns)
+2024-08-01T00:00:01Z 2024-08-01T00:00:01 Timestamp(ns)
+2024-09-01T00:00:01Z 2024-09-01T00:00:01 Timestamp(ns)
+2024-10-01T00:00:01Z 2024-10-01T00:00:01 Timestamp(ns)
+2024-11-01T00:00:01Z 2024-11-01T00:00:01 Timestamp(ns)
+2024-12-01T00:00:01Z 2024-12-01T00:00:01 Timestamp(ns)
 
 query PPT
 select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) from t_utc;
 ----
-NULL NULL Timestamp(Nanosecond, None)
-2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
-2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
-2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
-2024-04-01T00:00:01Z 2024-04-01T00:00:01 Timestamp(Nanosecond, None)
-2024-05-01T00:00:01Z 2024-05-01T00:00:01 Timestamp(Nanosecond, None)
-2024-06-01T00:00:01Z 2024-06-01T00:00:01 Timestamp(Nanosecond, None)
-2024-07-01T00:00:01Z 2024-07-01T00:00:01 Timestamp(Nanosecond, None)
-2024-08-01T00:00:01Z 2024-08-01T00:00:01 Timestamp(Nanosecond, None)
-2024-09-01T00:00:01Z 2024-09-01T00:00:01 Timestamp(Nanosecond, None)
-2024-10-01T00:00:01Z 2024-10-01T00:00:01 Timestamp(Nanosecond, None)
-2024-11-01T00:00:01Z 2024-11-01T00:00:01 Timestamp(Nanosecond, None)
-2024-12-01T00:00:01Z 2024-12-01T00:00:01 Timestamp(Nanosecond, None)
+NULL NULL Timestamp(ns)
+2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(ns)
+2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(ns)
+2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(ns)
+2024-04-01T00:00:01Z 2024-04-01T00:00:01 Timestamp(ns)
+2024-05-01T00:00:01Z 2024-05-01T00:00:01 Timestamp(ns)
+2024-06-01T00:00:01Z 2024-06-01T00:00:01 Timestamp(ns)
+2024-07-01T00:00:01Z 2024-07-01T00:00:01 Timestamp(ns)
+2024-08-01T00:00:01Z 2024-08-01T00:00:01 Timestamp(ns)
+2024-09-01T00:00:01Z 2024-09-01T00:00:01 Timestamp(ns)
+2024-10-01T00:00:01Z 2024-10-01T00:00:01 Timestamp(ns)
+2024-11-01T00:00:01Z 2024-11-01T00:00:01 Timestamp(ns)
+2024-12-01T00:00:01Z 2024-12-01T00:00:01 Timestamp(ns)
 
 query PPT
 select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) from t_timezone;
 ----
-NULL NULL Timestamp(Nanosecond, None)
-2024-01-01T00:00:01+01:00 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
-2024-02-01T00:00:01+01:00 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
-2024-03-01T00:00:01+01:00 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
-2024-04-01T00:00:01+02:00 2024-04-01T00:00:01 Timestamp(Nanosecond, None)
-2024-05-01T00:00:01+02:00 2024-05-01T00:00:01 Timestamp(Nanosecond, None)
-2024-06-01T00:00:01+02:00 2024-06-01T00:00:01 Timestamp(Nanosecond, None)
-2024-07-01T00:00:01+02:00 2024-07-01T00:00:01 Timestamp(Nanosecond, None)
-2024-08-01T00:00:01+02:00 2024-08-01T00:00:01 Timestamp(Nanosecond, None)
-2024-09-01T00:00:01+02:00 2024-09-01T00:00:01 Timestamp(Nanosecond, None)
-2024-10-01T00:00:01+02:00 2024-10-01T00:00:01 Timestamp(Nanosecond, None)
-2024-11-01T00:00:01+01:00 2024-11-01T00:00:01 Timestamp(Nanosecond, None)
-2024-12-01T00:00:01+01:00 2024-12-01T00:00:01 Timestamp(Nanosecond, None)
+NULL NULL Timestamp(ns)
+2024-01-01T00:00:01+01:00 2024-01-01T00:00:01 Timestamp(ns)
+2024-02-01T00:00:01+01:00 2024-02-01T00:00:01 Timestamp(ns)
+2024-03-01T00:00:01+01:00 2024-03-01T00:00:01 Timestamp(ns)
+2024-04-01T00:00:01+02:00 2024-04-01T00:00:01 Timestamp(ns)
+2024-05-01T00:00:01+02:00 2024-05-01T00:00:01 Timestamp(ns)
+2024-06-01T00:00:01+02:00 2024-06-01T00:00:01 Timestamp(ns)
+2024-07-01T00:00:01+02:00 2024-07-01T00:00:01 Timestamp(ns)
+2024-08-01T00:00:01+02:00 2024-08-01T00:00:01 Timestamp(ns)
+2024-09-01T00:00:01+02:00 2024-09-01T00:00:01 Timestamp(ns)
+2024-10-01T00:00:01+02:00 2024-10-01T00:00:01 Timestamp(ns)
+2024-11-01T00:00:01+01:00 2024-11-01T00:00:01 Timestamp(ns)
+2024-12-01T00:00:01+01:00 2024-12-01T00:00:01 Timestamp(ns)
 
 # combine to_local_time() with date_bin()
 query P
@@ -3667,7 +3667,7 @@ SELECT
     arrow_cast(a, 'LargeUtf8')
 FROM (SELECT TIMESTAMP '2005-09-10 13:31:00' AS a)
 ----
-Timestamp(Nanosecond, None) 2005-09-10T13:31:00 2005-09-10T13:31:00 2005-09-10T13:31:00 2005-09-10T13:31:00
+Timestamp(ns) 2005-09-10T13:31:00 2005-09-10T13:31:00 2005-09-10T13:31:00 2005-09-10T13:31:00
 
 query TTTTT
 SELECT
@@ -3678,4 +3678,4 @@ SELECT
     arrow_cast(a, 'LargeUtf8')
 FROM (SELECT CAST('2005-09-10 13:31:00 +02:00' AS timestamp with time zone) AS a)
 ----
-Timestamp(Nanosecond, Some("+00")) 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z
+Timestamp(ns, "+00") 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z
