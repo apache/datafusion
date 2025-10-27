@@ -4837,7 +4837,8 @@ mod tests {
     }
 
     #[test]
-    fn test_replace_placeholder_valid_param_type_schema() {
+    fn test_replace_placeholder_empty_relation_valid_schema() {
+        // SELECT $1, $2;
         let plan = LogicalPlanBuilder::empty(false)
             .project(vec![
                 SelectExpr::from(placeholder("$1")),
@@ -4845,10 +4846,19 @@ mod tests {
             ])
             .unwrap()
             .build()
-            .unwrap()
+            .unwrap();
+
+        // original
+        assert_snapshot!(plan.display_indent_schema(), @r"
+        Projection: $1, $2 [$1:Null;N, $2:Null;N]
+          EmptyRelation: rows=0 []
+        ");
+
+        let plan = plan
             .with_param_values(vec![ScalarValue::from(1i32), ScalarValue::from("s")])
             .unwrap();
 
+        // replaced
         assert_snapshot!(plan.display_indent_schema(), @r#"
         Projection: Int32(1) AS $1, Utf8("s") AS $2 [$1:Int32, $2:Utf8]
           EmptyRelation: rows=0 []
