@@ -325,6 +325,32 @@ impl ProjectionExprs {
     }
 
     /// Extract the ordered column indices for a column-only projection.
+    ///
+    /// This function assumes that all expressions in the projection are simple column references.
+    /// It returns the column indices in the order they appear in the projection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any expression in the projection is not a simple column reference. This includes:
+    /// - Computed expressions (e.g., `a + 1`, `CAST(a AS INT)`)
+    /// - Function calls (e.g., `UPPER(name)`, `SUM(amount)`)
+    /// - Literals (e.g., `42`, `'hello'`)
+    /// - Complex nested expressions (e.g., `CASE WHEN ... THEN ... END`)
+    ///
+    /// # Returns
+    ///
+    /// A vector of column indices in projection order. Unlike [`column_indices()`](Self::column_indices),
+    /// this function:
+    /// - Preserves the projection order (does not sort)
+    /// - Preserves duplicates (does not deduplicate)
+    ///
+    /// # Example
+    ///
+    /// For a projection `SELECT c, a, c` where `a` is at index 0 and `c` is at index 2,
+    /// this function would return `[2, 0, 2]`.
+    ///
+    /// Use [`column_indices()`](Self::column_indices) instead if the projection may contain
+    /// non-column expressions or if you need a deduplicated sorted list.
     pub fn ordered_column_indices(&self) -> Vec<usize> {
         self.exprs
             .iter()
