@@ -116,7 +116,7 @@ impl CaseBody {
             .iter()
             .enumerate()
             .map(|(projected, original)| (*original, projected))
-            .collect::<HashMap::<usize, usize>>();
+            .collect::<HashMap<usize, usize>>();
 
         // Construct the projected body by rewriting each expression from the original body
         // using the column index mapping.
