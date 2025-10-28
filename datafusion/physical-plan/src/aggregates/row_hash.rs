@@ -26,8 +26,8 @@ use super::AggregateExec;
 use crate::aggregates::group_values::{new_group_values, GroupByMetrics, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    create_schema, evaluate_aggregate_arguments, evaluate_group_by, evaluate_optional,
-    AggregateMode, PhysicalGroupBy,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode,
+    PhysicalGroupBy,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
@@ -49,6 +49,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use datafusion_common::instant::Instant;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -835,20 +836,25 @@ impl GroupedHashAggregateStream {
             evaluate_group_by(&self.group_by, &batch)?
         };
 
+        // Only create the timer if there are actual aggregate arguments to evaluate
+        let timer = match (
+            self.spill_state.is_stream_merging,
+            self.spill_state.merging_aggregate_arguments.is_empty(),
+            self.aggregate_arguments.is_empty(),
+        ) {
+            (true, false, _) | (false, _, false) => {
+                Some(self.group_by_metrics.aggregate_arguments_time.timer())
+            }
+            _ => None,
+        };
+
         // Evaluate the aggregation expressions.
         let input_values = if self.spill_state.is_stream_merging {
-            evaluate_aggregate_arguments(
-                &self.spill_state.merging_aggregate_arguments,
-                &self.group_by_metrics,
-                &batch,
-            )?
+            evaluate_many(&self.spill_state.merging_aggregate_arguments, &batch)?
         } else {
-            evaluate_aggregate_arguments(
-                &self.aggregate_arguments,
-                &self.group_by_metrics,
-                &batch,
-            )?
+            evaluate_many(&self.aggregate_arguments, &batch)?
         };
+        drop(timer);
 
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = if self.spill_state.is_stream_merging {
@@ -858,8 +864,9 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, &batch)?
         };
 
-        let aggregation_timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &group_by_values {
+            let groups_start_time = Instant::now();
+
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
             self.group_values
@@ -875,6 +882,12 @@ impl GroupedHashAggregateStream {
                     total_num_groups,
                 )?;
             }
+
+            // Use this instant for both measurements to save a syscall
+            let agg_start_time = Instant::now();
+            self.group_by_metrics
+                .time_calculating_group_ids
+                .add_duration(agg_start_time - groups_start_time);
 
             // Gather the inputs to call the actual accumulator
             let t = self
@@ -911,9 +924,11 @@ impl GroupedHashAggregateStream {
                         acc.merge_batch(values, group_indices, None, total_num_groups)?;
                     }
                 }
+                self.group_by_metrics
+                    .aggregation_time
+                    .add_duration(Instant::now() - agg_start_time);
             }
         }
-        drop(aggregation_timer);
 
         match self.update_memory_reservation() {
             // Here we can ignore `insufficient_capacity_err` because we will spill later,
@@ -1177,11 +1192,7 @@ impl GroupedHashAggregateStream {
     /// Transforms input batch to intermediate aggregate state, without grouping it
     fn transform_to_states(&self, batch: RecordBatch) -> Result<RecordBatch> {
         let mut group_values = evaluate_group_by(&self.group_by, &batch)?;
-        let input_values = evaluate_aggregate_arguments(
-            &self.aggregate_arguments,
-            &self.group_by_metrics,
-            &batch,
-        )?;
+        let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
         if group_values.len() != 1 {

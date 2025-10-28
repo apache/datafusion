@@ -20,6 +20,7 @@
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, Time};
 
 pub(crate) struct GroupByMetrics {
+    pub(crate) time_calculating_group_ids: Time,
     /// Time spent evaluating the inputs to the aggregate functions.
     pub(crate) aggregate_arguments_time: Time,
     /// Time spent performing the aggregation itself.
@@ -32,6 +33,8 @@ pub(crate) struct GroupByMetrics {
 impl GroupByMetrics {
     pub(crate) fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         Self {
+            time_calculating_group_ids: MetricBuilder::new(metrics)
+                .subset_time("time_calculating_group_ids", partition),
             aggregate_arguments_time: MetricBuilder::new(metrics)
                 .subset_time("aggregate_arguments_time", partition),
             aggregation_time: MetricBuilder::new(metrics)

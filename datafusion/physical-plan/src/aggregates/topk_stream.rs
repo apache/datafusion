@@ -20,8 +20,8 @@
 use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::topk::priority_map::PriorityMap;
 use crate::aggregates::{
-    aggregate_expressions, evaluate_aggregate_arguments, evaluate_group_by,
-    AggregateExec, PhysicalGroupBy,
+    aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
+    PhysicalGroupBy,
 };
 use crate::metrics::BaselineMetrics;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -150,16 +150,21 @@ impl Stream for GroupedTopKAggregateStream {
                         "Exactly 1 group value required"
                     );
                     let group_by_values = Arc::clone(&group_by_values[0][0]);
-                    let input_values = evaluate_aggregate_arguments(
-                        &self.aggregate_arguments,
-                        &self.group_by_metrics,
-                        batches.first().unwrap(),
-                    )?;
+                    let input_values = {
+                        let _timer = (!self.aggregate_arguments.is_empty()).then(|| {
+                            self.group_by_metrics.aggregate_arguments_time.timer()
+                        });
+                        evaluate_many(
+                            &self.aggregate_arguments,
+                            batches.first().unwrap(),
+                        )?
+                    };
                     assert_eq!(input_values.len(), 1, "Exactly 1 input required");
                     assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
                     let input_values = Arc::clone(&input_values[0][0]);
 
                     // iterate over each column of group_by values
+                    self.group_by_metrics.time_calculating_group_ids.timer();
                     (*self).intern(group_by_values, input_values)?;
                 }
                 // inner is done, emit all rows and switch to producing output
@@ -168,7 +173,10 @@ impl Stream for GroupedTopKAggregateStream {
                         trace!("partition {} emit None", self.partition);
                         return Poll::Ready(None);
                     }
-                    let cols = self.priority_map.emit()?;
+                    let cols = {
+                        self.group_by_metrics.emitting_time.timer();
+                        self.priority_map.emit()?
+                    };
                     let batch = RecordBatch::try_new(Arc::clone(&self.schema), cols)?;
                     trace!(
                         "partition {} emit batch with {} rows",
