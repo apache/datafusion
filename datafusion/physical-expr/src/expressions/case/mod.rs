@@ -686,11 +686,15 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::Deref;
 
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{ArrowNativeType, Field, Float16Type, Float32Type, Float64Type};
+    use half::f16;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -1521,4 +1525,421 @@ mod tests {
 
         Ok(())
     }
+
+    // TODO - test when optimization should not be taken:
+    //  - when the literals types are not supported
+    //  - when else type is not matching
+    //  - when else is not literal
+    //  - when not all when are literals
+    //  - when not all then are literals
+
+    fn test_case_when_literal_lookup(
+        values: ArrayRef,
+        lookup_map: &[(ScalarValue, ScalarValue)],
+        else_value: Option<ScalarValue>,
+        expected: ArrayRef,
+    ) {
+        // Create lookup
+        // CASE <expr>
+        // WHEN <when_constant_1> THEN <then_constant_1>
+        // WHEN <when_constant_2> THEN <then_constant_2>
+        // [ ELSE <else_constant> ]
+
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            values.data_type().clone(),
+            values.is_nullable(),
+        )]);
+        let schema = Arc::new(schema);
+
+        let batch = RecordBatch::try_new(schema, vec![values]).expect("failed to create RecordBatch");
+
+        let schema = batch.schema_ref();
+        let case = col("a", &schema).expect("failed to create col");
+
+        let when_then = lookup_map
+            .into_iter()
+            .map(|(when, then)| {
+                (
+                    Arc::new(Literal::new(when.clone())) as _,
+                    Arc::new(Literal::new(then.clone())) as _,
+                )
+            })
+            .collect::<Vec<WhenThen>>();
+
+        let else_expr = if let Some(else_value) = else_value {
+            Some(Arc::new(Literal::new(else_value)) as Arc<dyn PhysicalExpr>)
+        } else {
+            None
+        };
+        let expr = CaseExpr::try_new(Some(case), when_then, else_expr).expect("failed to create case");
+
+        // Assert that we are testing what we intend to assert
+        assert!(
+            matches!(expr.eval_method, EvalMethod::WithExprScalarLookupTable(_)),
+            "we should use the expected eval method"
+        );
+
+        let actual = expr
+            .evaluate(&batch)
+            .expect("failed to evaluate case")
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+
+        assert_eq!(actual.data_type(), expected.data_type(), "Data type mismatch");
+
+        assert_eq!(
+            actual.as_ref(),
+            expected.as_ref(),
+            "actual (left) does not match expected (right)"
+        );
+    }
+
+    fn create_lookup<When, Then>(
+        when_then_pairs: impl IntoIterator<Item = (When, Then)>,
+    ) -> Vec<(ScalarValue, ScalarValue)>
+    where
+      ScalarValue: From<When>,
+      ScalarValue: From<Then>,
+    {
+        when_then_pairs
+          .into_iter()
+          .map(|(when, then)| (ScalarValue::from(when), ScalarValue::from(then)))
+          .collect()
+    }
+
+    fn create_input_and_expected<Input, Expected, InputFromItem, ExpectedFromItem>(
+        input_and_expected_pairs: impl IntoIterator<Item = (InputFromItem, ExpectedFromItem)>,
+    ) -> (Input, Expected)
+    where
+      Input: Array + From<Vec<InputFromItem>>,
+      Expected: Array + From<Vec<ExpectedFromItem>>,
+    {
+        let (input_items, expected_items): (Vec<InputFromItem>, Vec<ExpectedFromItem>) =
+          input_and_expected_pairs.into_iter().unzip();
+
+        (Input::from(input_items), Expected::from(expected_items))
+    }
+
+
+    fn test_with_and_without_else(lookup_map: &Vec<(ScalarValue, ScalarValue)>, input_values: ArrayRef, expected: StringArray) {
+        // Testing without ELSE should fallback to None
+        test_case_when_literal_lookup(
+            Arc::clone(&input_values),
+            &lookup_map,
+            None,
+            Arc::new(expected.clone()),
+        );
+
+        // Testing with Else
+        let else_value = "___fallback___";
+
+        // Changing each expected None to be fallback
+        let expected_with_else = expected
+          .iter()
+          .map(|item| item.unwrap_or(else_value))
+          .map(Some)
+          .collect::<StringArray>();
+
+        // Test case
+        test_case_when_literal_lookup(
+            input_values,
+            &lookup_map,
+            Some(ScalarValue::Utf8(Some(else_value.to_string()))),
+            Arc::new(expected_with_else),
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_int32_to_string() {
+        let lookup_map = create_lookup([
+            (Some(4), Some("four")),
+            (Some(2), Some("two")),
+            (Some(3), Some("three")),
+            (Some(1), Some("one")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<Int32Array, StringArray, _, _>([
+            (1, Some("one")),
+            (2, Some("two")),
+            (3, Some("three")),
+            (3, Some("three")),
+            (2, Some("two")),
+            (3, Some("three")),
+            (5, None), // No match in WHEN
+            (5, None), // No match in WHEN
+            (3, Some("three")),
+            (5, None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_none_case_should_never_match() {
+        let lookup_map = create_lookup([
+            (Some(4), Some("four")),
+            (None, Some("none")),
+            (Some(2), Some("two")),
+            (Some(1), Some("one")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<Int32Array, StringArray, _, _>([
+            (Some(1), Some("one")),
+            (Some(5), None), // No match in WHEN
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (Some(2), Some("two")),
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (Some(2), Some("two")),
+            (Some(5), None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_int32_to_string_with_duplicate_cases() {
+        let lookup_map = create_lookup([
+            (Some(4), Some("four")),
+            (Some(4), Some("no 4")),
+            (Some(2), Some("two")),
+            (Some(2), Some("no 2")),
+            (Some(3), Some("three")),
+            (Some(3), Some("no 3")),
+            (Some(2), Some("no 2")),
+            (Some(4), Some("no 4")),
+            (Some(2), Some("no 2")),
+            (Some(3), Some("no 3")),
+            (Some(4), Some("no 4")),
+            (Some(2), Some("no 2")),
+            (Some(3), Some("no 3")),
+            (Some(3), Some("no 3")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<Int32Array, StringArray, _, _>([
+            (1, Some("one")),
+            (2, Some("two")),
+            (3, Some("three")),
+            (3, Some("three")),
+            (2, Some("two")),
+            (3, Some("three")),
+            (5, None), // No match in WHEN
+            (5, None), // No match in WHEN
+            (3, Some("three")),
+            (5, None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_f32_to_string_with_special_values_and_duplicate_cases() {
+        let lookup_map = create_lookup([
+            (Some(4.0), Some("four point zero")),
+            (Some(f32::NAN), Some("NaN")),
+            (Some(3.2), Some("three point two")),
+
+            // Duplicate case to make sure it is not used
+            (Some(f32::NAN), Some("should not use this NaN branch")),
+            (Some(f32::INFINITY), Some("Infinity")),
+            (Some(0.0), Some("zero")),
+
+            // Duplicate case to make sure it is not used
+            (Some(f32::INFINITY), Some("should not use this Infinity branch")),
+            (Some(1.1), Some("one point one")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<Float32Array, StringArray, _, _>([
+            (1.1, Some("one point one")),
+            (f32::NAN, Some("NaN")),
+            (3.2, Some("three point two")),
+            (3.2, Some("three point two")),
+            (0.0, Some("zero")),
+            (f32::INFINITY, Some("Infinity")),
+            (3.2, Some("three point two")),
+            (f32::NEG_INFINITY, None), // No match in WHEN
+            (f32::NEG_INFINITY, None), // No match in WHEN
+            (3.2, Some("three point two")),
+            (-0.0, None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_f16_to_string_with_special_values() {
+        let lookup_map = create_lookup([
+            (ScalarValue::Float16(Some(f16::from_f32(3.2))), Some("3 dot 2")),
+            (ScalarValue::Float16(Some(f16::NAN)), Some("NaN")),
+            (ScalarValue::Float16(Some(f16::from_f32(17.4))), Some("17 dot 4")),
+            (ScalarValue::Float16(Some(f16::INFINITY)), Some("Infinity")),
+            (ScalarValue::Float16(Some(f16::ZERO)), Some("zero")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<Float16Array, StringArray, _, _>([
+            (f16::from_f32(3.2), Some("3 dot 2")),
+            (f16::NAN, Some("NaN")),
+            (f16::from_f32(17.4), Some("17 dot 4")),
+            (f16::from_f32(17.4), Some("17 dot 4")),
+            (f16::INFINITY, Some("Infinity")),
+            (f16::from_f32(17.4), Some("17 dot 4")),
+            (f16::NEG_INFINITY, None), // No match in WHEN
+            (f16::NEG_INFINITY, None), // No match in WHEN
+            (f16::from_f32(17.4), Some("17 dot 4")),
+            (f16::NEG_ZERO, None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_f32_to_string_with_special_values() {
+        let lookup_map = create_lookup([
+            (3.2, Some("3 dot 2")),
+            (f32::NAN, Some("NaN")),
+            (17.4, Some("17 dot 4")),
+            (f32::INFINITY, Some("Infinity")),
+            (f32::ZERO, Some("zero")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<Float32Array, StringArray, _, _>([
+            (3.2, Some("3 dot 2")),
+            (f32::NAN, Some("NaN")),
+            (17.4, Some("17 dot 4")),
+            (17.4, Some("17 dot 4")),
+            (f32::INFINITY, Some("Infinity")),
+            (17.4, Some("17 dot 4")),
+            (f32::NEG_INFINITY, None), // No match in WHEN
+            (f32::NEG_INFINITY, None), // No match in WHEN
+            (17.4, Some("17 dot 4")),
+            (-0.0, None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_f64_to_string_with_special_values() {
+        let lookup_map = create_lookup([
+            (3.2, Some("3 dot 2")),
+            (f64::NAN, Some("NaN")),
+            (17.4, Some("17 dot 4")),
+            (f64::INFINITY, Some("Infinity")),
+            (f64::ZERO, Some("zero")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<Float64Array, StringArray, _, _>([
+            (3.2, Some("3 dot 2")),
+            (f64::NAN, Some("NaN")),
+            (17.4, Some("17 dot 4")),
+            (17.4, Some("17 dot 4")),
+            (f64::INFINITY, Some("Infinity")),
+            (17.4, Some("17 dot 4")),
+            (f64::NEG_INFINITY, None), // No match in WHEN
+            (f64::NEG_INFINITY, None), // No match in WHEN
+            (17.4, Some("17 dot 4")),
+            (-0.0, None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    // TODO - need to add one for decimal
+
+    #[test]
+    fn test_with_strings_to_int32() {
+        let lookup_map = create_lookup([
+            (Some("why"), Some(42)),
+            (Some("what"), Some(22)),
+            (Some("when"), Some(17)),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<StringArray, Int32Array, _, _>([
+            (Some("why"), Some(42)),
+            (Some("5"), None), // No match in WHEN
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (Some("what"), Some(22)),
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (Some("what"), Some(22)),
+            (Some("5"), None), // No match in WHEN
+        ]);
+
+        let input_values = Arc::new(input_values) as ArrayRef;
+
+        // Testing without ELSE should fallback to None
+        test_case_when_literal_lookup(
+            Arc::clone(&input_values),
+            &lookup_map,
+            None,
+            Arc::new(expected.clone()),
+        );
+
+        // Testing with Else
+        let else_value = 101;
+
+        // Changing each expected None to be fallback
+        let expected_with_else = expected
+          .iter()
+          .map(|item| item.unwrap_or(else_value))
+          .map(Some)
+          .collect::<Int32Array>();
+
+        // Test case
+        test_case_when_literal_lookup(
+            input_values,
+            &lookup_map,
+            Some(ScalarValue::Int32(Some(else_value))),
+            Arc::new(expected_with_else),
+        );
+    }
+
+    #[test]
+    fn test_with_bytes_to_string() {
+        let lookup_map = create_lookup([
+            (ScalarValue::Binary(Some("why".as_bytes().to_vec())), Some("one")),
+            (ScalarValue::Binary(Some("what".as_bytes().to_vec())), Some("two")),
+            (ScalarValue::Binary(Some("when".as_bytes().to_vec())), Some("three")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<BinaryArray, StringArray, _, _>([
+            (Some(b"why" as &[u8]), Some("one")),
+            (Some(b"5"), None), // No match in WHEN
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (Some(b"what"), Some("two")),
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (Some(b"what"), Some("two")),
+            (Some(b"5"), None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    #[test]
+    fn test_with_large_bytes_to_string() {
+        let lookup_map = create_lookup([
+            (ScalarValue::LargeBinary(Some("why".as_bytes().to_vec())), Some("one")),
+            (ScalarValue::LargeBinary(Some("what".as_bytes().to_vec())), Some("two")),
+            (ScalarValue::LargeBinary(Some("when".as_bytes().to_vec())), Some("three")),
+        ]);
+
+        let (input_values, expected) = create_input_and_expected::<LargeBinaryArray, StringArray, _, _>([
+            (Some(b"why" as &[u8]), Some("one")),
+            (Some(b"5"), None), // No match in WHEN
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (Some(b"what"), Some("two")),
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+            (Some(b"what"), Some("two")),
+            (Some(b"5"), None), // No match in WHEN
+        ]);
+
+        test_with_and_without_else(&lookup_map, Arc::new(input_values), expected);
+    }
+
+    // TODO - test timezone and decimal precision and scale to make sure we keep the correct data type
+    // TODO - test all supported types - boolean, primitive, fixed size bytes, view, dictionary of generic/fixed/view
+    // TODO - test different output data types
 }
