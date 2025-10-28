@@ -112,13 +112,11 @@ impl CaseBody {
         }
 
         // Construct a mapping from the original column index to the projected column index.
-        let mut column_index_map = HashMap::<usize, usize>::new();
-        used_column_indices
+        let column_index_map = used_column_indices
             .iter()
             .enumerate()
-            .for_each(|(projected, original)| {
-                column_index_map.insert(*original, projected);
-            });
+            .map(|(projected, original)| (*original, projected))
+            .collect::<HashMap::<usize, usize>>();
 
         // Construct the projected body by rewriting each expression from the original body
         // using the column index mapping.
@@ -977,7 +975,7 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if projected.projection.len() < batch.num_rows() {
+        if projected.projection.len() < batch.num_columns() {
             let projected_batch = batch.project(&projected.projection)?;
             projected
                 .body
@@ -1000,7 +998,7 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if projected.projection.len() < batch.num_rows() {
+        if projected.projection.len() < batch.num_columns() {
             let projected_batch = batch.project(&projected.projection)?;
             projected
                 .body
@@ -1119,7 +1117,7 @@ impl CaseExpr {
             _ => Cow::Owned(prep_null_mask_filter(when_value)),
         };
 
-        if projected.projection.len() < batch.num_rows() {
+        if projected.projection.len() < batch.num_columns() {
             let projected_batch = batch.project(&projected.projection)?;
             projected
                 .body
