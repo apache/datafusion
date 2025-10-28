@@ -1942,7 +1942,7 @@ mod tests {
         // Test TrivialFirstValueAccumulator
         let mut trivial_accumulator =
             TrivialFirstValueAccumulator::try_new(&DataType::Utf8, false)?;
-        let trivial_states = vec![value.clone(), corrupted_flag.clone()];
+        let trivial_states = vec![Arc::clone(&value), Arc::clone(&corrupted_flag)];
         let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
         assert!(result
@@ -1985,7 +1985,7 @@ mod tests {
         // Test TrivialLastValueAccumulator
         let mut trivial_accumulator =
             TrivialLastValueAccumulator::try_new(&DataType::Utf8, false)?;
-        let trivial_states = vec![value.clone(), corrupted_flag.clone()];
+        let trivial_states = vec![Arc::clone(&value), Arc::clone(&corrupted_flag)];
         let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
         assert!(result
