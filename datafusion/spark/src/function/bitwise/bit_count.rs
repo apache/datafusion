@@ -111,7 +111,7 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Int64 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int64Type>()
-                .unary(|v| bit_count(v.into()));
+                .unary(|v| bit_count(v));
             Ok(Arc::new(result))
         }
         DataType::UInt8 => {
