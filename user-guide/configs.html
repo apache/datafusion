@@ -831,8 +831,8 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>(reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.metadata_size_hint</p></td>
-<td><p>NULL</p></td>
-<td><p>(reading) If specified, the parquet reader will try and fetch the last <code class="docutils literal notranslate"><span class="pre">size_hint</span></code> bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer</p></td>
+<td><p>524288</p></td>
+<td><p>(reading) If specified, the parquet reader will try and fetch the last <code class="docutils literal notranslate"><span class="pre">size_hint</span></code> bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer Default setting to 512 KiB, which should be sufficient for most parquet files, it can reduce one I/O operation per parquet file. If the metadata is larger than the hint, two reads will still be performed.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.pushdown_filters</p></td>
 <td><p>false</p></td>
