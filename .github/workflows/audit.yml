@@ -46,9 +46,4 @@ jobs:
         with:
           tool: cargo-audit
       - name: Run audit check
-        # RUSTSEC-2025-0111: tokio-tar is by testcontainers for orchestration
-        # of testing, so does not impact DataFusion's security
-        # See https://github.com/apache/datafusion/issues/18288
-        # NOTE: can remove this once testcontainers releases a version that includes
-        # https://github.com/testcontainers/testcontainers-rs/pull/852
-        run: cargo audit --ignore RUSTSEC-2025-0111
+        run: cargo audit
