@@ -166,7 +166,14 @@ impl AggregateUDFImpl for FirstValue {
         )
         .into()];
         fields.extend(args.ordering_fields.iter().cloned());
-        fields.push(Field::new("is_set", DataType::Boolean, true).into());
+        fields.push(
+            Field::new(
+                format_state_name(args.name, "first_value_is_set"),
+                DataType::Boolean,
+                true,
+            )
+            .into(),
+        );
         Ok(fields)
     }
 
@@ -1087,7 +1094,14 @@ impl AggregateUDFImpl for LastValue {
         )
         .into()];
         fields.extend(args.ordering_fields.iter().cloned());
-        fields.push(Field::new("is_set", DataType::Boolean, true).into());
+        fields.push(
+            Field::new(
+                format_state_name(args.name, "last_value_is_set"),
+                DataType::Boolean,
+                true,
+            )
+            .into(),
+        );
         Ok(fields)
     }
 

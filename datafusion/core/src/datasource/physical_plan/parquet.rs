@@ -201,7 +201,7 @@ mod tests {
                 source,
             )
             .with_file_group(file_group)
-            .with_projection(self.projection.clone())
+            .with_projection_indices(self.projection.clone())
             .build();
             DataSourceExec::from_data_source(base_config)
         }
@@ -1655,7 +1655,7 @@ mod tests {
         let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
             .with_file(partitioned_file)
             // file has 10 cols so index 12 should be month and 13 should be day
-            .with_projection(Some(vec![0, 1, 2, 12, 13]))
+            .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
             .with_table_partition_cols(vec![
                 Field::new("year", DataType::Utf8, false),
                 Field::new("month", DataType::UInt8, false),
