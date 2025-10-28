@@ -17,11 +17,13 @@
 
 //! A memory-conscious aggregation implementation that limits group buckets to a fixed number
 
+use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::topk::priority_map::PriorityMap;
 use crate::aggregates::{
-    aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
-    PhysicalGroupBy,
+    aggregate_expressions, evaluate_aggregate_arguments, evaluate_group_by,
+    AggregateExec, PhysicalGroupBy,
 };
+use crate::metrics::BaselineMetrics;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
@@ -42,6 +44,8 @@ pub struct GroupedTopKAggregateStream {
     started: bool,
     schema: SchemaRef,
     input: SendableRecordBatchStream,
+    baseline_metrics: BaselineMetrics,
+    group_by_metrics: GroupByMetrics,
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     group_by: PhysicalGroupBy,
     priority_map: PriorityMap,
@@ -57,6 +61,8 @@ impl GroupedTopKAggregateStream {
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = aggr.group_by.clone();
         let input = aggr.input.execute(partition, Arc::clone(&context))?;
+        let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
+        let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
         let aggregate_arguments =
             aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
         let (val_field, desc) = aggr
@@ -75,6 +81,8 @@ impl GroupedTopKAggregateStream {
             row_count: 0,
             schema: agg_schema,
             input,
+            baseline_metrics,
+            group_by_metrics,
             aggregate_arguments,
             group_by,
             priority_map,
@@ -111,10 +119,13 @@ impl Stream for GroupedTopKAggregateStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        let elapsed_computer = self.baseline_metrics.elapsed_compute().clone();
         while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
             match res {
                 // got a batch, convert to rows and append to our TreeMap
                 Some(Ok(batch)) => {
+                    let _timer = elapsed_computer.timer();
+
                     self.started = true;
                     trace!(
                         "partition {} has {} rows and got batch with {} rows",
@@ -140,8 +151,9 @@ impl Stream for GroupedTopKAggregateStream {
                         "Exactly 1 group value required"
                     );
                     let group_by_values = Arc::clone(&group_by_values[0][0]);
-                    let input_values = evaluate_many(
+                    let input_values = evaluate_aggregate_arguments(
                         &self.aggregate_arguments,
+                        &self.group_by_metrics,
                         batches.first().unwrap(),
                     )?;
                     assert_eq!(input_values.len(), 1, "Exactly 1 input required");

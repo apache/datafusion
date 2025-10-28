@@ -23,11 +23,11 @@ use std::vec;
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
-use crate::aggregates::group_values::{new_group_values, GroupValues};
+use crate::aggregates::group_values::{new_group_values, GroupByMetrics, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode,
-    PhysicalGroupBy,
+    create_schema, evaluate_aggregate_arguments, evaluate_group_by, evaluate_optional,
+    AggregateMode, PhysicalGroupBy,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
@@ -49,6 +49,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use datafusion_common::instant::Instant;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -430,6 +431,9 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
+
+    /// Aggregation-specific metrics
+    group_by_metrics: GroupByMetrics,
 }
 
 impl GroupedHashAggregateStream {
@@ -447,6 +451,7 @@ impl GroupedHashAggregateStream {
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -609,6 +614,7 @@ impl GroupedHashAggregateStream {
             current_group_indices: Default::default(),
             exec_state,
             baseline_metrics,
+            group_by_metrics,
             batch_size,
             group_ordering,
             input_done: false,
@@ -832,9 +838,17 @@ impl GroupedHashAggregateStream {
 
         // Evaluate the aggregation expressions.
         let input_values = if self.spill_state.is_stream_merging {
-            evaluate_many(&self.spill_state.merging_aggregate_arguments, &batch)?
+            evaluate_aggregate_arguments(
+                &self.spill_state.merging_aggregate_arguments,
+                &self.group_by_metrics,
+                &batch,
+            )?
         } else {
-            evaluate_many(&self.aggregate_arguments, &batch)?
+            evaluate_aggregate_arguments(
+                &self.aggregate_arguments,
+                &self.group_by_metrics,
+                &batch,
+            )?
         };
 
         // Evaluate the filter expressions, if any, against the inputs
@@ -845,6 +859,7 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, &batch)?
         };
 
+        let aggregation_timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &group_by_values {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
@@ -899,6 +914,7 @@ impl GroupedHashAggregateStream {
                 }
             }
         }
+        drop(aggregation_timer);
 
         match self.update_memory_reservation() {
             // Here we can ignore `insufficient_capacity_err` because we will spill later,
@@ -941,6 +957,7 @@ impl GroupedHashAggregateStream {
             return Ok(None);
         }
 
+        let start_time = Instant::now();
         let mut output = self.group_values.emit(emit_to)?;
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
@@ -967,6 +984,8 @@ impl GroupedHashAggregateStream {
         let _ = self.update_memory_reservation();
         let batch = RecordBatch::try_new(schema, output)?;
         debug_assert!(batch.num_rows() > 0);
+
+        self.group_by_metrics.emitting_time.add_elapsed(start_time);
         Ok(Some(batch))
     }
 
@@ -1159,7 +1178,11 @@ impl GroupedHashAggregateStream {
     /// Transforms input batch to intermediate aggregate state, without grouping it
     fn transform_to_states(&self, batch: RecordBatch) -> Result<RecordBatch> {
         let mut group_values = evaluate_group_by(&self.group_by, &batch)?;
-        let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
+        let input_values = evaluate_aggregate_arguments(
+            &self.aggregate_arguments,
+            &self.group_by_metrics,
+            &batch,
+        )?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
         if group_values.len() != 1 {

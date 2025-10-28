@@ -52,6 +52,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
 
+use crate::aggregates::group_values::GroupByMetrics;
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use itertools::Itertools;
 
@@ -1359,12 +1360,17 @@ fn evaluate(
         .collect()
 }
 
-/// Evaluates expressions against a record batch.
-pub fn evaluate_many(
-    expr: &[Vec<Arc<dyn PhysicalExpr>>],
+/// Evaluates the aggregate arguments against a record batch to produce the values for aggregation.
+pub(crate) fn evaluate_aggregate_arguments(
+    aggregate_arguments: &[Vec<Arc<dyn PhysicalExpr>>],
+    group_by_metrics: &GroupByMetrics,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    expr.iter().map(|expr| evaluate(expr, batch)).collect()
+    let _timer = group_by_metrics.aggregate_arguments_time.timer();
+    aggregate_arguments
+        .iter()
+        .map(|expr| evaluate(expr, batch))
+        .collect()
 }
 
 fn evaluate_optional(
