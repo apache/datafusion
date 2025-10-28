@@ -79,6 +79,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        not_impl_err!("Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions" )
+        not_impl_err!("Substring could not be planned by registered expr planner. \
+                        Hint: Please try with `unicode_expressions` DataFusion feature enabled")
     }
 }

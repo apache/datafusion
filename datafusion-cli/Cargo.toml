@@ -37,21 +37,25 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.3"
-aws-credential-types = "1.2.5"
-clap = { version = "4.5.44", features = ["derive", "cargo"] }
+aws-config = "1.8.7"
+aws-credential-types = "1.2.7"
+chrono = { workspace = true }
+clap = { version = "4.5.50", features = ["cargo", "derive"] }
 datafusion = { workspace = true, features = [
     "avro",
+    "compression",
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
     "nested_expressions",
     "parquet",
+    "parquet_encryption",
     "recursive_protection",
     "regex_expressions",
+    "sql",
     "unicode_expressions",
-    "compression",
 ] }
+datafusion-common = { workspace = true }
 dirs = "6.0.0"
 env_logger = { workspace = true }
 futures = { workspace = true }
@@ -62,15 +66,13 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, default-features = false }
 regex = { workspace = true }
 rustyline = "17.0"
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
+tokio = { workspace = true, features = ["macros", "parking_lot", "rt", "rt-multi-thread", "signal", "sync"] }
 url = { workspace = true }
 
 [dev-dependencies]
-assert_cmd = "2.0"
 ctor = { workspace = true }
 insta = { workspace = true }
 insta-cmd = "0.6.0"
-predicates = "3.0"
 rstest = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio"] }

@@ -154,7 +154,6 @@ mod tests {
     use futures::stream::BoxStream;
     use futures::StreamExt;
     use insta::assert_snapshot;
-    use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectMeta;
     use object_store::{
@@ -163,9 +162,10 @@ mod tests {
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::file::metadata::{KeyValue, ParquetColumnIndex, ParquetOffsetIndex};
-    use parquet::file::page_index::index::Index;
-    use parquet::format::FileMetaData;
+    use parquet::file::metadata::{
+        KeyValue, ParquetColumnIndex, ParquetMetaData, ParquetOffsetIndex,
+    };
+    use parquet::file::page_index::column_index::ColumnIndexMetaData;
     use tokio::fs::File;
 
     enum ForceViews {
@@ -1144,18 +1144,14 @@ mod tests {
 
         // 325 pages in int_col
         assert_eq!(int_col_offset.len(), 325);
-        match int_col_index {
-            Index::INT32(index) => {
-                assert_eq!(index.indexes.len(), 325);
-                for min_max in index.clone().indexes {
-                    assert!(min_max.min.is_some());
-                    assert!(min_max.max.is_some());
-                    assert!(min_max.null_count.is_some());
-                }
-            }
-            _ => {
-                error!("fail to read page index.")
-            }
+        let ColumnIndexMetaData::INT32(index) = int_col_index else {
+            panic!("fail to read page index.")
+        };
+        assert_eq!(index.min_values().len(), 325);
+        assert_eq!(index.max_values().len(), 325);
+        // all values are non null
+        for idx in 0..325 {
+            assert_eq!(index.null_count(idx), Some(0));
         }
     }
 
@@ -1556,7 +1552,7 @@ mod tests {
         Ok(parquet_sink)
     }
 
-    fn get_written(parquet_sink: Arc<ParquetSink>) -> Result<(Path, FileMetaData)> {
+    fn get_written(parquet_sink: Arc<ParquetSink>) -> Result<(Path, ParquetMetaData)> {
         let mut written = parquet_sink.written();
         let written = written.drain();
         assert_eq!(
@@ -1566,28 +1562,33 @@ mod tests {
             written.len()
         );
 
-        let (path, file_metadata) = written.take(1).next().unwrap();
-        Ok((path, file_metadata))
+        let (path, parquet_meta_data) = written.take(1).next().unwrap();
+        Ok((path, parquet_meta_data))
     }
 
-    fn assert_file_metadata(file_metadata: FileMetaData, expected_kv: &Vec<KeyValue>) {
-        let FileMetaData {
-            num_rows,
-            schema,
-            key_value_metadata,
-            ..
-        } = file_metadata;
-        assert_eq!(num_rows, 2, "file metadata to have 2 rows");
+    fn assert_file_metadata(
+        parquet_meta_data: ParquetMetaData,
+        expected_kv: &Vec<KeyValue>,
+    ) {
+        let file_metadata = parquet_meta_data.file_metadata();
+        let schema_descr = file_metadata.schema_descr();
+        assert_eq!(file_metadata.num_rows(), 2, "file metadata to have 2 rows");
         assert!(
-            schema.iter().any(|col_schema| col_schema.name == "a"),
+            schema_descr
+                .columns()
+                .iter()
+                .any(|col_schema| col_schema.name() == "a"),
             "output file metadata should contain col a"
         );
         assert!(
-            schema.iter().any(|col_schema| col_schema.name == "b"),
+            schema_descr
+                .columns()
+                .iter()
+                .any(|col_schema| col_schema.name() == "b"),
             "output file metadata should contain col b"
         );
 
-        let mut key_value_metadata = key_value_metadata.unwrap();
+        let mut key_value_metadata = file_metadata.key_value_metadata().unwrap().clone();
         key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
         assert_eq!(&key_value_metadata, expected_kv);
     }
@@ -1644,13 +1645,11 @@ mod tests {
 
         // check the file metadata includes partitions
         let mut expected_partitions = std::collections::HashSet::from(["a=foo", "a=bar"]);
-        for (
-            path,
-            FileMetaData {
-                num_rows, schema, ..
-            },
-        ) in written.take(2)
-        {
+        for (path, parquet_metadata) in written.take(2) {
+            let file_metadata = parquet_metadata.file_metadata();
+            let schema = file_metadata.schema_descr();
+            let num_rows = file_metadata.num_rows();
+
             let path_parts = path.parts().collect::<Vec<_>>();
             assert_eq!(path_parts.len(), 2, "should have path prefix");
 
@@ -1663,11 +1662,17 @@ mod tests {
 
             assert_eq!(num_rows, 1, "file metadata to have 1 row");
             assert!(
-                !schema.iter().any(|col_schema| col_schema.name == "a"),
+                !schema
+                    .columns()
+                    .iter()
+                    .any(|col_schema| col_schema.name() == "a"),
                 "output file metadata will not contain partitioned col a"
             );
             assert!(
-                schema.iter().any(|col_schema| col_schema.name == "b"),
+                schema
+                    .columns()
+                    .iter()
+                    .any(|col_schema| col_schema.name() == "b"),
                 "output file metadata should contain col b"
             );
         }

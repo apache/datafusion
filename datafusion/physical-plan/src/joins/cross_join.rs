@@ -175,6 +175,12 @@ impl CrossJoinExec {
     /// Returns a new `ExecutionPlan` that computes the same join as this one,
     /// with the left and right inputs swapped using the  specified
     /// `partition_mode`.
+    ///
+    /// # Notes:
+    ///
+    /// This function should be called BEFORE inserting any repartitioning
+    /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
+    /// for more details.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let new_join =
             CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
@@ -889,7 +895,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec"
+            "Resources exhausted: Additional allocation failed for CrossJoinExec with top memory consumers (across reservations) as:\n  CrossJoinExec"
         );
 
         Ok(())

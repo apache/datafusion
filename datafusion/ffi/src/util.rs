@@ -30,13 +30,13 @@ macro_rules! df_result {
         match $x {
             abi_stable::std_types::RResult::ROk(v) => Ok(v),
             abi_stable::std_types::RResult::RErr(e) => {
-                Err(datafusion::error::DataFusionError::Execution(e.to_string()))
+                datafusion_common::exec_err!("FFI error: {}", e)
             }
         }
     };
 }
 
-/// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
+/// This macro is a helpful conversion utility to convert from a DataFusion Result to an abi_stable::RResult
 #[macro_export]
 macro_rules! rresult {
     ( $x:expr ) => {
@@ -49,7 +49,7 @@ macro_rules! rresult {
     };
 }
 
-/// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
+/// This macro is a helpful conversion utility to convert from a DataFusion Result to an abi_stable::RResult
 /// and to also call return when it is an error. Since you cannot use `?` on an RResult, this is designed
 /// to mimic the pattern.
 #[macro_export]
@@ -142,21 +142,21 @@ mod tests {
         let returned_err_result = df_result!(err_r_result);
         assert!(returned_err_result.is_err());
         assert!(
-            returned_err_result.unwrap_err().to_string()
-                == format!("Execution error: {ERROR_VALUE}")
+            returned_err_result.unwrap_err().strip_backtrace()
+                == format!("Execution error: FFI error: {ERROR_VALUE}")
         );
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
         let err_result: Result<String, DataFusionError> =
-            Err(DataFusionError::Execution(ERROR_VALUE.to_string()));
+            datafusion_common::exec_err!("{ERROR_VALUE}");
 
         let returned_ok_r_result = wrap_result(ok_result);
         assert!(returned_ok_r_result == RResult::ROk(VALID_VALUE.into()));
 
         let returned_err_r_result = wrap_result(err_result);
-        assert!(
-            returned_err_r_result
-                == RResult::RErr(format!("Execution error: {ERROR_VALUE}").into())
-        );
+        assert!(returned_err_r_result.is_err());
+        assert!(returned_err_r_result
+            .unwrap_err()
+            .starts_with(format!("Execution error: {ERROR_VALUE}").as_str()));
     }
 }

@@ -21,7 +21,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
@@ -30,8 +29,11 @@ use super::invariants::{
     InvariantLevel,
 };
 use super::DdlStatement;
-use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams};
+use crate::builder::{unique_field_aliases, unnest_with_options};
+use crate::expr::{
+    intersect_metadata_for_union, Alias, Placeholder, Sort as SortExpr, WindowFunction,
+    WindowFunctionParams,
+};
 use crate::expr_rewriter::{
     create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
 };
@@ -49,8 +51,10 @@ use crate::{
     WindowFunctionDefinition,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
+use datafusion_common::format::ExplainFormat;
+use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -1095,15 +1099,13 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
-                name,
-                data_types,
-                ..
+                name, fields, ..
             })) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Statement(Statement::Prepare(Prepare {
                     name: name.clone(),
-                    data_types: data_types.clone(),
+                    fields: fields.clone(),
                     input: Arc::new(input),
                 })))
             }
@@ -1279,7 +1281,7 @@ impl LogicalPlan {
             if let LogicalPlan::Statement(Statement::Prepare(prepare_lp)) =
                 plan_with_values
             {
-                param_values.verify(&prepare_lp.data_types)?;
+                param_values.verify_fields(&prepare_lp.fields)?;
                 // try and take ownership of the input if is not shared, clone otherwise
                 Arc::unwrap_or_clone(prepare_lp.input)
             } else {
@@ -1460,8 +1462,10 @@ impl LogicalPlan {
                     let original_name = name_preserver.save(&e);
                     let transformed_expr = e.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
-                            let value = param_values.get_placeholders_with_values(&id)?;
-                            Ok(Transformed::yes(Expr::Literal(value, None)))
+                            let (value, metadata) = param_values
+                                .get_placeholders_with_values(&id)?
+                                .into_inner();
+                            Ok(Transformed::yes(Expr::Literal(value, metadata)))
                         } else {
                             Ok(Transformed::no(e))
                         }
@@ -1491,24 +1495,43 @@ impl LogicalPlan {
     }
 
     /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
+    ///
+    /// Note that this will drop any extension or field metadata attached to parameters. Use
+    /// [`LogicalPlan::get_parameter_fields`] to keep extension metadata.
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
-        let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
+        let mut parameter_fields = self.get_parameter_fields()?;
+        Ok(parameter_fields
+            .drain()
+            .map(|(name, maybe_field)| {
+                (name, maybe_field.map(|field| field.data_type().clone()))
+            })
+            .collect())
+    }
+
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs
+    pub fn get_parameter_fields(
+        &self,
+    ) -> Result<HashMap<String, Option<FieldRef>>, DataFusionError> {
+        let mut param_types: HashMap<String, Option<FieldRef>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
                 expr.apply(|expr| {
-                    if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
+                    if let Expr::Placeholder(Placeholder { id, field }) = expr {
                         let prev = param_types.get(id);
-                        match (prev, data_type) {
-                            (Some(Some(prev)), Some(dt)) => {
-                                if prev != dt {
-                                    plan_err!("Conflicting types for {id}")?;
-                                }
+                        match (prev, field) {
+                            (Some(Some(prev)), Some(field)) => {
+                                check_metadata_with_storage_equal(
+                                    (field.data_type(), Some(field.metadata())),
+                                    (prev.data_type(), Some(prev.metadata())),
+                                    "parameter",
+                                    &format!(": Conflicting types for id {id}"),
+                                )?;
                             }
-                            (_, Some(dt)) => {
-                                param_types.insert(id.clone(), Some(dt.clone()));
+                            (_, Some(field)) => {
+                                param_types.insert(id.clone(), Some(Arc::clone(field)));
                             }
                             _ => {
                                 param_types.insert(id.clone(), None);
@@ -2057,7 +2080,10 @@ pub struct EmptyRelation {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for EmptyRelation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.produce_one_row.partial_cmp(&other.produce_one_row)
+        self.produce_one_row
+            .partial_cmp(&other.produce_one_row)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2111,7 +2137,10 @@ pub struct Values {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Values {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.values.partial_cmp(&other.values)
+        self.values
+            .partial_cmp(&other.values)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2136,6 +2165,8 @@ impl PartialOrd for Projection {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2184,14 +2215,22 @@ impl Projection {
 ///   will be computed.
 /// * `exprs`: A slice of `Expr` expressions representing the projection operation to apply.
 ///
+/// # Metadata Handling
+///
+/// - **Schema-level metadata**: Passed through unchanged from the input schema
+/// - **Field-level metadata**: Determined by each expression via [`exprlist_to_fields`], which
+///   calls [`Expr::to_field`] to handle expression-specific metadata (literals, aliases, etc.)
+///
 /// # Returns
 ///
 /// A `Result` containing an `Arc<DFSchema>` representing the schema of the result
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
+    // Preserve input schema metadata at the schema level
     let metadata = input.schema().metadata().clone();
 
+    // Convert expressions to fields with Field properties determined by `Expr::to_field`
     let schema =
         DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
             .with_functional_dependencies(calc_func_dependencies_for_project(
@@ -2220,15 +2259,47 @@ impl SubqueryAlias {
         alias: impl Into<TableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
-        let fields = change_redundant_column(plan.schema().fields());
-        let meta_data = plan.schema().as_ref().metadata().clone();
-        let schema: Schema =
-            DFSchema::from_unqualified_fields(fields.into(), meta_data)?.into();
-        // Since schema is the same, other than qualifier, we can use existing
-        // functional dependencies:
+
+        // Since SubqueryAlias will replace all field qualification for the output schema of `plan`,
+        // no field must share the same column name as this would lead to ambiguity when referencing
+        // columns in parent logical nodes.
+
+        // Compute unique aliases, if any, for each column of the input's schema.
+        let aliases = unique_field_aliases(plan.schema().fields());
+        let is_projection_needed = aliases.iter().any(Option::is_some);
+
+        // Insert a projection node, if needed, to make sure aliases are applied.
+        let plan = if is_projection_needed {
+            let projection_expressions = aliases
+                .iter()
+                .zip(plan.schema().iter())
+                .map(|(alias, (qualifier, field))| {
+                    let column =
+                        Expr::Column(Column::new(qualifier.cloned(), field.name()));
+                    match alias {
+                        None => column,
+                        Some(alias) => {
+                            Expr::Alias(Alias::new(column, qualifier.cloned(), alias))
+                        }
+                    }
+                })
+                .collect();
+            let projection = Projection::try_new(projection_expressions, plan)?;
+            Arc::new(LogicalPlan::Projection(projection))
+        } else {
+            plan
+        };
+
+        // Requalify fields with the new `alias`.
+        let fields = plan.schema().fields().clone();
+        let meta_data = plan.schema().metadata().clone();
         let func_dependencies = plan.schema().functional_dependencies().clone();
+
+        let schema = DFSchema::from_unqualified_fields(fields, meta_data)?;
+        let schema = schema.as_arrow();
+
         let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
+            DFSchema::try_from_qualified_schema(alias.clone(), schema)?
                 .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
@@ -2246,6 +2317,8 @@ impl PartialOrd for SubqueryAlias {
             Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2466,6 +2539,20 @@ impl Window {
             window_func_dependencies.extend(new_deps);
         }
 
+        // Validate that FILTER clauses are only used with aggregate window functions
+        if let Some(e) = window_expr.iter().find(|e| {
+            matches!(
+                e,
+                Expr::WindowFunction(wf)
+                    if !matches!(wf.fun, WindowFunctionDefinition::AggregateUDF(_))
+                        && wf.params.filter.is_some()
+            )
+        }) {
+            return plan_err!(
+                "FILTER clause can only be used with aggregate window functions. Found in '{e}'"
+            );
+        }
+
         Self::try_new_with_schema(
             window_expr,
             input,
@@ -2476,16 +2563,22 @@ impl Window {
         )
     }
 
+    /// Create a new window function using the provided schema to avoid the overhead of
+    /// building the schema again when the schema is already known.
+    ///
+    /// This method should only be called when you are absolutely sure that the schema being
+    /// provided is correct for the window function. If in doubt, call [try_new](Self::try_new) instead.
     pub fn try_new_with_schema(
         window_expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        if window_expr.len() != schema.fields().len() - input.schema().fields().len() {
+        let input_fields_count = input.schema().fields().len();
+        if schema.fields().len() != input_fields_count + window_expr.len() {
             return plan_err!(
-                "Window has mismatch between number of expressions ({}) and number of fields in schema ({})",
-                window_expr.len(),
-                schema.fields().len() - input.schema().fields().len()
+                "Window schema has wrong number of fields. Expected {} got {}",
+                input_fields_count + window_expr.len(),
+                schema.fields().len()
             );
         }
 
@@ -2500,9 +2593,22 @@ impl Window {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Window {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.input.partial_cmp(&other.input) {
-            Some(Ordering::Equal) => self.window_expr.partial_cmp(&other.window_expr),
-            cmp => cmp,
+        match self.input.partial_cmp(&other.input)? {
+            Ordering::Equal => {} // continue
+            not_equal => return Some(not_equal),
+        }
+
+        match self.window_expr.partial_cmp(&other.window_expr)? {
+            Ordering::Equal => {} // continue
+            not_equal => return Some(not_equal),
+        }
+
+        // Contract for PartialOrd and PartialEq consistency requires that
+        // a == b if and only if partial_cmp(a, b) == Some(Equal).
+        if self == other {
+            Some(Ordering::Equal)
+        } else {
+            None
         }
     }
 }
@@ -2576,7 +2682,10 @@ impl PartialOrd for TableScan {
             filters: &other.filters,
             fetch: &other.fetch,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2619,7 +2728,7 @@ impl TableScan {
                 let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
+                            (Some(table_name.clone()), Arc::clone(&schema.fields()[*i]))
                         })
                         .collect(),
                     schema.metadata.clone(),
@@ -2664,7 +2773,8 @@ pub struct Union {
 
 impl Union {
     /// Constructs new Union instance deriving schema from inputs.
-    fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+    /// Schema data types must match exactly.
+    pub fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, false, false)?;
         Ok(Union { inputs, schema })
     }
@@ -2799,15 +2909,16 @@ impl Union {
 
                     let mut field =
                         Field::new(name, data_type.clone(), final_is_nullable);
-                    field.set_metadata(intersect_maps(unmerged_metadata));
+                    field.set_metadata(intersect_metadata_for_union(unmerged_metadata));
 
                     (None, Arc::new(field))
                 },
             )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
-        let union_schema_metadata =
-            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+        let union_schema_metadata = intersect_metadata_for_union(
+            inputs.iter().map(|input| input.schema().metadata()),
+        );
 
         // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
@@ -2876,14 +2987,16 @@ impl Union {
                 };
 
                 let mut field = Field::new(&name, data_type.clone(), nullable);
-                let field_metadata =
-                    intersect_maps(fields.iter().map(|field| field.metadata()));
+                let field_metadata = intersect_metadata_for_union(
+                    fields.iter().map(|field| field.metadata()),
+                );
                 field.set_metadata(field_metadata);
                 Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
-        let union_schema_metadata =
-            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+        let union_schema_metadata = intersect_metadata_for_union(
+            inputs.iter().map(|input| input.schema().metadata()),
+        );
 
         // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
@@ -2893,25 +3006,13 @@ impl Union {
     }
 }
 
-fn intersect_maps<'a>(
-    inputs: impl IntoIterator<Item = &'a HashMap<String, String>>,
-) -> HashMap<String, String> {
-    let mut inputs = inputs.into_iter();
-    let mut merged: HashMap<String, String> = inputs.next().cloned().unwrap_or_default();
-    for input in inputs {
-        // The extra dereference below (`&*v`) is a workaround for https://github.com/rkyv/rkyv/issues/434.
-        // When this crate is used in a workspace that enables the `rkyv-64` feature in the `chrono` crate,
-        // this triggers a Rust compilation error:
-        // error[E0277]: can't compare `Option<&std::string::String>` with `Option<&mut std::string::String>`.
-        merged.retain(|k, v| input.get(k) == Some(&*v));
-    }
-    merged
-}
-
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Union {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.inputs.partial_cmp(&other.inputs)
+        self.inputs
+            .partial_cmp(&other.inputs)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2951,154 +3052,6 @@ impl PartialOrd for DescribeTable {
     fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
         // There is no relevant comparison for schemas
         None
-    }
-}
-
-/// Output formats for controlling for Explain plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ExplainFormat {
-    /// Indent mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format indent select x from values (1) t(x);
-    /// +---------------+-----------------------------------------------------+
-    /// | plan_type     | plan                                                |
-    /// +---------------+-----------------------------------------------------+
-    /// | logical_plan  | SubqueryAlias: t                                    |
-    /// |               |   Projection: column1 AS x                          |
-    /// |               |     Values: (Int64(1))                              |
-    /// | physical_plan | ProjectionExec: expr=[column1@0 as x]               |
-    /// |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
-    /// |               |                                                     |
-    /// +---------------+-----------------------------------------------------+
-    /// ```
-    Indent,
-    /// Tree mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format tree select x from values (1) t(x);
-    /// +---------------+-------------------------------+
-    /// | plan_type     | plan                          |
-    /// +---------------+-------------------------------+
-    /// | physical_plan | ┌───────────────────────────┐ |
-    /// |               | │       ProjectionExec      │ |
-    /// |               | │    --------------------   │ |
-    /// |               | │        x: column1@0       │ |
-    /// |               | └─────────────┬─────────────┘ |
-    /// |               | ┌─────────────┴─────────────┐ |
-    /// |               | │       DataSourceExec      │ |
-    /// |               | │    --------------------   │ |
-    /// |               | │         bytes: 128        │ |
-    /// |               | │       format: memory      │ |
-    /// |               | │          rows: 1          │ |
-    /// |               | └───────────────────────────┘ |
-    /// |               |                               |
-    /// +---------------+-------------------------------+
-    /// ```
-    Tree,
-    /// Postgres Json mode
-    ///
-    /// A displayable structure that produces plan in postgresql JSON format.
-    ///
-    /// Users can use this format to visualize the plan in existing plan
-    /// visualization tools, for example [dalibo](https://explain.dalibo.com/)
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format pgjson select x from values (1) t(x);
-    /// +--------------+--------------------------------------+
-    /// | plan_type    | plan                                 |
-    /// +--------------+--------------------------------------+
-    /// | logical_plan | [                                    |
-    /// |              |   {                                  |
-    /// |              |     "Plan": {                        |
-    /// |              |       "Alias": "t",                  |
-    /// |              |       "Node Type": "Subquery",       |
-    /// |              |       "Output": [                    |
-    /// |              |         "x"                          |
-    /// |              |       ],                             |
-    /// |              |       "Plans": [                     |
-    /// |              |         {                            |
-    /// |              |           "Expressions": [           |
-    /// |              |             "column1 AS x"           |
-    /// |              |           ],                         |
-    /// |              |           "Node Type": "Projection", |
-    /// |              |           "Output": [                |
-    /// |              |             "x"                      |
-    /// |              |           ],                         |
-    /// |              |           "Plans": [                 |
-    /// |              |             {                        |
-    /// |              |               "Node Type": "Values", |
-    /// |              |               "Output": [            |
-    /// |              |                 "column1"            |
-    /// |              |               ],                     |
-    /// |              |               "Plans": [],           |
-    /// |              |               "Values": "(Int64(1))" |
-    /// |              |             }                        |
-    /// |              |           ]                          |
-    /// |              |         }                            |
-    /// |              |       ]                              |
-    /// |              |     }                                |
-    /// |              |   }                                  |
-    /// |              | ]                                    |
-    /// +--------------+--------------------------------------+
-    /// ```
-    PostgresJSON,
-    /// Graphviz mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format graphviz select x from values (1) t(x);
-    /// +--------------+------------------------------------------------------------------------+
-    /// | plan_type    | plan                                                                   |
-    /// +--------------+------------------------------------------------------------------------+
-    /// | logical_plan |                                                                        |
-    /// |              | // Begin DataFusion GraphViz Plan,                                     |
-    /// |              | // display it online here: https://dreampuf.github.io/GraphvizOnline   |
-    /// |              |                                                                        |
-    /// |              | digraph {                                                              |
-    /// |              |   subgraph cluster_1                                                   |
-    /// |              |   {                                                                    |
-    /// |              |     graph[label="LogicalPlan"]                                         |
-    /// |              |     2[shape=box label="SubqueryAlias: t"]                              |
-    /// |              |     3[shape=box label="Projection: column1 AS x"]                      |
-    /// |              |     2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |     4[shape=box label="Values: (Int64(1))"]                            |
-    /// |              |     3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |   }                                                                    |
-    /// |              |   subgraph cluster_5                                                   |
-    /// |              |   {                                                                    |
-    /// |              |     graph[label="Detailed LogicalPlan"]                                |
-    /// |              |     6[shape=box label="SubqueryAlias: t\nSchema: [x:Int64;N]"]         |
-    /// |              |     7[shape=box label="Projection: column1 AS x\nSchema: [x:Int64;N]"] |
-    /// |              |     6 -> 7 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |     8[shape=box label="Values: (Int64(1))\nSchema: [column1:Int64;N]"] |
-    /// |              |     7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |   }                                                                    |
-    /// |              | }                                                                      |
-    /// |              | // End DataFusion GraphViz Plan                                        |
-    /// |              |                                                                        |
-    /// +--------------+------------------------------------------------------------------------+
-    /// ```
-    Graphviz,
-}
-
-/// Implement  parsing strings to `ExplainFormat`
-impl FromStr for ExplainFormat {
-    type Err = DataFusionError;
-
-    fn from_str(format: &str) -> std::result::Result<Self, Self::Err> {
-        match format.to_lowercase().as_str() {
-            "indent" => Ok(ExplainFormat::Indent),
-            "tree" => Ok(ExplainFormat::Tree),
-            "pgjson" => Ok(ExplainFormat::PostgresJSON),
-            "graphviz" => Ok(ExplainFormat::Graphviz),
-            _ => {
-                plan_err!("Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'")
-            }
-        }
     }
 }
 
@@ -3192,7 +3145,10 @@ impl PartialOrd for Explain {
             stringified_plans: &other.stringified_plans,
             logical_optimization_succeeded: &other.logical_optimization_succeeded,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3215,6 +3171,8 @@ impl PartialOrd for Analyze {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3442,7 +3400,10 @@ impl PartialOrd for DistinctOn {
             sort_expr: &other.sort_expr,
             input: &other.input,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3629,6 +3590,8 @@ impl PartialOrd for Aggregate {
             }
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3805,7 +3768,7 @@ impl Join {
         })
     }
 
-    /// Create Join with input which wrapped with projection, this method is used in physcial planning only to help
+    /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
     /// create the physical join.
     pub fn try_new_with_project_input(
         original: &LogicalPlan,
@@ -3901,7 +3864,10 @@ impl PartialOrd for Join {
             join_constraint: &other.join_constraint,
             null_equality: &other.null_equality,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -4066,7 +4032,10 @@ impl PartialOrd for Unnest {
             dependency_indices: &other.dependency_indices,
             options: &other.options,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -4245,10 +4214,7 @@ fn get_unnested_columns(
             }))
         }
         _ => {
-            return internal_err!(
-                "trying to unnest on invalid data type {:?}",
-                data_type
-            );
+            return internal_err!("trying to unnest on invalid data type {data_type}");
         }
     };
     Ok(qualified_columns)
@@ -4272,27 +4238,26 @@ fn get_unnested_list_datatype_recursive(
         _ => {}
     };
 
-    internal_err!("trying to unnest on invalid data type {:?}", data_type)
+    internal_err!("trying to unnest on invalid data type {data_type}")
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
+    use crate::test::function_stub::{count, count_udaf};
     use crate::{
         binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
         GroupingSet,
     };
-
+    use datafusion_common::metadata::ScalarAndMetadata;
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
     use insta::{assert_debug_snapshot, assert_snapshot};
-
-    use crate::test::function_stub::count;
+    use std::hash::DefaultHasher;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -4697,6 +4662,63 @@ mod tests {
     }
 
     #[test]
+    fn test_partial_eq_hash_and_partial_ord() {
+        let empty_values = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: true,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+
+        let count_window_function = |schema| {
+            Window::try_new_with_schema(
+                vec![Expr::WindowFunction(Box::new(WindowFunction::new(
+                    WindowFunctionDefinition::AggregateUDF(count_udaf()),
+                    vec![],
+                )))],
+                Arc::clone(&empty_values),
+                Arc::new(schema),
+            )
+            .unwrap()
+        };
+
+        let schema_without_metadata = || {
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("count", DataType::Int64, false)].into(),
+                HashMap::new(),
+            )
+            .unwrap()
+        };
+
+        let schema_with_metadata = || {
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("count", DataType::Int64, false)].into(),
+                [("key".to_string(), "value".to_string())].into(),
+            )
+            .unwrap()
+        };
+
+        // A Window
+        let f = count_window_function(schema_without_metadata());
+
+        // Same like `f`, different instance
+        let f2 = count_window_function(schema_without_metadata());
+        assert_eq!(f, f2);
+        assert_eq!(hash(&f), hash(&f2));
+        assert_eq!(f.partial_cmp(&f2), Some(Ordering::Equal));
+
+        // Same like `f`, except for schema metadata
+        let o = count_window_function(schema_with_metadata());
+        assert_ne!(f, o);
+        assert_ne!(hash(&f), hash(&o)); // hash can collide for different values but does not collide in this test
+        assert_eq!(f.partial_cmp(&o), None);
+    }
+
+    fn hash<T: Hash>(value: &T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
+    }
+
+    #[test]
     fn projection_expr_schema_mismatch() -> Result<()> {
         let empty_schema = Arc::new(DFSchema::empty());
         let p = Projection::try_new_with_schema(
@@ -4768,6 +4790,38 @@ mod tests {
 
         plan.replace_params_with_values(&param_values.into())
             .expect_err("unexpectedly succeeded to replace an invalid placeholder");
+    }
+
+    #[test]
+    fn test_replace_placeholder_mismatched_metadata() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        // Create a prepared statement with explicit fields that do not have metadata
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(placeholder("$1")))
+            .unwrap()
+            .build()
+            .unwrap();
+        let prepared_builder = LogicalPlanBuilder::new(plan)
+            .prepare(
+                "".to_string(),
+                vec![Field::new("", DataType::Int32, true).into()],
+            )
+            .unwrap();
+
+        // Attempt to bind a parameter with metadata
+        let mut scalar_meta = HashMap::new();
+        scalar_meta.insert("some_key".to_string(), "some_value".to_string());
+        let param_values = ParamValues::List(vec![ScalarAndMetadata::new(
+            ScalarValue::Int32(Some(42)),
+            Some(scalar_meta.into()),
+        )]);
+        prepared_builder
+            .plan()
+            .clone()
+            .with_param_values(param_values)
+            .expect_err("prepared field metadata mismatch unexpectedly succeeded");
     }
 
     #[test]
@@ -5142,7 +5196,7 @@ mod tests {
             .unwrap();
 
         // Check that the placeholder parameters have not received a DataType.
-        let params = plan.get_parameter_types().unwrap();
+        let params = plan.get_parameter_fields().unwrap();
         assert_eq!(params.len(), 1);
 
         let parameter_type = params.clone().get(placeholder_value).unwrap().clone();
@@ -5577,7 +5631,7 @@ mod tests {
             )?;
 
             let fields = join.schema.fields();
-            assert_eq!(fields.len(), 6, "Expected 6 fields for {join_type:?} join");
+            assert_eq!(fields.len(), 6, "Expected 6 fields for {join_type} join");
 
             for (i, field) in fields.iter().enumerate() {
                 let expected_nullable = match (i, &join_type) {

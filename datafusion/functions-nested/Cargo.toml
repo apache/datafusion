@@ -37,13 +37,18 @@ workspace = true
 [lib]
 name = "datafusion_functions_nested"
 
+[features]
+default = ["sql"]
+sql = ["datafusion-expr/sql"]
+
 [dependencies]
 arrow = { workspace = true }
 arrow-ord = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
-datafusion-expr = { workspace = true }
+datafusion-expr = { workspace = true, default-features = false }
+datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }

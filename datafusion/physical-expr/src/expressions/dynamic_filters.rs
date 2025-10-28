@@ -15,12 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    fmt::Display,
-    hash::Hash,
-    sync::{Arc, RwLock},
-};
+use parking_lot::RwLock;
+use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
 
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
@@ -72,6 +68,11 @@ impl Inner {
             expr,
         }
     }
+
+    /// Clone the inner expression.
+    fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
 }
 
 impl Hash for DynamicFilterPhysicalExpr {
@@ -97,8 +98,7 @@ impl Eq for DynamicFilterPhysicalExpr {}
 
 impl Display for DynamicFilterPhysicalExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.current().expect("Failed to get current expression");
-        write!(f, "DynamicFilterPhysicalExpr [ {inner} ]")
+        self.render(f, |expr, f| write!(f, "{expr}"))
     }
 }
 
@@ -172,24 +172,17 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
+    /// Get the current generation of the expression.
+    fn current_generation(&self) -> u64 {
+        self.inner.read().generation
+    }
+
     /// Get the current expression.
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let inner = Arc::clone(
-            &self
-                .inner
-                .read()
-                .map_err(|_| {
-                    datafusion_common::DataFusionError::Execution(
-                        "Failed to acquire read lock for inner".to_string(),
-                    )
-                })?
-                .expr,
-        );
-        let inner =
-            Self::remap_children(&self.children, self.remapped_children.as_ref(), inner)?;
-        Ok(inner)
+        let expr = Arc::clone(self.inner.read().expr());
+        Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
     }
 
     /// Update the current expression.
@@ -199,11 +192,6 @@ impl DynamicFilterPhysicalExpr {
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
     pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let mut current = self.inner.write().map_err(|_| {
-            datafusion_common::DataFusionError::Execution(
-                "Failed to acquire write lock for inner".to_string(),
-            )
-        })?;
         // Remap the children of the new expression to match the original children
         // We still do this again in `current()` but doing it preventively here
         // reduces the work needed in some cases if `current()` is called multiple times
@@ -213,11 +201,34 @@ impl DynamicFilterPhysicalExpr {
             self.remapped_children.as_ref(),
             new_expr,
         )?;
-        // Update the inner expression to the new expression.
-        current.expr = new_expr;
-        // Increment the generation to indicate that the expression has changed.
-        current.generation += 1;
+
+        // Load the current inner, increment generation, and store the new one
+        let mut current = self.inner.write();
+        *current = Inner {
+            generation: current.generation + 1,
+            expr: new_expr,
+        };
         Ok(())
+    }
+
+    fn render(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        render_expr: impl FnOnce(
+            Arc<dyn PhysicalExpr>,
+            &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result,
+    ) -> std::fmt::Result {
+        let inner = self.current().map_err(|_| std::fmt::Error)?;
+        let current_generation = self.current_generation();
+        write!(f, "DynamicFilter [ ")?;
+        if current_generation == 1 {
+            write!(f, "empty")?;
+        } else {
+            render_expr(inner, f)?;
+        }
+
+        write!(f, " ]")
     }
 }
 
@@ -253,10 +264,8 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         {
             use datafusion_common::internal_err;
             // Check if the data type has changed.
-            let mut data_type_lock = self
-                .data_type
-                .write()
-                .expect("Failed to acquire write lock for data_type");
+            let mut data_type_lock = self.data_type.write();
+
             if let Some(existing) = &*data_type_lock {
                 if existing != &res {
                     // If the data type has changed, we have a bug.
@@ -278,10 +287,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         {
             use datafusion_common::internal_err;
             // Check if the nullability has changed.
-            let mut nullable_lock = self
-                .nullable
-                .write()
-                .expect("Failed to acquire write lock for nullable");
+            let mut nullable_lock = self.nullable.write();
             if let Some(existing) = *nullable_lock {
                 if existing != res {
                     // If the nullability has changed, we have a bug.
@@ -313,8 +319,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.current().map_err(|_| std::fmt::Error)?;
-        inner.fmt_sql(f)
+        self.render(f, |expr, f| expr.fmt_sql(f))
     }
 
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
@@ -324,10 +329,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
     fn snapshot_generation(&self) -> u64 {
         // Return the current generation of the expression.
-        self.inner
-            .read()
-            .expect("Failed to acquire read lock for inner")
-            .generation
+        self.inner.read().generation
     }
 }
 
@@ -335,7 +337,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 mod test {
     use crate::{
         expressions::{col, lit, BinaryExpr},
-        utils::reassign_predicate_columns,
+        utils::reassign_expr_columns,
     };
     use arrow::{
         array::RecordBatch,
@@ -373,22 +375,20 @@ mod test {
         ]));
         // Each ParquetExec calls `with_new_children` on the DynamicFilterPhysicalExpr
         // and remaps the children to the file schema.
-        let dynamic_filter_1 = reassign_predicate_columns(
+        let dynamic_filter_1 = reassign_expr_columns(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             &filter_schema_1,
-            false,
         )
         .unwrap();
         let snap = dynamic_filter_1.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#);
-        let dynamic_filter_2 = reassign_predicate_columns(
+        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#);
+        let dynamic_filter_2 = reassign_expr_columns(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             &filter_schema_2,
-            false,
         )
         .unwrap();
         let snap = dynamic_filter_2.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#);
+        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32 } }, fail_on_overflow: false }"#);
         // Both filters allow evaluating the same expression
         let batch_1 = RecordBatch::try_new(
             Arc::clone(&filter_schema_1),

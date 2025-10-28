@@ -680,6 +680,11 @@ impl<T> Transformed<T> {
         Self::new(data, true, TreeNodeRecursion::Continue)
     }
 
+    /// Wrapper for transformed data with [`TreeNodeRecursion::Stop`] statement.
+    pub fn complete(data: T) -> Self {
+        Self::new(data, true, TreeNodeRecursion::Stop)
+    }
+
     /// Wrapper for unchanged data with [`TreeNodeRecursion::Continue`] statement.
     pub fn no(data: T) -> Self {
         Self::new(data, false, TreeNodeRecursion::Continue)
@@ -985,6 +990,48 @@ impl<
     }
 }
 
+impl<
+        'a,
+        T: 'a,
+        C0: TreeNodeContainer<'a, T>,
+        C1: TreeNodeContainer<'a, T>,
+        C2: TreeNodeContainer<'a, T>,
+        C3: TreeNodeContainer<'a, T>,
+    > TreeNodeContainer<'a, T> for (C0, C1, C2, C3)
+{
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.0
+            .apply_elements(&mut f)?
+            .visit_sibling(|| self.1.apply_elements(&mut f))?
+            .visit_sibling(|| self.2.apply_elements(&mut f))?
+            .visit_sibling(|| self.3.apply_elements(&mut f))
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        self.0
+            .map_elements(&mut f)?
+            .map_data(|new_c0| Ok((new_c0, self.1, self.2, self.3)))?
+            .transform_sibling(|(new_c0, c1, c2, c3)| {
+                c1.map_elements(&mut f)?
+                    .map_data(|new_c1| Ok((new_c0, new_c1, c2, c3)))
+            })?
+            .transform_sibling(|(new_c0, new_c1, c2, c3)| {
+                c2.map_elements(&mut f)?
+                    .map_data(|new_c2| Ok((new_c0, new_c1, new_c2, c3)))
+            })?
+            .transform_sibling(|(new_c0, new_c1, new_c2, c3)| {
+                c3.map_elements(&mut f)?
+                    .map_data(|new_c3| Ok((new_c0, new_c1, new_c2, new_c3)))
+            })
+    }
+}
+
 /// [`TreeNodeRefContainer`] contains references to elements that a function can be
 /// applied on. The elements of the container are siblings so the continuation rules are
 /// similar to [`TreeNodeRecursion::visit_sibling`].
@@ -1057,6 +1104,27 @@ impl<
             .apply_elements(&mut f)?
             .visit_sibling(|| self.1.apply_elements(&mut f))?
             .visit_sibling(|| self.2.apply_elements(&mut f))
+    }
+}
+
+impl<
+        'a,
+        T: 'a,
+        C0: TreeNodeContainer<'a, T>,
+        C1: TreeNodeContainer<'a, T>,
+        C2: TreeNodeContainer<'a, T>,
+        C3: TreeNodeContainer<'a, T>,
+    > TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2, &'a C3)
+{
+    fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.0
+            .apply_elements(&mut f)?
+            .visit_sibling(|| self.1.apply_elements(&mut f))?
+            .visit_sibling(|| self.2.apply_elements(&mut f))?
+            .visit_sibling(|| self.3.apply_elements(&mut f))
     }
 }
 

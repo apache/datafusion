@@ -30,12 +30,12 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field, FieldRef,
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
+    Decimal64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
@@ -166,7 +166,14 @@ impl AggregateUDFImpl for FirstValue {
         )
         .into()];
         fields.extend(args.ordering_fields.iter().cloned());
-        fields.push(Field::new("is_set", DataType::Boolean, true).into());
+        fields.push(
+            Field::new(
+                format_state_name(args.name, "first_value_is_set"),
+                DataType::Boolean,
+                true,
+            )
+            .into(),
+        );
         Ok(fields)
     }
 
@@ -185,6 +192,8 @@ impl AggregateUDFImpl for FirstValue {
                     | Float16
                     | Float32
                     | Float64
+                    | Decimal32(_, _)
+                    | Decimal64(_, _)
                     | Decimal128(_, _)
                     | Decimal256(_, _)
                     | Date32
@@ -234,6 +243,8 @@ impl AggregateUDFImpl for FirstValue {
             DataType::Float32 => create_accumulator::<Float32Type>(args),
             DataType::Float64 => create_accumulator::<Float64Type>(args),
 
+            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(args),
+            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(args),
             DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
             DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
 
@@ -1083,7 +1094,14 @@ impl AggregateUDFImpl for LastValue {
         )
         .into()];
         fields.extend(args.ordering_fields.iter().cloned());
-        fields.push(Field::new("is_set", DataType::Boolean, true).into());
+        fields.push(
+            Field::new(
+                format_state_name(args.name, "last_value_is_set"),
+                DataType::Boolean,
+                true,
+            )
+            .into(),
+        );
         Ok(fields)
     }
 
@@ -1124,6 +1142,8 @@ impl AggregateUDFImpl for LastValue {
                     | Float16
                     | Float32
                     | Float64
+                    | Decimal32(_, _)
+                    | Decimal64(_, _)
                     | Decimal128(_, _)
                     | Decimal256(_, _)
                     | Date32
@@ -1175,6 +1195,8 @@ impl AggregateUDFImpl for LastValue {
             DataType::Float32 => create_accumulator::<Float32Type>(args),
             DataType::Float64 => create_accumulator::<Float64Type>(args),
 
+            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(args),
+            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(args),
             DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
             DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
 

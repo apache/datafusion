@@ -766,6 +766,13 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 query error DataFusion error: Error during planning: Column a is not in schema
 CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';
 
+
+# Create external table with order column expression that can't be planned
+# This is currently expected to fail, but should not panic
+query error DataFusion error: Schema error: No field named a\.
+CREATE EXTERNAL TABLE dt STORED AS CSV WITH ORDER (a || b) LOCATION 'file://path/to/table';
+
+
 # Sort with duplicate sort expressions
 # Table is sorted multiple times on the same column name and should not fail
 statement ok
@@ -1510,3 +1517,40 @@ SELECT address, zip FROM addresses ORDER BY ALL;
 111 Duck Duck Goose Ln 11111
 111 Duck Duck Goose Ln 11111-0001
 123 Quack Blvd 11111
+
+# Create a table with an order clause that's not a simple column reference
+statement ok
+CREATE EXTERNAL TABLE ordered (
+  a  BIGINT NOT NULL,
+  b  BIGINT NOT NULL
+)
+STORED AS CSV
+LOCATION 'data/composite_order.csv'
+OPTIONS ('format.has_header' 'true')
+WITH ORDER (a + b);
+
+# Simple query should be just a table scan
+query TT
+EXPLAIN SELECT * from ordered;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Query ordered by the declared order should be just a table scan
+query TT
+EXPLAIN SELECT * from ordered ORDER BY (a + b);
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Order equivalence handling should make this query a simple table scan
+query TT
+EXPLAIN SELECT * from ordered ORDER BY -(a + b) desc nulls last;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Ordering by another column requires a sort
+query TT
+EXPLAIN SELECT * from ordered ORDER BY a;
+----
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true

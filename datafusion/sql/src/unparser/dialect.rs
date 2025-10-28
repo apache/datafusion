@@ -21,7 +21,9 @@ use super::{
     utils::character_length_to_sql, utils::date_part_to_sql,
     utils::sqlite_date_trunc_to_sql, utils::sqlite_from_unixtime_to_sql, Unparser,
 };
+use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
+use chrono::DateTime;
 use datafusion_common::Result;
 use datafusion_expr::Expr;
 use regex::Regex;
@@ -204,6 +206,18 @@ pub trait Dialect: Send + Sync {
     fn col_alias_overrides(&self, _alias: &str) -> Result<Option<String>> {
         Ok(None)
     }
+
+    /// Allows the dialect to support the QUALIFY clause
+    ///
+    /// Some dialects, like Postgres, do not support the QUALIFY clause
+    fn supports_qualify(&self) -> bool {
+        true
+    }
+
+    /// Allows the dialect to override logic of formatting datetime with tz into string.
+    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, _unit: TimeUnit) -> String {
+        dt.to_string()
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -267,6 +281,14 @@ impl Dialect for DefaultDialect {
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        true
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('"')
     }
@@ -401,11 +423,26 @@ impl Dialect for DuckDBDialect {
 
         Ok(None)
     }
+
+    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, unit: TimeUnit) -> String {
+        let format = match unit {
+            TimeUnit::Second => "%Y-%m-%d %H:%M:%S%:z",
+            TimeUnit::Millisecond => "%Y-%m-%d %H:%M:%S%.3f%:z",
+            TimeUnit::Microsecond => "%Y-%m-%d %H:%M:%S%.6f%:z",
+            TimeUnit::Nanosecond => "%Y-%m-%d %H:%M:%S%.9f%:z",
+        };
+
+        dt.format(format).to_string()
+    }
 }
 
 pub struct MySqlDialect {}
 
 impl Dialect for MySqlDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -467,6 +504,10 @@ impl Dialect for MySqlDialect {
 pub struct SqliteDialect {}
 
 impl Dialect for SqliteDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -485,6 +526,14 @@ impl Dialect for SqliteDialect {
 
     fn supports_column_alias_in_table_alias(&self) -> bool {
         false
+    }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Text
     }
 
     fn scalar_function_to_sql_overrides(

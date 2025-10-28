@@ -24,6 +24,8 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use parking_lot::RwLock;
+
 use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
@@ -39,8 +41,10 @@ use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
-use crate::stream::{BatchSplitStream, RecordBatchStreamAdapter};
+use crate::stream::BatchSplitStream;
+use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
+use crate::topk::TopKDynamicFilters;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
@@ -51,7 +55,10 @@ use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, unwrap_or_internal_err, DataFusionError,
+    Result,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
@@ -887,8 +894,10 @@ pub struct SortExec {
     common_sort_prefix: Vec<PhysicalSortExpr>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Filter matching the state of the sort for dynamic filter pushdown
-    filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    /// Filter matching the state of the sort for dynamic filter pushdown.
+    /// If `fetch` is `Some`, this will also be set and a TopK operator may be used.
+    /// If `fetch` is `None`, this will be `None`.
+    filter: Option<Arc<RwLock<TopKDynamicFilters>>>,
 }
 
 impl SortExec {
@@ -934,14 +943,16 @@ impl SortExec {
         self
     }
 
-    /// Add or reset `self.filter` to a new `DynamicFilterPhysicalExpr`.
-    fn create_filter(&self) -> Arc<DynamicFilterPhysicalExpr> {
+    /// Add or reset `self.filter` to a new `TopKDynamicFilters`.
+    fn create_filter(&self) -> Arc<RwLock<TopKDynamicFilters>> {
         let children = self
             .expr
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
-        Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true)))
+        Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(children, lit(true)),
+        ))))
     }
 
     fn cloned(&self) -> Self {
@@ -1080,7 +1091,7 @@ impl DisplayAs for SortExec {
                     Some(fetch) => {
                         write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
                         if let Some(filter) = &self.filter {
-                            if let Ok(current) = filter.current() {
+                            if let Ok(current) = filter.read().expr().current() {
                                 if !current.eq(&lit(true)) {
                                     write!(f, ", filter=[{current}]")?;
                                 }
@@ -1216,6 +1227,7 @@ impl ExecutionPlan for SortExec {
             ))),
             (true, None) => Ok(input),
             (false, Some(fetch)) => {
+                let filter = self.filter.clone();
                 let mut topk = TopK::try_new(
                     partition,
                     input.schema(),
@@ -1225,7 +1237,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
-                    self.filter.clone(),
+                    Arc::clone(&unwrap_or_internal_err!(filter)),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -1279,19 +1291,14 @@ impl ExecutionPlan for SortExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if !self.preserve_partitioning() {
-            return self.input.partition_statistics(None)?.with_fetch(
-                self.schema(),
-                self.fetch,
-                0,
-                1,
-            );
+            return self
+                .input
+                .partition_statistics(None)?
+                .with_fetch(self.fetch, 0, 1);
         }
-        self.input.partition_statistics(partition)?.with_fetch(
-            self.schema(),
-            self.fetch,
-            0,
-            1,
-        )
+        self.input
+            .partition_statistics(partition)?
+            .with_fetch(self.fetch, 0, 1)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -1348,9 +1355,8 @@ impl ExecutionPlan for SortExec {
             ChildFilterDescription::from_child(&parent_filters, self.input())?;
 
         if let Some(filter) = &self.filter {
-            if config.optimizer.enable_dynamic_filter_pushdown {
-                child =
-                    child.with_self_filter(Arc::clone(filter) as Arc<dyn PhysicalExpr>);
+            if config.optimizer.enable_topk_dynamic_filter_pushdown {
+                child = child.with_self_filter(filter.read().expr());
             }
         }
 

@@ -167,6 +167,7 @@ message CreateExternalTableNode {
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
+  bool or_replace = 15;
   bool temporary = 14;
   string definition = 7;
   repeated SortExprNodeCollection order_exprs = 10;
@@ -178,8 +179,11 @@ message CreateExternalTableNode {
 
 message PrepareNode {
   string name = 1;
+  // We serialize both the data types and the fields for compatibility with
+  // older versions (newer versions populate both).
   repeated datafusion_common.ArrowType data_types = 2;
   LogicalPlanNode input = 3;
+  repeated datafusion_common.Field fields = 4;
 }
 
 message CreateCatalogSchemaNode {
@@ -411,7 +415,11 @@ message Wildcard {
 
 message PlaceholderNode {
   string id = 1;
+  // We serialize the data type, metadata, and nullability separately to maintain
+  // compatibility with older versions
   datafusion_common.ArrowType data_type = 2;
+  optional bool nullable = 3;
+  map<string, string> metadata = 4;
 }
 
 message LogicalExprList {
@@ -517,6 +525,7 @@ message AggregateUDFExprNode {
   LogicalExprNode filter = 3;
   repeated SortExprNode order_by = 4;
   optional bytes fun_definition = 6;
+  optional NullTreatment null_treatment = 7;
 }
 
 message ScalarUDFExprNode {
@@ -537,6 +546,9 @@ message WindowExprNode {
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
   optional bytes fun_definition = 10;
+  optional NullTreatment null_treatment = 11;
+  bool distinct = 12;
+  LogicalExprNode filter = 13;
 }
 
 message BetweenNode {
@@ -619,6 +631,11 @@ enum WindowFrameBoundType {
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
   datafusion_common.ScalarValue bound_value = 2;
+}
+
+enum NullTreatment {
+  RESPECT_NULLS = 0;
+  IGNORE_NULLS = 1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -729,6 +746,8 @@ message PhysicalPlanNode {
     JsonScanExecNode json_scan = 31;
     CooperativeExecNode cooperative = 32;
     GenerateSeriesNode generate_series = 33;
+    SortMergeJoinExecNode sort_merge_join = 34;
+    MemoryScanExecNode memory_scan = 35;
   }
 }
 
@@ -1030,6 +1049,7 @@ message CsvScanExecNode {
     string comment = 6;
   }
   bool newlines_in_values = 7;
+  bool truncate_rows = 8;
 }
 
 message JsonScanExecNode {
@@ -1038,6 +1058,15 @@ message JsonScanExecNode {
 
 message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
+}
+
+message MemoryScanExecNode {
+  repeated bytes partitions = 1;
+  datafusion_common.Schema schema = 2;
+  repeated uint32 projection = 3;
+  repeated PhysicalSortExprNodeCollection sort_information = 4;
+  bool show_sizes = 5;
+  optional uint32 fetch = 6;
 }
 
 message CooperativeExecNode {
@@ -1342,4 +1371,14 @@ message GenerateSeriesNode {
         GenerateSeriesArgsTimestamp timestamp_args = 5;
         GenerateSeriesArgsDate date_args = 6;
     }
+}
+
+message SortMergeJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  datafusion_common.JoinType join_type = 4;
+  JoinFilter filter = 5;
+  repeated SortExprNode sort_options = 6;
+  datafusion_common.NullEquality null_equality = 7;
 }

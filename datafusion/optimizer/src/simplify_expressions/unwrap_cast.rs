@@ -90,7 +90,7 @@ pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
             let Some(value) = try_cast_literal_to_type(&lit_value, &expr_type) else {
                 return internal_err!(
-                    "Can't cast the literal expr {:?} to type {:?}",
+                    "Can't cast the literal expr {:?} to type {}",
                     &lit_value,
                     &expr_type
                 );

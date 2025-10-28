@@ -23,9 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use arrow::error::ArrowError;
-use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
-};
+use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -39,6 +37,14 @@ use crate::utils::make_scalar_function;
     doc_section(label = "Math Functions"),
     description = "Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.",
     syntax_example = "lcm(expression_x, expression_y)",
+    sql_example = r#"```sql
+> SELECT lcm(4, 5);
++----------+
+| lcm(4,5) |
++----------+
+| 20       |
++----------+
+```"#,
     standard_argument(name = "expression_x", prefix = "First numeric"),
     standard_argument(name = "expression_y", prefix = "Second numeric")
 )]

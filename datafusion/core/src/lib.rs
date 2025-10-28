@@ -19,7 +19,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 //
@@ -443,7 +443,30 @@
 //! other operators read a single [`RecordBatch`] from their input to produce a
 //! single [`RecordBatch`] as output.
 //!
-//! For example, given this SQL query:
+//! For example, given this SQL:
+//!
+//! ```sql
+//! SELECT name FROM 'data.parquet' WHERE id > 10
+//! ```
+//!
+//! An simplified DataFusion execution plan is shown below. It first reads
+//! data from the Parquet file, then applies the filter, then the projection,
+//! and finally produces output. Each step processes one [`RecordBatch`] at a
+//! time. Multiple batches are processed concurrently on different CPU cores
+//! for plans with multiple partitions.
+//!
+//! ```text
+//! ┌─────────────┐    ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐    ┌──────────┐
+//! │ Parquet     │───▶│ DataSource   │───▶│ FilterExec     │───▶│ ProjectionExec   │───▶│ Results  │
+//! │ File        │    │              │    │                │    │                  │    │          │
+//! └─────────────┘    └──────────────┘    └────────────────┘    └──────────────────┘    └──────────┘
+//!                    (reads data)        (id > 10)             (keeps "name" col)
+//!                    RecordBatch ───▶    RecordBatch ────▶     RecordBatch ────▶        RecordBatch
+//! ```
+//!
+//! DataFusion uses the classic "pull" based control flow (explained more in the
+//! next section) to implement streaming execution. As an example,
+//! consider the following SQL query:
 //!
 //! ```sql
 //! SELECT date_trunc('month', time) FROM data WHERE id IN (10,20,30);
@@ -734,6 +757,8 @@
 pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 extern crate core;
+
+#[cfg(feature = "sql")]
 extern crate sqlparser;
 
 pub mod dataframe;
@@ -750,6 +775,9 @@ pub use object_store;
 
 #[cfg(feature = "parquet")]
 pub use parquet;
+
+#[cfg(feature = "avro")]
+pub use datafusion_datasource_avro::apache_avro;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
@@ -805,6 +833,11 @@ pub mod physical_expr {
     pub use datafusion_physical_expr::*;
 }
 
+/// re-export of [`datafusion_physical_expr_adapter`] crate
+pub mod physical_expr_adapter {
+    pub use datafusion_physical_expr_adapter::*;
+}
+
 /// re-export of [`datafusion_physical_plan`] crate
 pub mod physical_plan {
     pub use datafusion_physical_plan::*;
@@ -815,6 +848,7 @@ pub use datafusion_common::assert_batches_eq;
 pub use datafusion_common::assert_batches_sorted_eq;
 
 /// re-export of [`datafusion_sql`] crate
+#[cfg(feature = "sql")]
 pub mod sql {
     pub use datafusion_sql::*;
 }
@@ -886,6 +920,12 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 // For example, if `user_guide_expressions(line 123)` fails,
 // go to `docs/source/user-guide/expressions.md` to find the relevant problem.
 //
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/arrow-introduction.md",
+    user_guide_arrow_introduction
+);
+
 #[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/user-guide/concepts-readings-events.md",

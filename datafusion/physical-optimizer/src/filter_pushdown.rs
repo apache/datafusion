@@ -36,9 +36,9 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{config::ConfigOptions, Result};
-use datafusion_expr_common::signature::Volatility;
+use datafusion_common::{config::ConfigOptions, internal_err, Result};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -47,7 +47,7 @@ use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use itertools::{izip, Itertools};
 
-/// Attempts to recursively push given filters from the top of the tree into leafs.
+/// Attempts to recursively push given filters from the top of the tree into leaves.
 ///
 /// # Default Implementation
 ///
@@ -462,24 +462,20 @@ fn push_down_filters(
     let filter_description_parent_filters = filter_description.parent_filters();
     let filter_description_self_filters = filter_description.self_filters();
     if filter_description_parent_filters.len() != children.len() {
-        return Err(datafusion_common::DataFusionError::Internal(
-            format!(
-                "Filter pushdown expected FilterDescription to have parent filters for {expected_num_children}, but got {actual_num_children} for node {node_name}",
-                expected_num_children = children.len(),
-                actual_num_children = filter_description_parent_filters.len(),
-                node_name = node.name(),
-            ),
-        ));
+        return internal_err!(
+            "Filter pushdown expected FilterDescription to have parent filters for {}, but got {} for node {}",
+            children.len(),
+            filter_description_parent_filters.len(),
+            node.name()
+        );
     }
     if filter_description_self_filters.len() != children.len() {
-        return Err(datafusion_common::DataFusionError::Internal(
-            format!(
-                "Filter pushdown expected FilterDescription to have self filters for {expected_num_children}, but got {actual_num_children} for node {node_name}",
-                expected_num_children = children.len(),
-                actual_num_children = filter_description_self_filters.len(),
-                node_name = node.name(),
-            ),
-        ));
+        return internal_err!(
+            "Filter pushdown expected FilterDescription to have self filters for {}, but got {} for node {}",
+            children.len(),
+            filter_description_self_filters.len(),
+            node.name()
+        );
     }
 
     for (child_idx, (child, parent_filters, self_filters)) in izip!(
@@ -529,15 +525,13 @@ fn push_down_filters(
         // this since we do need to distinguish between them.
         let mut all_filters = result.filters.into_iter().collect_vec();
         if all_filters.len() != num_self_filters + num_parent_filters {
-            return Err(datafusion_common::DataFusionError::Internal(
-                format!(
-                    "Filter pushdown did not return the expected number of filters: expected {num_self_filters} self filters and {num_parent_filters} parent filters, but got {num_filters_from_child}. Likely culprit is {child}",
-                    num_self_filters = num_self_filters,
-                    num_parent_filters = num_parent_filters,
-                    num_filters_from_child = all_filters.len(),
-                    child = child.name(),
-                ),
-            ));
+            return internal_err!(
+                "Filter pushdown did not return the expected number of filters: expected {} self filters and {} parent filters, but got {}. Likely culprit is {}",
+                num_self_filters,
+                num_parent_filters,
+                all_filters.len(),
+                child.name()
+            );
         }
         let parent_filters = all_filters
             .split_off(num_self_filters)
@@ -711,7 +705,7 @@ impl<T: Clone> FilteredVec<T> {
 fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut allow_pushdown = true;
     expr.apply(|e| {
-        allow_pushdown = allow_pushdown && allow_pushdown_for_expr_inner(e);
+        allow_pushdown = allow_pushdown && !is_volatile(e);
         if allow_pushdown {
             Ok(TreeNodeRecursion::Continue)
         } else {
@@ -720,20 +714,6 @@ fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     })
     .expect("Infallible traversal of PhysicalExpr tree failed");
     allow_pushdown
-}
-
-fn allow_pushdown_for_expr_inner(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    if let Some(scalar_function) =
-        expr.as_any()
-            .downcast_ref::<datafusion_physical_expr::ScalarFunctionExpr>()
-    {
-        // Check if the function is volatile using the proper volatility API
-        if scalar_function.fun().signature().volatility == Volatility::Volatile {
-            // Volatile functions should not be pushed down
-            return false;
-        }
-    }
-    true
 }
 
 #[cfg(test)]

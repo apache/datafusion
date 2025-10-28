@@ -114,8 +114,6 @@ impl RuntimeEnv {
     /// ```
     ///
     /// # Example: Register remote URL object store like [Github](https://github.com)
-    ///
-    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use url::Url;
@@ -139,6 +137,12 @@ impl RuntimeEnv {
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         self.object_store_registry.register_store(url, object_store)
+    }
+
+    /// Deregisters a custom `ObjectStore` previously registered for a specific url.
+    /// See [`ObjectStoreRegistry::deregister_store`] for more details.
+    pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        self.object_store_registry.deregister_store(url)
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
@@ -258,7 +262,8 @@ impl RuntimeEnvBuilder {
     /// Specify the total memory to use while running the DataFusion
     /// plan to `max_memory * memory_fraction` in bytes.
     ///
-    /// This defaults to using [`GreedyMemoryPool`]
+    /// This defaults to using [`GreedyMemoryPool`] wrapped in the
+    /// [`TrackConsumersPool`] with a maximum of 5 consumers.
     ///
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {

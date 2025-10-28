@@ -74,6 +74,15 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// [`execute`]: ExecutionPlan::execute
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
+///
+/// # Examples
+///
+/// See [`datafusion-examples`] for examples, including
+/// [`memory_pool_execution_plan.rs`] which shows how to implement a custom
+/// `ExecutionPlan` with memory tracking and spilling support.
+///
+/// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
+/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
@@ -1326,7 +1335,7 @@ pub fn check_not_null_constraints(
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
-    actual.iter().map(|elem| elem.to_string()).collect()
+    actual.iter().map(|elem| (*elem).to_string()).collect()
 }
 
 /// Indicates the effect an execution plan operator will have on the cardinality

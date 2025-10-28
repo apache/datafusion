@@ -37,7 +37,6 @@ use datafusion_common::{
         TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
-    not_impl_err,
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
@@ -139,11 +138,17 @@ where
     }
 }
 
+impl From<protobuf::ColumnRelation> for TableReference {
+    fn from(rel: protobuf::ColumnRelation) -> Self {
+        Self::parse_str_normalized(rel.relation.as_str(), true)
+    }
+}
+
 impl From<protobuf::Column> for Column {
     fn from(c: protobuf::Column) -> Self {
         let protobuf::Column { relation, name } = c;
 
-        Self::new(relation.map(|r| r.relation), name)
+        Self::new(relation, name)
     }
 }
 
@@ -165,10 +170,7 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
             .map(|df_field| {
                 let field: Field = df_field.field.as_ref().required("field")?;
                 Ok((
-                    df_field
-                        .qualifier
-                        .as_ref()
-                        .map(|q| q.relation.clone().into()),
+                    df_field.qualifier.as_ref().map(|q| q.clone().into()),
                     Arc::new(field),
                 ))
             })
@@ -478,13 +480,13 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let null_type: DataType = v.try_into()?;
                 null_type.try_into().map_err(Error::DataFusionError)?
             }
-            Value::Decimal32Value(_val) => {
-                return not_impl_err!("Decimal32 protobuf deserialization")
-                    .map_err(Error::DataFusionError)
+            Value::Decimal32Value(val) => {
+                let array = vec_to_array(val.value.clone());
+                Self::Decimal32(Some(i32::from_be_bytes(array)), val.p as u8, val.s as i8)
             }
-            Value::Decimal64Value(_val) => {
-                return not_impl_err!("Decimal64 protobuf deserialization")
-                    .map_err(Error::DataFusionError)
+            Value::Decimal64Value(val) => {
+                let array = vec_to_array(val.value.clone());
+                Self::Decimal64(Some(i64::from_be_bytes(array)), val.p as u8, val.s as i8)
             }
             Value::Decimal128Value(val) => {
                 let array = vec_to_array(val.value.clone());
@@ -917,6 +919,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             null_regex: (!proto_opts.null_regex.is_empty())
                 .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
+            truncated_rows: proto_opts.truncated_rows.first().map(|h| *h != 0),
         })
     }
 }
@@ -999,6 +1002,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => Some(v),
             }).unwrap_or(None),
             skip_arrow_metadata: value.skip_arrow_metadata,
+            max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
+                protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
+            }).unwrap_or(None),
         })
     }
 }

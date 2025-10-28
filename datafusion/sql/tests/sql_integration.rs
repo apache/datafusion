@@ -669,10 +669,10 @@ fn plan_insert() {
     assert_snapshot!(
         plan,
         @r#"
-        Dml: op=[Insert Into] table=[person]
-          Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
-            Values: (CAST(Int64(1) AS UInt32), Utf8("Alan"), Utf8("Turing"))
-        "#
+    Dml: op=[Insert Into] table=[person]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(ns)) AS birth_date, CAST(NULL AS Int32) AS 😀
+        Values: (CAST(Int64(1) AS UInt32), Utf8("Alan"), Utf8("Turing"))
+    "#
     );
 }
 
@@ -738,8 +738,8 @@ fn plan_update() {
 }
 
 #[rstest]
-#[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
-#[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
+#[case::missing_assignment_target("UPDATE person SET doesnotexist = true")]
+#[case::missing_assignment_expression("UPDATE person SET age = doesnotexist + 42")]
 #[case::missing_selection_expression(
     "UPDATE person SET age = 42 WHERE doesnotexist = true"
 )]
@@ -875,11 +875,11 @@ fn test_timestamp_filter() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: person.state
-          Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(Second, None)) AS Timestamp(Nanosecond, None))
-            TableScan: person
-        "#
+        @r"
+    Projection: person.state
+      Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(s)) AS Timestamp(ns))
+        TableScan: person
+    "
     );
 }
 
@@ -1586,11 +1586,11 @@ fn select_from_typed_string_values() {
     assert_snapshot!(
         plan,
         @r#"
-        Projection: t.col1, t.col2
-          SubqueryAlias: t
-            Projection: column1 AS col1, column2 AS col2
-              Values: (CAST(Utf8("2021-06-10 17:01:00Z") AS Timestamp(Nanosecond, None)), CAST(Utf8("2004-04-09") AS Date32))
-        "#
+    Projection: t.col1, t.col2
+      SubqueryAlias: t
+        Projection: column1 AS col1, column2 AS col2
+          Values: (CAST(Utf8("2021-06-10 17:01:00Z") AS Timestamp(ns)), CAST(Utf8("2004-04-09") AS Date32))
+    "#
     );
 }
 
@@ -3151,7 +3151,7 @@ fn select_typed_time_string() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("08:09:10.123") AS Time64(Nanosecond)) AS time
+    Projection: CAST(Utf8("08:09:10.123") AS Time64(ns)) AS time
       EmptyRelation: rows=1
     "#
     );
@@ -4203,6 +4203,67 @@ Projection: person.id, row_number() PARTITION BY [person.age] ORDER BY [person.i
 }
 
 #[test]
+fn test_select_qualify_aggregate_reference() {
+    let sql = "
+        SELECT
+            person.id,
+            ROW_NUMBER() OVER (PARTITION BY person.id ORDER BY person.id) as rn
+        FROM person
+        GROUP BY
+            person.id
+        QUALIFY rn = 1 AND SUM(person.age) > 0";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id, row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+      Filter: row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1) AND sum(person.age) > Int64(0)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
+            TableScan: person
+    "
+    );
+}
+
+#[test]
+fn test_select_qualify_aggregate_reference_within_window_function() {
+    let sql = "
+        SELECT
+            person.id
+        FROM person
+        GROUP BY
+            person.id
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY person.id ORDER BY SUM(person.age) DESC) = 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: row_number() PARTITION BY [person.id] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [person.id] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
+            TableScan: person
+    "
+    );
+}
+
+#[test]
+fn test_select_qualify_aggregate_invalid_column_reference() {
+    let sql = "
+        SELECT
+            person.id
+        FROM person
+        GROUP BY
+            person.id
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY person.id ORDER BY person.age DESC) = 1";
+    let err = logical_plan(sql).unwrap_err();
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"Error during planning: Column in QUALIFY must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.id" appears in the SELECT clause satisfies this requirement"#
+    );
+}
+
+#[test]
 fn test_select_qualify_without_window_function() {
     let sql = "SELECT person.id FROM person QUALIFY person.id > 1";
     let err = logical_plan(sql).unwrap_err();
@@ -4572,7 +4633,7 @@ fn test_no_substring_registered() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: Please try with `unicode_expressions` DataFusion feature enabled"
     );
 }
 
@@ -4584,7 +4645,7 @@ fn test_no_substring_registered_alt_syntax() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: Please try with `unicode_expressions` DataFusion feature enabled"
     );
 }
 
@@ -4603,7 +4664,7 @@ fn test_custom_type_plan() -> Result<()> {
     let err = planner.statement_to_plan(ast.pop_front().unwrap());
     assert_contains!(
         err.unwrap_err().to_string(),
-        "This feature is not implemented: Unsupported SQL type Datetime(None)"
+        "This feature is not implemented: Unsupported SQL type DATETIME"
     );
 
     fn plan_sql(sql: &str) -> LogicalPlan {
@@ -4625,7 +4686,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None))
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
       EmptyRelation: rows=1
     "#
     );
@@ -4635,7 +4696,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))
+    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns))
       EmptyRelation: rows=1
     "#
     );
@@ -4647,7 +4708,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(Nanosecond, None)))
+    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns)))
       EmptyRelation: rows=1
     "#
     );

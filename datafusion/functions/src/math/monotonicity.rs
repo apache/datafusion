@@ -18,8 +18,8 @@
 use std::sync::LazyLock;
 
 use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_doc::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::Documentation;
 
@@ -45,6 +45,16 @@ static DOCUMENTATION_ACOS: LazyLock<Documentation> = LazyLock::new(|| {
         "acos(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT acos(1);
++----------+
+| acos(1)  |
++----------+
+| 0.0      |
++----------+
+```"#,
+    )
     .build()
 });
 
@@ -69,15 +79,24 @@ pub fn acosh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     }
 }
 
-static DOCUMENTATION_ACOSH: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
+static DOCUMENTATION_ACOSH: LazyLock<Documentation> =
+    LazyLock::new(|| {
+        Documentation::builder(
         DOC_SECTION_MATH,
         "Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.",
         "acosh(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(r#"```sql
+> SELECT acosh(2);
++------------+
+| acosh(2)   |
++------------+
+| 1.31696    |
++------------+
+```"#)
     .build()
-});
+    });
 
 pub fn get_acosh_doc() -> &'static Documentation {
     &DOCUMENTATION_ACOSH
@@ -105,6 +124,16 @@ static DOCUMENTATION_ASIN: LazyLock<Documentation> = LazyLock::new(|| {
         "asin(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT asin(0.5);
++------------+
+| asin(0.5)  |
++------------+
+| 0.5235988  |
++------------+
+```"#,
+    )
     .build()
 });
 
@@ -124,6 +153,16 @@ static DOCUMENTATION_ASINH: LazyLock<Documentation> = LazyLock::new(|| {
         "asinh(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#" ```sql 
+> SELECT asinh(1);
++------------+
+| asinh(1)   |
++------------+
+| 0.8813736  |
++------------+
+```"#,
+    )
     .build()
 });
 
@@ -143,6 +182,16 @@ static DOCUMENTATION_ATAN: LazyLock<Documentation> = LazyLock::new(|| {
         "atan(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+    > SELECT atan(1);
++-----------+
+| atan(1)   |
++-----------+
+| 0.7853982 |
++-----------+
+```"#,
+    )
     .build()
 });
 
@@ -165,15 +214,24 @@ pub fn atanh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     }
 }
 
-static DOCUMENTATION_ATANH: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
+static DOCUMENTATION_ATANH: LazyLock<Documentation> =
+    LazyLock::new(|| {
+        Documentation::builder(
         DOC_SECTION_MATH,
         "Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.",
         "atanh(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(r#"```sql
+    > SELECT atanh(0.5);
++-------------+
+| atanh(0.5)  |
++-------------+
+| 0.5493061   |
++-------------+
+```"#)
     .build()
-});
+    });
 
 pub fn get_atanh_doc() -> &'static Documentation {
     &DOCUMENTATION_ATANH
@@ -185,8 +243,9 @@ pub fn atan2_order(_input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(SortProperties::Unordered)
 }
 
-static DOCUMENTATION_ATANH2: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
+static DOCUMENTATION_ATANH2: LazyLock<Documentation> =
+    LazyLock::new(|| {
+        Documentation::builder(
         DOC_SECTION_MATH,
         "Returns the arc tangent or inverse tangent of `expression_y / expression_x`.",
         "atan2(expression_y, expression_x)",
@@ -201,8 +260,16 @@ Can be a constant, column, or function, and any combination of arithmetic operat
         r#"Second numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators."#,
     )
+    .with_sql_example(r#"```sql
+> SELECT atan2(1, 1);
++------------+
+| atan2(1,1) |
++------------+
+| 0.7853982  |
++------------+
+```"#)
     .build()
-});
+    });
 
 pub fn get_atan2_doc() -> &'static Documentation {
     &DOCUMENTATION_ATANH2
@@ -220,6 +287,16 @@ static DOCUMENTATION_CBRT: LazyLock<Documentation> = LazyLock::new(|| {
         "cbrt(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT cbrt(27);
++-----------+
+| cbrt(27)  |
++-----------+
+| 3.0       |
++-----------+
+```"#,
+    )
     .build()
 });
 
@@ -239,6 +316,16 @@ static DOCUMENTATION_CEIL: LazyLock<Documentation> = LazyLock::new(|| {
         "ceil(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+    > SELECT ceil(3.14);
++------------+
+| ceil(3.14) |
++------------+
+| 4.0        |
++------------+
+```"#,
+    )
     .build()
 });
 
@@ -260,6 +347,16 @@ static DOCUMENTATION_COS: LazyLock<Documentation> = LazyLock::new(|| {
         "cos(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT cos(0);
++--------+
+| cos(0) |
++--------+
+| 1.0    |
++--------+
+```"#,
+    )
     .build()
 });
 
@@ -290,6 +387,16 @@ static DOCUMENTATION_COSH: LazyLock<Documentation> = LazyLock::new(|| {
         "cosh(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT cosh(1);
++-----------+
+| cosh(1)   |
++-----------+
+| 1.5430806 |
++-----------+
+```"#,
+    )
     .build()
 });
 
@@ -309,6 +416,16 @@ static DOCUMENTATION_DEGREES: LazyLock<Documentation> = LazyLock::new(|| {
         "degrees(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+    > SELECT degrees(pi());
++------------+
+| degrees(0) |
++------------+
+| 180.0      |
++------------+
+```"#,
+    )
     .build()
 });
 
@@ -328,6 +445,16 @@ static DOCUMENTATION_EXP: LazyLock<Documentation> = LazyLock::new(|| {
         "exp(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT exp(1);
++---------+
+| exp(1)  |
++---------+
+| 2.71828 |
++---------+
+```"#,
+    )
     .build()
 });
 
@@ -347,6 +474,16 @@ static DOCUMENTATION_FLOOR: LazyLock<Documentation> = LazyLock::new(|| {
         "floor(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT floor(3.14);
++-------------+
+| floor(3.14) |
++-------------+
+| 3.0         |
++-------------+
+```"#,
+    )
     .build()
 });
 
@@ -375,6 +512,16 @@ static DOCUMENTATION_LN: LazyLock<Documentation> = LazyLock::new(|| {
         "ln(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT ln(2.71828);
++-------------+
+| ln(2.71828) |
++-------------+
+| 1.0         |
++-------------+
+```"#,
+    )
     .build()
 });
 
@@ -403,6 +550,16 @@ static DOCUMENTATION_LOG2: LazyLock<Documentation> = LazyLock::new(|| {
         "log2(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT log2(8);
++-----------+
+| log2(8)   |
++-----------+
+| 3.0       |
++-----------+
+```"#,
+    )
     .build()
 });
 
@@ -431,6 +588,16 @@ static DOCUMENTATION_LOG10: LazyLock<Documentation> = LazyLock::new(|| {
         "log10(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT log10(100);
++-------------+
+| log10(100)  |
++-------------+
+| 2.0         |
++-------------+
+```"#,
+    )
     .build()
 });
 
@@ -443,18 +610,28 @@ pub fn radians_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
-static DOCUMENTATION_RADIONS: LazyLock<Documentation> = LazyLock::new(|| {
+static DOCUMENTATION_RADIANS: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_MATH,
         "Converts degrees to radians.",
         "radians(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT radians(180);
++----------------+
+| radians(180)   |
++----------------+
+| 3.14159265359  |
++----------------+
+```"#,
+    )
     .build()
 });
 
 pub fn get_radians_doc() -> &'static Documentation {
-    &DOCUMENTATION_RADIONS
+    &DOCUMENTATION_RADIANS
 }
 
 /// Non-decreasing on \[0, π\] and then non-increasing on \[π, 2π\].
@@ -471,6 +648,16 @@ static DOCUMENTATION_SIN: LazyLock<Documentation> = LazyLock::new(|| {
         "sin(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT sin(0);
++----------+
+| sin(0)   |
++----------+
+| 0.0      |
++----------+
+```"#,
+    )
     .build()
 });
 
@@ -490,6 +677,16 @@ static DOCUMENTATION_SINH: LazyLock<Documentation> = LazyLock::new(|| {
         "sinh(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT sinh(1);
++-----------+
+| sinh(1)   |
++-----------+
+| 1.1752012 |
++-----------+
+```"#,
+    )
     .build()
 });
 
@@ -539,6 +736,16 @@ static DOCUMENTATION_TAN: LazyLock<Documentation> = LazyLock::new(|| {
         "tan(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+> SELECT tan(pi()/4);
++--------------+
+| tan(PI()/4)  |
++--------------+
+| 1.0          |
++--------------+
+```"#,
+    )
     .build()
 });
 
@@ -558,6 +765,16 @@ static DOCUMENTATION_TANH: LazyLock<Documentation> = LazyLock::new(|| {
         "tanh(numeric_expression)",
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
+    .with_sql_example(
+        r#"```sql
+  > SELECT tanh(20);
+  +----------+
+  | tanh(20) |
+  +----------+
+  | 1.0      |
+  +----------+
+  ```"#,
+    )
     .build()
 });
 

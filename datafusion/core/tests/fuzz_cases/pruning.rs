@@ -201,7 +201,7 @@ impl Utf8Test {
         }
     }
 
-    ///  all combinations of interesting charactes  with lengths ranging from 1 to 4
+    ///  all combinations of interesting characters  with lengths ranging from 1 to 4
     fn values() -> &'static [String] {
         &VALUES
     }

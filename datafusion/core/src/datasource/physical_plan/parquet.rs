@@ -50,7 +50,6 @@ mod tests {
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{assert_contains, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
@@ -65,7 +64,9 @@ mod tests {
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::analyze::AnalyzeExec;
     use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+    use datafusion_physical_plan::metrics::{
+        ExecutionPlanMetricsSet, MetricType, MetricsSet,
+    };
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use chrono::{TimeZone, Utc};
@@ -200,7 +201,7 @@ mod tests {
                 source,
             )
             .with_file_group(file_group)
-            .with_projection(self.projection.clone())
+            .with_projection_indices(self.projection.clone())
             .build();
             DataSourceExec::from_data_source(base_config)
         }
@@ -239,6 +240,7 @@ mod tests {
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
                 false,
+                vec![MetricType::SUMMARY, MetricType::DEV],
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
                     Arc::clone(table_schema),
@@ -332,7 +334,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -390,7 +392,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -452,7 +454,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -514,7 +516,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c3").eq(lit(7_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -1653,7 +1655,7 @@ mod tests {
         let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
             .with_file(partitioned_file)
             // file has 10 cols so index 12 should be month and 13 should be day
-            .with_projection(Some(vec![0, 1, 2, 12, 13]))
+            .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
             .with_table_partition_cols(vec![
                 Field::new("year", DataType::Utf8, false),
                 Field::new("month", DataType::UInt8, false),
@@ -2018,14 +2020,14 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         fs::create_dir(&out_dir).unwrap();
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        let schema: Schema = df.schema().into();
+        let schema = Arc::clone(df.schema().inner());
         // Register a listing table - this will use all files in the directory as data sources
         // for the query
         ctx.register_listing_table(
             "my_table",
             &out_dir,
             listing_options,
-            Some(Arc::new(schema)),
+            Some(schema),
             None,
         )
         .await
@@ -2207,7 +2209,7 @@ mod tests {
         fn create_reader(
             &self,
             partition_index: usize,
-            file_meta: FileMeta,
+            partitioned_file: PartitionedFile,
             metadata_size_hint: Option<usize>,
             metrics: &ExecutionPlanMetricsSet,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
@@ -2218,7 +2220,7 @@ mod tests {
                 .push(metadata_size_hint);
             self.inner.create_reader(
                 partition_index,
-                file_meta,
+                partitioned_file,
                 metadata_size_hint,
                 metrics,
             )

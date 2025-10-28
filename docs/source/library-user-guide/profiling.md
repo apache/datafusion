@@ -48,7 +48,7 @@ Ensure that you're in the directory containing the necessary data files for your
 
 ### Step 3: Running the Flamegraph Tool
 
-To generate a flamegraph, you'll need to use the -- separator to pass arguments to the binary you're profiling. For datafusion-cli, you need to make sure to run the command with sudo permissions (especially on macOS, where DTrace requires elevated privileges).
+To generate a flamegraph, you'll need to use the `--` separator to pass arguments to the binary you're profiling. For datafusion-cli, you need to make sure to run the command with sudo permissions (especially on macOS, where DTrace requires elevated privileges).
 
 Here is a general example:
 

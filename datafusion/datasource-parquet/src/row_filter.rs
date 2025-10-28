@@ -76,7 +76,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor}
 use datafusion_common::Result;
 use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::reassign_predicate_columns;
+use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 
 use datafusion_physical_plan::metrics;
@@ -119,9 +119,8 @@ impl DatafusionArrowPredicate {
         rows_matched: metrics::Count,
         time: metrics::Time,
     ) -> Result<Self> {
-        let projected_schema = Arc::clone(&candidate.filter_schema);
         let physical_expr =
-            reassign_predicate_columns(candidate.expr, &projected_schema, true)?;
+            reassign_expr_columns(candidate.expr, &candidate.filter_schema)?;
 
         Ok(Self {
             physical_expr,
@@ -184,7 +183,7 @@ pub(crate) struct FilterCandidate {
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
     /// The projection to read from the file schema to get the columns
-    /// required to pass thorugh a `SchemaMapper` to the table schema
+    /// required to pass through a `SchemaMapper` to the table schema
     /// upon which we then evaluate the filter expression.
     projection: Vec<usize>,
     ///  A `SchemaMapper` used to map batches read from the file schema to

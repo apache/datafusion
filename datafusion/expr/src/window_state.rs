@@ -28,9 +28,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    internal_err,
+    internal_datafusion_err, internal_err,
     utils::{compare_rows, get_row_at_idx, search_in_slice},
-    DataFusionError, Result, ScalarValue,
+    Result, ScalarValue,
 };
 
 /// Holds the state of evaluating a window function
@@ -90,7 +90,12 @@ impl WindowAggState {
         partition_batch_state: &PartitionBatchState,
     ) -> Result<()> {
         self.last_calculated_index += out_col.len();
-        self.out_col = concat(&[&self.out_col, &out_col])?;
+        // no need to use concat if the current `out_col` is empty
+        if self.out_col.is_empty() {
+            self.out_col = Arc::clone(out_col);
+        } else {
+            self.out_col = concat(&[&self.out_col, &out_col])?;
+        }
         self.n_row_result_missing =
             partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
         self.is_end = partition_batch_state.is_end;
@@ -265,6 +270,15 @@ impl PartitionBatchState {
         }
     }
 
+    pub fn new_with_batch(batch: RecordBatch) -> Self {
+        Self {
+            record_batch: batch,
+            most_recent_row: None,
+            is_end: false,
+            n_out_row: 0,
+        }
+    }
+
     pub fn extend(&mut self, batch: &RecordBatch) -> Result<()> {
         self.record_batch =
             concat_batches(&self.record_batch.schema(), [&self.record_batch, batch])?;
@@ -388,8 +402,8 @@ impl WindowFrameStateRange {
                 .sort_options
                 .first()
                 .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Sort options unexpectedly absent in a window frame".to_string(),
+                    internal_datafusion_err!(
+                        "Sort options unexpectedly absent in a window frame"
                     )
                 })?
                 .descending;

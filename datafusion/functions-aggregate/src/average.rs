@@ -24,22 +24,28 @@ use arrow::array::{
 
 use arrow::compute::sum;
 use arrow::datatypes::{
-    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType,
-    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type,
+    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
+    Decimal64Type, DecimalType, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Field, FieldRef, Float64Type, TimeUnit,
+    UInt64Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
+    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
 };
+use datafusion_common::plan_err;
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
     ReversedUDAF, Signature,
 };
 
+use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
+    DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
@@ -60,6 +66,17 @@ make_udaf_expr_and_func!(
     "Returns the avg of a group of values.",
     avg_udaf
 );
+
+pub fn avg_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        avg_udaf(),
+        vec![expr],
+        true,
+        None,
+        vec![],
+        None,
+    ))
+}
 
 #[user_doc(
     doc_section(label = "General Functions"),
@@ -109,84 +126,234 @@ impl AggregateUDFImpl for Avg {
         &self.signature
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [args] = take_function_args(self.name(), arg_types)?;
+
+        // Supported types smallint, int, bigint, real, double precision, decimal, or interval
+        // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+        fn coerced_type(data_type: &DataType) -> Result<DataType> {
+            match &data_type {
+                DataType::Decimal32(p, s) => Ok(DataType::Decimal32(*p, *s)),
+                DataType::Decimal64(p, s) => Ok(DataType::Decimal64(*p, *s)),
+                DataType::Decimal128(p, s) => Ok(DataType::Decimal128(*p, *s)),
+                DataType::Decimal256(p, s) => Ok(DataType::Decimal256(*p, *s)),
+                d if d.is_numeric() => Ok(DataType::Float64),
+                DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
+                DataType::Dictionary(_, v) => coerced_type(v.as_ref()),
+                _ => {
+                    plan_err!("Avg does not support inputs of type {data_type}.")
+                }
+            }
+        }
+        Ok(vec![coerced_type(args)?])
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        avg_return_type(self.name(), &arg_types[0])
+        match &arg_types[0] {
+            DataType::Decimal32(precision, scale) => {
+                // In the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
+                // Ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
+                let new_precision = DECIMAL32_MAX_PRECISION.min(*precision + 4);
+                let new_scale = DECIMAL32_MAX_SCALE.min(*scale + 4);
+                Ok(DataType::Decimal32(new_precision, new_scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                // In the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
+                // Ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
+                let new_precision = DECIMAL64_MAX_PRECISION.min(*precision + 4);
+                let new_scale = DECIMAL64_MAX_SCALE.min(*scale + 4);
+                Ok(DataType::Decimal64(new_precision, new_scale))
+            }
+            DataType::Decimal128(precision, scale) => {
+                // In the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
+                // Ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
+                let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 4);
+                let new_scale = DECIMAL128_MAX_SCALE.min(*scale + 4);
+                Ok(DataType::Decimal128(new_precision, new_scale))
+            }
+            DataType::Decimal256(precision, scale) => {
+                // In the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
+                // Ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
+                let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 4);
+                let new_scale = DECIMAL256_MAX_SCALE.min(*scale + 4);
+                Ok(DataType::Decimal256(new_precision, new_scale))
+            }
+            DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
+            _ => Ok(DataType::Float64),
+        }
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if acc_args.is_distinct {
-            return exec_err!("avg(DISTINCT) aggregations are not available");
-        }
+        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         use DataType::*;
 
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         // instantiate specialized accumulator based for the type
-        match (&data_type, acc_args.return_field.data_type()) {
-            (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
-            (
-                Decimal128(sum_precision, sum_scale),
-                Decimal128(target_precision, target_scale),
-            ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type> {
-                sum: None,
-                count: 0,
-                sum_scale: *sum_scale,
-                sum_precision: *sum_precision,
-                target_precision: *target_precision,
-                target_scale: *target_scale,
-            })),
+        if acc_args.is_distinct {
+            match (&data_type, acc_args.return_type()) {
+                // Numeric types are converted to Float64 via `coerce_avg_type` during logical plan creation
+                (Float64, _) => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
 
-            (
-                Decimal256(sum_precision, sum_scale),
-                Decimal256(target_precision, target_scale),
-            ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal256Type> {
-                sum: None,
-                count: 0,
-                sum_scale: *sum_scale,
-                sum_precision: *sum_precision,
-                target_precision: *target_precision,
-                target_scale: *target_scale,
-            })),
+                (
+                    Decimal32(_, scale),
+                    Decimal32(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal32Type>::with_decimal_params(
+                    *scale,
+                    *target_precision,
+                    *target_scale,
+                ))),
+                                (
+                    Decimal64(_, scale),
+                    Decimal64(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal64Type>::with_decimal_params(
+                    *scale,
+                    *target_precision,
+                    *target_scale,
+                ))),
+                (
+                    Decimal128(_, scale),
+                    Decimal128(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal128Type>::with_decimal_params(
+                    *scale,
+                    *target_precision,
+                    *target_scale,
+                ))),
 
-            (Duration(time_unit), Duration(result_unit)) => {
-                Ok(Box::new(DurationAvgAccumulator {
+                (
+                    Decimal256(_, scale),
+                    Decimal256(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal256Type>::with_decimal_params(
+                    *scale,
+                    *target_precision,
+                    *target_scale,
+                ))),
+
+                (dt, return_type) => exec_err!(
+                    "AVG(DISTINCT) for ({} --> {}) not supported",
+                    dt,
+                    return_type
+                ),
+            }
+        } else {
+            match (&data_type, acc_args.return_type()) {
+                (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
+                (
+                    Decimal32(sum_precision, sum_scale),
+                    Decimal32(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal32Type> {
                     sum: None,
                     count: 0,
-                    time_unit: *time_unit,
-                    result_unit: *result_unit,
-                }))
-            }
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
+                (
+                    Decimal64(sum_precision, sum_scale),
+                    Decimal64(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal64Type> {
+                    sum: None,
+                    count: 0,
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
+                (
+                    Decimal128(sum_precision, sum_scale),
+                    Decimal128(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type> {
+                    sum: None,
+                    count: 0,
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
 
-            _ => exec_err!(
-                "AvgAccumulator for ({} --> {})",
-                &data_type,
-                acc_args.return_field.data_type()
-            ),
+                (
+                    Decimal256(sum_precision, sum_scale),
+                    Decimal256(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal256Type> {
+                    sum: None,
+                    count: 0,
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
+
+                (Duration(time_unit), Duration(result_unit)) => {
+                    Ok(Box::new(DurationAvgAccumulator {
+                        sum: None,
+                        count: 0,
+                        time_unit: *time_unit,
+                        result_unit: *result_unit,
+                    }))
+                }
+
+                (dt, return_type) => {
+                    exec_err!("AvgAccumulator for ({} --> {})", dt, return_type)
+                }
+            }
         }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(args.name, "count"),
-                DataType::UInt64,
-                true,
-            ),
-            Field::new(
-                format_state_name(args.name, "sum"),
-                args.input_fields[0].data_type().clone(),
-                true,
-            ),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect())
+        if args.is_distinct {
+            // Decimal accumulator actually uses a different precision during accumulation,
+            // see DecimalDistinctAvgAccumulator::with_decimal_params
+            let dt = match args.input_fields[0].data_type() {
+                DataType::Decimal32(_, scale) => {
+                    DataType::Decimal32(DECIMAL32_MAX_PRECISION, *scale)
+                }
+                DataType::Decimal64(_, scale) => {
+                    DataType::Decimal64(DECIMAL64_MAX_PRECISION, *scale)
+                }
+                DataType::Decimal128(_, scale) => {
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, *scale)
+                }
+                DataType::Decimal256(_, scale) => {
+                    DataType::Decimal256(DECIMAL256_MAX_PRECISION, *scale)
+                }
+                _ => args.return_type().clone(),
+            };
+            // Similar to datafusion_functions_aggregate::sum::Sum::state_fields
+            // since the accumulator uses DistinctSumAccumulator internally.
+            Ok(vec![Field::new_list(
+                format_state_name(args.name, "avg distinct"),
+                Field::new_list_field(dt, true),
+                false,
+            )
+            .into()])
+        } else {
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "count"),
+                    DataType::UInt64,
+                    true,
+                ),
+                Field::new(
+                    format_state_name(args.name, "sum"),
+                    args.input_fields[0].data_type().clone(),
+                    true,
+                ),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect())
+        }
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         matches!(
             args.return_field.data_type(),
-            DataType::Float64 | DataType::Decimal128(_, _) | DataType::Duration(_)
-        )
+            DataType::Float64
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+                | DataType::Duration(_)
+        ) && !args.is_distinct
     }
 
     fn create_groups_accumulator(
@@ -203,6 +370,44 @@ impl AggregateUDFImpl for Avg {
                     &data_type,
                     args.return_field.data_type(),
                     |sum: f64, count: u64| Ok(sum / count as f64),
+                )))
+            }
+            (
+                Decimal32(_sum_precision, sum_scale),
+                Decimal32(target_precision, target_scale),
+            ) => {
+                let decimal_averager = DecimalAverager::<Decimal32Type>::try_new(
+                    *sum_scale,
+                    *target_precision,
+                    *target_scale,
+                )?;
+
+                let avg_fn =
+                    move |sum: i32, count: u64| decimal_averager.avg(sum, count as i32);
+
+                Ok(Box::new(AvgGroupsAccumulator::<Decimal32Type, _>::new(
+                    &data_type,
+                    args.return_field.data_type(),
+                    avg_fn,
+                )))
+            }
+            (
+                Decimal64(_sum_precision, sum_scale),
+                Decimal64(target_precision, target_scale),
+            ) => {
+                let decimal_averager = DecimalAverager::<Decimal64Type>::try_new(
+                    *sum_scale,
+                    *target_precision,
+                    *target_scale,
+                )?;
+
+                let avg_fn =
+                    move |sum: i64, count: u64| decimal_averager.avg(sum, count as i64);
+
+                Ok(Box::new(AvgGroupsAccumulator::<Decimal64Type, _>::new(
+                    &data_type,
+                    args.return_field.data_type(),
+                    avg_fn,
                 )))
             }
             (
@@ -301,11 +506,6 @@ impl AggregateUDFImpl for Avg {
         ReversedUDAF::Identical
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [args] = take_function_args(self.name(), arg_types)?;
-        coerce_avg_type(self.name(), std::slice::from_ref(args))
-    }
-
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -388,7 +588,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
         self.count += (values.len() - values.null_count()) as u64;
 
         if let Some(x) = sum(values) {
-            let v = self.sum.get_or_insert(T::Native::default());
+            let v = self.sum.get_or_insert_with(T::Native::default);
             self.sum = Some(v.add_wrapping(x));
         }
         Ok(())
@@ -433,7 +633,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
 
         // sums are summed
         if let Some(x) = sum(states[1].as_primitive::<T>()) {
-            let v = self.sum.get_or_insert(T::Native::default());
+            let v = self.sum.get_or_insert_with(T::Native::default);
             self.sum = Some(v.add_wrapping(x));
         }
         Ok(())
@@ -588,7 +788,7 @@ where
 {
     pub fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F) -> Self {
         debug!(
-            "AvgGroupsAccumulator ({}, sum type: {sum_data_type:?}) --> {return_data_type:?}",
+            "AvgGroupsAccumulator ({}, sum type: {sum_data_type}) --> {return_data_type}",
             std::any::type_name::<T>()
         );
 

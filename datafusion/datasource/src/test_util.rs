@@ -34,6 +34,14 @@ pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
+}
+
+impl MockSource {
+    pub fn with_filter(mut self, filter: Arc<dyn PhysicalExpr>) -> Self {
+        self.filter = Some(filter);
+        self
+    }
 }
 
 impl FileSource for MockSource {
@@ -48,6 +56,10 @@ impl FileSource for MockSource {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
