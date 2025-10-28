@@ -402,15 +402,14 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
-    #[cfg(feature = "parquet_encryption")]
-    use crate::encryption::map_encryption_to_config_encryption;
-    use parquet::{
-        basic::Compression,
-        file::properties::{
-            BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
-            DEFAULT_BLOOM_FILTER_NDV,
-        },
+    use crate::config::{
+        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
+        ParquetOptions,
+    };
+    use parquet::basic::Compression;
+    use parquet::file::properties::{
+        BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
+        DEFAULT_BLOOM_FILTER_NDV,
     };
     use std::collections::HashMap;
 
@@ -539,7 +538,10 @@ mod tests {
         };
 
         #[cfg(feature = "parquet_encryption")]
-        let fep = map_encryption_to_config_encryption(props.file_encryption_properties());
+        let fep = props
+            .file_encryption_properties()
+            .map(ConfigFileEncryptionProperties::from);
+
         #[cfg(not(feature = "parquet_encryption"))]
         let fep = None;
 

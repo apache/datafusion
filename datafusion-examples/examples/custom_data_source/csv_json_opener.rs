@@ -59,7 +59,7 @@ async fn csv_opener() -> Result<()> {
         Arc::clone(&schema),
         Arc::new(CsvSource::default()),
     )
-    .with_projection(Some(vec![12, 0]))
+    .with_projection_indices(Some(vec![12, 0]))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.display().to_string(), 10))
     .build();
@@ -125,7 +125,7 @@ async fn json_opener() -> Result<()> {
         schema,
         Arc::new(JsonSource::default()),
     )
-    .with_projection(Some(vec![1, 0]))
+    .with_projection_indices(Some(vec![1, 0]))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.to_string(), 10))
     .build();

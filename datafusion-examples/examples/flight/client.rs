@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use tonic::transport::Endpoint;
 
 use datafusion::arrow::datatypes::Schema;
 
@@ -33,7 +34,9 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let testdata = datafusion::test_util::parquet_test_data();
 
     // Create Flight client
-    let mut client = FlightServiceClient::connect("http://localhost:50051").await?;
+    let endpoint = Endpoint::new("http://localhost:50051")?;
+    let channel = endpoint.connect().await?;
+    let mut client = FlightServiceClient::new(channel);
 
     // Call get_schema to get the schema of a Parquet file
     let request = tonic::Request::new(FlightDescriptor {
