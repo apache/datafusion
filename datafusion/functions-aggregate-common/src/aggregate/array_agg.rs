@@ -30,6 +30,7 @@ use arrow::datatypes::{ArrowNativeType, Field, FieldRef};
 use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
+
 #[derive(Clone)]
 pub struct AggGroupAccumulator<T: OffsetSizeTrait + Clone> {
     _virtual: PhantomData<T>,
@@ -50,8 +51,7 @@ pub struct AggGroupAccumulator<T: OffsetSizeTrait + Clone> {
     // after the call to `evaluate` this needs to be offseted by the number of
     // group consumed
     // zero means there is no state accumulated
-    max_seen_group: usize,
-    groups_consumed: usize,
+    total_groups_in_state: usize,
 }
 
 impl<T: OffsetSizeTrait + Clone> AggGroupAccumulator<T> {
@@ -63,8 +63,7 @@ impl<T: OffsetSizeTrait + Clone> AggGroupAccumulator<T> {
             stacked_batches_size: 0,
             stacked_group_indices: vec![],
             indice_sorted: false,
-            max_seen_group: 0,
-            groups_consumed: 0,
+            total_groups_in_state: 0,
         }
     }
     fn consume_stacked_batches(
@@ -73,7 +72,7 @@ impl<T: OffsetSizeTrait + Clone> AggGroupAccumulator<T> {
     ) -> Result<GenericListArray<T>> {
         // this is inclusive, zero-based
         let stop_at_group = match emit_to {
-            EmitTo::All => self.max_seen_group - self.groups_consumed - 1,
+            EmitTo::All => self.total_groups_in_state - 1,
             EmitTo::First(groups_taken) => groups_taken - 1,
         };
         // this can still happen, if all the groups have not been consumed
@@ -106,7 +105,7 @@ impl<T: OffsetSizeTrait + Clone> AggGroupAccumulator<T> {
         let mut group_windows = Vec::<T>::with_capacity(stop_at_group + 1);
         group_windows.push(T::zero());
         let mut split_offset = None;
-        self.groups_consumed += stop_at_group + 1;
+        self.total_groups_in_state -= stop_at_group + 1;
 
         // TODO: init with a good cap if possible via some stats during accumulation phase
         let mut interleave_offsets = vec![];
@@ -236,7 +235,7 @@ impl<T: OffsetSizeTrait + Clone> GroupsAccumulator for AggGroupAccumulator<T> {
             }
         }
         self.indice_sorted = false;
-        self.max_seen_group = total_num_groups;
+        self.total_groups_in_state = total_num_groups;
         Ok(())
     }
 
@@ -283,7 +282,7 @@ impl<T: OffsetSizeTrait + Clone> GroupsAccumulator for AggGroupAccumulator<T> {
         self.stacked_batches.push(Arc::clone(backed_arr));
         self.stacked_batches_size += backed_arr.get_array_memory_size();
         self.indice_sorted = false;
-        self.max_seen_group = total_num_groups;
+        self.total_groups_in_state = total_num_groups;
         Ok(())
     }
 
@@ -409,7 +408,7 @@ mod tests {
             opt_filter.as_ref(),
             6,
         )?;
-        assert_eq!(6, acc.max_seen_group);
+        assert_eq!(6, acc.total_groups_in_state);
         assert_eq!(
             &vec![
                 // from the prev merge_batch call
@@ -454,7 +453,7 @@ mod tests {
             );
 
             assert_eq!(vec![expected_final_state], final_state);
-            assert_eq!(6, acc2.groups_consumed);
+            assert_eq!(0, acc2.total_groups_in_state);
         }
         {
             let mut acc2 = acc.clone();
@@ -469,8 +468,7 @@ mod tests {
             );
 
             assert_eq!(vec![expected_final_state], final_state);
-            assert_eq!(6, acc2.max_seen_group);
-            assert_eq!(1, acc2.groups_consumed);
+            assert_eq!(5, acc2.total_groups_in_state);
         }
         {
             let mut acc2 = acc.clone();
@@ -489,8 +487,7 @@ mod tests {
             );
 
             assert_eq!(vec![expected_final_state], final_state);
-            assert_eq!(6, acc2.max_seen_group);
-            assert_eq!(2, acc2.groups_consumed);
+            assert_eq!(4, acc2.total_groups_in_state);
         }
         {
             let mut acc2 = acc.clone();
@@ -512,8 +509,7 @@ mod tests {
                 None,
             );
 
-            assert_eq!(6, acc2.max_seen_group);
-            assert_eq!(3, acc2.groups_consumed);
+            assert_eq!(3, acc2.total_groups_in_state);
             assert_eq!(vec![expected_final_state], final_state);
 
             assert_eq!(
@@ -544,8 +540,7 @@ mod tests {
                 None,
             );
 
-            assert_eq!(6, acc2.max_seen_group);
-            assert_eq!(4, acc2.groups_consumed);
+            assert_eq!(2, acc2.total_groups_in_state);
             assert_eq!(vec![expected_final_state], final_state);
             assert_eq!(
                 &vec![
@@ -575,8 +570,7 @@ mod tests {
                 None,
             );
 
-            assert_eq!(6, acc2.max_seen_group);
-            assert_eq!(5, acc2.groups_consumed);
+            assert_eq!(1, acc2.total_groups_in_state);
             assert_eq!(vec![expected_final_state], final_state);
             assert_eq!(
                 &vec![
