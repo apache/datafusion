@@ -16,7 +16,7 @@
 // under the License.
 
 use super::{Column, Literal};
-use crate::expressions::case::ResultState::{Complete, Partial};
+use crate::expressions::case::ResultState::{Complete, Empty, Partial};
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
 use arrow::array::*;
@@ -293,6 +293,10 @@ impl PartialResultIndex {
         Self { index: NONE_VALUE }
     }
 
+    fn zero() -> Self {
+        Self { index: 0 }
+    }
+
     /// Creates a new partial result index.
     ///
     /// If the provided value is greater than or equal to `u32::MAX`
@@ -335,10 +339,12 @@ impl Debug for PartialResultIndex {
 }
 
 enum ResultState {
-    /// The final result needs to be computed by merging the the data in `arrays`.
+    /// The final result is an array containing only null values.
+    Empty,
+    /// The final result needs to be computed by merging the data in `arrays`.
     Partial {
-        // A Vec of partial results that should be merged. `partial_result_indices` contains
-        // indexes into this vec.
+        // A `Vec` of partial results that should be merged.
+        // `partial_result_indices` contains indexes into this vec.
         arrays: Vec<ArrayData>,
         // Indicates per result row from which array in `partial_results` a value should be taken.
         indices: Vec<PartialResultIndex>,
@@ -372,10 +378,7 @@ impl ResultBuilder {
         Self {
             data_type: data_type.clone(),
             row_count,
-            state: Partial {
-                arrays: vec![],
-                indices: vec![PartialResultIndex::none(); row_count],
-            },
+            state: Empty,
         }
     }
 
@@ -454,6 +457,20 @@ impl ResultBuilder {
         }
 
         match &mut self.state {
+            Empty => {
+                let array_index = PartialResultIndex::zero();
+                let mut indices = vec![PartialResultIndex::none(); self.row_count];
+                for row_ix in row_indices.as_primitive::<UInt32Type>().values().iter() {
+                    indices[*row_ix as usize] = array_index;
+                }
+
+                self.state = Partial {
+                    arrays: vec![row_values],
+                    indices,
+                };
+
+                Ok(())
+            }
             Partial { arrays, indices } => {
                 let array_index = PartialResultIndex::try_new(arrays.len())?;
 
@@ -485,27 +502,23 @@ impl ResultBuilder {
     /// without any merging overhead.
     fn set_complete_result(&mut self, value: ColumnarValue) -> Result<()> {
         match &self.state {
-            Partial { arrays, .. } if !arrays.is_empty() => {
+            Empty => {
+                self.state = Complete(value);
+                Ok(())
+            }
+            Partial { .. } => {
                 internal_err!(
                     "Cannot set a complete result when there are already partial results"
                 )
             }
             Complete(_) => internal_err!("Complete result already set"),
-            _ => {
-                self.state = Complete(value);
-                Ok(())
-            }
         }
     }
 
     /// Finishes building the result and returns the final array.
     fn finish(self) -> Result<ColumnarValue> {
         match self.state {
-            Complete(v) => {
-                // If we have a complete result, we can just return it.
-                Ok(v)
-            }
-            Partial { arrays, .. } if arrays.is_empty() => {
+            Empty => {
                 // No complete result and no partial results.
                 // This can happen for case expressions with no else branch where no rows
                 // matched.
@@ -516,6 +529,10 @@ impl ResultBuilder {
             Partial { arrays, indices } => {
                 // Merge partial results into a single array.
                 Ok(ColumnarValue::Array(merge(&arrays, &indices)?))
+            }
+            Complete(v) => {
+                // If we have a complete result, we can just return it.
+                Ok(v)
             }
         }
     }
