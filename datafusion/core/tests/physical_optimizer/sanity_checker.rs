@@ -379,6 +379,32 @@ async fn test_analyzer() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_order_by_case_requirement() -> Result<()> {
+    let sql = r#"
+    WITH typ(oid, typnamespace, typname, typtype) AS (
+                      SELECT * FROM (VALUES (1, 10, 't1', 'b'))
+            UNION ALL SELECT * FROM (VALUES (2, NULL, 't2', 'b'))
+            UNION ALL SELECT * FROM (VALUES (3, 12, 't3', NULL))
+         )
+       , ns(oid, nspname) AS (VALUES (1, 'ns1'), (2, 'ns2'))
+
+    SELECT ns.nspname, typ.oid, typ.typname, typ.typtype
+      FROM typ JOIN ns ON (ns.oid = typ.typnamespace)
+     WHERE typ.typtype IN ('b','r','m','e','d')
+     ORDER BY CASE WHEN typ.typtype IN ('b','e','p') THEN 0
+                   WHEN typ.typtype = 'r' THEN 1
+              END
+    "#;
+
+    let ctx = SessionContext::new();
+    let df = ctx.sql(sql).await?;
+    let plan = df.create_physical_plan().await;
+
+    assert!(plan.is_ok(), "planning failed: {:?}", plan.err());
+    Ok(())
+}
+
 fn create_test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![Field::new("c9", DataType::Int32, true)]))
 }
