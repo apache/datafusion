@@ -154,19 +154,6 @@ impl<T: OffsetSizeTrait + Clone> AggGroupAccumulator<T> {
                 group_windows.push(end_offset);
             }
 
-            if self.stacked_group_indices.len() > 11 {
-                println!("debug first items {:?}", &self.stacked_group_indices[..10]);
-                println!("debug first group windows {:?}", &group_windows[..10]);
-                println!(
-                    "debug last items {:?}",
-                    &self.stacked_group_indices[self.stacked_group_indices.len() - 10..]
-                );
-                println!(
-                    "debug group windows {:?}",
-                    &group_windows[group_windows.len() - 10..]
-                );
-                println!("group windows len {}", group_windows.len());
-            }
             mem::take(&mut self.stacked_group_indices);
         };
 
@@ -254,29 +241,13 @@ impl<T: OffsetSizeTrait + Clone> GroupsAccumulator for AggGroupAccumulator<T> {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let emit_to_str = match emit_to {
-            EmitTo::All => "all".to_string(),
-            EmitTo::First(n) => format!("first {n}"),
-        };
         let arr = self.consume_stacked_batches(emit_to)?;
-        println!("finalize {} {}", arr.len(), emit_to_str);
         Ok(Arc::new(arr) as ArrayRef)
     }
 
     // filtered_null_mask(opt_filter, &values);
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let emit_to_str = match emit_to {
-            EmitTo::All => "all".to_string(),
-            EmitTo::First(n) => format!("first {n}"),
-        };
         let arr = self.consume_stacked_batches(emit_to)?;
-        println!(
-            "evaluate state {} {} {} {}",
-            arr.len(),
-            emit_to_str,
-            self.max_seen_group,
-            self.groups_consumed
-        );
         Ok(vec![Arc::new(arr) as ArrayRef])
     }
 
