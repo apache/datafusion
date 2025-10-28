@@ -214,9 +214,12 @@ impl SharedBoundsAccumulator {
         let mut partition_predicates = Vec::with_capacity(bounds.len());
 
         for partition_bounds in bounds.into_iter() {
-            // Create range predicates and bloom filter checks for each join key in this partition
-            let mut column_predicates =
+            // Create range predicates for each join key in this partition
+            let mut range_predicates =
                 Vec::with_capacity(partition_bounds.column_filters.len());
+
+            // Get the first bloom filter (they all have the same data - combined hash of all columns)
+            let mut bloom_filter_builder = None;
 
             // Consume column_filters by taking ownership
             for (col_idx, filter_data) in
@@ -239,27 +242,35 @@ impl SharedBoundsAccumulator {
                     Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
                         as Arc<dyn PhysicalExpr>;
 
-                // Create bloom filter check by consuming the builder
-                let bloom_expr =
-                    Arc::new(filter_data.bloom_filter.build(Arc::clone(right_expr)))
-                        as Arc<dyn PhysicalExpr>;
+                range_predicates.push(range_expr);
 
-                // Combine range and bloom filter: (range_expr AND bloom_expr)
-                let combined_expr =
-                    Arc::new(BinaryExpr::new(range_expr, Operator::And, bloom_expr))
-                        as Arc<dyn PhysicalExpr>;
-                column_predicates.push(combined_expr);
+                // Save the first bloom filter (all bloom filters have identical data)
+                if bloom_filter_builder.is_none() {
+                    bloom_filter_builder = Some(filter_data.bloom_filter);
+                }
             }
 
-            // Combine all column predicates for this partition with AND
-            if !column_predicates.is_empty() {
-                let partition_predicate = column_predicates
+            // Create a single bloom filter check for all columns combined
+            if let Some(builder) = bloom_filter_builder {
+                // Build bloom filter with all on_right expressions (matching how build side populated it)
+                let bloom_expr = Arc::new(builder.build(self.on_right.clone()))
+                    as Arc<dyn PhysicalExpr>;
+
+                // Combine all range predicates with bloom filter
+                // First combine all range predicates with AND
+                let combined_ranges = range_predicates
                     .into_iter()
                     .reduce(|acc, pred| {
                         Arc::new(BinaryExpr::new(acc, Operator::And, pred))
                             as Arc<dyn PhysicalExpr>
                     })
                     .unwrap();
+
+                // Then AND with the bloom filter
+                let partition_predicate =
+                    Arc::new(BinaryExpr::new(combined_ranges, Operator::And, bloom_expr))
+                        as Arc<dyn PhysicalExpr>;
+
                 partition_predicates.push(partition_predicate);
             }
         }

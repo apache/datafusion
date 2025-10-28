@@ -24,7 +24,7 @@ use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use std::any::Any;
 use std::fmt;
@@ -83,24 +83,25 @@ impl BloomFilterBuilder {
     /// avoiding any clones of the (potentially large) bloom filter.
     ///
     /// # Arguments
-    /// * `expr` - The expression to evaluate and check against the bloom filter
-    pub fn build(self, expr: Arc<dyn PhysicalExpr>) -> BloomFilterExpr {
-        BloomFilterExpr::new(expr, self.sbbf, self.random_state)
+    /// * `exprs` - The expressions to evaluate and check against the bloom filter
+    pub fn build(self, exprs: Vec<Arc<dyn PhysicalExpr>>) -> BloomFilterExpr {
+        BloomFilterExpr::new(exprs, self.sbbf, self.random_state)
     }
 }
 
 /// Physical expression that checks values against a bloom filter
 ///
 /// This is a static expression (similar to `InListExpr`) that evaluates
-/// a child expression and checks each value against a pre-built bloom filter.
+/// one or more child expressions and checks each value against a pre-built bloom filter.
+/// When multiple expressions are provided, they are combined via hashing (similar to join key hashing).
 /// Returns a boolean array indicating whether each value might be present
 /// (true) or is definitely absent (false).
 ///
 /// Note: Bloom filters can produce false positives but never false negatives.
 #[derive(Debug, Clone)]
 pub struct BloomFilterExpr {
-    /// The expression to evaluate
-    expr: Arc<dyn PhysicalExpr>,
+    /// The expressions to evaluate (one or more columns)
+    exprs: Vec<Arc<dyn PhysicalExpr>>,
     /// The bloom filter to check against
     bloom_filter: Arc<Sbbf>,
     /// Random state for consistent hashing
@@ -112,38 +113,55 @@ impl BloomFilterExpr {
     ///
     /// Users should create bloom filter expressions through `BloomFilterBuilder::build()`
     pub(crate) fn new(
-        expr: Arc<dyn PhysicalExpr>,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
         bloom_filter: Sbbf,
         random_state: RandomState,
     ) -> Self {
         Self {
-            expr,
+            exprs,
             bloom_filter: Arc::new(bloom_filter),
             random_state,
         }
     }
 
-    /// Check a scalar value against the bloom filter
-    fn check_scalar(&self, value: &ScalarValue) -> Result<bool> {
-        let array = value.to_array()?;
-        let result = self.check_array(&array)?;
-        // Since the array has length 1, return the first value
-        #[cfg(debug_assertions)]
-        {
-            assert_eq!(result.len(), 1);
-        }
-        Ok(result.value(0))
+    /// Check scalar expressions against the bloom filter
+    fn check_scalar_batch(&self, batch: &RecordBatch) -> Result<bool> {
+        // Evaluate all expressions to get their scalar values
+        let arrays: Vec<ArrayRef> = self
+            .exprs
+            .iter()
+            .map(|expr| {
+                let value = expr.evaluate(batch)?;
+                match value {
+                    ColumnarValue::Scalar(s) => s.to_array(),
+                    ColumnarValue::Array(a) => Ok(a),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Compute combined hash
+        let mut hashes = vec![0u64; 1];
+        create_hashes(&arrays, &self.random_state, &mut hashes)?;
+
+        Ok(self.bloom_filter.check_hash(hashes[0]))
     }
 
-    /// Check an array against the bloom filter
-    fn check_array(&self, array: &ArrayRef) -> Result<BooleanArray> {
-        // Use create_hashes to compute hash values for all array types
-        // This handles Dictionary, Struct, Null, and all other types uniformly
-        let mut hashes = vec![0u64; array.len()];
-        create_hashes(&[Arc::clone(array)], &self.random_state, &mut hashes)?;
+    /// Check arrays against the bloom filter
+    fn check_arrays(&self, batch: &RecordBatch) -> Result<BooleanArray> {
+        // Evaluate all expressions to get their arrays
+        let arrays: Vec<ArrayRef> = self
+            .exprs
+            .iter()
+            .map(|expr| expr.evaluate(batch)?.into_array(batch.num_rows()))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Use create_hashes to compute combined hash values for all columns
+        // This matches how the build side computes hashes (combining all join columns)
+        let mut hashes = vec![0u64; batch.num_rows()];
+        create_hashes(&arrays, &self.random_state, &mut hashes)?;
 
         // Check each hash against the bloom filter
-        let mut builder = BooleanArray::builder(array.len());
+        let mut builder = BooleanArray::builder(batch.num_rows());
         for hash in hashes {
             builder.append_value(self.bloom_filter.check_hash(hash));
         }
@@ -154,15 +172,27 @@ impl BloomFilterExpr {
 
 impl fmt::Display for BloomFilterExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} IN BLOOM_FILTER", self.expr)
+        if self.exprs.len() == 1 {
+            write!(f, "{} IN BLOOM_FILTER", self.exprs[0])
+        } else {
+            write!(f, "(")?;
+            for (i, expr) in self.exprs.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", expr)?;
+            }
+            write!(f, ") IN BLOOM_FILTER")
+        }
     }
 }
 
 impl PartialEq for BloomFilterExpr {
     fn eq(&self, other: &Self) -> bool {
-        // Two bloom filter expressions are equal if they have the same child expression
+        // Two bloom filter expressions are equal if they have the same child expressions
         // We can't compare bloom filters directly, so we use pointer equality
-        self.expr.eq(&other.expr) && Arc::ptr_eq(&self.bloom_filter, &other.bloom_filter)
+        self.exprs.eq(&other.exprs)
+            && Arc::ptr_eq(&self.bloom_filter, &other.bloom_filter)
     }
 }
 
@@ -170,7 +200,9 @@ impl Eq for BloomFilterExpr {}
 
 impl Hash for BloomFilterExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.expr.hash(state);
+        for expr in &self.exprs {
+            expr.hash(state);
+        }
         // Hash the pointer to the bloom filter
         Arc::as_ptr(&self.bloom_filter).hash(state);
     }
@@ -190,39 +222,54 @@ impl PhysicalExpr for BloomFilterExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let value = self.expr.evaluate(batch)?;
-        match value {
-            ColumnarValue::Array(array) => {
-                let result = self.check_array(&array)?;
-                Ok(ColumnarValue::Array(Arc::new(result)))
-            }
-            ColumnarValue::Scalar(scalar) => {
-                let result = self.check_scalar(&scalar)?;
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result))))
-            }
+        // Check if all expressions return scalars
+        let all_scalars = self
+            .exprs
+            .iter()
+            .map(|expr| expr.evaluate(batch))
+            .collect::<Result<Vec<_>>>()?
+            .iter()
+            .all(|v| matches!(v, ColumnarValue::Scalar(_)));
+
+        if all_scalars {
+            // If all are scalars, check them and return a scalar
+            let result = self.check_scalar_batch(batch)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result))))
+        } else {
+            // Otherwise, check arrays
+            let result = self.check_arrays(batch)?;
+            Ok(ColumnarValue::Array(Arc::new(result)))
         }
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        vec![&self.expr]
+        self.exprs.iter().collect()
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        if children.len() != 1 {
-            return internal_err!("BloomFilterExpr should have exactly 1 child");
-        }
         Ok(Arc::new(BloomFilterExpr {
-            expr: Arc::clone(&children[0]),
+            exprs: children,
             bloom_filter: Arc::clone(&self.bloom_filter),
             random_state: self.random_state.clone(),
         }))
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} IN BLOOM_FILTER", self.expr)
+        if self.exprs.len() == 1 {
+            write!(f, "{} IN BLOOM_FILTER", self.exprs[0])
+        } else {
+            write!(f, "(")?;
+            for (i, expr) in self.exprs.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", expr)?;
+            }
+            write!(f, ") IN BLOOM_FILTER")
+        }
     }
 }
 
@@ -259,17 +306,20 @@ mod tests {
         builder.insert_scalar(&ScalarValue::Int32(Some(2)))?;
         builder.insert_scalar(&ScalarValue::Int32(Some(3)))?;
 
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let expr = col("a", &schema)?;
-        let bloom_expr = builder.build(expr);
+        let bloom_expr = Arc::new(builder.build(vec![expr]));
 
-        // Check that inserted values are found
-        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(1)))?);
-        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(2)))?);
-        assert!(bloom_expr.check_scalar(&ScalarValue::Int32(Some(3)))?);
-
-        // A value that wasn't inserted might not be found
-        // (but could be a false positive, so we can't assert false)
+        // Check that inserted values are found by creating test batches
+        let test_array = Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![test_array])?;
+        let result = bloom_expr.evaluate(&batch)?;
+        assert!(result
+            .into_array(1)?
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap()
+            .value(0));
 
         Ok(())
     }
@@ -293,7 +343,7 @@ mod tests {
         // Create the expression
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let expr = col("a", &schema)?;
-        let bloom_expr = Arc::new(builder.build(expr));
+        let bloom_expr = Arc::new(builder.build(vec![expr]));
 
         // Create a test batch with values [1, 2, 4, 5]
         let test_array = Arc::new(Int32Array::from(vec![1, 2, 4, 5])) as ArrayRef;
@@ -328,7 +378,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
         let expr = col("s", &schema)?;
-        let bloom_expr = Arc::new(builder.build(expr));
+        let bloom_expr = Arc::new(builder.build(vec![expr]));
 
         let test_array =
             Arc::new(StringArray::from(vec!["hello", "world", "foo"])) as ArrayRef;
@@ -363,7 +413,7 @@ mod tests {
             false,
         )]));
         let expr = col("d", &schema)?;
-        let bloom_expr = Arc::new(builder.build(expr));
+        let bloom_expr = Arc::new(builder.build(vec![expr]));
 
         // Create test array with decimal values
         let test_array = Arc::new(
