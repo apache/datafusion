@@ -166,7 +166,7 @@ pub fn concat_elements_utf8view(
             buffer.clear();
             write!(&mut buffer, "{left}{right}")
                 .expect("writing into string buffer failed");
-            result.append_value(&buffer);
+            result.try_append_value(&buffer)?;
         } else {
             // at least one of the values is null, so the output is also null
             result.append_null()
@@ -260,13 +260,13 @@ pub(crate) fn regex_match_dyn_scalar(
     let result: Result<ArrayRef> = match left.data_type() {
         DataType::Utf8 => {
             regexp_is_match_flag_scalar!(left, right, StringArray, not_match, flag)
-        },
+        }
         DataType::Utf8View => {
             regexp_is_match_flag_scalar!(left, right, StringViewArray, not_match, flag)
         }
         DataType::LargeUtf8 => {
             regexp_is_match_flag_scalar!(left, right, LargeStringArray, not_match, flag)
-        },
+        }
         DataType::Dictionary(_, _) => {
             let values = left.as_any_dictionary().values();
 
@@ -288,7 +288,7 @@ pub(crate) fn regex_match_dyn_scalar(
                     _ => unreachable!(),
                 }
             )
-        },
+        }
         other => internal_err!(
                 "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",
                 other
