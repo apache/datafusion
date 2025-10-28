@@ -141,6 +141,12 @@ create_left_integral_dyn_scalar_kernel!(
     bitwise_shift_left_scalar
 );
 
+/// Concatenates two `StringViewArray`s element-wise.  
+/// If either element is `Null`, the result element is also `Null`.
+///
+/// # Errors
+/// - Returns an error if the input arrays have different lengths.  
+/// - Returns an error if any concatenated string exceeds `u32::MAX` (≈4 GB) in length.
 pub fn concat_elements_utf8view(
     left: &StringViewArray,
     right: &StringViewArray,
