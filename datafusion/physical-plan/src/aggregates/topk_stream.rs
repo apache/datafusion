@@ -119,12 +119,12 @@ impl Stream for GroupedTopKAggregateStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let elapsed_computer = self.baseline_metrics.elapsed_compute().clone();
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
             match res {
                 // got a batch, convert to rows and append to our TreeMap
                 Some(Ok(batch)) => {
-                    let _timer = elapsed_computer.timer();
+                    let _timer = elapsed_compute.timer();
 
                     self.started = true;
                     trace!(
