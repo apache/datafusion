@@ -90,7 +90,7 @@ impl ScalarUDFImpl for SparkBitCount {
 fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
     let value_array = value_array[0].as_ref();
     match value_array.data_type() {
-        DataType::Int8 => {
+        DataType::Int8 | DataType::Boolean => {
             let result: Int32Array = value_array
                 .as_primitive::<Int8Type>()
                 .unary(|v| bit_count(v.into()));
