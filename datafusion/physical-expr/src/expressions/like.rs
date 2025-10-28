@@ -19,7 +19,7 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::apply_cmp;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
@@ -118,14 +118,13 @@ impl PhysicalExpr for LikeExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        use arrow::compute::*;
         let lhs = self.expr.evaluate(batch)?;
         let rhs = self.pattern.evaluate(batch)?;
         match (self.negated, self.case_insensitive) {
-            (false, false) => apply_cmp(&lhs, &rhs, like),
-            (false, true) => apply_cmp(&lhs, &rhs, ilike),
-            (true, false) => apply_cmp(&lhs, &rhs, nlike),
-            (true, true) => apply_cmp(&lhs, &rhs, nilike),
+            (false, false) => apply_cmp(Operator::LikeMatch, &lhs, &rhs),
+            (false, true) => apply_cmp(Operator::ILikeMatch, &lhs, &rhs),
+            (true, false) => apply_cmp(Operator::NotLikeMatch, &lhs, &rhs),
+            (true, true) => apply_cmp(Operator::NotILikeMatch, &lhs, &rhs),
         }
     }
 
