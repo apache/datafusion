@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::IntervalUnit::*;
+
 use crate::types::{LogicalTypeRef, NativeType};
 use std::sync::{Arc, LazyLock};
 
@@ -25,6 +27,19 @@ macro_rules! singleton {
 
         #[doc = "Getter for singleton instance of a logical type representing"]
         #[doc = concat!("[`NativeType::", stringify!($ty), "`].")]
+        pub fn $getter() -> LogicalTypeRef {
+            Arc::clone(&$name)
+        }
+    };
+}
+
+macro_rules! singleton_variant {
+    ($name:ident, $getter:ident, $ty:ident, $variant:ident) => {
+        static $name: LazyLock<LogicalTypeRef> =
+            LazyLock::new(|| Arc::new(NativeType::$ty($variant)));
+
+        #[doc = "Getter for singleton instance of a logical type representing"]
+        #[doc = concat!("[`NativeType::", stringify!($ty), "`] of unit [`", stringify!($variant),"`].`")]
         pub fn $getter() -> LogicalTypeRef {
             Arc::clone(&$name)
         }
@@ -47,3 +62,10 @@ singleton!(LOGICAL_FLOAT64, logical_float64, Float64);
 singleton!(LOGICAL_DATE, logical_date, Date);
 singleton!(LOGICAL_BINARY, logical_binary, Binary);
 singleton!(LOGICAL_STRING, logical_string, String);
+
+singleton_variant!(
+    LOGICAL_INTERVAL_MDN,
+    logical_interval_mdn,
+    Interval,
+    MonthDayNano
+);
