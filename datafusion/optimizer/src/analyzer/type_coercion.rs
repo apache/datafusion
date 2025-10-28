@@ -1722,7 +1722,10 @@ mod test {
         let empty = empty_with_type(DataType::Int32);
         let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             avg_udaf(),
-            vec![cast(col("a"), DataType::Float64)],
+            vec![cast(
+                col("a"),
+                Arc::new(Field::new("a", DataType::Float64, true)),
+            )],
             false,
             None,
             vec![],
@@ -1761,8 +1764,10 @@ mod test {
     #[test]
     fn binary_op_date32_op_interval() -> Result<()> {
         // CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("...")
-        let expr = cast(lit("1998-03-18"), DataType::Date32)
-            + lit(ScalarValue::new_interval_dt(123, 456));
+        let expr = cast(
+            lit("1998-03-18"),
+            Arc::new(Field::new("date", DataType::Date32, true)),
+        ) + lit(ScalarValue::new_interval_dt(123, 456));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
 
@@ -1811,8 +1816,10 @@ mod test {
         let expr = col("a").between(
             lit("2002-05-08"),
             // (cast('2002-05-08' as date) + interval '1 months')
-            cast(lit("2002-05-08"), DataType::Date32)
-                + lit(ScalarValue::new_interval_ym(0, 1)),
+            cast(
+                lit("2002-05-08"),
+                Arc::new(Field::new("date", DataType::Date32, true)),
+            ) + lit(ScalarValue::new_interval_ym(0, 1)),
         );
         let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
@@ -1830,8 +1837,10 @@ mod test {
     fn between_infer_cheap_type() -> Result<()> {
         let expr = col("a").between(
             // (cast('2002-05-08' as date) + interval '1 months')
-            cast(lit("2002-05-08"), DataType::Date32)
-                + lit(ScalarValue::new_interval_ym(0, 1)),
+            cast(
+                lit("2002-05-08"),
+                Arc::new(Field::new("date", DataType::Date32, true)),
+            ) + lit(ScalarValue::new_interval_ym(0, 1)),
             lit("2002-12-08"),
         );
         let empty = empty_with_type(Utf8);
@@ -2108,9 +2117,16 @@ mod test {
     fn binary_op_date32_eq_ts() -> Result<()> {
         let expr = cast(
             lit("1998-03-18"),
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            Arc::new(Field::new(
+                "date",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            )),
         )
-        .eq(cast(lit("1998-03-18"), DataType::Date32));
+        .eq(cast(
+            lit("1998-03-18"),
+            Arc::new(Field::new("date", DataType::Date32, true)),
+        ));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
 
@@ -2458,7 +2474,10 @@ mod test {
         let fields = Field::new("key_value", DataType::Struct(struct_fields), false);
         let may_type_custom = DataType::Map(Arc::new(fields), false);
 
-        let expr = col("a").eq(cast(col("a"), may_type_custom));
+        let expr = col("a").eq(cast(
+            col("a"),
+            Arc::new(Field::new("a", may_type_custom, true)),
+        ));
         let empty = empty_with_type(map_type_entries);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
 
@@ -2479,7 +2498,11 @@ mod test {
             Operator::Plus,
             Box::new(cast(
                 lit("2000-01-01T00:00:00"),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                Arc::new(Field::new(
+                    "timestamp",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    true,
+                )),
             )),
         ));
         let empty = empty();
@@ -2499,12 +2522,20 @@ mod test {
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                Arc::new(Field::new(
+                    "timestamp",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    true,
+                )),
             )),
             Operator::Minus,
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                Arc::new(Field::new(
+                    "timestamp",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    true,
+                )),
             )),
         ));
         let empty = empty();

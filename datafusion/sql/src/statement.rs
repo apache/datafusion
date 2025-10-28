@@ -499,11 +499,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .iter()
                                 .zip(input_fields)
                                 .map(|(field, input_field)| {
-                                    cast(
-                                        col(input_field.name()),
-                                        field.data_type().clone(),
-                                    )
-                                    .alias(field.name())
+                                    cast(col(input_field.name()), Arc::clone(field))
+                                        .alias(field.name())
                                 })
                                 .collect::<Vec<_>>();
 

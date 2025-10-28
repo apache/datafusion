@@ -326,14 +326,75 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
     Expr::GroupingSet(GroupingSet::Rollup(exprs))
 }
 
+/// Types that can be used to describe the result of a cast expression.
+pub trait IntoCastField {
+    fn into_cast_field(self, expr: &Expr) -> FieldRef;
+}
+
+impl IntoCastField for FieldRef {
+    fn into_cast_field(self, _expr: &Expr) -> FieldRef {
+        self
+    }
+}
+
+impl IntoCastField for &FieldRef {
+    fn into_cast_field(self, _expr: &Expr) -> FieldRef {
+        Arc::clone(self)
+    }
+}
+
+impl IntoCastField for Field {
+    fn into_cast_field(self, _expr: &Expr) -> FieldRef {
+        Arc::new(self)
+    }
+}
+
+impl IntoCastField for &Field {
+    fn into_cast_field(self, _expr: &Expr) -> FieldRef {
+        Arc::new(self.clone())
+    }
+}
+
+impl IntoCastField for DataType {
+    fn into_cast_field(self, expr: &Expr) -> FieldRef {
+        let nullable = infer_cast_nullability(expr);
+        Arc::new(Field::new("", self, nullable))
+    }
+}
+
+fn infer_cast_nullability(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(value, _) => value.is_null(),
+        Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
+            field.is_nullable()
+        }
+        _ => true,
+    }
+}
+
 /// Create a cast expression
-pub fn cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::Cast(Cast::new(Box::new(expr), data_type))
+pub fn cast<F>(expr: Expr, field: F) -> Expr
+where
+    F: IntoCastField,
+{
+    let field = field.into_cast_field(&expr);
+    Expr::Cast(Cast::new(Box::new(expr), field))
 }
 
 /// Create a try cast expression
-pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::TryCast(TryCast::new(Box::new(expr), data_type))
+pub fn try_cast<F>(expr: Expr, field: F) -> Expr
+where
+    F: IntoCastField,
+{
+    let field = field.into_cast_field(&expr);
+    if field.is_nullable() {
+        Expr::TryCast(TryCast::new(Box::new(expr), field))
+    } else {
+        Expr::TryCast(TryCast::new(
+            Box::new(expr),
+            Arc::new(field.as_ref().clone().with_nullable(true)),
+        ))
+    }
 }
 
 /// Create is null expression

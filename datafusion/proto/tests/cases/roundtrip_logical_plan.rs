@@ -2032,7 +2032,10 @@ fn roundtrip_null_literal() {
 
 #[test]
 fn roundtrip_cast() {
-    let test_expr = Expr::Cast(Cast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+    let test_expr = Expr::Cast(Cast::new(
+        Box::new(lit(1.0_f32)),
+        Arc::new(Field::new("a", DataType::Boolean, true)),
+    ));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2040,14 +2043,18 @@ fn roundtrip_cast() {
 
 #[test]
 fn roundtrip_try_cast() {
-    let test_expr =
-        Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+    let test_expr = Expr::TryCast(TryCast::new(
+        Box::new(lit(1.0_f32)),
+        Arc::new(Field::new("a", DataType::Boolean, true)),
+    ));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 
-    let test_expr =
-        Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
+    let test_expr = Expr::TryCast(TryCast::new(
+        Box::new(lit("not a bool")),
+        Arc::new(Field::new("a", DataType::Boolean, true)),
+    ));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);

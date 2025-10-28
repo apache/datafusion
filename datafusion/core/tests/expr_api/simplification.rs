@@ -192,7 +192,10 @@ fn make_udf_add(volatility: Volatility) -> Arc<ScalarUDF> {
 }
 
 fn cast_to_int64_expr(expr: Expr) -> Expr {
-    Expr::Cast(Cast::new(expr.into(), DataType::Int64))
+    Expr::Cast(Cast::new(
+        expr.into(),
+        Arc::new(Field::new("cast_to_i64", DataType::Int64, true)),
+    ))
 }
 
 fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
@@ -747,8 +750,14 @@ fn test_simplify_concat() -> Result<()> {
 #[test]
 fn test_simplify_cycles() {
     // cast(now() as int64) < cast(to_timestamp(0) as int64) + i64::MAX
-    let expr = cast(now(), DataType::Int64)
-        .lt(cast(to_timestamp(vec![lit(0)]), DataType::Int64) + lit(i64::MAX));
+    let expr = cast(
+        now(),
+        Arc::new(Field::new("cast_to_i64", DataType::Int64, true)),
+    )
+    .lt(cast(
+        to_timestamp(vec![lit(0)]),
+        Arc::new(Field::new("cast_to_i64", DataType::Int64, true)),
+    ) + lit(i64::MAX));
     let expected = lit(true);
     test_simplify_with_cycle_count(expr, expected, 3);
 }

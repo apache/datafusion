@@ -289,8 +289,8 @@ fn extract_non_nullable_columns(
                 false,
             )
         }
-        Expr::Cast(Cast { expr, data_type: _ })
-        | Expr::TryCast(TryCast { expr, data_type: _ }) => extract_non_nullable_columns(
+        Expr::Cast(Cast { expr, field: _ })
+        | Expr::TryCast(TryCast { expr, field: _ }) => extract_non_nullable_columns(
             expr,
             non_nullable_cols,
             left_schema,
@@ -308,6 +308,7 @@ mod tests {
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::DataType;
+    use arrow::datatypes::Field;
     use datafusion_expr::{
         binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
@@ -449,9 +450,11 @@ mod tests {
                 None,
             )?
             .filter(binary_expr(
-                cast(col("t1.b"), DataType::Int64).gt(lit(10u32)),
+                cast(col("t1.b"), Arc::new(Field::new("", DataType::Int64, true)))
+                    .gt(lit(10u32)),
                 And,
-                try_cast(col("t2.c"), DataType::Int64).lt(lit(20u32)),
+                try_cast(col("t2.c"), Arc::new(Field::new("", DataType::Int64, true)))
+                    .lt(lit(20u32)),
             ))?
             .build()?;
 

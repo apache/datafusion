@@ -70,17 +70,13 @@ message LogicalExtensionNode {
   repeated LogicalPlanNode inputs = 2;
 }
 
-message ProjectionColumns {
-  repeated string columns = 1;
-}
+message ProjectionColumns { repeated string columns = 1; }
 
 message LogicalExprNodeCollection {
   repeated LogicalExprNode logical_expr_nodes = 1;
 }
 
-message SortExprNodeCollection {
-  repeated SortExprNode sort_expr_nodes = 1;
-}
+message SortExprNodeCollection { repeated SortExprNode sort_expr_nodes = 1; }
 
 message ListingTableScanNode {
   reserved 1; // was string table_name
@@ -125,9 +121,7 @@ message CustomTableScanNode {
 message ProjectionNode {
   LogicalPlanNode input = 1;
   repeated LogicalExprNode expr = 2;
-  oneof optional_alias {
-    string alias = 3;
-  }
+  oneof optional_alias { string alias = 3; }
 }
 
 message SelectionNode {
@@ -155,9 +149,7 @@ message HashRepartition {
   uint64 partition_count = 2;
 }
 
-message EmptyRelationNode {
-  bool produce_one_row = 1;
-}
+message EmptyRelationNode { bool produce_one_row = 1; }
 
 message CreateExternalTableNode {
   reserved 1; // was string name
@@ -213,8 +205,9 @@ message CreateViewNode {
   string definition = 4;
 }
 
-// a node containing data for defining values list. unlike in SQL where it's two dimensional, here
-// the list is flattened, and with the field n_cols it can be parsed and partitioned into rows
+// a node containing data for defining values list. unlike in SQL where it's two
+// dimensional, here the list is flattened, and with the field n_cols it can be
+// parsed and partitioned into rows
 message ValuesNode {
   uint64 n_cols = 1;
   repeated LogicalExprNode values_list = 2;
@@ -252,9 +245,7 @@ message JoinNode {
   LogicalExprNode filter = 8;
 }
 
-message DistinctNode {
-  LogicalPlanNode input = 1;
-}
+message DistinctNode { LogicalPlanNode input = 1; }
 
 message DistinctOnNode {
   repeated LogicalExprNode on_expr = 1;
@@ -270,8 +261,8 @@ message CopyToNode {
   repeated string partition_by = 7;
 }
 
-message DmlNode{
-   enum Type {
+message DmlNode {
+  enum Type {
     UPDATE = 0;
     DELETE = 1;
     CTAS = 2;
@@ -319,9 +310,7 @@ message RecursionUnnestOption {
   uint32 depth = 3;
 }
 
-message UnionNode {
-  repeated LogicalPlanNode inputs = 1;
-}
+message UnionNode { repeated LogicalPlanNode inputs = 1; }
 
 message CrossJoinNode {
   LogicalPlanNode left = 1;
@@ -336,9 +325,7 @@ message LimitNode {
   int64 fetch = 3;
 }
 
-message SelectionExecNode {
-  LogicalExprNode expr = 1;
-}
+message SelectionExecNode { LogicalExprNode expr = 1; }
 
 message SubqueryAliasNode {
   reserved 2; // Was string alias
@@ -359,7 +346,6 @@ message LogicalExprNode {
 
     // binary expressions
     BinaryExprNode binary_expr = 4;
-
 
     // null checks
     IsNull is_null_expr = 6;
@@ -405,13 +391,10 @@ message LogicalExprNode {
     PlaceholderNode placeholder = 34;
 
     Unnest unnest = 35;
-
   }
 }
 
-message Wildcard {
-  TableReference qualifier = 1;
-}
+message Wildcard { TableReference qualifier = 1; }
 
 message PlaceholderNode {
   string id = 1;
@@ -422,29 +405,17 @@ message PlaceholderNode {
   map<string, string> metadata = 4;
 }
 
-message LogicalExprList {
-  repeated LogicalExprNode expr = 1;
-}
+message LogicalExprList { repeated LogicalExprNode expr = 1; }
 
-message GroupingSetNode {
-  repeated LogicalExprList expr = 1;
-}
+message GroupingSetNode { repeated LogicalExprList expr = 1; }
 
-message CubeNode {
-  repeated LogicalExprNode expr = 1;
-}
+message CubeNode { repeated LogicalExprNode expr = 1; }
 
-message RollupNode {
-  repeated LogicalExprNode expr = 1;
-}
+message RollupNode { repeated LogicalExprNode expr = 1; }
 
-message NamedStructField {
-  datafusion_common.ScalarValue name = 1;
-}
+message NamedStructField { datafusion_common.ScalarValue name = 1; }
 
-message ListIndex {
-  LogicalExprNode key = 1;
-}
+message ListIndex { LogicalExprNode key = 1; }
 
 message ListRange {
   LogicalExprNode start = 1;
@@ -452,41 +423,23 @@ message ListRange {
   LogicalExprNode stride = 3;
 }
 
-message IsNull {
-  LogicalExprNode expr = 1;
-}
+message IsNull { LogicalExprNode expr = 1; }
 
-message IsNotNull {
-  LogicalExprNode expr = 1;
-}
+message IsNotNull { LogicalExprNode expr = 1; }
 
-message IsTrue {
-  LogicalExprNode expr = 1;
-}
+message IsTrue { LogicalExprNode expr = 1; }
 
-message IsFalse {
-  LogicalExprNode expr = 1;
-}
+message IsFalse { LogicalExprNode expr = 1; }
 
-message IsUnknown {
-  LogicalExprNode expr = 1;
-}
+message IsUnknown { LogicalExprNode expr = 1; }
 
-message IsNotTrue {
-  LogicalExprNode expr = 1;
-}
+message IsNotTrue { LogicalExprNode expr = 1; }
 
-message IsNotFalse {
-  LogicalExprNode expr = 1;
-}
+message IsNotFalse { LogicalExprNode expr = 1; }
 
-message IsNotUnknown {
-  LogicalExprNode expr = 1;
-}
+message IsNotUnknown { LogicalExprNode expr = 1; }
 
-message Not {
-  LogicalExprNode expr = 1;
-}
+message Not { LogicalExprNode expr = 1; }
 
 message AliasNode {
   LogicalExprNode expr = 1;
@@ -503,20 +456,15 @@ message BinaryExprNode {
   string op = 3;
 }
 
-message NegativeNode {
-  LogicalExprNode expr = 1;
-}
+message NegativeNode { LogicalExprNode expr = 1; }
 
-message Unnest {
-  repeated LogicalExprNode exprs = 1;
-}
+message Unnest { repeated LogicalExprNode exprs = 1; }
 
 message InListNode {
   LogicalExprNode expr = 1;
   repeated LogicalExprNode list = 2;
   bool negated = 3;
 }
-
 
 message AggregateUDFExprNode {
   string fun_name = 1;
@@ -592,12 +540,12 @@ message WhenThen {
 
 message CastNode {
   LogicalExprNode expr = 1;
-  datafusion_common.ArrowType arrow_type = 2;
+  datafusion_common.Field field = 2;
 }
 
 message TryCastNode {
   LogicalExprNode expr = 1;
-  datafusion_common.ArrowType arrow_type = 2;
+  datafusion_common.Field field = 2;
 }
 
 message SortExprNode {
@@ -615,11 +563,12 @@ enum WindowFrameUnits {
 message WindowFrame {
   WindowFrameUnits window_frame_units = 1;
   WindowFrameBound start_bound = 2;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
-  // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
-  oneof end_bound {
-    WindowFrameBound bound = 3;
-  }
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see
+  // https://github.com/tokio-rs/prost/issues/430 and
+  // https://github.com/tokio-rs/prost/pull/455) this syntax is ugly but is
+  // binary compatible with the "optional" keyword (see
+  // https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
+  oneof end_bound { WindowFrameBound bound = 3; }
 }
 
 enum WindowFrameBoundType {
@@ -642,26 +591,18 @@ enum NullTreatment {
 // Arrow Data Types
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-message FixedSizeBinary{
-  int32 length = 1;
-}
+message FixedSizeBinary { int32 length = 1; }
 
-enum DateUnit{
+enum DateUnit {
   Day = 0;
   DateMillisecond = 1;
 }
 
-message AnalyzedLogicalPlanType {
-  string analyzer_name = 1;
-}
+message AnalyzedLogicalPlanType { string analyzer_name = 1; }
 
-message OptimizedLogicalPlanType {
-  string optimizer_name = 1;
-}
+message OptimizedLogicalPlanType { string optimizer_name = 1; }
 
-message OptimizedPhysicalPlanType {
-  string optimizer_name = 1;
-}
+message OptimizedPhysicalPlanType { string optimizer_name = 1; }
 
 message PlanType {
   oneof plan_type_enum {
@@ -686,9 +627,7 @@ message StringifiedPlan {
   string plan = 2;
 }
 
-message BareTableReference {
-  string table = 1;
-}
+message BareTableReference { string table = 1; }
 
 message PartialTableReference {
   string schema = 1;
@@ -755,7 +694,6 @@ message PartitionColumn {
   string name = 1;
   datafusion_common.ArrowType arrow_type = 2;
 }
-
 
 message FileSinkConfig {
   reserved 6; // writer_mode
@@ -884,9 +822,7 @@ message PhysicalScalarUdfNode {
 }
 
 message PhysicalAggregateExprNode {
-  oneof AggregateFunction {
-    string user_defined_aggr_function = 4;
-  }
+  oneof AggregateFunction { string user_defined_aggr_function = 4; }
   repeated PhysicalExprNode expr = 2;
   repeated PhysicalSortExprNode ordering_req = 5;
   bool distinct = 3;
@@ -911,17 +847,11 @@ message PhysicalWindowExprNode {
   bool distinct = 12;
 }
 
-message PhysicalIsNull {
-  PhysicalExprNode expr = 1;
-}
+message PhysicalIsNull { PhysicalExprNode expr = 1; }
 
-message PhysicalIsNotNull {
-  PhysicalExprNode expr = 1;
-}
+message PhysicalIsNotNull { PhysicalExprNode expr = 1; }
 
-message PhysicalNot {
-  PhysicalExprNode expr = 1;
-}
+message PhysicalNot { PhysicalExprNode expr = 1; }
 
 message PhysicalAliasNode {
   PhysicalExprNode expr = 1;
@@ -980,9 +910,7 @@ message PhysicalCastNode {
   datafusion_common.ArrowType arrow_type = 2;
 }
 
-message PhysicalNegativeNode {
-  PhysicalExprNode expr = 1;
-}
+message PhysicalNegativeNode { PhysicalExprNode expr = 1; }
 
 message PhysicalExtensionExprNode {
   bytes expr = 1;
@@ -996,9 +924,7 @@ message FilterExecNode {
   repeated uint32 projection = 9;
 }
 
-message FileGroup {
-  repeated PartitionedFile files = 1;
-}
+message FileGroup { repeated PartitionedFile files = 1; }
 
 message ScanLimit {
   // wrap into a message to make it optional
@@ -1042,23 +968,15 @@ message CsvScanExecNode {
   bool has_header = 2;
   string delimiter = 3;
   string quote = 4;
-  oneof optional_escape {
-    string escape = 5;
-  }
-  oneof optional_comment {
-    string comment = 6;
-  }
+  oneof optional_escape { string escape = 5; }
+  oneof optional_comment { string comment = 6; }
   bool newlines_in_values = 7;
   bool truncate_rows = 8;
 }
 
-message JsonScanExecNode {
-  FileScanExecConf base_conf = 1;
-}
+message JsonScanExecNode { FileScanExecConf base_conf = 1; }
 
-message AvroScanExecNode {
-  FileScanExecConf base_conf = 1;
-}
+message AvroScanExecNode { FileScanExecConf base_conf = 1; }
 
 message MemoryScanExecNode {
   repeated bytes partitions = 1;
@@ -1069,9 +987,7 @@ message MemoryScanExecNode {
   optional uint32 fetch = 6;
 }
 
-message CooperativeExecNode {
-  PhysicalPlanNode input = 1;
-}
+message CooperativeExecNode { PhysicalPlanNode input = 1; }
 
 enum PartitionMode {
   COLLECT_LEFT = 0;
@@ -1107,13 +1023,9 @@ message SymmetricHashJoinExecNode {
   repeated PhysicalSortExprNode right_sort_exprs = 10;
 }
 
-message InterleaveExecNode {
-  repeated PhysicalPlanNode inputs = 1;
-}
+message InterleaveExecNode { repeated PhysicalPlanNode inputs = 1; }
 
-message UnionExecNode {
-  repeated PhysicalPlanNode inputs = 1;
-}
+message UnionExecNode { repeated PhysicalPlanNode inputs = 1; }
 
 message ExplainExecNode {
   datafusion_common.Schema schema = 1;
@@ -1138,22 +1050,16 @@ message PhysicalColumn {
   uint32 index = 2;
 }
 
-message UnknownColumn {
-  string name = 1;
-}
+message UnknownColumn { string name = 1; }
 
 message JoinOn {
   PhysicalExprNode left = 1;
   PhysicalExprNode right = 2;
 }
 
-message EmptyExecNode {
-  datafusion_common.Schema schema = 1;
-}
+message EmptyExecNode { datafusion_common.Schema schema = 1; }
 
-message PlaceholderRowExecNode {
-  datafusion_common.Schema schema = 1;
-}
+message PlaceholderRowExecNode { datafusion_common.Schema schema = 1; }
 
 message ProjectionExecNode {
   PhysicalPlanNode input = 1;
@@ -1169,9 +1075,7 @@ enum AggregateMode {
   SINGLE_PARTITIONED = 4;
 }
 
-message PartiallySortedInputOrderMode {
-  repeated uint64 columns = 6;
-}
+message PartiallySortedInputOrderMode { repeated uint64 columns = 6; }
 
 message WindowAggExecNode {
   PhysicalPlanNode input = 1;
@@ -1185,13 +1089,9 @@ message WindowAggExecNode {
   }
 }
 
-message MaybeFilter {
-  PhysicalExprNode expr = 1;
-}
+message MaybeFilter { PhysicalExprNode expr = 1; }
 
-message MaybePhysicalSortExprs {
-  repeated PhysicalSortExprNode sort_expr = 1;
-}
+message MaybePhysicalSortExprs { repeated PhysicalSortExprNode sort_expr = 1; }
 
 message AggLimit {
   // wrap into a message to make it optional
@@ -1205,7 +1105,8 @@ message AggregateExecNode {
   PhysicalPlanNode input = 4;
   repeated string group_expr_name = 5;
   repeated string aggr_expr_name = 6;
-  // we need the input schema to the partial aggregate to pass to the final aggregate
+  // we need the input schema to the partial aggregate to pass to the final
+  // aggregate
   datafusion_common.Schema input_schema = 7;
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
@@ -1265,7 +1166,7 @@ message PhysicalHashRepartition {
   uint64 partition_count = 2;
 }
 
-message RepartitionExecNode{
+message RepartitionExecNode {
   PhysicalPlanNode input = 1;
   // oneof partition_method {
   //   uint64 round_robin = 2;
@@ -1283,13 +1184,13 @@ message Partitioning {
   }
 }
 
-message JoinFilter{
+message JoinFilter {
   PhysicalExprNode expression = 1;
   repeated ColumnIndex column_indices = 2;
   datafusion_common.Schema schema = 3;
 }
 
-message ColumnIndex{
+message ColumnIndex {
   uint32 index = 1;
   datafusion_common.JoinSide side = 2;
 }
@@ -1323,8 +1224,8 @@ message RecursiveQueryNode {
 }
 
 message CteWorkTableScanNode {
-    string name = 1;
-    datafusion_common.Schema schema = 2;
+  string name = 1;
+  datafusion_common.Schema schema = 2;
 }
 
 enum GenerateSeriesName {
@@ -1332,45 +1233,43 @@ enum GenerateSeriesName {
   GS_RANGE = 1;
 }
 
-message GenerateSeriesArgsContainsNull {
-    GenerateSeriesName name = 1;
-}
+message GenerateSeriesArgsContainsNull { GenerateSeriesName name = 1; }
 
 message GenerateSeriesArgsInt64 {
-    int64 start = 1;
-    int64 end = 2;
-    int64 step = 3;
-    bool include_end = 4;
-    GenerateSeriesName name = 5;
+  int64 start = 1;
+  int64 end = 2;
+  int64 step = 3;
+  bool include_end = 4;
+  GenerateSeriesName name = 5;
 }
 
 message GenerateSeriesArgsTimestamp {
-    int64 start = 1;
-    int64 end = 2;
-    datafusion_common.IntervalMonthDayNanoValue step = 3;
-    optional string tz = 4;
-    bool include_end = 5;
-    GenerateSeriesName name = 6;
+  int64 start = 1;
+  int64 end = 2;
+  datafusion_common.IntervalMonthDayNanoValue step = 3;
+  optional string tz = 4;
+  bool include_end = 5;
+  GenerateSeriesName name = 6;
 }
 
 message GenerateSeriesArgsDate {
-    int64 start = 1;
-    int64 end = 2;
-    datafusion_common.IntervalMonthDayNanoValue step = 3;
-    bool include_end = 4;
-    GenerateSeriesName name = 5;
+  int64 start = 1;
+  int64 end = 2;
+  datafusion_common.IntervalMonthDayNanoValue step = 3;
+  bool include_end = 4;
+  GenerateSeriesName name = 5;
 }
 
 message GenerateSeriesNode {
-    datafusion_common.Schema schema = 1;
-    uint32 target_batch_size = 2;
+  datafusion_common.Schema schema = 1;
+  uint32 target_batch_size = 2;
 
-    oneof args {
-        GenerateSeriesArgsContainsNull contains_null = 3;
-        GenerateSeriesArgsInt64 int64_args = 4;
-        GenerateSeriesArgsTimestamp timestamp_args = 5;
-        GenerateSeriesArgsDate date_args = 6;
-    }
+  oneof args {
+    GenerateSeriesArgsContainsNull contains_null = 3;
+    GenerateSeriesArgsInt64 int64_args = 4;
+    GenerateSeriesArgsTimestamp timestamp_args = 5;
+    GenerateSeriesArgsDate date_args = 6;
+  }
 }
 
 message SortMergeJoinExecNode {

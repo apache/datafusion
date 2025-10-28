@@ -287,15 +287,15 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, data_type }) => expressions::cast(
+        Expr::Cast(Cast { expr, field }) => expressions::cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            data_type.clone(),
+            field.data_type().clone(),
         ),
-        Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
+        Expr::TryCast(TryCast { expr, field }) => expressions::try_cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            data_type.clone(),
+            field.data_type().clone(),
         ),
         Expr::Not(expr) => {
             expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)

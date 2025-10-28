@@ -443,7 +443,10 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 
     // the arg2 parameter is a complex expr, but it can be evaluated to the literal value
     let alias_expr = Expr::Alias(Alias::new(
-        cast(lit(0.5), DataType::Float32),
+        cast(
+            lit(0.5),
+            Arc::new(Field::new("arg_2", DataType::Float32, true)),
+        ),
         None::<&str>,
         "arg_2".to_string(),
     ));
@@ -463,7 +466,10 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     );
 
     let alias_expr = Expr::Alias(Alias::new(
-        cast(lit(0.1), DataType::Float32),
+        cast(
+            lit(0.1),
+            Arc::new(Field::new("arg_2", DataType::Float32, true)),
+        ),
         None::<&str>,
         "arg_2".to_string(),
     ));
@@ -1129,7 +1135,7 @@ async fn test_fn_substr() -> Result<()> {
 
 #[tokio::test]
 async fn test_cast() -> Result<()> {
-    let expr = cast(col("b"), DataType::Float64);
+    let expr = cast(col("b"), Arc::new(Field::new("b", DataType::Float64, true)));
     let batches = get_batches(expr).await?;
 
     assert_snapshot!(

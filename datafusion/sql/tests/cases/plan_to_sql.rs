@@ -2238,9 +2238,12 @@ fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
         .alias("customer")?
         .project(vec![
             col("customer.c_custkey"),
-            cast(col("customer.c_custkey"), DataType::Int64)
-                .add(lit(1))
-                .alias("custkey_plus"),
+            cast(
+                col("customer.c_custkey"),
+                Arc::new(Field::new("customer.c_custkey", DataType::Int64, false)),
+            )
+            .add(lit(1))
+            .alias("custkey_plus"),
             col("customer.c_name"),
         ])?
         .alias("customer")?
