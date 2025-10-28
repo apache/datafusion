@@ -19,7 +19,7 @@
 
 use std::{borrow::Cow, sync::Arc};
 
-use crate::metrics::MetricType;
+use crate::metrics::{value::PruningMetrics, MetricType};
 
 use super::{
     Count, ExecutionPlanMetricsSet, Gauge, Label, Metric, MetricValue, Time, Timestamp,
@@ -151,6 +151,14 @@ impl<'a> MetricBuilder<'a> {
         count
     }
 
+    /// Consume self and create a new counter for recording total output bytes
+    pub fn output_bytes(self, partition: usize) -> Count {
+        let count = Count::new();
+        self.with_partition(partition)
+            .build(MetricValue::OutputBytes(count.clone()));
+        count
+    }
+
     /// Consume self and create a new gauge for reporting current memory usage
     pub fn mem_used(self, partition: usize) -> Gauge {
         let gauge = Gauge::new();
@@ -241,5 +249,21 @@ impl<'a> MetricBuilder<'a> {
         self.with_partition(partition)
             .build(MetricValue::EndTimestamp(timestamp.clone()));
         timestamp
+    }
+
+    /// Consumes self and creates a new `PruningMetrics`
+    pub fn pruning_metrics(
+        self,
+        name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> PruningMetrics {
+        let pruning_metrics = PruningMetrics::new();
+        self.with_partition(partition)
+            .build(MetricValue::PruningMetrics {
+                name: name.into(),
+                // inner values will be `Arc::clone()`
+                pruning_metrics: pruning_metrics.clone(),
+            });
+        pruning_metrics
     }
 }

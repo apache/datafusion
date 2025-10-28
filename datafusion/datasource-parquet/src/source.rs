@@ -53,11 +53,11 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 #[cfg(feature = "parquet_encryption")]
-use datafusion_common::encryption::map_config_decryption_to_decryption;
-#[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use itertools::Itertools;
 use object_store::ObjectStore;
+#[cfg(feature = "parquet_encryption")]
+use parquet::encryption::decrypt::FileDecryptionProperties;
 
 /// Execution plan for reading one or more Parquet files.
 ///
@@ -547,8 +547,8 @@ impl FileSource for ParquetSource {
             .table_parquet_options()
             .crypto
             .file_decryption
-            .as_ref()
-            .map(map_config_decryption_to_decryption)
+            .clone()
+            .map(FileDecryptionProperties::from)
             .map(Arc::new);
 
         let coerce_int96 = self
