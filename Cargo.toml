@@ -159,6 +159,7 @@ indexmap = "2.12.0"
 insta = { version = "1.43.2", features = ["glob", "filters"] }
 itertools = "0.14"
 log = "^0.4"
+num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "57.0.0", default-features = false, features = [
