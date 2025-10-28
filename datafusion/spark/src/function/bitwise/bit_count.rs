@@ -93,25 +93,25 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Int8 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int8Type>()
-                .unary(|v| v.count_ones() as i32);
+                .unary(|v| bit_count(v.into()));
             Ok(Arc::new(result))
         }
         DataType::Int16 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int16Type>()
-                .unary(|v| v.count_ones() as i32);
+                .unary(|v| bit_count(v.into()));
             Ok(Arc::new(result))
         }
         DataType::Int32 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int32Type>()
-                .unary(|v| v.count_ones() as i32);
+                .unary(|v| bit_count(v.into()));
             Ok(Arc::new(result))
         }
         DataType::Int64 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int64Type>()
-                .unary(|v| v.count_ones() as i32);
+                .unary(|v| bit_count(v.into()));
             Ok(Arc::new(result))
         }
         DataType::UInt8 => {
@@ -145,6 +145,18 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
     }
+}
+
+// Here’s the equivalent Rust implementation of the bitCount function (similar to Apache Spark's bitCount for LongType)
+fn bit_count(i: i64) -> i32 {
+    let mut u = i as u64;
+    u = u - ((u >> 1) & 0x5555555555555555);
+    u = (u & 0x3333333333333333) + ((u >> 2) & 0x3333333333333333);
+    u = (u + (u >> 4)) & 0x0f0f0f0f0f0f0f0f;
+    u = u + (u >> 8);
+    u = u + (u >> 16);
+    u = u + (u >> 32);
+    (u as i32) & 0x7f
 }
 
 #[cfg(test)]
@@ -192,7 +204,7 @@ mod tests {
         assert_eq!(arr.value(2), 2);
         assert_eq!(arr.value(3), 3);
         assert_eq!(arr.value(4), 4);
-        assert_eq!(arr.value(5), 8);
+        assert_eq!(arr.value(5), 64);
     }
 
     #[test]
@@ -207,7 +219,7 @@ mod tests {
         assert_eq!(arr.value(1), 1);
         assert_eq!(arr.value(2), 8);
         assert_eq!(arr.value(3), 10);
-        assert_eq!(arr.value(4), 16);
+        assert_eq!(arr.value(4), 64);
     }
 
     #[test]
@@ -222,7 +234,7 @@ mod tests {
         assert_eq!(arr.value(1), 1); // 0b00000000000000000000000000000001 = 1
         assert_eq!(arr.value(2), 8); // 0b00000000000000000000000011111111 = 8
         assert_eq!(arr.value(3), 10); // 0b00000000000000000000001111111111 = 10
-        assert_eq!(arr.value(4), 32); // -1 in two's complement = all 32 bits set
+        assert_eq!(arr.value(4), 64); // -1 in two's complement = all 32 bits set
     }
 
     #[test]
