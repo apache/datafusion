@@ -617,3 +617,30 @@ SELECT CASE WHEN a = 0 THEN 'a' WHEN 1 / a = 1 THEN 'b' ELSE 'c' END FROM (VALUE
 a
 b
 c
+
+# EvalMethod::WithExpression using subset of all selected columns in case expression
+query III
+SELECT CASE a1 WHEN 1 THEN a1 WHEN 2 THEN a2 WHEN 3 THEN b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+2 20 200
+30 30 300
+
+# EvalMethod::NoExpression using subset of all selected columns in case expression
+query III
+SELECT CASE WHEN a1 = 1 THEN a2 WHEN a2 = 2 THEN a1 WHEN 3 THEN b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+2 20 200
+30 30 300
+
+# EvalMethod::ExpressionOrExpression using subset of all selected columns in case expression
+query III
+SELECT CASE WHEN a1 = 1 THEN a2 ELSE b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+20 20 200
+30 30 300
