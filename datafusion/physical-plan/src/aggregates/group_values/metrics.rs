@@ -24,7 +24,8 @@ pub(crate) struct GroupByMetrics {
     pub(crate) aggregate_arguments_time: Time,
     /// Time spent performing the aggregation itself.
     pub(crate) aggregation_time: Time,
-    /// Time spent emitting the final results and constructing the record batch.
+    /// Time spent emitting the final results and constructing the record batch
+    /// which includes finalizing the grouping expressions (e.g. emit from the hash table in case of hash aggregation) and the accumulators
     pub(crate) emitting_time: Time,
 }
 
