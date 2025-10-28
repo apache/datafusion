@@ -2601,11 +2601,11 @@ mod tests {
                 Some("one"),
             ),
             (
-                ScalarValue::FixedSizeBinary(3, Some("wha".as_bytes().to_vec())),
+                ScalarValue::FixedSizeBinary(3, Some("dad".as_bytes().to_vec())),
                 Some("two"),
             ),
             (
-                ScalarValue::FixedSizeBinary(3, Some("whe".as_bytes().to_vec())),
+                ScalarValue::FixedSizeBinary(3, Some("mom".as_bytes().to_vec())),
                 Some("three"),
             ),
         ]);
@@ -2622,10 +2622,10 @@ mod tests {
                 (Some(b"why" as &[u8]), Some("one")),
                 (Some(b"555"), None), // No match in WHEN
                 (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some(b"wha"), Some("two")),
+                (Some(b"dad"), Some("two")),
                 (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
                 (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some(b"wha"), Some("two")),
+                (Some(b"dad"), Some("two")),
                 (Some(b"555"), None), // No match in WHEN
             ]);
 
