@@ -1063,6 +1063,96 @@ UDF.</p>
 <p>For async UDF implementation details, see <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs"><code class="docutils literal notranslate"><span class="pre">async_udf.rs</span></code></a>.</p>
 </section>
 </section>
+<section id="named-arguments">
+<h2>Named Arguments<a class="headerlink" href="#named-arguments" title="Link to this heading">#</a></h2>
+<p>DataFusion supports PostgreSQL-style named arguments for scalar functions, allowing you to pass arguments by parameter name:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">substr</span><span class="p">(</span><span class="n">str</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="s1">&#39;hello&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">start_pos</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">length</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Named arguments can be mixed with positional arguments, but positional arguments must come first:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">substr</span><span class="p">(</span><span class="s1">&#39;hello&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">start_pos</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">length</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span><span class="w">  </span><span class="c1">-- Valid</span>
+</pre></div>
+</div>
+<section id="implementing-functions-with-named-arguments">
+<h3>Implementing Functions with Named Arguments<a class="headerlink" href="#implementing-functions-with-named-arguments" title="Link to this heading">#</a></h3>
+<p>To support named arguments in your UDF, add parameter names to your function’s signature using <code class="docutils literal notranslate"><span class="pre">.with_parameter_names()</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">MyFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">signature</span><span class="p">:</span><span class="w"> </span><span class="nc">Signature</span><span class="p">::</span><span class="n">uniform</span><span class="p">(</span>
+<span class="w">                </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">                </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">],</span>
+<span class="w">                </span><span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span>
+<span class="w">            </span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">with_parameter_names</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">                </span><span class="s">&quot;base&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
+<span class="w">                </span><span class="s">&quot;exponent&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">()</span>
+<span class="w">            </span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">expect</span><span class="p">(</span><span class="s">&quot;valid parameter names&quot;</span><span class="p">),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The parameter names should match the order of arguments in your function’s signature. DataFusion automatically resolves named arguments to the correct positional order before invoking your function.</p>
+</section>
+<section id="example">
+<h3>Example<a class="headerlink" href="#example" title="Link to this heading">#</a></h3>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Debug, PartialEq, Eq, Hash)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">PowerFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">signature</span><span class="p">:</span><span class="w"> </span><span class="nc">Signature</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">PowerFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">new</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">signature</span><span class="p">:</span><span class="w"> </span><span class="nc">Signature</span><span class="p">::</span><span class="n">uniform</span><span class="p">(</span>
+<span class="w">                </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">                </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">],</span>
+<span class="w">                </span><span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span>
+<span class="w">            </span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">with_parameter_names</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">                </span><span class="s">&quot;base&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
+<span class="w">                </span><span class="s">&quot;exponent&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">()</span>
+<span class="w">            </span><span class="p">])</span>
+<span class="w">            </span><span class="p">.</span><span class="n">expect</span><span class="p">(</span><span class="s">&quot;valid parameter names&quot;</span><span class="p">),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">ScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">PowerFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">as_any</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Any</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="bp">self</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;power&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">signature</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Signature</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">signature</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">return_type</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">_args</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">DataType</span><span class="p">])</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_with_args</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">_args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Your implementation - arguments are in correct positional order</span>
+<span class="w">        </span><span class="fm">unimplemented!</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Once registered, users can call your function with named arguments:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">power</span><span class="p">(</span><span class="n">base</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">exponent</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">);</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">power</span><span class="p">(</span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">exponent</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="error-messages">
+<h3>Error Messages<a class="headerlink" href="#error-messages" title="Link to this heading">#</a></h3>
+<p>When a function call fails due to incorrect arguments, DataFusion will show the parameter names in error messages to help users:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>No function matches the given name and argument types substr(Utf8).
+    Candidate functions:
+    substr(str: Any, start_pos: Any)
+    substr(str: Any, start_pos: Any, length: Any)
+</pre></div>
+</div>
+</section>
+</section>
 <section id="adding-a-window-udf">
 <h2>Adding a Window UDF<a class="headerlink" href="#adding-a-window-udf" title="Link to this heading">#</a></h2>
 <p>Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have
@@ -1636,6 +1726,12 @@ validation of the input <code class="docutils literal notranslate"><span class="
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-an-async-scalar-udf">Adding an Async Scalar UDF</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-by-impl-asyncscalarudfimpl">Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">AsyncScalarUDFImpl</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#named-arguments">Named Arguments</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#implementing-functions-with-named-arguments">Implementing Functions with Named Arguments</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#example">Example</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#error-messages">Error Messages</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-window-udf">Adding a Window UDF</a><ul class="nav section-nav flex-column">
