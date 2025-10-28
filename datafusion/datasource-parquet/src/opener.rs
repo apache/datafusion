@@ -40,7 +40,9 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
 };
-use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
+use datafusion_physical_plan::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics,
+};
 use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 
 #[cfg(feature = "parquet_encryption")]
@@ -195,10 +197,12 @@ impl FileOpener for ParquetOpener {
             if let Some(file_pruner) = &mut file_pruner {
                 if file_pruner.should_prune()? {
                     // Return an empty stream immediately to skip the work of setting up the actual stream
-                    file_metrics.files_ranges_pruned_statistics.add(1);
+                    file_metrics.files_ranges_pruned_statistics.add_pruned(1);
                     return Ok(futures::stream::empty().boxed());
                 }
             }
+
+            file_metrics.files_ranges_pruned_statistics.add_matched(1);
 
             // Don't load the page index yet. Since it is not stored inline in
             // the footer, loading the page index if it is not needed will do
@@ -480,7 +484,7 @@ struct EarlyStoppingStream<S> {
     /// None
     done: bool,
     file_pruner: FilePruner,
-    files_ranges_pruned_statistics: Count,
+    files_ranges_pruned_statistics: PruningMetrics,
     /// The inner stream
     inner: S,
 }
@@ -489,7 +493,7 @@ impl<S> EarlyStoppingStream<S> {
     pub fn new(
         stream: S,
         file_pruner: FilePruner,
-        files_ranges_pruned_statistics: Count,
+        files_ranges_pruned_statistics: PruningMetrics,
     ) -> Self {
         Self {
             done: false,
@@ -509,7 +513,9 @@ where
         // Since dynamic filters may have been updated, see if we can stop
         // reading this stream entirely.
         if self.file_pruner.should_prune()? {
-            self.files_ranges_pruned_statistics.add(1);
+            self.files_ranges_pruned_statistics.add_pruned(1);
+            // Previously this file range has been counted as matched
+            self.files_ranges_pruned_statistics.subtract_matched(1);
             self.done = true;
             Ok(None)
         } else {
