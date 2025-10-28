@@ -30,7 +30,6 @@ use arrow::datatypes::{ArrowNativeType, Field, FieldRef};
 use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
-
 #[derive(Clone)]
 pub struct AggGroupAccumulator<T: OffsetSizeTrait + Clone> {
     _virtual: PhantomData<T>,
@@ -48,7 +47,7 @@ pub struct AggGroupAccumulator<T: OffsetSizeTrait + Clone> {
     stacked_batches_size: usize,
     indice_sorted: bool,
     // max group seen so far, 1 based offset
-    // after the call to `evaluate` this needs to be offseted by the number of
+    // after the call to `evaluate` this needs to be offsetted by the number of
     // group consumed
     // zero means there is no state accumulated
     total_groups_in_state: usize,
@@ -421,7 +420,7 @@ mod tests {
                 (5, 1, 1), // b
                 // (1, 1,  2) c but filtered out
                 (1, 1, 3), // null
-                           // (1, 1, 4) // d but filterd out
+                           // (1, 1, 4) d but filtered out
             ],
             &acc.stacked_group_indices
         );

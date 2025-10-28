@@ -7612,6 +7612,7 @@ FROM range(1, 10001) AS t(r);
 # for the query
 query TT
 explain select c2, array_agg(c1) filter (where c1%2 = 0) from test_array_agg_table group by c2 order by c2 asc limit 10;
+----
 logical_plan
 01)Sort: test_array_agg_table.c2 ASC NULLS LAST, fetch=10
 02)--Aggregate: groupBy=[[test_array_agg_table.c2]], aggr=[[array_agg(test_array_agg_table.c1) FILTER (WHERE CAST(test_array_agg_table.c1 AS Int64) % Int64(2) = Int64(0)) AS array_agg(test_array_agg_table.c1) FILTER (WHERE test_array_agg_table.c1 % Int64(2) = Int64(0))]]
