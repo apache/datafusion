@@ -671,3 +671,15 @@ FROM (SELECT a as a1, a as a2 FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 3
 1
 NULL
 NULL
+
+# Nested case with projection
+query III
+SELECT CASE WHEN a = -1 THEN b WHEN a = -2 THEN -b END, b, c
+FROM (
+  SELECT b, c, CASE WHEN a1 = 1 THEN -a2 WHEN a1 = 2 THEN -a1 END as a
+  FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c))
+);
+----
+10 10 100
+-20 20 200
+NULL 30 300
