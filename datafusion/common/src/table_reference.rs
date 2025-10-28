@@ -69,8 +69,11 @@ impl std::fmt::Display for ResolvedTableReference {
 ///
 /// // Get a table reference to 'myschema.mytable' (note the capitalization)
 /// let table_reference = TableReference::from("MySchema.MyTable");
-/// assert_eq!(table_reference, TableReference::partial("myschema", "mytable"));
-///```
+/// assert_eq!(
+///     table_reference,
+///     TableReference::partial("myschema", "mytable")
+/// );
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TableReference {
     /// An unqualified table reference, e.g. "table"
@@ -247,7 +250,10 @@ impl TableReference {
     /// assert_eq!(table_reference.to_quoted_string(), "myschema.mytable");
     ///
     /// let table_reference = TableReference::partial("MySchema", "MyTable");
-    /// assert_eq!(table_reference.to_quoted_string(), r#""MySchema"."MyTable""#);
+    /// assert_eq!(
+    ///     table_reference.to_quoted_string(),
+    ///     r#""MySchema"."MyTable""#
+    /// );
     /// ```
     pub fn to_quoted_string(&self) -> String {
         match self {
