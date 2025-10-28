@@ -583,7 +583,10 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical conjunction"),
+            // TODO: bounds MAY be certain if either LHS or RHS is certainly false
+
+            // Return UNCERTAIN when intervals don't have concrete boolean bounds
+            _ => Ok(Self::UNCERTAIN),
         }
     }
 
@@ -606,7 +609,10 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical disjunction"),
+            // TODO: bounds MAY be certain if either LHS or RHS is certainly true
+
+            // Return UNCERTAIN when intervals don't have concrete boolean bounds
+            _ => Ok(Self::UNCERTAIN),
         }
     }
 
@@ -2503,6 +2509,18 @@ mod tests {
                 Interval::make(Some(case.2), Some(case.3))?
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_and_or_with_normalized_boolean_intervals() -> Result<()> {
+        // Verify that NULL boolean bounds are normalized and don't cause errors
+        let from_nulls =
+            Interval::try_new(ScalarValue::Boolean(None), ScalarValue::Boolean(None))?;
+
+        assert!(from_nulls.or(&Interval::CERTAINLY_TRUE).is_ok());
+        assert!(from_nulls.and(&Interval::CERTAINLY_FALSE).is_ok());
+
         Ok(())
     }
 
