@@ -705,6 +705,54 @@ SHOW CREATE TABLE abc;
 ----
 datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv
 
+# show_external_create_table_with_order
+statement ok
+CREATE EXTERNAL TABLE abc_ordered
+STORED AS CSV
+WITH ORDER (c1)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TTTT
+SHOW CREATE TABLE abc_ordered;
+----
+datafusion public abc_ordered CREATE EXTERNAL TABLE abc_ordered STORED AS CSV WITH ORDER (c1) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+statement ok
+DROP TABLE abc_ordered;
+
+# show_external_create_table_with_multiple_order_columns
+statement ok
+CREATE EXTERNAL TABLE abc_multi_order
+STORED AS CSV
+WITH ORDER (c1, c2 DESC)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TTTT
+SHOW CREATE TABLE abc_multi_order;
+----
+datafusion public abc_multi_order CREATE EXTERNAL TABLE abc_multi_order STORED AS CSV WITH ORDER (c1, c2 DESC) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+statement ok
+DROP TABLE abc_multi_order;
+
+# show_external_create_table_with_order_nulls
+statement ok
+CREATE EXTERNAL TABLE abc_order_nulls
+STORED AS CSV
+WITH ORDER (c1 NULLS LAST, c2 DESC NULLS FIRST)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TTTT
+SHOW CREATE TABLE abc_order_nulls;
+----
+datafusion public abc_order_nulls CREATE EXTERNAL TABLE abc_order_nulls STORED AS CSV WITH ORDER (c1 NULLS LAST, c2 DESC NULLS FIRST) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+statement ok
+DROP TABLE abc_order_nulls;
+
 # string_agg has different arg_types but same return type. Test avoiding duplicate entries for the same function.
 query TTT
 select routine_name, data_type, function_type from information_schema.routines where routine_name = 'string_agg';
