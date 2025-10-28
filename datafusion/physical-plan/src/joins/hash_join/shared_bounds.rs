@@ -35,7 +35,6 @@ use datafusion_physical_expr::expressions::{
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use itertools::Itertools;
 use parking_lot::Mutex;
 use tokio::sync::Barrier;
 
@@ -76,10 +75,6 @@ impl PartitionBounds {
             partition,
             column_bounds,
         }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.column_bounds.len()
     }
 
     pub(crate) fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
@@ -138,6 +133,8 @@ struct SharedBuildState {
     /// Hash maps from completed partitions (used in Partitioned mode)
     /// Index corresponds to partition number
     hash_maps: Vec<Option<Arc<dyn JoinHashMapType>>>,
+    /// Single hash map for CollectLeft mode (shared across all partitions)
+    single_hash_map: Option<Arc<dyn JoinHashMapType>>,
 }
 
 impl SharedBuildAccumulator {
@@ -200,6 +197,7 @@ impl SharedBuildAccumulator {
             inner: Mutex::new(SharedBuildState {
                 bounds: Vec::with_capacity(expected_calls),
                 hash_maps: vec![None; num_partitions],
+                single_hash_map: None,
             }),
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
@@ -208,129 +206,121 @@ impl SharedBuildAccumulator {
         }
     }
 
-    /// Create a filter expression from individual partition bounds using OR logic.
+    /// Report hash map and bounds from CollectLeft mode (single hash table shared by all partitions)
     ///
-    /// This creates a filter where each partition's bounds form a conjunction (AND)
-    /// of column range predicates, and all partitions are combined with OR.
+    /// This method is used for `PartitionMode::CollectLeft` to collect the single shared hash map
+    /// and bounds. When all partitions have reported (waited at barrier), it creates a simple filter
+    /// expression that combines min/max range checks with hash table lookups.
     ///
-    /// For example, with 2 partitions and 2 columns:
-    /// ((col0 >= p0_min0 AND col0 <= p0_max0 AND col1 >= p0_min1 AND col1 <= p0_max1)
-    ///  OR
-    ///  (col0 >= p1_min0 AND col0 <= p1_max0 AND col1 >= p1_min1 AND col1 <= p1_max1))
-    pub(crate) fn create_filter_from_partition_bounds(
-        &self,
-        bounds: &[PartitionBounds],
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        if bounds.is_empty() {
-            return Ok(lit(true));
-        }
-
-        // Create a predicate for each partition
-        let mut partition_predicates = Vec::with_capacity(bounds.len());
-
-        for partition_bounds in bounds.iter().sorted_by_key(|b| b.partition) {
-            // Create range predicates for each join key in this partition
-            let mut column_predicates = Vec::with_capacity(partition_bounds.len());
-
-            for (col_idx, right_expr) in self.on_right.iter().enumerate() {
-                if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
-                    // Create predicate: col >= min AND col <= max
-                    let min_expr = Arc::new(BinaryExpr::new(
-                        Arc::clone(right_expr),
-                        Operator::GtEq,
-                        lit(column_bounds.min.clone()),
-                    )) as Arc<dyn PhysicalExpr>;
-                    let max_expr = Arc::new(BinaryExpr::new(
-                        Arc::clone(right_expr),
-                        Operator::LtEq,
-                        lit(column_bounds.max.clone()),
-                    )) as Arc<dyn PhysicalExpr>;
-                    let range_expr =
-                        Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
-                            as Arc<dyn PhysicalExpr>;
-                    column_predicates.push(range_expr);
-                }
-            }
-
-            // Combine all column predicates for this partition with AND
-            if !column_predicates.is_empty() {
-                let partition_predicate = column_predicates
-                    .into_iter()
-                    .reduce(|acc, pred| {
-                        Arc::new(BinaryExpr::new(acc, Operator::And, pred))
-                            as Arc<dyn PhysicalExpr>
-                    })
-                    .unwrap();
-                partition_predicates.push(partition_predicate);
-            }
-        }
-
-        // Combine all partition predicates with OR
-        let combined_predicate = partition_predicates
-            .into_iter()
-            .reduce(|acc, pred| {
-                Arc::new(BinaryExpr::new(acc, Operator::Or, pred))
-                    as Arc<dyn PhysicalExpr>
-            })
-            .unwrap_or_else(|| lit(true));
-
-        Ok(combined_predicate)
-    }
-
-    /// Report bounds from a completed partition and update dynamic filter if all partitions are done
-    ///
-    /// This method coordinates the dynamic filter updates across all partitions. It stores the
-    /// bounds from the current partition, increments the completion counter, and when all
-    /// partitions have reported, creates an OR'd filter from individual partition bounds.
-    ///
-    /// This method is async and uses a [`tokio::sync::Barrier`] to wait for all partitions
-    /// to report their bounds. Once that occurs, the method will resolve for all callers and the
-    /// dynamic filter will be updated exactly once.
-    ///
-    /// # Note
-    ///
-    /// As barriers are reusable, it is likely an error to call this method more times than the
-    /// total number of partitions - as it can lead to pending futures that never resolve. We rely
-    /// on correct usage from the caller rather than imposing additional checks here. If this is a concern,
-    /// consider making the resulting future shared so the ready result can be reused.
+    /// Unlike Partitioned mode, this creates a simpler filter without CASE expression or partition routing:
+    /// `(col >= min AND col <= max AND ...) AND hash_lookup(hash_table, hash_join(join_keys))`
     ///
     /// # Arguments
-    /// * `left_side_partition_id` - The identifier for the **left-side** partition reporting its bounds
-    /// * `partition_bounds` - The bounds computed by this partition (if any)
+    /// * `hash_map` - Arc reference to the single shared hash table
+    /// * `partition_bounds` - Min/max bounds for the build side
     ///
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed
-    pub(crate) async fn report_partition_bounds(
+    pub(crate) async fn report_single_hash_map_and_bounds(
         &self,
-        left_side_partition_id: usize,
+        hash_map: Arc<dyn JoinHashMapType>,
         partition_bounds: Option<Vec<ColumnBounds>>,
     ) -> Result<()> {
-        // Store bounds in the accumulator - this runs once per partition
-        if let Some(bounds) = partition_bounds {
+        // Store hash map and bounds in the accumulator
+        {
             let mut guard = self.inner.lock();
 
-            let should_push = if let Some(last_bound) = guard.bounds.last() {
-                // In `PartitionMode::CollectLeft`, all streams on the left side share the same partition id (0).
-                // Since this function can be called multiple times for that same partition, we must deduplicate
-                // by checking against the last recorded bound.
-                last_bound.partition != left_side_partition_id
-            } else {
-                true
-            };
+            // Store the single hash map (only once, even though multiple partitions call this)
+            if guard.single_hash_map.is_none() {
+                guard.single_hash_map = Some(hash_map);
+            }
 
-            if should_push {
-                guard
-                    .bounds
-                    .push(PartitionBounds::new(left_side_partition_id, bounds));
+            if let Some(bounds) = partition_bounds {
+                // Use partition 0 for the single hash table
+                let should_push = if let Some(last_bound) = guard.bounds.last() {
+                    // Deduplicate - all partitions report the same data in CollectLeft
+                    last_bound.partition != 0
+                } else {
+                    true
+                };
+
+                if should_push {
+                    guard.bounds.push(PartitionBounds::new(0, bounds));
+                }
             }
         }
 
+        // Wait for all partitions to report
         if self.barrier.wait().await.is_leader() {
-            // All partitions have reported, so we can update the filter
+            // All partitions have reported, so we can create and update the filter
             let inner = self.inner.lock();
-            if !inner.bounds.is_empty() {
-                let filter_expr =
-                    self.create_filter_from_partition_bounds(&inner.bounds)?;
+
+            if let Some(ref hash_map) = inner.single_hash_map {
+                // Create hash lookup expression
+                let lookup_hash_expr = Arc::new(HashExpr::new(
+                    self.on_right.clone(),
+                    HASH_JOIN_SEED,
+                    "hash_join".to_string(),
+                )) as Arc<dyn PhysicalExpr>;
+
+                let hash_lookup_expr = Arc::new(HashTableLookupExpr::new(
+                    lookup_hash_expr,
+                    Arc::clone(hash_map),
+                    "hash_lookup".to_string(),
+                )) as Arc<dyn PhysicalExpr>;
+
+                // Create bounds check expression (if bounds available)
+                let mut filter_expr = hash_lookup_expr;
+
+                if let Some(partition_bounds) = inner.bounds.first() {
+                    let mut column_predicates = Vec::new();
+
+                    for (col_idx, right_expr) in self.on_right.iter().enumerate() {
+                        if let Some(column_bounds) =
+                            partition_bounds.get_column_bounds(col_idx)
+                        {
+                            // Create predicate: col >= min AND col <= max
+                            let min_expr = Arc::new(BinaryExpr::new(
+                                Arc::clone(right_expr),
+                                Operator::GtEq,
+                                lit(column_bounds.min.clone()),
+                            ))
+                                as Arc<dyn PhysicalExpr>;
+                            let max_expr = Arc::new(BinaryExpr::new(
+                                Arc::clone(right_expr),
+                                Operator::LtEq,
+                                lit(column_bounds.max.clone()),
+                            ))
+                                as Arc<dyn PhysicalExpr>;
+                            let range_expr = Arc::new(BinaryExpr::new(
+                                min_expr,
+                                Operator::And,
+                                max_expr,
+                            ))
+                                as Arc<dyn PhysicalExpr>;
+                            column_predicates.push(range_expr);
+                        }
+                    }
+
+                    // Combine all column range predicates with AND
+                    if !column_predicates.is_empty() {
+                        let bounds_expr = column_predicates
+                            .into_iter()
+                            .reduce(|acc, pred| {
+                                Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                                    as Arc<dyn PhysicalExpr>
+                            })
+                            .unwrap();
+
+                        // Combine bounds_expr AND hash_lookup_expr
+                        filter_expr = Arc::new(BinaryExpr::new(
+                            bounds_expr,
+                            Operator::And,
+                            filter_expr,
+                        )) as Arc<dyn PhysicalExpr>;
+                    }
+                }
+
                 self.dynamic_filter.update(filter_expr)?;
             }
         }

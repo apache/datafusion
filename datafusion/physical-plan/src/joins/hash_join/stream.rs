@@ -437,13 +437,11 @@ impl HashJoinStream {
                     }));
                 }
                 PartitionMode::CollectLeft => {
+                    let hash_map = left_data.hash_map_arc();
                     let left_data_bounds = left_data.bounds.clone();
                     self.build_waiter = Some(OnceFut::new(async move {
                         build_accumulator
-                            .report_partition_bounds(
-                                left_side_partition_id,
-                                left_data_bounds,
-                            )
+                            .report_single_hash_map_and_bounds(hash_map, left_data_bounds)
                             .await
                     }));
                 }
