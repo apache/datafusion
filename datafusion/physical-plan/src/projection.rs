@@ -53,7 +53,9 @@ use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 // Re-exported from datafusion-physical-expr for backwards compatibility
 // We recommend updating your imports to use datafusion-physical-expr directly
-pub use datafusion_physical_expr::projection::{update_expr, Projection, ProjectionExpr};
+pub use datafusion_physical_expr::projection::{
+    update_expr, ProjectionExpr, ProjectionExprs,
+};
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -65,7 +67,7 @@ use log::trace;
 #[derive(Debug, Clone)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
-    projection: Projection,
+    projection: ProjectionExprs,
     /// The schema once the projection has been applied to the input
     schema: SchemaRef,
     /// The input plan
@@ -130,7 +132,7 @@ impl ProjectionExec {
         let input_schema = input.schema();
         // convert argument to Vec<ProjectionExpr>
         let expr_vec = expr.into_iter().map(Into::into).collect::<Vec<_>>();
-        let projection = Projection::new(expr_vec);
+        let projection = ProjectionExprs::new(expr_vec);
 
         let schema = Arc::new(projection.project_schema(&input_schema)?);
 

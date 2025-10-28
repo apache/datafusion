@@ -226,7 +226,7 @@ impl EncryptionFactory for TestEncryptionFactory {
         options: &EncryptionFactoryOptions,
         schema: &SchemaRef,
         _file_path: &Path,
-    ) -> Result<Option<FileEncryptionProperties>> {
+    ) -> Result<Option<Arc<FileEncryptionProperties>>> {
         let config: EncryptionConfig = options.to_extension_options()?;
 
         // Generate a random encryption key for this file.
@@ -268,7 +268,7 @@ impl EncryptionFactory for TestEncryptionFactory {
         &self,
         _options: &EncryptionFactoryOptions,
         _file_path: &Path,
-    ) -> Result<Option<FileDecryptionProperties>> {
+    ) -> Result<Option<Arc<FileDecryptionProperties>>> {
         let decryption_properties =
             FileDecryptionProperties::with_key_retriever(Arc::new(TestKeyRetriever {}))
                 .build()?;

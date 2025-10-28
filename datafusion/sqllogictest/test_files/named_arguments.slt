@@ -1,0 +1,139 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## Tests for Named Arguments (PostgreSQL-style param => value syntax)
+#############
+
+# Test positional arguments still work (baseline)
+query T
+SELECT substr('hello world', 7, 5);
+----
+world
+
+# Test named arguments in order
+query T
+SELECT substr(str => 'hello world', start_pos => 7, length => 5);
+----
+world
+
+# Test named arguments out of order
+query T
+SELECT substr(length => 5, str => 'hello world', start_pos => 7);
+----
+world
+
+# Test mixed positional and named arguments
+query T
+SELECT substr('hello world', start_pos => 7, length => 5);
+----
+world
+
+# Test with only 2 parameters (length optional)
+query T
+SELECT substr(str => 'hello world', start_pos => 7);
+----
+world
+
+# Test all parameters named with substring alias
+query T
+SELECT substring(str => 'hello', start_pos => 1, length => 3);
+----
+hel
+
+# Error: positional argument after named argument
+query error DataFusion error: Error during planning: Positional argument.*follows named argument
+SELECT substr(str => 'hello', 1, 3);
+
+# Error: unknown parameter name
+query error DataFusion error: Error during planning: Unknown parameter name 'invalid'
+SELECT substr(invalid => 'hello', start_pos => 1, length => 3);
+
+# Error: duplicate parameter name
+query error DataFusion error: Error during planning: Parameter 'str' specified multiple times
+SELECT substr(str => 'hello', str => 'world', start_pos => 1);
+
+# Test case-insensitive parameter names (unquoted identifiers)
+query T
+SELECT substr(STR => 'hello world', START_POS => 7, LENGTH => 5);
+----
+world
+
+# Test case-insensitive with mixed case
+query T
+SELECT substr(Str => 'hello world', Start_Pos => 7);
+----
+world
+
+# Error: case-sensitive quoted parameter names don't match
+query error DataFusion error: Error during planning: Unknown parameter name 'STR'
+SELECT substr("STR" => 'hello world', "start_pos" => 7);
+
+# Error: wrong number of arguments
+# This query provides only 1 argument but substr requires 2 or 3
+query error DataFusion error: Error during planning: Execution error: Function 'substr' user-defined coercion failed with "Error during planning: The substr function requires 2 or 3 arguments, but got 1."
+SELECT substr(str => 'hello world');
+
+#############
+## PostgreSQL Dialect Tests (uses ExprNamed variant)
+#############
+
+statement ok
+set datafusion.sql_parser.dialect = 'PostgreSQL';
+
+# Test named arguments in order
+query T
+SELECT substr(str => 'hello world', start_pos => 7, length => 5);
+----
+world
+
+# Test named arguments out of order
+query T
+SELECT substr(length => 5, str => 'hello world', start_pos => 7);
+----
+world
+
+# Test mixed positional and named arguments
+query T
+SELECT substr('hello world', start_pos => 7, length => 5);
+----
+world
+
+# Test with only 2 parameters (length optional)
+query T
+SELECT substr(str => 'hello world', start_pos => 7);
+----
+world
+
+# Reset to default dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
+#############
+## MsSQL Dialect Tests (does NOT support => operator)
+#############
+
+statement ok
+set datafusion.sql_parser.dialect = 'MsSQL';
+
+# Error: MsSQL dialect does not support => operator
+query error DataFusion error: SQL error: ParserError\("Expected: \), found: => at Line: 1, Column: 19"\)
+SELECT substr(str => 'hello world', start_pos => 7, length => 5);
+
+# Reset to default dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
