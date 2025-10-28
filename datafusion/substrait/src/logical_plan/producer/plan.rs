@@ -54,6 +54,7 @@ pub fn to_substrait_plan(
         advanced_extensions: None,
         expected_type_urls: vec![],
         parameter_bindings: vec![],
+        type_aliases: vec![],
     }))
 }
 
