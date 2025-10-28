@@ -19,6 +19,7 @@
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
 };
@@ -171,7 +172,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
-                data_type: target_type,
+                field: target_type.into_nullable_field_ref(),
             })
         };
         // return the newly written argument to DataFusion
