@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::DataFusionError;
+use datafusion::common::{DataFusionError, Result};
 use datafusion::config::{ConfigFileEncryptionProperties, TableParquetOptions};
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
 use datafusion::logical_expr::{col, lit};
