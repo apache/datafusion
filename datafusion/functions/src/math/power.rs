@@ -21,18 +21,27 @@ use std::sync::Arc;
 
 use super::log::LogFunc;
 
-use arrow::array::{ArrayRef, AsArray, Int64Array};
-use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
-use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
-    DataFusionError, Result, ScalarValue,
+use crate::utils::{
+    calculate_binary_math, decimal128_to_i128, decimal256_to_i256, decimal32_to_i32,
+    decimal64_to_i64, reset_decimal_scale,
 };
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::{
+    ArrowNativeTypeOp, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
+    Decimal64Type, Float32Type, Float64Type, Int32Type, Int64Type,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL32_MAX_PRECISION,
+    DECIMAL64_MAX_PRECISION,
+};
+use arrow::error::ArrowError;
+use arrow_buffer::i256;
+use datafusion_common::{exec_err, plan_datafusion_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF, TypeSignature,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::TypeSignature::Numeric;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -68,8 +77,44 @@ impl PowerFunc {
         Self {
             signature: Signature::one_of(
                 vec![
+                    TypeSignature::Exact(vec![Int32, Int32]),
                     TypeSignature::Exact(vec![Int64, Int64]),
+                    TypeSignature::Exact(vec![Float32, Float32]),
                     TypeSignature::Exact(vec![Float64, Float64]),
+                    // Extra signatures for decimals to avoid casting them to floats
+                    TypeSignature::Exact(vec![
+                        Decimal32(DECIMAL32_MAX_PRECISION, 0),
+                        Int64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        Decimal32(DECIMAL32_MAX_PRECISION, 0),
+                        Float64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        Decimal32(DECIMAL64_MAX_PRECISION, 0),
+                        Int64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        Decimal32(DECIMAL64_MAX_PRECISION, 0),
+                        Float64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                        Int64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                        Float64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        Decimal256(DECIMAL256_MAX_PRECISION, 0),
+                        Int64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        Decimal256(DECIMAL256_MAX_PRECISION, 0),
+                        Float64,
+                    ]),
+                    Numeric(2), // Catch-all for all decimals
                 ],
                 Volatility::Immutable,
             ),
@@ -77,6 +122,64 @@ impl PowerFunc {
         }
     }
 }
+
+macro_rules! make_pow_fn {
+    ($t:ty, $name:ident, $name_int:ident, $name_float:ident) => {
+        /// Binary function to calculate a math power to integer exponent
+        /// Returns error if base is invalid
+        fn $name_int(base: $t, scale: i8, exp: i64) -> Result<$t, ArrowError> {
+            match exp.try_into() {
+                Ok(exp) => $name(base, scale)?.pow_checked(exp),
+                Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
+                    "Unsupported exp value: {exp}"
+                ))),
+            }
+        }
+
+        /// Binary function to calculate a math power to float exponent
+        /// Returns error if base is negative or non-integer
+        fn $name_float(base: $t, scale: i8, exp: f64) -> Result<$t, ArrowError> {
+            if !exp.is_finite() || exp.trunc() != exp {
+                return Err(ArrowError::ComputeError(format!(
+                    "Cannot use non-integer exp: {exp}"
+                )));
+            }
+            if exp < 0f64 || exp >= u32::MAX as f64 {
+                return Err(ArrowError::ArithmeticOverflow(format!(
+                    "Unsupported exp value: {exp}"
+                )));
+            }
+
+            $name(base, scale)?.pow_checked(exp as u32)
+        }
+    };
+}
+
+// Generate functions for numeric types
+make_pow_fn!(
+    i32,
+    decimal32_to_i32,
+    pow_decimal32_int,
+    pow_decimal32_float
+);
+make_pow_fn!(
+    i64,
+    decimal64_to_i64,
+    pow_decimal64_int,
+    pow_decimal64_float
+);
+make_pow_fn!(
+    i128,
+    decimal128_to_i128,
+    pow_decimal128_int,
+    pow_decimal128_float
+);
+make_pow_fn!(
+    i256,
+    decimal256_to_i256,
+    pow_decimal256_int,
+    pow_decimal256_float
+);
 
 impl ScalarUDFImpl for PowerFunc {
     fn as_any(&self) -> &dyn Any {
@@ -91,10 +194,7 @@ impl ScalarUDFImpl for PowerFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Int64 => Ok(DataType::Int64),
-            _ => Ok(DataType::Float64),
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn aliases(&self) -> &[String] {
@@ -102,47 +202,157 @@ impl ScalarUDFImpl for PowerFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(&args.args)?;
+        let base = &args.args[0].to_array(args.number_rows)?;
+        let exponent = &args.args[1];
 
-        let arr: ArrayRef = match args[0].data_type() {
+        let arr: ArrayRef = match base.data_type() {
+            DataType::Float32 => {
+                calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
+                    base,
+                    exponent,
+                    |b, e| Ok(f32::powf(b, e)),
+                )?
+            }
             DataType::Float64 => {
-                let bases = args[0].as_primitive::<Float64Type>();
-                let exponents = args[1].as_primitive::<Float64Type>();
-                let result = arrow::compute::binary::<_, _, _, Float64Type>(
-                    bases,
-                    exponents,
-                    f64::powf,
-                )?;
-                Arc::new(result) as _
+                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
+                    &base,
+                    exponent,
+                    |b, e| Ok(f64::powf(b, e)),
+                )?
+            }
+            DataType::Int32 => {
+                calculate_binary_math::<Int32Type, Int32Type, Int32Type, _>(
+                    &base,
+                    exponent,
+                    |b, e| match e.try_into() {
+                        Ok(exp_u32) => b.pow_checked(exp_u32),
+                        Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
+                            "Exponent {e} in integer computation is out of bounds."
+                        ))),
+                    },
+                )?
             }
             DataType::Int64 => {
-                let bases = downcast_named_arg!(&args[0], "base", Int64Array);
-                let exponents = downcast_named_arg!(&args[1], "exponent", Int64Array);
-                bases
-                    .iter()
-                    .zip(exponents.iter())
-                    .map(|(base, exp)| match (base, exp) {
-                        (Some(base), Some(exp)) => Ok(Some(base.pow_checked(
-                            exp.try_into().map_err(|_| {
-                                exec_datafusion_err!(
-                                    "Can't use negative exponents: {exp} in integer computation, please use Float."
-                                )
-                            })?,
-                        ).map_err(|e| arrow_datafusion_err!(e))?)),
-                        _ => Ok(None),
-                    })
-                    .collect::<Result<Int64Array>>()
-                    .map(Arc::new)? as _
+                calculate_binary_math::<Int64Type, Int64Type, Int64Type, _>(
+                    &base,
+                    exponent,
+                    |b, e| match e.try_into() {
+                        Ok(exp_u32) => b.pow_checked(exp_u32),
+                        Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
+                            "Exponent {e} in integer computation is out of bounds."
+                        ))),
+                    },
+                )?
             }
-
+            DataType::Decimal32(_precision, scale) => {
+                let array = match exponent.data_type() {
+                    DataType::Int64 => {
+                        calculate_binary_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
+                            &base,
+                            exponent,
+                            |b, e| pow_decimal32_int(b, *scale, e),
+                        )?
+                    }
+                    DataType::Float64 => {
+                        calculate_binary_math::<
+                            Decimal32Type,
+                            Float64Type,
+                            Decimal32Type,
+                            _,
+                        >(&base, exponent, |b, e| {
+                            pow_decimal32_float(b, *scale, e)
+                        })?
+                    }
+                    other => {
+                        return exec_err!("Unsupported data type {other:?} for exponent")
+                    }
+                };
+                Arc::new(reset_decimal_scale(array.as_ref())?)
+            }
+            DataType::Decimal64(_precision, scale) => {
+                let array = match exponent.data_type() {
+                    DataType::Int64 => {
+                        calculate_binary_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
+                            &base,
+                            exponent,
+                            |b, e| pow_decimal64_int(b, *scale, e),
+                        )?
+                    }
+                    DataType::Float64 => {
+                        calculate_binary_math::<
+                            Decimal64Type,
+                            Float64Type,
+                            Decimal64Type,
+                            _,
+                        >(&base, exponent, |b, e| {
+                            pow_decimal64_float(b, *scale, e)
+                        })?
+                    }
+                    other => {
+                        return exec_err!("Unsupported data type {other:?} for exponent")
+                    }
+                };
+                Arc::new(reset_decimal_scale(array.as_ref())?)
+            }
+            DataType::Decimal128(_precision, scale) => {
+                let array = match exponent.data_type() {
+                    DataType::Int64 => calculate_binary_math::<
+                        Decimal128Type,
+                        Int64Type,
+                        Decimal128Type,
+                        _,
+                    >(&base, exponent, |b, e| {
+                        pow_decimal128_int(b, *scale, e)
+                    })?,
+                    DataType::Float64 => {
+                        calculate_binary_math::<
+                            Decimal128Type,
+                            Float64Type,
+                            Decimal128Type,
+                            _,
+                        >(&base, exponent, |b, e| {
+                            pow_decimal128_float(b, *scale, e)
+                        })?
+                    }
+                    other => {
+                        return exec_err!("Unsupported data type {other:?} for exponent")
+                    }
+                };
+                Arc::new(reset_decimal_scale(array.as_ref())?)
+            }
+            DataType::Decimal256(_precision, scale) => {
+                let array = match exponent.data_type() {
+                    DataType::Int64 => calculate_binary_math::<
+                        Decimal256Type,
+                        Int64Type,
+                        Decimal256Type,
+                        _,
+                    >(&base, exponent, |b, e| {
+                        pow_decimal256_int(b, *scale, e)
+                    })?,
+                    DataType::Float64 => {
+                        calculate_binary_math::<
+                            Decimal256Type,
+                            Float64Type,
+                            Decimal256Type,
+                            _,
+                        >(&base, exponent, |b, e| {
+                            pow_decimal256_float(b, *scale, e)
+                        })?
+                    }
+                    other => {
+                        return exec_err!("Unsupported data type {other:?} for exponent")
+                    }
+                };
+                Arc::new(reset_decimal_scale(array.as_ref())?)
+            }
             other => {
                 return exec_err!(
-                    "Unsupported data type {other:?} for function {}",
+                    "Unsupported base data type {other:?} for function {}",
                     self.name()
                 )
             }
         };
-
         Ok(ColumnarValue::Array(arr))
     }
 
@@ -198,9 +408,16 @@ fn is_log(func: &ScalarUDF) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Float64Array;
-    use arrow::datatypes::Field;
-    use datafusion_common::cast::{as_float64_array, as_int64_array};
+    use arrow::array::{Array, Decimal128Array, Float64Array, Int64Array};
+    use arrow::datatypes::{
+        Field, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_SCALE, DECIMAL32_MAX_SCALE,
+        DECIMAL64_MAX_SCALE,
+    };
+    use arrow_buffer::NullBuffer;
+    use datafusion_common::cast::{
+        as_decimal128_array, as_decimal256_array, as_decimal32_array, as_decimal64_array,
+        as_float64_array, as_int64_array,
+    };
     use datafusion_common::config::ConfigOptions;
 
     #[test]
@@ -273,6 +490,439 @@ mod tests {
                 assert_eq!(ints.value(1), 4);
                 assert_eq!(ints.value(2), 81);
                 assert_eq!(ints.value(3), 625);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_i128_exp_int() {
+        let arg_fields = vec![
+            Field::new(
+                "a",
+                DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(
+                    Decimal128Array::from(vec![2, 2, 3, 5, 0, 5])
+                        .with_precision_and_scale(DECIMAL128_MAX_SCALE as u8, 0)
+                        .unwrap(),
+                )), // base
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4, 4, 0]))), // exponent
+            ],
+            arg_fields,
+            number_rows: 6,
+            return_field: Field::new(
+                "f",
+                DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints = as_decimal128_array(&arr)
+                    .expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 6);
+                assert_eq!(ints.value(0), i128::from(8));
+                assert_eq!(ints.value(1), i128::from(4));
+                assert_eq!(ints.value(2), i128::from(81));
+                assert_eq!(ints.value(3), i128::from(625));
+                assert_eq!(ints.value(4), i128::from(0));
+                assert_eq!(ints.value(5), i128::from(1));
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_i128_exp_int_scalar() {
+        let arg_fields = vec![
+            Field::new(
+                "a",
+                DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Decimal128(
+                    Some(2),
+                    DECIMAL128_MAX_SCALE as u8,
+                    0,
+                )), // base
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))), // exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new(
+                "f",
+                DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints = as_decimal128_array(&arr)
+                    .expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 1);
+                assert_eq!(ints.value(0), i128::from(8));
+
+                // Value is the same as expected, but scale should be 0
+                if let DataType::Decimal128(_precision, scale) = arr.data_type() {
+                    assert_eq!(*scale, 0);
+                } else {
+                    panic!("Expected Decimal256 result")
+                }
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_i128_exp_float() {
+        let arg_fields = vec![
+            Field::new(
+                "a",
+                DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            Field::new("a", DataType::Float64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(
+                    Decimal128Array::from(vec![2, 2, 3, 5, 0, 5])
+                        .with_precision_and_scale(DECIMAL128_MAX_SCALE as u8, 0)
+                        .unwrap(),
+                )), // base
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    3.0, 2.0, 4.0, 4.0, 4.0, 0.0,
+                ]))), // exponent
+            ],
+            arg_fields,
+            number_rows: 6,
+            return_field: Field::new(
+                "f",
+                DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints = as_decimal128_array(&arr)
+                    .expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 6);
+                assert_eq!(ints.value(0), i128::from(8));
+                assert_eq!(ints.value(1), i128::from(4));
+                assert_eq!(ints.value(2), i128::from(81));
+                assert_eq!(ints.value(3), i128::from(625));
+                assert_eq!(ints.value(4), i128::from(0));
+                assert_eq!(ints.value(5), i128::from(1));
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_i128_exp_float_fail() {
+        let bad_exponents = [
+            3.5,
+            -1.0,
+            u32::MAX as f64 + 10.0,
+            f64::INFINITY,
+            -f64::INFINITY,
+            f64::NAN,
+        ];
+        for exp in bad_exponents {
+            let arg_fields = vec![
+                Field::new(
+                    "a",
+                    DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
+                    true,
+                )
+                .into(),
+                Field::new("a", DataType::Float64, true).into(),
+            ];
+            let args = ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(ScalarValue::Decimal128(Some(2), 38, 0)), // base
+                    ColumnarValue::Scalar(ScalarValue::Float64(Some(exp))), // exponent
+                ],
+                arg_fields,
+                number_rows: 1,
+                return_field: Field::new(
+                    "f",
+                    DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
+                    true,
+                )
+                .into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
+            let result = PowerFunc::new().invoke_with_args(args);
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn test_power_i256_exp_int_scalar() {
+        let arg_fields = vec![
+            Field::new(
+                "a",
+                DataType::Decimal256(DECIMAL256_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Decimal256(
+                    Some(i256::from(2)),
+                    DECIMAL256_MAX_SCALE as u8,
+                    0,
+                )), // base
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))), // exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new(
+                "f",
+                DataType::Decimal256(DECIMAL256_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints = as_decimal256_array(&arr)
+                    .expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 1);
+                assert_eq!(ints.value(0), i256::from(8));
+
+                // Value is the same as expected, but scale should be 0
+                if let DataType::Decimal256(_precision, scale) = arr.data_type() {
+                    assert_eq!(*scale, 0);
+                } else {
+                    panic!("Expected Decimal256 result")
+                }
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_i32_exp_int_scalar() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Decimal32(DECIMAL32_MAX_SCALE as u8, 0), true)
+                .into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Decimal32(
+                    Some(2),
+                    DECIMAL32_MAX_SCALE as u8,
+                    0,
+                )), // base
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))), // exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new(
+                "f",
+                DataType::Decimal32(DECIMAL32_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints = as_decimal32_array(&arr)
+                    .expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 1);
+                assert_eq!(ints.value(0), 8);
+
+                // Value is the same as expected, but scale should be 0
+                if let DataType::Decimal32(_precision, scale) = arr.data_type() {
+                    assert_eq!(*scale, 0);
+                } else {
+                    panic!("Expected Decimal32 result")
+                }
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_i64_exp_int_scalar() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Decimal64(DECIMAL64_MAX_SCALE as u8, 0), true)
+                .into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Decimal64(
+                    Some(i64::from(2)),
+                    DECIMAL64_MAX_SCALE as u8,
+                    0,
+                )), // base
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))), // exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new(
+                "f",
+                DataType::Decimal64(DECIMAL64_MAX_SCALE as u8, 0),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints = as_decimal64_array(&arr)
+                    .expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 1);
+                assert_eq!(ints.value(0), i64::from(8));
+
+                // Value is the same as expected, but scale should be 0
+                if let DataType::Decimal64(_precision, scale) = arr.data_type() {
+                    assert_eq!(*scale, 0);
+                } else {
+                    panic!("Expected Decimal64 result")
+                }
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_scalar_null() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))), // base
+                ColumnarValue::Scalar(ScalarValue::Null),           // exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints =
+                    as_int64_array(&arr).expect("failed to convert result to an array");
+                assert!(ints.is_null(0));
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_power_array_null() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 2]))), // base
+                ColumnarValue::Array(Arc::new(Int64Array::from_iter_values_with_nulls(
+                    vec![1, 2, 3],
+                    Some(NullBuffer::from(vec![true, false, true])),
+                ))), // exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints =
+                    as_int64_array(&arr).expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 3);
+                assert!(!ints.is_null(0));
+                assert_eq!(ints.value(0), i64::from(2));
+                assert!(ints.is_null(1));
+                assert!(!ints.is_null(2));
+                assert_eq!(ints.value(2), i64::from(8));
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
