@@ -936,7 +936,7 @@ pub fn generate_signature_error_msg(
 ) -> String {
     let candidate_signatures = func_signature
         .type_signature
-        .to_string_repr()
+        .to_string_repr_with_names(func_signature.parameter_names.as_deref())
         .iter()
         .map(|args_str| format!("\t{func_name}({args_str})"))
         .collect::<Vec<String>>()
@@ -1295,6 +1295,7 @@ mod tests {
         Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
+    use datafusion_expr_common::signature::{TypeSignature, Volatility};
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -1713,5 +1714,53 @@ mod tests {
         let list_union_type =
             DataType::List(Arc::new(Field::new("my_union", union_type, true)));
         assert!(!can_hash(&list_union_type));
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_with_parameter_names() {
+        let sig = Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Int64,
+                ]),
+            ],
+            Volatility::Immutable,
+        )
+        .with_parameter_names(vec![
+            "str".to_string(),
+            "start_pos".to_string(),
+            "length".to_string(),
+        ])
+        .expect("valid parameter names");
+
+        // Generate error message with only 1 argument provided
+        let error_msg = generate_signature_error_msg("substr", sig, &[DataType::Utf8]);
+
+        assert!(
+            error_msg.contains("str: Utf8, start_pos: Int64"),
+            "Expected 'str: Utf8, start_pos: Int64' in error message, got: {error_msg}"
+        );
+        assert!(
+            error_msg.contains("str: Utf8, start_pos: Int64, length: Int64"),
+            "Expected 'str: Utf8, start_pos: Int64, length: Int64' in error message, got: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_without_parameter_names() {
+        let sig = Signature::one_of(
+            vec![TypeSignature::Any(2), TypeSignature::Any(3)],
+            Volatility::Immutable,
+        );
+
+        let error_msg = generate_signature_error_msg("my_func", sig, &[DataType::Int32]);
+
+        assert!(
+            error_msg.contains("Any, Any"),
+            "Expected 'Any, Any' without parameter names, got: {error_msg}"
+        );
     }
 }
