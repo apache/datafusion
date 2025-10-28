@@ -133,13 +133,14 @@ impl RowGroupPruningTest {
             self.expected_files_pruned_by_statistics,
             "mismatched files_ranges_pruned_statistics",
         );
+        let bloom_filter_metrics = output.row_groups_bloom_filter();
         assert_eq!(
-            output.row_groups_matched_bloom_filter(),
+            bloom_filter_metrics.map(|(_pruned, matched)| matched),
             self.expected_row_group_matched_by_bloom_filter,
             "mismatched row_groups_matched_bloom_filter",
         );
         assert_eq!(
-            output.row_groups_pruned_bloom_filter(),
+            bloom_filter_metrics.map(|(pruned, _matched)| pruned),
             self.expected_row_group_pruned_by_bloom_filter,
             "mismatched row_groups_pruned_bloom_filter",
         );

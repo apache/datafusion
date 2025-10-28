@@ -134,9 +134,9 @@ impl RowGroupAccessPlanFilter {
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
                     if !value {
                         self.access_plan.skip(*idx);
-                        metrics.row_groups_pruned_statistics.add(1);
+                        metrics.row_groups_pruned_statistics.add_pruned(1);
                     } else {
-                        metrics.row_groups_matched_statistics.add(1);
+                        metrics.row_groups_pruned_statistics.add_matched(1);
                     }
                 }
             }
@@ -215,10 +215,10 @@ impl RowGroupAccessPlanFilter {
             };
 
             if prune_group {
-                metrics.row_groups_pruned_bloom_filter.add(1);
+                metrics.row_groups_pruned_bloom_filter.add_pruned(1);
                 self.access_plan.skip(idx)
-            } else if !stats.column_sbbf.is_empty() {
-                metrics.row_groups_matched_bloom_filter.add(1);
+            } else {
+                metrics.row_groups_pruned_bloom_filter.add_matched(1);
             }
         }
     }
