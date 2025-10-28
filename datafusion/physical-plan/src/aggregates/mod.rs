@@ -1366,6 +1366,10 @@ pub(crate) fn evaluate_aggregate_arguments(
     group_by_metrics: &GroupByMetrics,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
+    if aggregate_arguments.is_empty() {
+        return Ok(vec![]);
+    }
+
     let _timer = group_by_metrics.aggregate_arguments_time.timer();
     aggregate_arguments
         .iter()

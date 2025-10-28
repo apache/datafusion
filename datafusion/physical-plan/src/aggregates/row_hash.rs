@@ -49,7 +49,6 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use datafusion_common::instant::Instant;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -957,7 +956,7 @@ impl GroupedHashAggregateStream {
             return Ok(None);
         }
 
-        let start_time = Instant::now();
+        let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.group_values.emit(emit_to)?;
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
@@ -978,6 +977,7 @@ impl GroupedHashAggregateStream {
                 | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
             }
         }
+        drop(timer);
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
@@ -985,7 +985,6 @@ impl GroupedHashAggregateStream {
         let batch = RecordBatch::try_new(schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
-        self.group_by_metrics.emitting_time.add_elapsed(start_time);
         Ok(Some(batch))
     }
 
