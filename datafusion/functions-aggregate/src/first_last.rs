@@ -810,10 +810,7 @@ impl Accumulator for TrivialFirstValueAccumulator {
         // Second index contains is_set flag.
         if !self.is_set {
             let flags = states[1].as_boolean();
-            debug_assert!(
-                flags.null_count() == 0,
-                "first_value: is_set flags contain nulls"
-            );
+            debug_assert!(flags.null_count() == 0, "first_value: is_set flags contain nulls");
 
             let filtered_states =
                 filter_states_according_to_is_set(&states[0..1], flags)?;
@@ -960,10 +957,7 @@ impl Accumulator for FirstValueAccumulator {
         // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
         let flags = states[is_set_idx].as_boolean();
-        debug_assert!(
-            flags.null_count() == 0,
-            "first_value: is_set flags contain nulls"
-        );
+        debug_assert!(flags.null_count() == 0, "first_value: is_set flags contain nulls");
 
         let filtered_states =
             filter_states_according_to_is_set(&states[0..is_set_idx], flags)?;
@@ -1295,10 +1289,7 @@ impl Accumulator for TrivialLastValueAccumulator {
         // LAST_VALUE(last1, last2, last3, ...)
         // Second index contains is_set flag.
         let flags = states[1].as_boolean();
-        debug_assert!(
-            flags.null_count() == 0,
-            "last_value: is_set flags contain nulls"
-        );
+        debug_assert!(flags.null_count() == 0, "last_value: is_set flags contain nulls");
 
         let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
         if let Some(last) = filtered_states.last() {
@@ -1445,10 +1436,7 @@ impl Accumulator for LastValueAccumulator {
         // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
         let flags = states[is_set_idx].as_boolean();
-        debug_assert!(
-            flags.null_count() == 0,
-            "last_value: is_set flags contain nulls"
-        );
+        debug_assert!(flags.null_count() == 0, "last_value: is_set flags contain nulls");
 
         let filtered_states =
             filter_states_according_to_is_set(&states[0..is_set_idx], flags)?;
@@ -1971,8 +1959,7 @@ mod tests {
             .unwrap(),
             false,
             false,
-        )
-        .unwrap();
+        ).unwrap();
         let ordering = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
         let ordered_states = vec![value, ordering, corrupted_flag];
         ordered_accumulator.merge_batch(&ordered_states).unwrap();
@@ -2014,8 +2001,7 @@ mod tests {
             .unwrap(),
             false,
             false,
-        )
-        .unwrap();
+        ).unwrap();
         let ordering = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
         let ordered_states = vec![value, ordering, corrupted_flag];
         ordered_accumulator.merge_batch(&ordered_states).unwrap();
