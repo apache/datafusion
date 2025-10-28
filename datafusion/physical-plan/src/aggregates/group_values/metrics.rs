@@ -20,6 +20,7 @@
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, Time};
 
 pub(crate) struct GroupByMetrics {
+    /// Time spent calculating the group IDs for each row in the input batch.
     pub(crate) time_calculating_group_ids: Time,
     /// Time spent evaluating the inputs to the aggregate functions.
     pub(crate) aggregate_arguments_time: Time,
