@@ -114,12 +114,12 @@ use uuid::Uuid;
 /// # use std::sync::Arc;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-///     let state = SessionStateBuilder::new()
-///         .with_config(SessionConfig::new())
-///         .with_runtime_env(Arc::new(RuntimeEnv::default()))
-///         .with_default_features()
-///         .build();
-///     Ok(())
+/// let state = SessionStateBuilder::new()
+///     .with_config(SessionConfig::new())
+///     .with_runtime_env(Arc::new(RuntimeEnv::default()))
+///     .with_default_features()
+///     .build();
+/// Ok(())
 /// # }
 /// ```
 ///
