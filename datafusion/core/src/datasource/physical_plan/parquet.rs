@@ -1906,7 +1906,7 @@ mod tests {
         // was not used at all.
         assert_contains!(
             &explain,
-            "row_groups_pruned_statistics=0 total \u{2192} 0 matched"
+            "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
         );
 
         // But pushdown predicate should be present
