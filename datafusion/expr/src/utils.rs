@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction, WindowFunctionParams};
+use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
@@ -38,7 +38,10 @@ use datafusion_common::{
     Result, TableReference,
 };
 
+#[cfg(not(feature = "sql"))]
+use crate::expr::{ExceptSelectItem, ExcludeSelectItem};
 use indexmap::IndexSet;
+#[cfg(feature = "sql")]
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -276,7 +279,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Unnest(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
@@ -579,7 +582,8 @@ pub fn group_window_expr_by_sort_keys(
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
     window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction( WindowFunction{ params: WindowFunctionParams { partition_by, order_by, ..}, .. }) => {
+        Expr::WindowFunction(window_fun) => {
+            let WindowFunctionParams{ partition_by, order_by, ..} = &window_fun.as_ref().params;
             let sort_key = generate_sort_key(partition_by, order_by)?;
             if let Some((_, values)) = result.iter_mut().find(
                 |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
@@ -608,7 +612,7 @@ pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Ve
 
 /// Collect all deeply nested `Expr::WindowFunction`. They are returned in order of occurrence
 /// (depth first), with duplicates omitted.
-pub fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
+pub fn find_window_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::WindowFunction { .. })
     })
@@ -689,7 +693,23 @@ where
     err
 }
 
-/// Create field meta-data from an expression, for use in a result set schema
+/// Create schema fields from an expression list, for use in result set schema construction
+///
+/// This function converts a list of expressions into a list of complete schema fields,
+/// making comprehensive determinations about each field's properties including:
+/// - **Data type**: Resolved based on expression type and input schema context
+/// - **Nullability**: Determined by expression-specific nullability rules
+/// - **Metadata**: Computed based on expression type (preserving, merging, or generating new metadata)
+/// - **Table reference scoping**: Establishing proper qualified field references
+///
+/// Each expression is converted to a field by calling [`Expr::to_field`], which performs
+/// the complete field resolution process for all field properties.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of `(Option<TableReference>, Arc<Field>)` tuples,
+/// where each Field contains complete schema information (type, nullability, metadata)
+/// and proper table reference scoping for the corresponding expression.
 pub fn exprlist_to_fields<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
@@ -784,7 +804,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
                     indexes.push(idx);
                 }
             }
-            Expr::Literal(_) => {
+            Expr::Literal(_, _) => {
                 indexes.push(usize::MAX);
             }
             _ => {}
@@ -813,6 +833,8 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Float16 => true,
         DataType::Float32 => true,
         DataType::Float64 => true,
+        DataType::Decimal32(_, _) => true,
+        DataType::Decimal64(_, _) => true,
         DataType::Decimal128(_, _) => true,
         DataType::Decimal256(_, _) => true,
         DataType::Timestamp(_, _) => true,
@@ -1222,6 +1244,9 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 }
 
 /// merge inputs schema into a single schema.
+///
+/// This function merges schemas from multiple logical plan inputs using [`DFSchema::merge`].
+/// Refer to that documentation for details on precedence and metadata handling.
 pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
     if inputs.len() == 1 {
         inputs[0].schema().as_ref().clone()
@@ -1263,9 +1288,11 @@ pub fn collect_subquery_cols(
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr_vec_fmt, grouping_set, lit, rollup,
-        test::function_stub::max_udaf, test::function_stub::min_udaf,
-        test::function_stub::sum_udaf, Cast, ExprFunctionExt, WindowFunctionDefinition,
+        col, cube,
+        expr::WindowFunction,
+        expr_vec_fmt, grouping_set, lit, rollup,
+        test::function_stub::{max_udaf, min_udaf, sum_udaf},
+        Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
 
@@ -1279,19 +1306,19 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_window() -> Result<()> {
-        let max1 = Expr::WindowFunction(WindowFunction::new(
+        let max1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let max2 = Expr::WindowFunction(WindowFunction::new(
+        let max2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(WindowFunction::new(
+        let min3 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ));
-        let sum4 = Expr::WindowFunction(WindowFunction::new(
+        let sum4 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ));
@@ -1309,25 +1336,25 @@ mod tests {
         let age_asc = Sort::new(col("age"), true, true);
         let name_desc = Sort::new(col("name"), false, true);
         let created_at_desc = Sort::new(col("created_at"), false, true);
-        let max1 = Expr::WindowFunction(WindowFunction::new(
+        let max1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let max2 = Expr::WindowFunction(WindowFunction::new(
+        let max2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(WindowFunction::new(
+        let min3 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let sum4 = Expr::WindowFunction(WindowFunction::new(
+        let sum4 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ))

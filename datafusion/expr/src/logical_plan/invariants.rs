@@ -74,7 +74,7 @@ pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
 fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Result<()> {
     plan.apply_with_subqueries(|plan: &LogicalPlan| {
         if let LogicalPlan::Extension(Extension { node }) = plan {
-            node.check_invariants(check, plan)?;
+            node.check_invariants(check)?;
         }
         plan.apply_expressions(|expr| {
             // recursively look for subqueries
@@ -102,7 +102,7 @@ fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
     plan.schema().check_names()
 }
 
-/// Returns an error if the plan is not sematically valid.
+/// Returns an error if the plan is not semantically valid.
 fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
     assert_subqueries_are_valid(plan)?;
 
@@ -310,7 +310,10 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
                 check_inner_plan(left)?;
                 check_no_outer_references(right)
             }
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
                 check_no_outer_references(left)?;
                 check_inner_plan(right)
             }

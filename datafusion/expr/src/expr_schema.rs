@@ -17,8 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
-    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, FieldMetadata,
+    InList, InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
 use crate::type_coercion::functions::{
@@ -34,7 +34,6 @@ use datafusion_common::{
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Trait to allow expr to typable with respect to a schema
@@ -46,7 +45,7 @@ pub trait ExprSchemable {
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool>;
 
     /// Given a schema, return the expr's optional metadata
-    fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>>;
+    fn metadata(&self, schema: &dyn ExprSchema) -> Result<FieldMetadata>;
 
     /// Convert to a field with respect to a schema
     fn to_field(
@@ -113,9 +112,9 @@ impl ExprSchemable for Expr {
             },
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
+            Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
-            Expr::Literal(l) => Ok(l.data_type()),
+            Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
                 for (_, then_expr) in &case.when_then_expr {
                     let then_type = then_expr.get_type(schema)?;
@@ -277,8 +276,8 @@ impl ExprSchemable for Expr {
                 || high.nullable(input_schema)?),
 
             Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(_, _) => Ok(true),
-            Expr::Literal(value) => Ok(value.is_null()),
+            Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
+            Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // This expression is nullable if any of the input expressions are nullable
                 let then_nullable = case
@@ -346,9 +345,9 @@ impl ExprSchemable for Expr {
         }
     }
 
-    fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>> {
+    fn metadata(&self, schema: &dyn ExprSchema) -> Result<FieldMetadata> {
         self.to_field(schema)
-            .map(|(_, field)| field.metadata().clone())
+            .map(|(_, field)| FieldMetadata::from(field.metadata()))
     }
 
     /// Returns the datatype and nullability of the expression based on [ExprSchema].
@@ -372,8 +371,54 @@ impl ExprSchemable for Expr {
 
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     ///
+    /// This function converts an expression into a field with appropriate metadata
+    /// and nullability based on the expression type and context. It is the primary
+    /// mechanism for determining field-level schemas.
+    ///
+    /// # Field Property Resolution
+    ///
+    /// For each expression, the following properties are determined:
+    ///
+    /// ## Data Type Resolution
+    /// - **Column references**: Data type from input schema field
+    /// - **Literals**: Data type inferred from literal value
+    /// - **Aliases**: Data type inherited from the underlying expression (the aliased expression)
+    /// - **Binary expressions**: Result type from type coercion rules
+    /// - **Boolean expressions**: Always a boolean type
+    /// - **Cast expressions**: Target data type from cast operation
+    /// - **Function calls**: Return type based on function signature and argument types
+    ///
+    /// ## Nullability Determination
+    /// - **Column references**: Inherit nullability from input schema field
+    /// - **Literals**: Nullable only if literal value is NULL
+    /// - **Aliases**: Inherit nullability from the underlying expression (the aliased expression)
+    /// - **Binary expressions**: Nullable if either operand is nullable
+    /// - **Boolean expressions**: Always non-nullable (IS NULL, EXISTS, etc.)
+    /// - **Cast expressions**: determined by the input expression's nullability rules
+    /// - **Function calls**: Based on function nullability rules and input nullability
+    ///
+    /// ## Metadata Handling
+    /// - **Column references**: Preserve original field metadata from input schema
+    /// - **Literals**: Use explicitly provided metadata, otherwise empty
+    /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
+    /// - **Binary expressions**: field metadata is empty
+    /// - **Boolean expressions**: field metadata is empty
+    /// - **Cast expressions**: determined by the input expression's field metadata handling
+    /// - **Scalar functions**: Generate metadata via function's [`return_field_from_args`] method,
+    ///   with the default implementation returning empty field metadata
+    /// - **Aggregate functions**: Generate metadata via function's [`return_field`] method,
+    ///   with the default implementation returning empty field metadata
+    /// - **Window functions**: field metadata is empty
+    ///
+    /// ## Table Reference Scoping
+    /// - Establishes proper qualified field references when columns belong to specific tables
+    /// - Maintains table context for accurate field resolution in multi-table scenarios
+    ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
+    ///
+    /// [`return_field_from_args`]: crate::ScalarUDF::return_field_from_args
+    /// [`return_field`]: crate::AggregateUDF::return_field
     fn to_field(
         &self,
         schema: &dyn ExprSchema,
@@ -405,26 +450,26 @@ impl ExprSchemable for Expr {
 
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
-                    if !metadata.is_empty() {
-                        combined_metadata.extend(metadata.clone());
-                    }
+                    combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(Arc::new(field.with_metadata(combined_metadata)))
+                Ok(Arc::new(combined_metadata.add_to_field(field)))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
-            Expr::OuterReferenceColumn(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
+            Expr::OuterReferenceColumn(field, _) => {
+                Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
             }
             Expr::ScalarVariable(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }
-            Expr::Literal(l) => Ok(Arc::new(Field::new(
-                &schema_name,
-                l.data_type(),
-                l.is_null(),
-            ))),
+            Expr::Literal(l, metadata) => {
+                let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
+                if let Some(metadata) = metadata {
+                    field = metadata.add_to_field(field);
+                }
+                Ok(Arc::new(field))
+            }
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -437,7 +482,7 @@ impl ExprSchemable for Expr {
                 Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
             }
             Expr::ScalarSubquery(subquery) => {
-                Ok(Arc::new(subquery.subquery.schema().field(0).clone()))
+                Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
             }
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
@@ -533,7 +578,7 @@ impl ExprSchemable for Expr {
                 let arguments = args
                     .iter()
                     .map(|e| match e {
-                        Expr::Literal(sv) => Some(sv),
+                        Expr::Literal(sv, _) => Some(sv),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
@@ -597,7 +642,7 @@ impl ExprSchemable for Expr {
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
-            plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
+            plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
         }
     }
 }
@@ -732,9 +777,9 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, lit};
+    use crate::{col, lit, out_ref_col_with_metadata};
 
-    use datafusion_common::{internal_err, DFSchema, ScalarValue};
+    use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -840,6 +885,7 @@ mod tests {
     fn test_expr_metadata() {
         let mut meta = HashMap::new();
         meta.insert("bar".to_string(), "buzz".to_string());
+        let meta = FieldMetadata::from(meta);
         let expr = col("foo");
         let schema = MockExprSchema::new()
             .with_data_type(DataType::Int32)
@@ -858,14 +904,21 @@ mod tests {
         );
 
         let schema = DFSchema::from_unqualified_fields(
-            vec![Field::new("foo", DataType::Int32, true).with_metadata(meta.clone())]
-                .into(),
-            HashMap::new(),
+            vec![meta.add_to_field(Field::new("foo", DataType::Int32, true))].into(),
+            std::collections::HashMap::new(),
         )
         .unwrap();
 
         // verify to_field method populates metadata
-        assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
+        assert_eq!(meta, expr.metadata(&schema).unwrap());
+
+        // outer ref constructed by `out_ref_col_with_metadata` should be metadata-preserving
+        let outer_ref = out_ref_col_with_metadata(
+            DataType::Int32,
+            meta.to_hashmap(),
+            Column::from_name("foo"),
+        );
+        assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
     }
 
     #[derive(Debug)]
@@ -897,8 +950,8 @@ mod tests {
             self
         }
 
-        fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
-            self.field = self.field.with_metadata(metadata);
+        fn with_metadata(mut self, metadata: FieldMetadata) -> Self {
+            self.field = metadata.add_to_field(self.field);
             self
         }
     }

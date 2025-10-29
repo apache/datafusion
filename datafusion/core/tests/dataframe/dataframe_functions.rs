@@ -1215,7 +1215,7 @@ async fn test_fn_decode() -> Result<()> {
     // Note that the decode function returns binary, and the default display of
     // binary is "hexadecimal" and therefore the output looks like decode did
     // nothing. So compare to a constant.
-    let df_schema = DFSchema::try_from(test_schema().as_ref().clone())?;
+    let df_schema = DFSchema::try_from(test_schema())?;
     let expr = decode(encode(col("a"), lit("hex")), lit("hex"))
         // need to cast to utf8 otherwise the default display of binary array is hex
         // so it looks like nothing is done
@@ -1313,6 +1313,31 @@ async fn test_count_wildcard() -> Result<()> {
         Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1)) AS count(*)]] [b:UInt32, count(*):Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
     ");
+
+    Ok(())
+}
+
+/// Call count wildcard with alias from dataframe API
+#[tokio::test]
+async fn test_count_wildcard_with_alias() -> Result<()> {
+    let df = create_test_table().await?;
+    let result_df = df.aggregate(vec![], vec![count_all().alias("total_count")])?;
+
+    let schema = result_df.schema();
+    assert_eq!(schema.fields().len(), 1);
+    assert_eq!(schema.field(0).name(), "total_count");
+    assert_eq!(*schema.field(0).data_type(), DataType::Int64);
+
+    let batches = result_df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+
+    let count_array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
+    assert_eq!(count_array.value(0), 4);
 
     Ok(())
 }

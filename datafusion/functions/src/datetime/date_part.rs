@@ -68,9 +68,10 @@ use datafusion_macros::user_doc;
     - millisecond
     - microsecond
     - nanosecond
-    - dow (day of the week)
+    - dow (day of the week where Sunday is 0)
     - doy (day of the year)
     - epoch (seconds since Unix epoch)
+    - isodow (day of the week where Monday is 0)
 "#
     ),
     argument(
@@ -78,7 +79,7 @@ use datafusion_macros::user_doc;
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DatePartFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -217,6 +218,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+                "isodow" => date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?,
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
@@ -232,6 +234,7 @@ impl ScalarUDFImpl for DatePartFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

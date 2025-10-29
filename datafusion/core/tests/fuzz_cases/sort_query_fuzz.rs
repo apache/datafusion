@@ -220,7 +220,7 @@ impl SortQueryFuzzer {
                         .test_gen
                         .fuzzer_run(init_seed, query_seed, config_seed)
                         .await?;
-                    println!("\n"); // Seperator between tested runs
+                    println!("\n"); // Separator between tested runs
 
                     if expected_results.is_none() {
                         expected_results = Some(results);
@@ -428,7 +428,7 @@ impl SortFuzzerTestGenerator {
             .collect();
 
         let mut order_by_clauses = Vec::new();
-        for col in selected_columns {
+        for col in &selected_columns {
             let mut clause = col.name.clone();
             if rng.random_bool(0.5) {
                 let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
@@ -463,7 +463,12 @@ impl SortFuzzerTestGenerator {
         let limit_clause = limit.map_or(String::new(), |l| format!(" LIMIT {l}"));
 
         let query = format!(
-            "SELECT * FROM {} ORDER BY {}{}",
+            "SELECT {} FROM {} ORDER BY {}{}",
+            selected_columns
+                .iter()
+                .map(|col| col.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
             self.table_name,
             order_by_clauses.join(", "),
             limit_clause

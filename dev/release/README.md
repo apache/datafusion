@@ -36,8 +36,8 @@ If you would like to propose your change for inclusion in a release branch for a
 patch release:
 
 1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
-1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
-1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
+2. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
+3. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
 For example, to backport commit `12345` from `main` to `branch-43`:
 
@@ -127,6 +127,15 @@ Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
 release.
 
 See [#9697](https://github.com/apache/datafusion/pull/9697) for an example.
+
+Modify `asf.yaml` to protect future release candidate branch to prevent accidental merges:
+
+```yaml
+# needs to be updated as part of the release process
+branch-50:
+  required_pull_request_reviews:
+    required_approving_review_count: 1
+```
 
 Here are the commands that could be used to prepare the `38.0.0` release:
 
@@ -271,6 +280,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/execution && cargo publish)
 (cd datafusion/functions && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
+(cd datafusion/physical-expr-adapter && cargo publish)
 (cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/functions-window && cargo publish)
 (cd datafusion/functions-nested && cargo publish)
@@ -278,63 +288,31 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
+(cd datafusion/pruning && cargo publish)
 (cd datafusion/physical-optimizer && cargo publish)
-(cd datafusion/catalog && cargo publish)
+(cd datafusion/session && cargo publish)
 (cd datafusion/datasource && cargo publish)
+(cd datafusion/catalog && cargo publish)
 (cd datafusion/catalog-listing && cargo publish)
 (cd datafusion/functions-table && cargo publish)
+(cd datafusion/datasource-csv && cargo publish)
+(cd datafusion/datasource-json && cargo publish)
+(cd datafusion/datasource-parquet && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)
+(cd datafusion/datasource-avro && cargo publish)
 (cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
 (cd datafusion-cli && cargo publish)
+(cd datafusion/spark && cargo publish)
 (cd datafusion/sqllogictest && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew
 
-Run `publish_homebrew.sh` to publish `datafusion-cli` on Homebrew. In order to do so it is necessary to
-fork the `homebrew-core` repo https://github.com/Homebrew/homebrew-core/, have Homebrew installed on your
-macOS/Linux/WSL2 and properly configured and have a Github Personal Access Token that has permission to file pull requests in the `homebrew-core` repo.
-
-#### Fork the `homebrew-core` repo
-
-Go to https://github.com/Homebrew/homebrew-core/ and fork the repo.
-
-#### Install and configure Homebrew
-
-Please visit https://brew.sh/ to obtain Homebrew. In addition to that please check out https://docs.brew.sh/Homebrew-on-Linux if you are on Linux or WSL2.
-
-Before running the script make sure that you can run the following command in your bash to make sure
-that `brew` has been installed and configured properly:
-
-```shell
-brew --version
-```
-
-#### Create a Github Personal Access Token
-
-To create a Github Personal Access Token, please visit https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token for instructions.
-
-- Make sure to select either **All repositories** or **Only selected repositories** so that you have access to **Repository permissions**.
-- If you only use the token for selected repos make sure you include your
-  fork of `homebrew-core` in the list of repos under **Selected repositories**.
-- Make sure to have **Read and write** access enabled for pull requests in your **Repository permissions**.
-
-After all of the above is complete execute the following command:
-
-```shell
-dev/release/publish_homebrew.sh <version> <github-user> <github-token> <homebrew-default-branch-name>
-```
-
-Note that sometimes someone else has already submitted a PR to update the datafusion formula in homebrew.
-In this case you will get an error with a message that your PR is a duplicate of an existing one. In this
-case no further action is required.
-
-Alternatively manually submit a simple PR to update tag and commit hash for the datafusion
-formula in homebrew-core. Here is an example PR:
-https://github.com/Homebrew/homebrew-core/pull/89562.
+[`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
+so no action is needed.
 
 ### Call the vote
 

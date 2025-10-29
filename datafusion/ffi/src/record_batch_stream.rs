@@ -32,6 +32,7 @@ use datafusion::{
     error::DataFusionError,
     execution::{RecordBatchStream, SendableRecordBatchStream},
 };
+use datafusion_common::{exec_datafusion_err, exec_err};
 use futures::{Stream, TryStreamExt};
 use tokio::runtime::Handle;
 
@@ -56,6 +57,9 @@ pub struct FFI_RecordBatchStream {
 
     /// Return the schema of the record batch
     pub schema: unsafe extern "C" fn(stream: &Self) -> WrappedSchema,
+
+    /// Release the memory of the private data when it is no longer being used.
+    pub release: unsafe extern "C" fn(arg: &mut Self),
 
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// The foreign library should never attempt to access this data.
@@ -82,6 +86,7 @@ impl FFI_RecordBatchStream {
         FFI_RecordBatchStream {
             poll_next: poll_next_fn_wrapper,
             schema: schema_fn_wrapper,
+            release: release_fn_wrapper,
             private_data,
         }
     }
@@ -94,6 +99,12 @@ unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> Wrappe
     let stream = &(*private_data).rbs;
 
     (*stream).schema().into()
+}
+
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
+    let private_data =
+        Box::from_raw(provider.private_data as *mut RecordBatchStreamPrivateData);
+    drop(private_data);
 }
 
 fn record_batch_to_wrapped_array(
@@ -153,9 +164,8 @@ fn wrapped_array_to_record_batch(array: WrappedArray) -> Result<RecordBatch> {
     let struct_array = array
         .as_any()
         .downcast_ref::<StructArray>()
-        .ok_or(DataFusionError::Execution(
-        "Unexpected array type during record batch collection in FFI_RecordBatchStream"
-            .to_string(),
+        .ok_or_else(|| exec_datafusion_err!(
+        "Unexpected array type during record batch collection in FFI_RecordBatchStream - expected StructArray"
     ))?;
 
     Ok(struct_array.into())
@@ -168,9 +178,7 @@ fn maybe_wrapped_array_to_record_batch(
         ROption::RSome(RResult::ROk(wrapped_array)) => {
             Some(wrapped_array_to_record_batch(wrapped_array))
         }
-        ROption::RSome(RResult::RErr(e)) => {
-            Some(Err(DataFusionError::Execution(e.to_string())))
-        }
+        ROption::RSome(RResult::RErr(e)) => Some(exec_err!("FFI error: {e}")),
         ROption::RNone => None,
     }
 }
@@ -190,9 +198,61 @@ impl Stream for FFI_RecordBatchStream {
                 Poll::Ready(maybe_wrapped_array_to_record_batch(array))
             }
             FfiPoll::Pending => Poll::Pending,
-            FfiPoll::Panicked => Poll::Ready(Some(Err(DataFusionError::Execution(
-                "Error occurred during poll_next on FFI_RecordBatchStream".to_string(),
-            )))),
+            FfiPoll::Panicked => Poll::Ready(Some(exec_err!(
+                "Panic occurred during poll_next on FFI_RecordBatchStream"
+            ))),
         }
+    }
+}
+
+impl Drop for FFI_RecordBatchStream {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::{
+        common::record_batch, error::Result, execution::SendableRecordBatchStream,
+        test_util::bounded_stream,
+    };
+
+    use super::FFI_RecordBatchStream;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn test_round_trip_record_batch_stream() -> Result<()> {
+        let record_batch = record_batch!(
+            ("a", Int32, vec![1, 2, 3]),
+            ("b", Float64, vec![Some(4.0), None, Some(5.0)])
+        )?;
+        let original_rbs = bounded_stream(record_batch.clone(), 1);
+
+        let ffi_rbs: FFI_RecordBatchStream = original_rbs.into();
+        let mut ffi_rbs: SendableRecordBatchStream = Box::pin(ffi_rbs);
+
+        let schema = ffi_rbs.schema();
+        assert_eq!(
+            schema,
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Float64, true)
+            ]))
+        );
+
+        let batch = ffi_rbs.next().await;
+        assert!(batch.is_some());
+        assert!(batch.as_ref().unwrap().is_ok());
+        assert_eq!(batch.unwrap().unwrap(), record_batch);
+
+        // There should only be one batch
+        let no_batch = ffi_rbs.next().await;
+        assert!(no_batch.is_none());
+
+        Ok(())
     }
 }

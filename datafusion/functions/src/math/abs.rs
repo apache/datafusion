@@ -21,14 +21,12 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array,
+    ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{
-    internal_datafusion_err, not_impl_err, utils::take_function_args, Result,
-};
+use datafusion_common::{not_impl_err, utils::take_function_args, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -100,6 +98,8 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
         | DataType::UInt64 => Ok(|input: &ArrayRef| Ok(Arc::clone(input))),
 
         // Decimal types
+        DataType::Decimal32(_, _) => Ok(make_decimal_abs_function!(Decimal32Array)),
+        DataType::Decimal64(_, _) => Ok(make_decimal_abs_function!(Decimal64Array)),
         DataType::Decimal128(_, _) => Ok(make_decimal_abs_function!(Decimal128Array)),
         DataType::Decimal256(_, _) => Ok(make_decimal_abs_function!(Decimal256Array)),
 
@@ -110,9 +110,17 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
     doc_section(label = "Math Functions"),
     description = "Returns the absolute value of a number.",
     syntax_example = "abs(numeric_expression)",
+    sql_example = r#"```sql
+> SELECT abs(-5);
++----------+
+| abs(-5)  |
++----------+
+| 5        |
++----------+
+```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct AbsFunc {
     signature: Signature,
 }
@@ -156,6 +164,12 @@ impl ScalarUDFImpl for AbsFunc {
             DataType::UInt16 => Ok(DataType::UInt16),
             DataType::UInt32 => Ok(DataType::UInt32),
             DataType::UInt64 => Ok(DataType::UInt64),
+            DataType::Decimal32(precision, scale) => {
+                Ok(DataType::Decimal32(precision, scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                Ok(DataType::Decimal64(precision, scale))
+            }
             DataType::Decimal128(precision, scale) => {
                 Ok(DataType::Decimal128(precision, scale))
             }

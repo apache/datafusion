@@ -28,7 +28,7 @@ pub type Result<T, E = DFSqlLogicTestError> = std::result::Result<T, E>;
 pub enum DFSqlLogicTestError {
     /// Error from sqllogictest-rs
     #[error("SqlLogicTest error(from sqllogictest-rs crate): {0}")]
-    SqlLogicTest(#[from] TestError),
+    SqlLogicTest(#[from] Box<TestError>),
     /// Error from datafusion
     #[error("DataFusion error: {}", .0.strip_backtrace())]
     DataFusion(#[from] DataFusionError),

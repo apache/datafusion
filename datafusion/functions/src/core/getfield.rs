@@ -75,7 +75,7 @@ use std::sync::Arc;
         description = "The field name in the map or struct to retrieve data for. Must evaluate to a string."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct GetFieldFunc {
     signature: Signature,
 }
@@ -108,8 +108,8 @@ impl ScalarUDFImpl for GetFieldFunc {
         let [base, field_name] = take_function_args(self.name(), args)?;
 
         let name = match field_name {
-            Expr::Literal(name) => name,
-            other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
+            Expr::Literal(name, _) => name.to_string(),
+            other => other.schema_name().to_string(),
         };
 
         Ok(format!("{base}[{name}]"))
@@ -118,8 +118,8 @@ impl ScalarUDFImpl for GetFieldFunc {
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let [base, field_name] = take_function_args(self.name(), args)?;
         let name = match field_name {
-            Expr::Literal(name) => name,
-            other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
+            Expr::Literal(name, _) => name.to_string(),
+            other => other.schema_name().to_string(),
         };
 
         Ok(format!("{}[{}]", base.schema_name(), name))
@@ -256,7 +256,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Map(_, _), other) => {
                 let data_type = other.data_type();
                 if data_type.is_nested() {
-                    exec_err!("unsupported type {:?} for map access", data_type)
+                    exec_err!("unsupported type {} for map access", data_type)
                 } else {
                     process_map_array(array, other.to_array()?)
                 }
@@ -275,7 +275,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
             (dt, name) => exec_err!(
                 "get_field is only possible on maps with utf8 indexes or struct \
-                                         with utf8 indexes. Received {dt:?} with {name:?} index"
+                                         with utf8 indexes. Received {dt} with {name:?} index"
             ),
         }
     }

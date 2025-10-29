@@ -39,7 +39,7 @@ use datafusion::prelude::*;
 /// the power of the second argument `a^b`.
 ///
 /// To do so, we must implement the `ScalarUDFImpl` trait.
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct PowUdf {
     signature: Signature,
     aliases: Vec<String>,

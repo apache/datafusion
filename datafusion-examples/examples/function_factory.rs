@@ -17,7 +17,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{exec_err, internal_err, DataFusionError};
+use datafusion::common::{exec_datafusion_err, exec_err, internal_err, DataFusionError};
 use datafusion::error::Result;
 use datafusion::execution::context::{
     FunctionFactory, RegisterFunction, SessionContext, SessionState,
@@ -28,6 +28,7 @@ use datafusion::logical_expr::{
     ColumnarValue, CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
 };
+use std::hash::Hash;
 use std::result::Result as RResult;
 use std::sync::Arc;
 
@@ -106,7 +107,7 @@ impl FunctionFactory for CustomFunctionFactory {
 }
 
 /// this function represents the newly created execution engine.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct ScalarFunctionWrapper {
     /// The text of the function body, `$1 + f1($2)` in our example
     name: String,
@@ -150,10 +151,6 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         Ok(ExprSimplifyResult::Simplified(replacement))
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn output_ordering(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
         Ok(SortProperties::Unordered)
     }
@@ -188,9 +185,7 @@ impl ScalarFunctionWrapper {
     fn parse_placeholder_identifier(placeholder: &str) -> Result<usize> {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Placeholder `{placeholder}` parsing error: {e}!"
-                ))
+                exec_datafusion_err!("Placeholder `{placeholder}` parsing error: {e}!")
             })?)
         } else {
             exec_err!("Placeholder should start with `$`!")

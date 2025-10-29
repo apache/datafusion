@@ -19,14 +19,16 @@ extern crate criterion;
 
 use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::math::random::RandomFunc;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let random_func = RandomFunc::new();
-
     let return_field = Field::new("f", DataType::Float64, true).into();
+    let config_options = Arc::new(ConfigOptions::default());
+
     // Benchmark to evaluate 1M rows in batch size 8192
     let iterations = 1_000_000 / 8192; // Calculate how many iterations are needed to reach approximately 1M rows
     c.bench_function("random_1M_rows_batch_8192", |b| {
@@ -39,6 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: vec![],
                             number_rows: 8192,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 );
@@ -59,6 +62,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: vec![],
                             number_rows: 128,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 );

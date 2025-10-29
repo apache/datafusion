@@ -29,6 +29,8 @@ use crate::{
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
+#[cfg(feature = "parquet_encryption")]
+use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
 use datafusion_common::{config::ConfigEntry, Result};
 use object_store::ObjectStore;
 use std::path::PathBuf;
@@ -78,6 +80,9 @@ pub struct RuntimeEnv {
     pub cache_manager: Arc<CacheManager>,
     /// Object Store Registry
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
+    /// Parquet encryption factory registry
+    #[cfg(feature = "parquet_encryption")]
+    pub parquet_encryption_factory_registry: Arc<EncryptionFactoryRegistry>,
 }
 
 impl Debug for RuntimeEnv {
@@ -87,18 +92,6 @@ impl Debug for RuntimeEnv {
 }
 
 impl RuntimeEnv {
-    #[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-    #[allow(deprecated)]
-    pub fn new(config: RuntimeConfig) -> Result<Self> {
-        Self::try_new(config)
-    }
-    /// Create env based on configuration
-    #[deprecated(since = "44.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-    #[allow(deprecated)]
-    pub fn try_new(config: RuntimeConfig) -> Result<Self> {
-        config.build()
-    }
-
     /// Registers a custom `ObjectStore` to be used with a specific url.
     /// This allows DataFusion to create external tables from urls that do not have
     /// built in support such as `hdfs://namenode:port/...`.
@@ -154,6 +147,28 @@ impl RuntimeEnv {
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry.get_store(url.as_ref())
     }
+
+    /// Register an [`EncryptionFactory`] with an associated identifier that can be later
+    /// used to configure encryption when reading or writing Parquet.
+    /// If an encryption factory with the same identifier was already registered, it is replaced and returned.
+    #[cfg(feature = "parquet_encryption")]
+    pub fn register_parquet_encryption_factory(
+        &self,
+        id: &str,
+        encryption_factory: Arc<dyn EncryptionFactory>,
+    ) -> Option<Arc<dyn EncryptionFactory>> {
+        self.parquet_encryption_factory_registry
+            .register_factory(id, encryption_factory)
+    }
+
+    /// Retrieve an [`EncryptionFactory`] by its identifier
+    #[cfg(feature = "parquet_encryption")]
+    pub fn parquet_encryption_factory(
+        &self,
+        id: &str,
+    ) -> Result<Arc<dyn EncryptionFactory>> {
+        self.parquet_encryption_factory_registry.get_factory(id)
+    }
 }
 
 impl Default for RuntimeEnv {
@@ -162,15 +177,10 @@ impl Default for RuntimeEnv {
     }
 }
 
-/// Please see: <https://github.com/apache/datafusion/issues/12156>
-/// This a type alias for backwards compatibility.
-#[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-pub type RuntimeConfig = RuntimeEnvBuilder;
-
-#[derive(Clone)]
 /// Execution runtime configuration builder.
 ///
 /// See example on [`RuntimeEnv`]
+#[derive(Clone)]
 pub struct RuntimeEnvBuilder {
     #[allow(deprecated)]
     /// DiskManager to manage temporary disk file usage
@@ -185,6 +195,9 @@ pub struct RuntimeEnvBuilder {
     pub cache_manager: CacheManagerConfig,
     /// ObjectStoreRegistry to get object store based on url
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
+    /// Parquet encryption factory registry
+    #[cfg(feature = "parquet_encryption")]
+    pub parquet_encryption_factory_registry: Arc<EncryptionFactoryRegistry>,
 }
 
 impl Default for RuntimeEnvBuilder {
@@ -202,6 +215,8 @@ impl RuntimeEnvBuilder {
             memory_pool: Default::default(),
             cache_manager: Default::default(),
             object_store_registry: Arc::new(DefaultObjectStoreRegistry::default()),
+            #[cfg(feature = "parquet_encryption")]
+            parquet_encryption_factory_registry: Default::default(),
         }
     }
 
@@ -243,7 +258,8 @@ impl RuntimeEnvBuilder {
     /// Specify the total memory to use while running the DataFusion
     /// plan to `max_memory * memory_fraction` in bytes.
     ///
-    /// This defaults to using [`GreedyMemoryPool`]
+    /// This defaults to using [`GreedyMemoryPool`] wrapped in the
+    /// [`TrackConsumersPool`] with a maximum of 5 consumers.
     ///
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
@@ -255,11 +271,23 @@ impl RuntimeEnvBuilder {
     }
 
     /// Use the specified path to create any needed temporary files
-    pub fn with_temp_file_path(self, path: impl Into<PathBuf>) -> Self {
+    pub fn with_temp_file_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let builder = self.disk_manager_builder.take().unwrap_or_default();
         self.with_disk_manager_builder(
-            DiskManagerBuilder::default()
-                .with_mode(DiskManagerMode::Directories(vec![path.into()])),
+            builder.with_mode(DiskManagerMode::Directories(vec![path.into()])),
         )
+    }
+
+    /// Specify a limit on the size of the temporary file directory in bytes
+    pub fn with_max_temp_directory_size(mut self, size: u64) -> Self {
+        let builder = self.disk_manager_builder.take().unwrap_or_default();
+        self.with_disk_manager_builder(builder.with_max_temp_directory_size(size))
+    }
+
+    /// Specify the limit of the file-embedded metadata cache, in bytes.
+    pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_metadata_cache_limit(limit);
+        self
     }
 
     /// Build a RuntimeEnv
@@ -270,6 +298,8 @@ impl RuntimeEnvBuilder {
             memory_pool,
             cache_manager,
             object_store_registry,
+            #[cfg(feature = "parquet_encryption")]
+            parquet_encryption_factory_registry,
         } = self;
         let memory_pool =
             memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
@@ -284,6 +314,8 @@ impl RuntimeEnvBuilder {
             },
             cache_manager: CacheManager::try_new(&cache_manager)?,
             object_store_registry,
+            #[cfg(feature = "parquet_encryption")]
+            parquet_encryption_factory_registry,
         })
     }
 
@@ -299,6 +331,10 @@ impl RuntimeEnvBuilder {
                 .cache_manager
                 .get_file_statistic_cache(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
+            file_metadata_cache: Some(
+                runtime_env.cache_manager.get_file_metadata_cache(),
+            ),
+            metadata_cache_limit: runtime_env.cache_manager.get_metadata_cache_limit(),
         };
 
         Self {
@@ -310,17 +346,37 @@ impl RuntimeEnvBuilder {
             memory_pool: Some(Arc::clone(&runtime_env.memory_pool)),
             cache_manager: cache_config,
             object_store_registry: Arc::clone(&runtime_env.object_store_registry),
+            #[cfg(feature = "parquet_encryption")]
+            parquet_encryption_factory_registry: Arc::clone(
+                &runtime_env.parquet_encryption_factory_registry,
+            ),
         }
     }
 
     /// Returns a list of all available runtime configurations with their current values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
-        // Memory pool configuration
-        vec![ConfigEntry {
-            key: "datafusion.runtime.memory_limit".to_string(),
-            value: None, // Default is system-dependent
-            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-        }]
+        vec![
+            ConfigEntry {
+                key: "datafusion.runtime.memory_limit".to_string(),
+                value: None, // Default is system-dependent
+                description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.max_temp_directory_size".to_string(),
+                value: Some("100G".to_string()),
+                description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.temp_directory".to_string(),
+                value: None, // Default is system-dependent
+                description: "The path to the temporary file directory.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.metadata_cache_limit".to_string(),
+                value: Some("50M".to_owned()),
+                description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            }
+        ]
     }
 
     /// Generate documentation that can be included in the user guide

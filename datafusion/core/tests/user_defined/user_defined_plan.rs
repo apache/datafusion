@@ -580,7 +580,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         self.input.schema()
     }
 
-    fn check_invariants(&self, check: InvariantLevel, _plan: &LogicalPlan) -> Result<()> {
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
         if let Some(InvariantMock {
             should_fail_invariant,
             kind,
@@ -912,11 +912,12 @@ impl MyAnalyzerRule {
             .map(|e| {
                 e.transform(|e| {
                     Ok(match e {
-                        Expr::Literal(ScalarValue::Int64(i)) => {
+                        Expr::Literal(ScalarValue::Int64(i), _) => {
                             // transform to UInt64
-                            Transformed::yes(Expr::Literal(ScalarValue::UInt64(
-                                i.map(|i| i as u64),
-                            )))
+                            Transformed::yes(Expr::Literal(
+                                ScalarValue::UInt64(i.map(|i| i as u64)),
+                                None,
+                            ))
                         }
                         _ => Transformed::no(e),
                     })

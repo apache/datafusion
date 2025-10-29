@@ -87,6 +87,39 @@ To run for specific query, for example Q21
 ./bench.sh run tpch10 21
 ```
 
+## Compile profile benchmark
+
+Generate the data required for the compile profile helper (TPC-H SF=1):
+
+```shell
+./bench.sh data compile_profile
+```
+
+Run the benchmark across all default Cargo profiles (`dev`, `release`, `ci`, `release-nonlto`):
+
+```shell
+./bench.sh run compile_profile
+```
+
+Limit the run to a single profile:
+
+```shell
+./bench.sh run compile_profile dev
+```
+
+Or specify a subset of profiles:
+
+```shell
+./bench.sh run compile_profile dev release
+```
+
+You can also invoke the helper directly if you need to customise arguments further:
+
+```shell
+./benchmarks/compile_profile.py --profiles dev release --data /path/to/tpch_sf1
+```
+
+
 ## Benchmark with modified configurations
 
 ### Select join algorithm
@@ -283,6 +316,7 @@ This will produce output like:
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
+
 # Benchmark Runner
 
 The `dfbench` program contains subcommands to run the various
@@ -321,6 +355,66 @@ FLAGS:
 ...
 ```
 
+# Profiling Memory Stats for each benchmark query
+The `mem_profile` program wraps benchmark execution to measure memory usage statistics, such as peak RSS. It runs each benchmark query in a separate subprocess, capturing the child process’s stdout to print structured output.
+
+Subcommands supported by mem_profile are the subset of those in `dfbench`.
+Currently supported benchmarks include: Clickbench, H2o, Imdb, SortTpch, Tpch
+
+Before running benchmarks, `mem_profile` automatically compiles the benchmark binary (`dfbench`) using `cargo build`. Note that the build profile used for `dfbench` is not tied to the profile used for running `mem_profile` itself. We can explicitly specify the desired build profile using the `--bench-profile` option (e.g. release-nonlto). By prebuilding the binary and running each query in a separate process, we can ensure accurate memory statistics.
+
+Currently, `mem_profile` only supports `mimalloc` as the memory allocator, since it relies on `mimalloc`'s API to collect memory statistics.
+
+Because it runs the compiled binary directly from the target directory, make sure your working directory is the top-level datafusion/ directory, where the target/ is also located. 
+
+The benchmark subcommand (e.g., `tpch`) and all following arguments are passed directly to `dfbench`. Be sure to specify `--bench-profile` before the benchmark subcommand. 
+
+Example: 
+```shell
+datafusion$ cargo run --profile release-nonlto --bin mem_profile -- --bench-profile release-nonlto tpch --path benchmarks/data/tpch_sf1 --partitions 4 --format parquet
+```
+Example Output:
+```
+Query     Time (ms)     Peak RSS  Peak Commit  Major Page Faults
+----------------------------------------------------------------
+1            503.42     283.4 MB       3.0 GB                  0
+2            431.09     240.7 MB       3.0 GB                  0
+3            594.28     350.1 MB       3.0 GB                  0
+4            468.90     462.4 MB       3.0 GB                  0
+5            653.58     385.4 MB       3.0 GB                  0
+6            296.79     247.3 MB       2.0 GB                  0
+7            662.32     652.4 MB       3.0 GB                  0
+8            702.48     396.0 MB       3.0 GB                  0
+9            774.21     611.5 MB       3.0 GB                  0
+10           733.62     397.9 MB       3.0 GB                  0
+11           271.71     209.6 MB       3.0 GB                  0
+12           512.60     212.5 MB       2.0 GB                  0
+13           507.83     381.5 MB       2.0 GB                  0
+14           420.89     313.5 MB       3.0 GB                  0
+15           539.97     288.0 MB       2.0 GB                  0
+16           370.91     229.8 MB       3.0 GB                  0
+17           758.33     467.0 MB       2.0 GB                  0
+18          1112.32     638.9 MB       3.0 GB                  0
+19           712.72     280.9 MB       2.0 GB                  0
+20           620.64     402.9 MB       2.9 GB                  0
+21           971.63     388.9 MB       2.9 GB                  0
+22           404.50     164.8 MB       2.0 GB                  0
+```
+
+## Reported Metrics
+When running benchmarks, `mem_profile` collects several memory-related statistics using the mimalloc API:
+
+- Peak RSS (Resident Set Size): 
+The maximum amount of physical memory used by the process.
+This is a process-level metric collected via OS-specific mechanisms and is not mimalloc-specific.
+
+- Peak Commit:
+The peak amount of memory committed by the allocator (i.e., total virtual memory reserved).
+This is mimalloc-specific. It gives a more allocator-aware view of memory usage than RSS.
+
+- Major Page Faults:
+The number of major page faults triggered during execution.
+This metric is obtained from the operating system and is not mimalloc-specific.
 # Writing a new benchmark
 
 ## Creating or downloading data outside of the benchmark
@@ -378,37 +472,6 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 # Benchmarks
 
 The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience.
-
-## Cancellation
-
-Test performance of cancelling queries.
-
-Queries in DataFusion should stop executing "quickly" after they are
-cancelled (the output stream is dropped).
-
-The queries are executed on a synthetic dataset generated during
-the benchmark execution that is an anonymized version of a
-real-world data set.
-
-The query is an anonymized version of a real-world query, and the
-test starts the query then cancels it and reports how long it takes
-for the runtime to fully exit.
-
-Example output:
-
-```
-Using 7 files found on disk
-Starting to load data into in-memory object store
-Done loading data into in-memory object store
-in main, sleeping
-Starting spawned
-Creating logical plan...
-Creating physical plan...
-Executing physical plan...
-Getting results...
-cancelling thread
-done dropping runtime in 83.531417ms
-```
 
 ## ClickBench
 
@@ -508,6 +571,14 @@ See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
 
 ```bash
 ./bench.sh run sort_tpch
+```
+
+### TopK TPCH
+
+In addition, topk_tpch is available from the bench.sh script:
+
+```bash
+./bench.sh run topk_tpch
 ```
 
 ## IMDB
@@ -671,4 +742,65 @@ For example, to run query 1 with the small data generated above:
 
 ```bash
 cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/window.sql --query 1
+```
+
+# Micro-Benchmarks
+
+## Nested Loop Join
+
+This benchmark focuses on the performance of queries with nested loop joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Different queries are included to test nested loop joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run nlj
+```
+
+## Hash Join
+
+This benchmark focuses on the performance of queries with nested hash joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Several queries are included to test hash joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run hj
+```
+
+## Cancellation
+
+Test performance of cancelling queries.
+
+Queries in DataFusion should stop executing "quickly" after they are
+cancelled (the output stream is dropped).
+
+The queries are executed on a synthetic dataset generated during
+the benchmark execution that is an anonymized version of a
+real-world data set.
+
+The query is an anonymized version of a real-world query, and the
+test starts the query then cancels it and reports how long it takes
+for the runtime to fully exit.
+
+Example output:
+
+```
+Using 7 files found on disk
+Starting to load data into in-memory object store
+Done loading data into in-memory object store
+in main, sleeping
+Starting spawned
+Creating logical plan...
+Creating physical plan...
+Executing physical plan...
+Getting results...
+cancelling thread
+done dropping runtime in 83.531417ms
 ```

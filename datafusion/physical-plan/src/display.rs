@@ -120,6 +120,8 @@ pub struct DisplayableExecutionPlan<'a> {
     show_statistics: bool,
     /// If schema should be displayed. See [`Self::set_show_schema`]
     show_schema: bool,
+    // (TreeRender) Maximum total width of the rendered tree
+    tree_maximum_render_width: usize,
 }
 
 impl<'a> DisplayableExecutionPlan<'a> {
@@ -131,6 +133,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics::None,
             show_statistics: false,
             show_schema: false,
+            tree_maximum_render_width: 240,
         }
     }
 
@@ -143,6 +146,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics::Aggregated,
             show_statistics: false,
             show_schema: false,
+            tree_maximum_render_width: 240,
         }
     }
 
@@ -155,6 +159,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics::Full,
             show_statistics: false,
             show_schema: false,
+            tree_maximum_render_width: 240,
         }
     }
 
@@ -170,6 +175,12 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Enable display of statistics
     pub fn set_show_statistics(mut self, show_statistics: bool) -> Self {
         self.show_statistics = show_statistics;
+        self
+    }
+
+    /// Set the maximum render width for the tree format
+    pub fn set_tree_maximum_render_width(mut self, width: usize) -> Self {
+        self.tree_maximum_render_width = width;
         self
     }
 
@@ -270,14 +281,21 @@ impl<'a> DisplayableExecutionPlan<'a> {
     pub fn tree_render(&self) -> impl fmt::Display + 'a {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
+            maximum_render_width: usize,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                let mut visitor = TreeRenderVisitor { f };
+                let mut visitor = TreeRenderVisitor {
+                    f,
+                    maximum_render_width: self.maximum_render_width,
+                };
                 visitor.visit(self.plan)
             }
         }
-        Wrapper { plan: self.inner }
+        Wrapper {
+            plan: self.inner,
+            maximum_render_width: self.tree_maximum_render_width,
+        }
     }
 
     /// Return a single-line summary of the root of the plan
@@ -540,6 +558,8 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 struct TreeRenderVisitor<'a, 'b> {
     /// Write to this formatter
     f: &'a mut Formatter<'b>,
+    /// Maximum total width of the rendered tree
+    maximum_render_width: usize,
 }
 
 impl TreeRenderVisitor<'_, '_> {
@@ -557,7 +577,6 @@ impl TreeRenderVisitor<'_, '_> {
     const HORIZONTAL: &'static str = "─"; // Horizontal line
 
     // TODO: Make these variables configurable.
-    const MAXIMUM_RENDER_WIDTH: usize = 240; // Maximum total width of the rendered tree
     const NODE_RENDER_WIDTH: usize = 29; // Width of each node's box
     const MAX_EXTRA_LINES: usize = 30; // Maximum number of extra info lines per node
 
@@ -592,6 +611,12 @@ impl TreeRenderVisitor<'_, '_> {
         y: usize,
     ) -> Result<(), fmt::Error> {
         for x in 0..root.width {
+            if self.maximum_render_width > 0
+                && x * Self::NODE_RENDER_WIDTH >= self.maximum_render_width
+            {
+                break;
+            }
+
             if root.has_node(x, y) {
                 write!(self.f, "{}", Self::LTCORNER)?;
                 write!(
@@ -662,7 +687,9 @@ impl TreeRenderVisitor<'_, '_> {
         // Render the actual node.
         for render_y in 0..=extra_height {
             for (x, _) in root.nodes.iter().enumerate().take(root.width) {
-                if x * Self::NODE_RENDER_WIDTH >= Self::MAXIMUM_RENDER_WIDTH {
+                if self.maximum_render_width > 0
+                    && x * Self::NODE_RENDER_WIDTH >= self.maximum_render_width
+                {
                     break;
                 }
 
@@ -780,7 +807,9 @@ impl TreeRenderVisitor<'_, '_> {
         y: usize,
     ) -> Result<(), fmt::Error> {
         for x in 0..=root.width {
-            if x * Self::NODE_RENDER_WIDTH >= Self::MAXIMUM_RENDER_WIDTH {
+            if self.maximum_render_width > 0
+                && x * Self::NODE_RENDER_WIDTH >= self.maximum_render_width
+            {
                 break;
             }
             let mut has_adjacent_nodes = false;
@@ -906,7 +935,7 @@ impl TreeRenderVisitor<'_, '_> {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces % 2 == 0 { 0 } else { 1 };
+            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),
@@ -1034,27 +1063,22 @@ impl fmt::Display for ProjectSchemaDisplay<'_> {
 }
 
 pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::Result {
-    if let Some(ordering) = orderings.first() {
-        if !ordering.is_empty() {
-            let start = if orderings.len() == 1 {
-                ", output_ordering="
-            } else {
-                ", output_orderings=["
-            };
-            write!(f, "{start}")?;
-            for (idx, ordering) in
-                orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
-            {
-                match idx {
-                    0 => write!(f, "[{ordering}]")?,
-                    _ => write!(f, ", [{ordering}]")?,
-                }
+    if !orderings.is_empty() {
+        let start = if orderings.len() == 1 {
+            ", output_ordering="
+        } else {
+            ", output_orderings=["
+        };
+        write!(f, "{start}")?;
+        for (idx, ordering) in orderings.iter().enumerate() {
+            match idx {
+                0 => write!(f, "[{ordering}]")?,
+                _ => write!(f, ", [{ordering}]")?,
             }
-            let end = if orderings.len() == 1 { "" } else { "]" };
-            write!(f, "{end}")?;
         }
+        let end = if orderings.len() == 1 { "" } else { "]" };
+        write!(f, "{end}")?;
     }
-
     Ok(())
 }
 
@@ -1063,7 +1087,7 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{DataFusionError, Result, Statistics};
+    use datafusion_common::{internal_datafusion_err, Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
@@ -1129,9 +1153,7 @@ mod tests {
             }
             match self {
                 Self::Panic => panic!("expected panic"),
-                Self::Error => {
-                    Err(DataFusionError::Internal("expected error".to_string()))
-                }
+                Self::Error => Err(internal_datafusion_err!("expected error")),
                 Self::Ok => Ok(Statistics::new_unknown(self.schema().as_ref())),
             }
         }

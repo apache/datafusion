@@ -39,7 +39,7 @@ mod tests {
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
         ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
-        StringViewArray, StructArray,
+        StringViewArray, StructArray, TimestampNanosecondArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
@@ -50,7 +50,6 @@ mod tests {
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{assert_contains, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
@@ -332,7 +331,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -390,7 +389,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -452,7 +451,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -514,7 +513,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c3").eq(lit(7_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -958,6 +957,72 @@ mod tests {
             .map(|b| b.num_rows())
             .sum::<usize>();
         assert_eq!(read, 2, "Expected 2 rows to match the predicate");
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_column_type_filter_timestamp_units() {
+        // The table and filter have a common data type
+        // The table schema is in milliseconds, but the file schema is in nanoseconds
+        let c1: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
+            Some(1_000_000_000), // 1970-01-01T00:00:01Z
+            Some(2_000_000_000), // 1970-01-01T00:00:02Z
+            Some(3_000_000_000), // 1970-01-01T00:00:03Z
+            Some(4_000_000_000), // 1970-01-01T00:00:04Z
+        ]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+            false,
+        )]));
+        // One row should match, 2 pruned via page index, 1 pruned via filter pushdown
+        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(
+            Some(1_000),
+            Some("UTC".into()),
+        )));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_page_index_predicate() // produces pages with 2 rows each (2 pages total for our data)
+            .with_table_schema(table_schema.clone())
+            .round_trip(vec![batch.clone()])
+            .await;
+        // There should be no predicate evaluation errors and we keep 1 row
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 1, "Expected 1 rows to match the predicate");
+        assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
+        // If we filter with a value that is completely out of the range of the data
+        // we prune at the row group level.
+        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(
+            Some(5_000),
+            Some("UTC".into()),
+        )));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_table_schema(table_schema)
+            .round_trip(vec![batch])
+            .await;
+        // There should be no predicate evaluation errors and we keep 0 rows
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 0, "Expected 0 rows to match the predicate");
+        assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 1);
     }
 
     #[tokio::test]
@@ -1952,14 +2017,14 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         fs::create_dir(&out_dir).unwrap();
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        let schema: Schema = df.schema().into();
+        let schema = Arc::clone(df.schema().inner());
         // Register a listing table - this will use all files in the directory as data sources
         // for the query
         ctx.register_listing_table(
             "my_table",
             &out_dir,
             listing_options,
-            Some(Arc::new(schema)),
+            Some(schema),
             None,
         )
         .await
@@ -2141,7 +2206,7 @@ mod tests {
         fn create_reader(
             &self,
             partition_index: usize,
-            file_meta: FileMeta,
+            partitioned_file: PartitionedFile,
             metadata_size_hint: Option<usize>,
             metrics: &ExecutionPlanMetricsSet,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
@@ -2152,7 +2217,7 @@ mod tests {
                 .push(metadata_size_hint);
             self.inner.create_reader(
                 partition_index,
-                file_meta,
+                partitioned_file,
                 metadata_size_hint,
                 metrics,
             )

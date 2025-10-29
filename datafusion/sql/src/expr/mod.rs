@@ -22,7 +22,7 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
     DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
-    StructField, Subscript, TrimWhereField, Value, ValueWithSpan,
+    StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -215,7 +215,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             SQLExpr::Extract { field, expr, .. } => {
                 let mut extract_args = vec![
-                    Expr::Literal(ScalarValue::from(format!("{field}"))),
+                    Expr::Literal(ScalarValue::from(format!("{field}")), None),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ];
 
@@ -254,6 +254,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operand,
                 conditions,
                 else_result,
+                case_token: _,
+                end_token: _,
             } => self.sql_case_identifier_to_expr(
                 operand,
                 conditions,
@@ -289,7 +291,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )))
             }
 
-            SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
+            SQLExpr::TypedString(TypedString {
+                data_type,
+                value,
+                uses_odbc_syntax: _,
+            }) => Ok(Expr::Cast(Cast::new(
                 Box::new(lit(value.into_string().unwrap())),
                 self.convert_data_type(&data_type)?,
             ))),
@@ -446,6 +452,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 substring_from,
                 substring_for,
                 special: _,
+                shorthand: _,
             } => self.sql_substring_to_expr(
                 expr,
                 substring_from,
@@ -644,7 +651,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         values: Vec<SQLExpr>,
     ) -> Result<Expr> {
         match values.first() {
-            Some(SQLExpr::Identifier(_)) | Some(SQLExpr::Value(_)) => {
+            Some(SQLExpr::Identifier(_))
+            | Some(SQLExpr::Value(_))
+            | Some(SQLExpr::CompoundIdentifier(_)) => {
                 self.parse_struct(schema, planner_context, values, vec![])
             }
             None => not_impl_err!("Empty tuple not supported yet"),
@@ -811,7 +820,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<String>,
+        escape_char: Option<Value>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
@@ -821,13 +830,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("ANY in LIKE expression");
         }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = if let Some(char) = escape_char {
-            if char.len() != 1 {
-                return plan_err!("Invalid escape character in LIKE expression");
+        let escape_char = match escape_char {
+            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
+                Some(char.chars().next().unwrap())
             }
-            Some(char.chars().next().unwrap())
-        } else {
-            None
+            Some(value) => return plan_err!("Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"),
+            None => None,
         };
         Ok(Expr::Like(Like::new(
             negated,
@@ -843,7 +851,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<String>,
+        escape_char: Option<Value>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -852,13 +860,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
-        let escape_char = if let Some(char) = escape_char {
-            if char.len() != 1 {
-                return plan_err!("Invalid escape character in SIMILAR TO expression");
+        let escape_char = match escape_char {
+            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
+                Some(char.chars().next().unwrap())
             }
-            Some(char.chars().next().unwrap())
-        } else {
-            None
+            Some(value) => return plan_err!("Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"),
+            None => None,
         };
         Ok(Expr::SimilarTo(Like::new(
             negated,

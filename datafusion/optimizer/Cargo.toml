@@ -45,13 +45,14 @@ arrow = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 recursive = { workspace = true, optional = true }
 regex = { workspace = true }
-regex-syntax = "0.8.0"
+regex-syntax = "0.8.6"
 
 [dev-dependencies]
 async-trait = { workspace = true }

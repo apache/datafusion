@@ -67,6 +67,7 @@ impl InProgressSpillFile {
                 self.writer = Some(IPCStreamWriter::new(
                     in_progress_file.path(),
                     schema.as_ref(),
+                    self.spill_writer.compression,
                 )?);
 
                 // Update metrics
@@ -74,7 +75,7 @@ impl InProgressSpillFile {
             }
         }
         if let Some(writer) = &mut self.writer {
-            let (spilled_rows, spilled_bytes) = writer.write(batch)?;
+            let (spilled_rows, _) = writer.write(batch)?;
             if let Some(in_progress_file) = &mut self.in_progress_file {
                 in_progress_file.update_disk_usage()?;
             } else {
@@ -82,7 +83,6 @@ impl InProgressSpillFile {
             }
 
             // Update metrics
-            self.spill_writer.metrics.spilled_bytes.add(spilled_bytes);
             self.spill_writer.metrics.spilled_rows.add(spilled_rows);
         }
         Ok(())
@@ -95,6 +95,14 @@ impl InProgressSpillFile {
             writer.finish()?;
         } else {
             return Ok(None);
+        }
+
+        // Since spill files are append-only, add the file size to spilled_bytes
+        if let Some(in_progress_file) = &mut self.in_progress_file {
+            // Since writer.finish() writes continuation marker and message length at the end
+            in_progress_file.update_disk_usage()?;
+            let size = in_progress_file.current_disk_usage();
+            self.spill_writer.metrics.spilled_bytes.add(size as usize);
         }
 
         Ok(self.in_progress_file.take())

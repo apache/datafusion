@@ -27,12 +27,15 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -72,6 +75,16 @@ impl CoalescePartitionsExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        let input_partitions = input.output_partitioning().partition_count();
+        let (drive, scheduling) = if input_partitions > 1 {
+            (EvaluationType::Eager, SchedulingType::Cooperative)
+        } else {
+            (
+                input.properties().evaluation_type,
+                input.properties().scheduling_type,
+            )
+        };
+
         // Coalescing partitions loses existing orderings:
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
@@ -82,6 +95,8 @@ impl CoalescePartitionsExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+        .with_evaluation_type(drive)
+        .with_scheduling_type(scheduling)
     }
 }
 
@@ -202,7 +217,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         self.input
             .partition_statistics(None)?
-            .with_fetch(self.schema(), self.fetch, 0, 1)
+            .with_fetch(self.fetch, 0, 1)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -247,6 +262,15 @@ impl ExecutionPlan for CoalescePartitionsExec {
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        FilterDescription::from_children(parent_filters, &self.children())
     }
 }
 

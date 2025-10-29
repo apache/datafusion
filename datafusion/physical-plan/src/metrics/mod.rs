@@ -19,6 +19,7 @@
 
 mod baseline;
 mod builder;
+mod custom;
 mod value;
 
 use parking_lot::Mutex;
@@ -31,8 +32,9 @@ use std::{
 use datafusion_common::HashMap;
 
 // public exports
-pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics};
+pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
+pub use custom::CustomMetricValue;
 pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
@@ -263,6 +265,7 @@ impl MetricsSet {
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
+            MetricValue::Custom { .. } => false,
         })
     }
 
@@ -384,7 +387,7 @@ impl ExecutionPlanMetricsSet {
 /// "tags" in
 /// [InfluxDB](https://docs.influxdata.com/influxdb/v1.8/write_protocols/line_protocol_tutorial/)
 /// , "attributes" in [open
-/// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/datamodel.md>,
+/// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/data-model.md>,
 /// etc.
 ///
 /// As the name and value are expected to mostly be constant strings,

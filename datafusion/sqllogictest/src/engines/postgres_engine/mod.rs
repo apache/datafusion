@@ -93,7 +93,7 @@ impl Postgres {
 
         let spawned_task = SpawnedTask::spawn(async move {
             if let Err(e) = connection.await {
-                log::error!("Postgres connection error: {:?}", e);
+                log::error!("Postgres connection error: {e:?}");
             }
         });
 

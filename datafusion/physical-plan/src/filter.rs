@@ -16,10 +16,11 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
+
+use itertools::Itertools;
 
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
@@ -28,11 +29,12 @@ use super::{
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
-    ProjectionExec,
+    ProjectionExec, ProjectionExpr,
 };
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
@@ -45,9 +47,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
 };
@@ -64,7 +63,6 @@ use datafusion_physical_expr::{
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
-use itertools::Itertools;
 use log::trace;
 
 const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
@@ -233,24 +231,18 @@ impl FilterExec {
             if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
                 if binary.op() == &Operator::Eq {
                     // Filter evaluates to single value for all partitions
-                    if input_eqs.is_expr_constant(binary.left()) {
-                        let (expr, across_parts) = (
-                            binary.right(),
-                            input_eqs.get_expr_constant_value(binary.right()),
-                        );
-                        res_constants.push(
-                            ConstExpr::new(Arc::clone(expr))
-                                .with_across_partitions(across_parts),
-                        );
-                    } else if input_eqs.is_expr_constant(binary.right()) {
-                        let (expr, across_parts) = (
-                            binary.left(),
-                            input_eqs.get_expr_constant_value(binary.left()),
-                        );
-                        res_constants.push(
-                            ConstExpr::new(Arc::clone(expr))
-                                .with_across_partitions(across_parts),
-                        );
+                    if input_eqs.is_expr_constant(binary.left()).is_some() {
+                        let across = input_eqs
+                            .is_expr_constant(binary.right())
+                            .unwrap_or_default();
+                        res_constants
+                            .push(ConstExpr::new(Arc::clone(binary.right()), across));
+                    } else if input_eqs.is_expr_constant(binary.right()).is_some() {
+                        let across = input_eqs
+                            .is_expr_constant(binary.left())
+                            .unwrap_or_default();
+                        res_constants
+                            .push(ConstExpr::new(Arc::clone(binary.left()), across));
                     }
                 }
             }
@@ -273,9 +265,9 @@ impl FilterExec {
             default_selectivity,
         )?;
         let mut eq_properties = input.equivalence_properties().clone();
-        let (equal_pairs, _) = collect_columns_from_predicate(predicate);
+        let (equal_pairs, _) = collect_columns_from_predicate_inner(predicate);
         for (lhs, rhs) in equal_pairs {
-            eq_properties.add_equal_conditions(lhs, rhs)?
+            eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
         }
         // Add the columns that have only one viable value (singleton) after
         // filtering to constants.
@@ -287,15 +279,13 @@ impl FilterExec {
                     .min_value
                     .get_value();
                 let expr = Arc::new(column) as _;
-                ConstExpr::new(expr)
-                    .with_across_partitions(AcrossPartitions::Uniform(value.cloned()))
+                ConstExpr::new(expr, AcrossPartitions::Uniform(value.cloned()))
             });
         // This is for statistics
-        eq_properties = eq_properties.with_constants(constants);
+        eq_properties.add_constants(constants)?;
         // This is for logical constant (for example: a = '1', then a could be marked as a constant)
         // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
-        eq_properties =
-            eq_properties.with_constants(Self::extend_constants(input, predicate));
+        eq_properties.add_constants(Self::extend_constants(input, predicate))?;
 
         let mut output_partitioning = input.output_partitioning().clone();
         // If contains projection, update the PlanProperties.
@@ -457,74 +447,62 @@ impl ExecutionPlan for FilterExec {
 
     fn gather_filters_for_pushdown(
         &self,
+        phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        let self_filter = split_conjunction(&self.predicate)
-            .into_iter()
-            .cloned()
-            .collect_vec();
-
-        let parent_filters = if let Some(projection_indices) = self.projection.as_ref() {
-            // We need to invert the projection on any referenced columns in the filter
-            // Create a mapping from the output columns to the input columns (the inverse of the projection)
-            let inverse_projection = projection_indices
-                .iter()
-                .enumerate()
-                .map(|(i, &p)| (p, i))
-                .collect::<HashMap<_, _>>();
-            parent_filters
+        if !matches!(phase, FilterPushdownPhase::Pre) {
+            // For non-pre phase, filters pass through unchanged
+            let filter_supports = parent_filters
                 .into_iter()
-                .map(|f| {
-                    f.transform_up(|expr| {
-                        let mut res =
-                            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                                let index = col.index();
-                                let index_in_input_schema =
-                                    inverse_projection.get(&index).ok_or_else(|| {
-                                        DataFusionError::Internal(format!(
-                                            "Column {index} not found in projection"
-                                        ))
-                                    })?;
-                                Transformed::yes(Arc::new(Column::new(
-                                    col.name(),
-                                    *index_in_input_schema,
-                                )) as _)
-                            } else {
-                                Transformed::no(expr)
-                            };
-                        // Columns can only exist in the leaves, no need to try all nodes
-                        res.tnr = TreeNodeRecursion::Jump;
-                        Ok(res)
-                    })
-                    .data()
-                })
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            parent_filters
-        };
+                .map(PushedDownPredicate::supported)
+                .collect();
+            return Ok(FilterDescription::new().with_child(ChildFilterDescription {
+                parent_filters: filter_supports,
+                self_filters: vec![],
+            }));
+        }
 
-        Ok(FilterDescription::new_with_child_count(1)
-            .all_parent_filters_supported(parent_filters)
-            .with_self_filters_for_children(vec![self_filter]))
+        let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
+            .with_self_filters(
+                split_conjunction(&self.predicate)
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+            );
+
+        Ok(FilterDescription::new().with_child(child))
     }
 
     fn handle_child_pushdown_result(
         &self,
+        phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        if !matches!(phase, FilterPushdownPhase::Pre) {
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
         // We absorb any parent filters that were not handled by our children
-        let mut unhandled_filters =
-            child_pushdown_result.parent_filters.collect_unsupported();
-        assert_eq!(
-            child_pushdown_result.self_filters.len(),
-            1,
-            "FilterExec should only have one child"
-        );
-        let unsupported_self_filters =
-            child_pushdown_result.self_filters[0].collect_unsupported();
-        unhandled_filters.extend(unsupported_self_filters);
+        let unsupported_parent_filters =
+            child_pushdown_result.parent_filters.iter().filter_map(|f| {
+                matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
+            });
+        let unsupported_self_filters = child_pushdown_result
+            .self_filters
+            .first()
+            .expect("we have exactly one child")
+            .iter()
+            .filter_map(|f| match f.discriminant {
+                PushedDown::Yes => None,
+                PushedDown::No => Some(&f.predicate),
+            })
+            .cloned();
+
+        let unhandled_filters = unsupported_parent_filters
+            .into_iter()
+            .chain(unsupported_self_filters)
+            .collect_vec();
 
         // If we have unhandled filters, we need to create a new FilterExec
         let filter_input = Arc::clone(self.input());
@@ -538,11 +516,11 @@ impl ExecutionPlan for FilterExec {
                         .iter()
                         .map(|p| {
                             let field = filter_child_schema.field(*p).clone();
-                            (
-                                Arc::new(Column::new(field.name(), *p))
+                            ProjectionExpr {
+                                expr: Arc::new(Column::new(field.name(), *p))
                                     as Arc<dyn PhysicalExpr>,
-                                field.name().to_string(),
-                            )
+                                alias: field.name().to_string(),
+                            }
                         })
                         .collect::<Vec<_>>();
                     Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
@@ -573,8 +551,9 @@ impl ExecutionPlan for FilterExec {
             };
             Some(Arc::new(new) as _)
         };
+
         Ok(FilterPushdownPropagation {
-            filters: child_pushdown_result.parent_filters.make_supported(),
+            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
             updated_node,
         })
     }
@@ -737,7 +716,19 @@ impl RecordBatchStream for FilterExecStream {
 }
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
-fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
+#[deprecated(
+    since = "51.0.0",
+    note = "This function will be internal in the future"
+)]
+pub fn collect_columns_from_predicate(
+    predicate: &'_ Arc<dyn PhysicalExpr>,
+) -> EqualAndNonEqual<'_> {
+    collect_columns_from_predicate_inner(predicate)
+}
+
+fn collect_columns_from_predicate_inner(
+    predicate: &'_ Arc<dyn PhysicalExpr>,
+) -> EqualAndNonEqual<'_> {
     let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
     let mut ne_predicate_columns = Vec::<PhysicalExprPairRef>::new();
 
@@ -806,7 +797,7 @@ mod tests {
             &schema,
         )?;
 
-        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&predicate);
+        let (equal_pairs, ne_pairs) = collect_columns_from_predicate_inner(&predicate);
         assert_eq!(2, equal_pairs.len());
         assert!(equal_pairs[0].0.eq(&col("c2", &schema)?));
         assert!(equal_pairs[0].1.eq(&lit(4u32)));

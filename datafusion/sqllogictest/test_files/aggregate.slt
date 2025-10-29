@@ -32,10 +32,12 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c10 BIGINT UNSIGNED NOT NULL,
   c11 FLOAT NOT NULL,
   c12 DOUBLE NOT NULL,
-  c13 VARCHAR NOT NULL
+  c13 VARCHAR NOT NULL,
+  c14 DATE NOT NULL,
+  c15 TIMESTAMP NOT NULL,
 )
 STORED AS CSV
-LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+LOCATION '../../testing/data/csv/aggregate_test_100_with_dates.csv'
 OPTIONS ('format.has_header' 'true');
 
 statement ok
@@ -132,39 +134,26 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
 SELECT approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c1) FROM aggregate_test_100
-----
-DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Utf8View, Int8, Float64] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed
 
-
-statement error
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
 SELECT approx_percentile_cont_with_weight(c1, 0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
-----
-DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Int16, Utf8View, Float64] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed
 
-
-statement error
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
 SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
-----
-DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Int16, Int8, Utf8View] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed
-
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
-----
-DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from [Int16, Float64, Utf8View] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed
 
-
-
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Int16, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Float64, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
@@ -172,9 +161,6 @@ SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_te
 
 statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
 SELECT approx_percentile_cont(0.95, c5) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
-
-statement error DataFusion error: This feature is not implemented: Conflicting ordering requirements in aggregate functions is not supported
-SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5), approx_percentile_cont(0.2) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for approx_percentile_cont
 SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5) IGNORE NULLS FROM aggregate_test_100
@@ -186,7 +172,7 @@ statement error DataFusion error: This feature is not implemented: Only a single
 SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5, c12) FROM aggregate_test_100
 
 # Not supported over sliding windows
-query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause are can not be used together. OVER is for window function, whereas WITHIN GROUP is for ordered set aggregate function
+query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause cannot be used together. OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions
 SELECT approx_percentile_cont(0.5)
 WITHIN GROUP (ORDER BY c3)
 OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
@@ -221,6 +207,56 @@ FROM aggregate_test_100
 query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
 SELECT array_agg(DISTINCT c13 ORDER BY c13, c12)
 FROM aggregate_test_100
+
+query ?? rowsort
+with tbl as (SELECT * FROM (VALUES ('xxx', 'yyy'), ('xxx', 'yyy'), ('xxx2', 'yyy2')) AS t(x, y))
+select
+    array_agg(x order by x) as x_agg,
+    array_agg(y order by y) as y_agg
+from tbl
+group by all
+----
+[xxx, xxx, xxx2] [yyy, yyy, yyy2]
+
+query ??
+SELECT
+    (SELECT array_agg(c12 ORDER BY c12) FROM aggregate_test_100),
+    (SELECT array_agg(c13 ORDER BY c13) FROM aggregate_test_100)
+----
+[0.01479305307777301, 0.02182578039211991, 0.03968347085780355, 0.04429073092078406, 0.047343434291126085, 0.04893135681998029, 0.0494924465469434, 0.05573662213439634, 0.05636955101974106, 0.061029375346466685, 0.07260475960924484, 0.09465635123783445, 0.12357539988406441, 0.152498292971736, 0.16301110515739792, 0.1640882545084913, 0.1754261586710173, 0.17592486905979987, 0.17909035118828576, 0.18628859265874176, 0.19113293583306745, 0.2145232647388039, 0.21535402343780985, 0.24899794314659673, 0.2537253407987472, 0.2667177795079635, 0.27159190516490006, 0.2739938529235548, 0.28534428578703896, 0.2944158618048994, 0.296036538664718, 0.3051364088814128, 0.30585375151301186, 0.3114712539863804, 0.3231750610081745, 0.32869374687050157, 0.33639590659276175, 0.3600766362333053, 0.36936304600612724, 0.38870280983958583, 0.39144436569161134, 0.40342283197779727, 0.4094218353587008, 0.40975383525297016, 0.42073125331890115, 0.4273123318932347, 0.42950521730777025, 0.4830878559436823, 0.5081765563442366, 0.5437595540422571, 0.5590205548347534, 0.5593249815276734, 0.5603062368164834, 0.560333188635217, 0.5614503754617461, 0.565352842229935, 0.574210838214554, 0.5759450483859969, 0.5773498217058918, 0.5991138115095911, 0.6009475544728957, 0.6108938307533, 0.6316565296547284, 0.6404495093354053, 0.6405262429561641, 0.6425694115212065, 0.658671129040488, 0.6668423897406515, 0.6864391962767343, 0.7035635283169166, 0.7325106678655877, 0.7328050041291218, 0.7614304100703713, 0.7631239070049998, 0.7670021786149205, 0.7697753383420857, 0.7764360990307122, 0.7784918983501654, 0.7973920072996036, 0.819715865079681, 0.8506721053047003, 0.8813167497816289, 0.8824879447595726, 0.9185813970744787, 0.9231889896940375, 0.9237877978193884, 0.9255031346434324, 0.9293883502480845, 0.9294097332465232, 0.9463098243875633, 0.946325164889271, 0.9491397432856566, 0.9567595541247681, 0.9706712283358269, 0.9723580396501548, 0.9748360509016578, 0.9800193410444061, 0.980809631269599, 0.991517828651004, 0.9965400387585364] [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8, 3BEOHQsMEFZ58VcNTOJYShTBpAPzbt, 4HX6feIvmNXBN7XGqgO4YVBkhu8GDI, 4JznSdBajNWhu4hRQwjV1FjTTxY68i, 52mKlRE3aHCBZtjECq6sY9OqVf8Dze, 56MZa5O1hVtX4c5sbnCfxuX5kDChqI, 6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ, 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, 6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE, 6x93sxYioWuq5c9Kkk8oTAAORM7cH0, 802bgTGl6Bk5TlkPYYTxp5JkKyaYUA, 8LIh0b6jmDGm87BmIyjdxNIpX4ugjD, 90gAtmGEeIqUTbo1ZrxCvWtsseukXC, 9UbObCsVkmYpJGcGrgfK90qOnwb2Lj, AFGCj7OWlEB5QfniEFgonMq90Tq5uH, ALuRhobVWbnQTTWZdSOk0iVe8oYFhW, Amn2K87Db5Es3dFQO9cw9cvpAM6h35, AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz, BJqx5WokrmrrezZA0dUbleMYkG5U2O, BPtQMxnuSPpxMExYV9YkDa6cAN7GP3, BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE, C2GT5KVyOPZpgKVl110TyZO0NcJ434, DuJNG8tufSqW0ZstHqWj3aGvFLMg4A, EcCuckwsF3gV1Ecgmh5v4KM8g1ozif, ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU, F7NSTjWvQJyBburN7CXRUlbgp2dIrA, Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u, H5j5ZHy1FGesOAHjkQEDYCucbpKWRu, HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g, IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr, IZTkHMLvIKuiLjhDjYMmIHxh166we4, Ig1QcuKsjHXkproePdERo2w0mYzIqd, JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ, JN0VclewmjwYlSl8386MlWv5rEhWCz, JafwVLSVk5AVoXFuzclesQ000EE2k1, KJFcmTVjdkCMv94wYCtfHMFhzyRsmH, Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn, Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV, LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW, MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ, MeSTAXq8gVxVjbEjgkvU9YLte0X9uE, NEhyk8uIx4kEULJGa8qIyFjjBcP2G6, O66j6PaYuZhEUtqV6fuU7TyjM2WxC5, OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh, OPwBqCEK5PWTjWaiOyL45u2NLTaDWv, Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0, Ow5PGpfTm4dXCfTDsXAOTatXRoAydR, QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv, QJYm7YRA3YetcBHI5wkMZeLXVmfuNy, QYlaIAnJA6r8rlAb6f59wcxvcPcWFf, RilTlL1tKkPOUFuzmLydHAVZwv1OGl, Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH, TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX, TtDKUZxzVxsq758G6AWPSYuZgVgbcl, VDhtJkYjAYPykCgOU9x3v7v3t4SO1a, VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4, Vp3gmWunM5A7wOC9YW2JroFqTWjvTi, WHmjWk2AY4c6m7DA4GitUx6nmb1yYS, XemNcT1xp61xcM1Qz3wZ1VECCnq06O, Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK, aDxBtor7Icd9C5hnTvvw5NrIre740e, akiiY5N0I44CMwEnBL6RTBk7BRkxEj, b3b9esRhTzFEawbs6XhpKnD9ojutHB, bgK1r6v3BCTh0aejJUhkA1Hn6idXGp, cBGc0kSm32ylBDnxogG727C0uhZEYZ, cq4WSAIFwx3wwTUS5bp1wCe71R6U5I, dVdvo6nUD5FgCgsbOZLds28RyGTpnx, e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG, f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX, fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG, gTpyQnEODMcpsPnJMZC66gh33i3m0b, gpo8K5qtYePve6jyPt6xgJx4YOVjms, gxfHWUF8XgY2KdFxigxvNEXe2V2XMl, i6RQVXKUh7MzuGMDaNclUYnFUAireU, ioEncce3mPOXD2hWhpZpCPWGATG6GU, jQimhdepw3GKmioWUlVSWeBVRKFkY3, l7uwDoTepWwnAP0ufqtHJS3CRi7RfP, lqhzgLsXZ8JhtpeeUWWNbMz8PHI705, m6jD0LBIQWaMfenwRCTANI9eOdyyto, mhjME0zBHbrK6NMkytMTQzOssOa1gF, mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS, nYVJnVicpGRqKZibHyBAmtmzBXAFfT, oHJMNvWuunsIMIWFnYG31RCfkOo2V7, oLZ21P2JEDooxV1pU31cIxQHEeeoLu, okOkcWflkNXIy4R8LzmySyY1EC3sYd, pLk3i59bZwd5KBZrI1FiweYTd5hteG, pTeu0WMjBRTaNRT15rLCuEh3tBJVc5, qnPOOmslCJaT45buUisMRnM0rc77EK, t6fQUjJejPcjc04wHvHTPe55S65B4V, ukOiFGGFnQJDHFgZxHMpvhD3zybF0M, ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8, waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs, wwXqSGKLyBQyPkonlzBNYUJTCo4LRS, xipQ93429ksjNcXPX5326VSg1xJZcW, y7C453hRWd4E7ImjNDWlpexB8nUqjh, ydkwycaISlYSlEq3TlkS2m15I2pcp8]
+
+query ??
+SELECT
+    array_agg(c12 ORDER BY c12),
+    array_agg(c13 ORDER BY c13)
+FROM aggregate_test_100
+----
+[0.01479305307777301, 0.02182578039211991, 0.03968347085780355, 0.04429073092078406, 0.047343434291126085, 0.04893135681998029, 0.0494924465469434, 0.05573662213439634, 0.05636955101974106, 0.061029375346466685, 0.07260475960924484, 0.09465635123783445, 0.12357539988406441, 0.152498292971736, 0.16301110515739792, 0.1640882545084913, 0.1754261586710173, 0.17592486905979987, 0.17909035118828576, 0.18628859265874176, 0.19113293583306745, 0.2145232647388039, 0.21535402343780985, 0.24899794314659673, 0.2537253407987472, 0.2667177795079635, 0.27159190516490006, 0.2739938529235548, 0.28534428578703896, 0.2944158618048994, 0.296036538664718, 0.3051364088814128, 0.30585375151301186, 0.3114712539863804, 0.3231750610081745, 0.32869374687050157, 0.33639590659276175, 0.3600766362333053, 0.36936304600612724, 0.38870280983958583, 0.39144436569161134, 0.40342283197779727, 0.4094218353587008, 0.40975383525297016, 0.42073125331890115, 0.4273123318932347, 0.42950521730777025, 0.4830878559436823, 0.5081765563442366, 0.5437595540422571, 0.5590205548347534, 0.5593249815276734, 0.5603062368164834, 0.560333188635217, 0.5614503754617461, 0.565352842229935, 0.574210838214554, 0.5759450483859969, 0.5773498217058918, 0.5991138115095911, 0.6009475544728957, 0.6108938307533, 0.6316565296547284, 0.6404495093354053, 0.6405262429561641, 0.6425694115212065, 0.658671129040488, 0.6668423897406515, 0.6864391962767343, 0.7035635283169166, 0.7325106678655877, 0.7328050041291218, 0.7614304100703713, 0.7631239070049998, 0.7670021786149205, 0.7697753383420857, 0.7764360990307122, 0.7784918983501654, 0.7973920072996036, 0.819715865079681, 0.8506721053047003, 0.8813167497816289, 0.8824879447595726, 0.9185813970744787, 0.9231889896940375, 0.9237877978193884, 0.9255031346434324, 0.9293883502480845, 0.9294097332465232, 0.9463098243875633, 0.946325164889271, 0.9491397432856566, 0.9567595541247681, 0.9706712283358269, 0.9723580396501548, 0.9748360509016578, 0.9800193410444061, 0.980809631269599, 0.991517828651004, 0.9965400387585364] [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8, 3BEOHQsMEFZ58VcNTOJYShTBpAPzbt, 4HX6feIvmNXBN7XGqgO4YVBkhu8GDI, 4JznSdBajNWhu4hRQwjV1FjTTxY68i, 52mKlRE3aHCBZtjECq6sY9OqVf8Dze, 56MZa5O1hVtX4c5sbnCfxuX5kDChqI, 6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ, 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, 6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE, 6x93sxYioWuq5c9Kkk8oTAAORM7cH0, 802bgTGl6Bk5TlkPYYTxp5JkKyaYUA, 8LIh0b6jmDGm87BmIyjdxNIpX4ugjD, 90gAtmGEeIqUTbo1ZrxCvWtsseukXC, 9UbObCsVkmYpJGcGrgfK90qOnwb2Lj, AFGCj7OWlEB5QfniEFgonMq90Tq5uH, ALuRhobVWbnQTTWZdSOk0iVe8oYFhW, Amn2K87Db5Es3dFQO9cw9cvpAM6h35, AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz, BJqx5WokrmrrezZA0dUbleMYkG5U2O, BPtQMxnuSPpxMExYV9YkDa6cAN7GP3, BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE, C2GT5KVyOPZpgKVl110TyZO0NcJ434, DuJNG8tufSqW0ZstHqWj3aGvFLMg4A, EcCuckwsF3gV1Ecgmh5v4KM8g1ozif, ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU, F7NSTjWvQJyBburN7CXRUlbgp2dIrA, Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u, H5j5ZHy1FGesOAHjkQEDYCucbpKWRu, HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g, IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr, IZTkHMLvIKuiLjhDjYMmIHxh166we4, Ig1QcuKsjHXkproePdERo2w0mYzIqd, JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ, JN0VclewmjwYlSl8386MlWv5rEhWCz, JafwVLSVk5AVoXFuzclesQ000EE2k1, KJFcmTVjdkCMv94wYCtfHMFhzyRsmH, Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn, Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV, LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW, MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ, MeSTAXq8gVxVjbEjgkvU9YLte0X9uE, NEhyk8uIx4kEULJGa8qIyFjjBcP2G6, O66j6PaYuZhEUtqV6fuU7TyjM2WxC5, OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh, OPwBqCEK5PWTjWaiOyL45u2NLTaDWv, Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0, Ow5PGpfTm4dXCfTDsXAOTatXRoAydR, QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv, QJYm7YRA3YetcBHI5wkMZeLXVmfuNy, QYlaIAnJA6r8rlAb6f59wcxvcPcWFf, RilTlL1tKkPOUFuzmLydHAVZwv1OGl, Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH, TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX, TtDKUZxzVxsq758G6AWPSYuZgVgbcl, VDhtJkYjAYPykCgOU9x3v7v3t4SO1a, VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4, Vp3gmWunM5A7wOC9YW2JroFqTWjvTi, WHmjWk2AY4c6m7DA4GitUx6nmb1yYS, XemNcT1xp61xcM1Qz3wZ1VECCnq06O, Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK, aDxBtor7Icd9C5hnTvvw5NrIre740e, akiiY5N0I44CMwEnBL6RTBk7BRkxEj, b3b9esRhTzFEawbs6XhpKnD9ojutHB, bgK1r6v3BCTh0aejJUhkA1Hn6idXGp, cBGc0kSm32ylBDnxogG727C0uhZEYZ, cq4WSAIFwx3wwTUS5bp1wCe71R6U5I, dVdvo6nUD5FgCgsbOZLds28RyGTpnx, e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG, f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX, fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG, gTpyQnEODMcpsPnJMZC66gh33i3m0b, gpo8K5qtYePve6jyPt6xgJx4YOVjms, gxfHWUF8XgY2KdFxigxvNEXe2V2XMl, i6RQVXKUh7MzuGMDaNclUYnFUAireU, ioEncce3mPOXD2hWhpZpCPWGATG6GU, jQimhdepw3GKmioWUlVSWeBVRKFkY3, l7uwDoTepWwnAP0ufqtHJS3CRi7RfP, lqhzgLsXZ8JhtpeeUWWNbMz8PHI705, m6jD0LBIQWaMfenwRCTANI9eOdyyto, mhjME0zBHbrK6NMkytMTQzOssOa1gF, mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS, nYVJnVicpGRqKZibHyBAmtmzBXAFfT, oHJMNvWuunsIMIWFnYG31RCfkOo2V7, oLZ21P2JEDooxV1pU31cIxQHEeeoLu, okOkcWflkNXIy4R8LzmySyY1EC3sYd, pLk3i59bZwd5KBZrI1FiweYTd5hteG, pTeu0WMjBRTaNRT15rLCuEh3tBJVc5, qnPOOmslCJaT45buUisMRnM0rc77EK, t6fQUjJejPcjc04wHvHTPe55S65B4V, ukOiFGGFnQJDHFgZxHMpvhD3zybF0M, ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8, waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs, wwXqSGKLyBQyPkonlzBNYUJTCo4LRS, xipQ93429ksjNcXPX5326VSg1xJZcW, y7C453hRWd4E7ImjNDWlpexB8nUqjh, ydkwycaISlYSlEq3TlkS2m15I2pcp8]
+
+query ?? rowsort
+with tbl as (SELECT * FROM (VALUES ('xxx', 'yyy'), ('xxx', 'yyy'), ('xxx2', 'yyy2')) AS t(x, y))
+select
+    array_agg(distinct x order by x) as x_agg,
+    array_agg(distinct y order by y) as y_agg
+from tbl
+group by all
+----
+[xxx, xxx2] [yyy, yyy2]
+
+query ??
+SELECT
+    (SELECT array_agg(DISTINCT c12 ORDER BY c12) FROM aggregate_test_100),
+    (SELECT array_agg(DISTINCT c13 ORDER BY c13) FROM aggregate_test_100)
+----
+[0.01479305307777301, 0.02182578039211991, 0.03968347085780355, 0.04429073092078406, 0.047343434291126085, 0.04893135681998029, 0.0494924465469434, 0.05573662213439634, 0.05636955101974106, 0.061029375346466685, 0.07260475960924484, 0.09465635123783445, 0.12357539988406441, 0.152498292971736, 0.16301110515739792, 0.1640882545084913, 0.1754261586710173, 0.17592486905979987, 0.17909035118828576, 0.18628859265874176, 0.19113293583306745, 0.2145232647388039, 0.21535402343780985, 0.24899794314659673, 0.2537253407987472, 0.2667177795079635, 0.27159190516490006, 0.2739938529235548, 0.28534428578703896, 0.2944158618048994, 0.296036538664718, 0.3051364088814128, 0.30585375151301186, 0.3114712539863804, 0.3231750610081745, 0.32869374687050157, 0.33639590659276175, 0.3600766362333053, 0.36936304600612724, 0.38870280983958583, 0.39144436569161134, 0.40342283197779727, 0.4094218353587008, 0.40975383525297016, 0.42073125331890115, 0.4273123318932347, 0.42950521730777025, 0.4830878559436823, 0.5081765563442366, 0.5437595540422571, 0.5590205548347534, 0.5593249815276734, 0.5603062368164834, 0.560333188635217, 0.5614503754617461, 0.565352842229935, 0.574210838214554, 0.5759450483859969, 0.5773498217058918, 0.5991138115095911, 0.6009475544728957, 0.6108938307533, 0.6316565296547284, 0.6404495093354053, 0.6405262429561641, 0.6425694115212065, 0.658671129040488, 0.6668423897406515, 0.6864391962767343, 0.7035635283169166, 0.7325106678655877, 0.7328050041291218, 0.7614304100703713, 0.7631239070049998, 0.7670021786149205, 0.7697753383420857, 0.7764360990307122, 0.7784918983501654, 0.7973920072996036, 0.819715865079681, 0.8506721053047003, 0.8813167497816289, 0.8824879447595726, 0.9185813970744787, 0.9231889896940375, 0.9237877978193884, 0.9255031346434324, 0.9293883502480845, 0.9294097332465232, 0.9463098243875633, 0.946325164889271, 0.9491397432856566, 0.9567595541247681, 0.9706712283358269, 0.9723580396501548, 0.9748360509016578, 0.9800193410444061, 0.980809631269599, 0.991517828651004, 0.9965400387585364] [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8, 3BEOHQsMEFZ58VcNTOJYShTBpAPzbt, 4HX6feIvmNXBN7XGqgO4YVBkhu8GDI, 4JznSdBajNWhu4hRQwjV1FjTTxY68i, 52mKlRE3aHCBZtjECq6sY9OqVf8Dze, 56MZa5O1hVtX4c5sbnCfxuX5kDChqI, 6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ, 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, 6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE, 6x93sxYioWuq5c9Kkk8oTAAORM7cH0, 802bgTGl6Bk5TlkPYYTxp5JkKyaYUA, 8LIh0b6jmDGm87BmIyjdxNIpX4ugjD, 90gAtmGEeIqUTbo1ZrxCvWtsseukXC, 9UbObCsVkmYpJGcGrgfK90qOnwb2Lj, AFGCj7OWlEB5QfniEFgonMq90Tq5uH, ALuRhobVWbnQTTWZdSOk0iVe8oYFhW, Amn2K87Db5Es3dFQO9cw9cvpAM6h35, AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz, BJqx5WokrmrrezZA0dUbleMYkG5U2O, BPtQMxnuSPpxMExYV9YkDa6cAN7GP3, BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE, C2GT5KVyOPZpgKVl110TyZO0NcJ434, DuJNG8tufSqW0ZstHqWj3aGvFLMg4A, EcCuckwsF3gV1Ecgmh5v4KM8g1ozif, ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU, F7NSTjWvQJyBburN7CXRUlbgp2dIrA, Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u, H5j5ZHy1FGesOAHjkQEDYCucbpKWRu, HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g, IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr, IZTkHMLvIKuiLjhDjYMmIHxh166we4, Ig1QcuKsjHXkproePdERo2w0mYzIqd, JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ, JN0VclewmjwYlSl8386MlWv5rEhWCz, JafwVLSVk5AVoXFuzclesQ000EE2k1, KJFcmTVjdkCMv94wYCtfHMFhzyRsmH, Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn, Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV, LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW, MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ, MeSTAXq8gVxVjbEjgkvU9YLte0X9uE, NEhyk8uIx4kEULJGa8qIyFjjBcP2G6, O66j6PaYuZhEUtqV6fuU7TyjM2WxC5, OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh, OPwBqCEK5PWTjWaiOyL45u2NLTaDWv, Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0, Ow5PGpfTm4dXCfTDsXAOTatXRoAydR, QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv, QJYm7YRA3YetcBHI5wkMZeLXVmfuNy, QYlaIAnJA6r8rlAb6f59wcxvcPcWFf, RilTlL1tKkPOUFuzmLydHAVZwv1OGl, Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH, TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX, TtDKUZxzVxsq758G6AWPSYuZgVgbcl, VDhtJkYjAYPykCgOU9x3v7v3t4SO1a, VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4, Vp3gmWunM5A7wOC9YW2JroFqTWjvTi, WHmjWk2AY4c6m7DA4GitUx6nmb1yYS, XemNcT1xp61xcM1Qz3wZ1VECCnq06O, Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK, aDxBtor7Icd9C5hnTvvw5NrIre740e, akiiY5N0I44CMwEnBL6RTBk7BRkxEj, b3b9esRhTzFEawbs6XhpKnD9ojutHB, bgK1r6v3BCTh0aejJUhkA1Hn6idXGp, cBGc0kSm32ylBDnxogG727C0uhZEYZ, cq4WSAIFwx3wwTUS5bp1wCe71R6U5I, dVdvo6nUD5FgCgsbOZLds28RyGTpnx, e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG, f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX, fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG, gTpyQnEODMcpsPnJMZC66gh33i3m0b, gpo8K5qtYePve6jyPt6xgJx4YOVjms, gxfHWUF8XgY2KdFxigxvNEXe2V2XMl, i6RQVXKUh7MzuGMDaNclUYnFUAireU, ioEncce3mPOXD2hWhpZpCPWGATG6GU, jQimhdepw3GKmioWUlVSWeBVRKFkY3, l7uwDoTepWwnAP0ufqtHJS3CRi7RfP, lqhzgLsXZ8JhtpeeUWWNbMz8PHI705, m6jD0LBIQWaMfenwRCTANI9eOdyyto, mhjME0zBHbrK6NMkytMTQzOssOa1gF, mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS, nYVJnVicpGRqKZibHyBAmtmzBXAFfT, oHJMNvWuunsIMIWFnYG31RCfkOo2V7, oLZ21P2JEDooxV1pU31cIxQHEeeoLu, okOkcWflkNXIy4R8LzmySyY1EC3sYd, pLk3i59bZwd5KBZrI1FiweYTd5hteG, pTeu0WMjBRTaNRT15rLCuEh3tBJVc5, qnPOOmslCJaT45buUisMRnM0rc77EK, t6fQUjJejPcjc04wHvHTPe55S65B4V, ukOiFGGFnQJDHFgZxHMpvhD3zybF0M, ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8, waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs, wwXqSGKLyBQyPkonlzBNYUJTCo4LRS, xipQ93429ksjNcXPX5326VSg1xJZcW, y7C453hRWd4E7ImjNDWlpexB8nUqjh, ydkwycaISlYSlEq3TlkS2m15I2pcp8]
+
+query ??
+SELECT
+    array_agg(DISTINCT c12 ORDER BY c12),
+    array_agg(DISTINCT c13 ORDER BY c13)
+FROM aggregate_test_100
+----
+[0.01479305307777301, 0.02182578039211991, 0.03968347085780355, 0.04429073092078406, 0.047343434291126085, 0.04893135681998029, 0.0494924465469434, 0.05573662213439634, 0.05636955101974106, 0.061029375346466685, 0.07260475960924484, 0.09465635123783445, 0.12357539988406441, 0.152498292971736, 0.16301110515739792, 0.1640882545084913, 0.1754261586710173, 0.17592486905979987, 0.17909035118828576, 0.18628859265874176, 0.19113293583306745, 0.2145232647388039, 0.21535402343780985, 0.24899794314659673, 0.2537253407987472, 0.2667177795079635, 0.27159190516490006, 0.2739938529235548, 0.28534428578703896, 0.2944158618048994, 0.296036538664718, 0.3051364088814128, 0.30585375151301186, 0.3114712539863804, 0.3231750610081745, 0.32869374687050157, 0.33639590659276175, 0.3600766362333053, 0.36936304600612724, 0.38870280983958583, 0.39144436569161134, 0.40342283197779727, 0.4094218353587008, 0.40975383525297016, 0.42073125331890115, 0.4273123318932347, 0.42950521730777025, 0.4830878559436823, 0.5081765563442366, 0.5437595540422571, 0.5590205548347534, 0.5593249815276734, 0.5603062368164834, 0.560333188635217, 0.5614503754617461, 0.565352842229935, 0.574210838214554, 0.5759450483859969, 0.5773498217058918, 0.5991138115095911, 0.6009475544728957, 0.6108938307533, 0.6316565296547284, 0.6404495093354053, 0.6405262429561641, 0.6425694115212065, 0.658671129040488, 0.6668423897406515, 0.6864391962767343, 0.7035635283169166, 0.7325106678655877, 0.7328050041291218, 0.7614304100703713, 0.7631239070049998, 0.7670021786149205, 0.7697753383420857, 0.7764360990307122, 0.7784918983501654, 0.7973920072996036, 0.819715865079681, 0.8506721053047003, 0.8813167497816289, 0.8824879447595726, 0.9185813970744787, 0.9231889896940375, 0.9237877978193884, 0.9255031346434324, 0.9293883502480845, 0.9294097332465232, 0.9463098243875633, 0.946325164889271, 0.9491397432856566, 0.9567595541247681, 0.9706712283358269, 0.9723580396501548, 0.9748360509016578, 0.9800193410444061, 0.980809631269599, 0.991517828651004, 0.9965400387585364] [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8, 3BEOHQsMEFZ58VcNTOJYShTBpAPzbt, 4HX6feIvmNXBN7XGqgO4YVBkhu8GDI, 4JznSdBajNWhu4hRQwjV1FjTTxY68i, 52mKlRE3aHCBZtjECq6sY9OqVf8Dze, 56MZa5O1hVtX4c5sbnCfxuX5kDChqI, 6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ, 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, 6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE, 6x93sxYioWuq5c9Kkk8oTAAORM7cH0, 802bgTGl6Bk5TlkPYYTxp5JkKyaYUA, 8LIh0b6jmDGm87BmIyjdxNIpX4ugjD, 90gAtmGEeIqUTbo1ZrxCvWtsseukXC, 9UbObCsVkmYpJGcGrgfK90qOnwb2Lj, AFGCj7OWlEB5QfniEFgonMq90Tq5uH, ALuRhobVWbnQTTWZdSOk0iVe8oYFhW, Amn2K87Db5Es3dFQO9cw9cvpAM6h35, AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz, BJqx5WokrmrrezZA0dUbleMYkG5U2O, BPtQMxnuSPpxMExYV9YkDa6cAN7GP3, BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE, C2GT5KVyOPZpgKVl110TyZO0NcJ434, DuJNG8tufSqW0ZstHqWj3aGvFLMg4A, EcCuckwsF3gV1Ecgmh5v4KM8g1ozif, ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU, F7NSTjWvQJyBburN7CXRUlbgp2dIrA, Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u, H5j5ZHy1FGesOAHjkQEDYCucbpKWRu, HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g, IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr, IZTkHMLvIKuiLjhDjYMmIHxh166we4, Ig1QcuKsjHXkproePdERo2w0mYzIqd, JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ, JN0VclewmjwYlSl8386MlWv5rEhWCz, JafwVLSVk5AVoXFuzclesQ000EE2k1, KJFcmTVjdkCMv94wYCtfHMFhzyRsmH, Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn, Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV, LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW, MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ, MeSTAXq8gVxVjbEjgkvU9YLte0X9uE, NEhyk8uIx4kEULJGa8qIyFjjBcP2G6, O66j6PaYuZhEUtqV6fuU7TyjM2WxC5, OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh, OPwBqCEK5PWTjWaiOyL45u2NLTaDWv, Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0, Ow5PGpfTm4dXCfTDsXAOTatXRoAydR, QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv, QJYm7YRA3YetcBHI5wkMZeLXVmfuNy, QYlaIAnJA6r8rlAb6f59wcxvcPcWFf, RilTlL1tKkPOUFuzmLydHAVZwv1OGl, Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH, TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX, TtDKUZxzVxsq758G6AWPSYuZgVgbcl, VDhtJkYjAYPykCgOU9x3v7v3t4SO1a, VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4, Vp3gmWunM5A7wOC9YW2JroFqTWjvTi, WHmjWk2AY4c6m7DA4GitUx6nmb1yYS, XemNcT1xp61xcM1Qz3wZ1VECCnq06O, Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK, aDxBtor7Icd9C5hnTvvw5NrIre740e, akiiY5N0I44CMwEnBL6RTBk7BRkxEj, b3b9esRhTzFEawbs6XhpKnD9ojutHB, bgK1r6v3BCTh0aejJUhkA1Hn6idXGp, cBGc0kSm32ylBDnxogG727C0uhZEYZ, cq4WSAIFwx3wwTUS5bp1wCe71R6U5I, dVdvo6nUD5FgCgsbOZLds28RyGTpnx, e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG, f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX, fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG, gTpyQnEODMcpsPnJMZC66gh33i3m0b, gpo8K5qtYePve6jyPt6xgJx4YOVjms, gxfHWUF8XgY2KdFxigxvNEXe2V2XMl, i6RQVXKUh7MzuGMDaNclUYnFUAireU, ioEncce3mPOXD2hWhpZpCPWGATG6GU, jQimhdepw3GKmioWUlVSWeBVRKFkY3, l7uwDoTepWwnAP0ufqtHJS3CRi7RfP, lqhzgLsXZ8JhtpeeUWWNbMz8PHI705, m6jD0LBIQWaMfenwRCTANI9eOdyyto, mhjME0zBHbrK6NMkytMTQzOssOa1gF, mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS, nYVJnVicpGRqKZibHyBAmtmzBXAFfT, oHJMNvWuunsIMIWFnYG31RCfkOo2V7, oLZ21P2JEDooxV1pU31cIxQHEeeoLu, okOkcWflkNXIy4R8LzmySyY1EC3sYd, pLk3i59bZwd5KBZrI1FiweYTd5hteG, pTeu0WMjBRTaNRT15rLCuEh3tBJVc5, qnPOOmslCJaT45buUisMRnM0rc77EK, t6fQUjJejPcjc04wHvHTPe55S65B4V, ukOiFGGFnQJDHFgZxHMpvhD3zybF0M, ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8, waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs, wwXqSGKLyBQyPkonlzBNYUJTCo4LRS, xipQ93429ksjNcXPX5326VSg1xJZcW, y7C453hRWd4E7ImjNDWlpexB8nUqjh, ydkwycaISlYSlEq3TlkS2m15I2pcp8]
 
 statement ok
 CREATE EXTERNAL TABLE agg_order (
@@ -376,15 +412,15 @@ logical_plan
 04)------SubqueryAlias: a
 05)--------Union
 06)----------Projection: Int64(1) AS id, Int64(2) AS foo
-07)------------EmptyRelation
+07)------------EmptyRelation: rows=1
 08)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
-09)------------EmptyRelation
+09)------------EmptyRelation: rows=1
 10)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
-11)------------EmptyRelation
+11)------------EmptyRelation: rows=1
 12)----------Projection: Int64(1) AS id, Int64(3) AS foo
-13)------------EmptyRelation
+13)------------EmptyRelation: rows=1
 14)----------Projection: Int64(1) AS id, Int64(2) AS foo
-15)------------EmptyRelation
+15)------------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
 02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
@@ -521,7 +557,7 @@ SELECT corr(c2, c12) FROM aggregate_test_100
 query R
 select corr(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 ----
-0
+NULL
 
 # all_nulls_query_correlation
 query R
@@ -689,10 +725,6 @@ SELECT c2, var_samp(c12) FROM aggregate_test_100 WHERE c12 > 0.90 GROUP BY c2 OR
 4 NULL
 5 0.000269544643
 
-# Use PostgresSQL dialect
-statement ok
-set datafusion.sql_parser.dialect = 'Postgres';
-
 # csv_query_stddev_12
 query IR
 SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.95) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
@@ -703,9 +735,30 @@ SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.95) FROM aggregate_test_100 GROUP
 4 NULL
 5 NULL
 
-# Restore the default dialect
 statement ok
-set datafusion.sql_parser.dialect = 'Generic';
+CREATE TABLE t (
+  a DOUBLE,
+  b BIGINT,
+  c INT
+) AS VALUES
+(1.0, 10, -5),
+(2.0, 20, -5),
+(3.0, 20, 4);
+
+# https://github.com/apache/datafusion/issues/15291
+query III
+WITH s AS (
+    SELECT
+        COUNT(a) FILTER (WHERE (b * b) - 3600 <= b),
+	COUNT(a) FILTER (WHERE (b * b) - 3000 <= b AND (c >= 0)),
+	COUNT(a) FILTER (WHERE (b * b) - 3000 <= b AND (c >= 0) AND (c >= 0))
+    FROM t
+) SELECT * FROM s
+----
+3 1 1
+
+statement ok
+DROP TABLE t
 
 # csv_query_stddev_13
 query IR
@@ -1273,11 +1326,23 @@ SELECT COUNT(2) FROM aggregate_test_100
 # ----
 # 100 99
 
+# csv_query_approx_count_literal_null
+query I
+SELECT approx_distinct(null)
+----
+0
+
 # csv_query_approx_count_dupe_expr_aliased
 query II
 SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_100
 ----
 100 100
+
+# csv_query_approx_count_date_timestamp
+query IIIII
+SELECT approx_distinct(c14) AS a, approx_distinct(c15) AS b, approx_distinct(arrow_cast(c15, 'Date64')), approx_distinct(arrow_cast(c15, 'Time32(Second)')) as c, approx_distinct(arrow_cast(c15, 'Time64(Nanosecond)')) AS d FROM aggregate_test_100
+----
+18 60 60 60 60
 
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
@@ -1303,7 +1368,7 @@ SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_10
 ## Column `c12` is omitted due to a large relative error (~10%) due to the small
 ## float values.
 
-#csv_query_approx_percentile_cont (c2)
+# csv_query_approx_percentile_cont (c2)
 query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c2) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
 ----
@@ -1316,6 +1381,23 @@ true
 
 query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c2) AS DOUBLE) / 5.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+
+# csv_query_approx_percentile_cont (c2, alternate syntax, should be the same as above)
+query B
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.1) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query B
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.5) AS DOUBLE) / 3.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query B
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.9) AS DOUBLE) / 5.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
@@ -1472,6 +1554,19 @@ SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (
 # percentile_cont_with_nulls_only
 query I
 SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
+----
+NULL
+
+# percentile_cont_with_weight_with_nulls
+query I
+SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(w, 0.5) WITHIN GROUP (ORDER BY v)
+FROM (VALUES (1, 1), (2, 1), (3, 1), (4, NULL), (NULL, 1), (NULL, NULL)) as t (v, w);
+----
+2
+
+# percentile_cont_with_weight_nulls_only
+query I
+SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(1, 0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
 ----
 NULL
 
@@ -1759,6 +1854,40 @@ c 122
 d 124
 e 115
 
+
+# csv_query_approx_percentile_cont_with_weight (should be the same as above)
+query TI
+SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 73
+b 68
+c 122
+d 124
+e 115
+
+
+# using approx_percentile_cont on 2 columns with same signature
+query TII
+SELECT c1, approx_percentile_cont(c2, 0.95) AS c2, approx_percentile_cont(c3, 0.95) AS c3 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 5 73
+b 5 68
+c 5 122
+d 5 124
+e 5 115
+
+# error is unique to this UDAF
+query TRR
+SELECT c1, avg(c2) AS c2, avg(c3) AS c3 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 2.857142857143 -18.333333333333
+b 3.263157894737 -5.842105263158
+c 2.666666666667 -1.333333333333
+d 2.444444444444 25.444444444444
+e 3 40.333333333333
+
+
+
 query TI
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
@@ -1777,6 +1906,17 @@ b 68
 c 122
 d 124
 e 115
+
+# csv_query_approx_percentile_cont_with_weight alternate syntax
+query TI
+SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 73
+b 68
+c 122
+d 124
+e 115
+
 
 query TI
 SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
@@ -1799,6 +1939,16 @@ e 115
 
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 74
+b 68
+c 123
+d 124
+e 115
+
+# approx_percentile_cont_with_weight with centroids
+query TI
+SELECT c1, approx_percentile_cont_with_weight(c2, 0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 74
 b 68
@@ -2284,7 +2434,7 @@ drop table t;
 
 # test count with largeutf8
 statement ok
-create table t (c string) as values 
+create table t (c string) as values
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast(null, 'LargeUtf8')),
@@ -2294,10 +2444,10 @@ create table t (c string) as values
 query T
 select arrow_typeof(c) from t;
 ----
-Utf8
-Utf8
-Utf8
-Utf8
+Utf8View
+Utf8View
+Utf8View
+Utf8View
 
 query IT
 select count(c), arrow_typeof(count(c)) from t;
@@ -2564,7 +2714,117 @@ select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
 statement ok
 drop table t;
 
+# correlation_f64_1
+statement ok
+create table t (c1 double, c2 double) as values (1, 4), (2, 5), (3, 6);
+
+query RT rowsort
+select corr(c1, c2), arrow_typeof(corr(c1, c2)) from t;
+----
+1 Float64
+
+# correlation with different numeric types (create test data)
+statement ok
+CREATE OR REPLACE TABLE corr_test(
+  int8_col TINYINT,
+  int16_col SMALLINT,
+  int32_col INT,
+  int64_col BIGINT,
+  uint32_col INT UNSIGNED,
+  float32_col FLOAT,
+  float64_col DOUBLE
+) as VALUES
+(1, 10, 100, 1000, 10000, 1.1, 10.1),
+(2, 20, 200, 2000, 20000, 2.2, 20.2),
+(3, 30, 300, 3000, 30000, 3.3, 30.3),
+(4, 40, 400, 4000, 40000, 4.4, 40.4),
+(5, 50, 500, 5000, 50000, 5.5, 50.5);
+
+# correlation using int32 and float64
+query R
+SELECT corr(int32_col, float64_col) FROM corr_test;
+----
+1
+
+# correlation using int64 and int32
+query R
+SELECT corr(int64_col, int32_col) FROM corr_test;
+----
+1
+
+# correlation using float32 and int8
+query R
+SELECT corr(float32_col, int8_col) FROM corr_test;
+----
+1
+
+# correlation using uint32 and int16
+query R
+SELECT corr(uint32_col, int16_col) FROM corr_test;
+----
+1
+
+# correlation with nulls
+statement ok
+CREATE OR REPLACE TABLE corr_nulls(
+  x INT,
+  y DOUBLE
+) as VALUES
+(1, 10.0),
+(2, 20.0),
+(NULL, 30.0),
+(4, NULL),
+(5, 50.0);
+
+# correlation with some nulls (should skip null pairs)
+query R
+SELECT corr(x, y) FROM corr_nulls;
+----
+1
+
+# correlation with single row (should return NULL)
+statement ok
+CREATE OR REPLACE TABLE corr_single_row(
+  x INT,
+  y DOUBLE
+) as VALUES
+(1, 10.0);
+
+query R
+SELECT corr(x, y) FROM corr_single_row;
+----
+NULL
+
+# correlation with all nulls
+statement ok
+CREATE OR REPLACE TABLE corr_all_nulls(
+  x INT,
+  y DOUBLE
+) as VALUES
+(NULL, NULL),
+(NULL, NULL);
+
+query R
+SELECT corr(x, y) FROM corr_all_nulls;
+----
+NULL
+
+statement ok
+drop table corr_test;
+
+statement ok
+drop table corr_nulls;
+
+statement ok
+drop table corr_single_row;
+
+statement ok
+drop table corr_all_nulls;
+
 # covariance_f64_4
+statement ok
+drop table if exists t;
+
 statement ok
 create table t (c1 double, c2 double) as values (1.1, 4.1), (2.0, 5.0), (3.0, 6.0);
 
@@ -4257,6 +4517,50 @@ DROP VIEW binary_views
 statement ok
 DROP TABLE strings;
 
+############ FixedSizeBinary ############
+
+statement ok
+CREATE TABLE binaries
+AS VALUES
+ (X'000103', 1),
+ (X'000104', 1),
+ (X'000101', 3),
+ (X'000103', 1),
+ (X'000102', 1),
+ (NULL, 1),
+ (NULL, 4),
+ (X'000104', 1),
+ (X'000109', 2),
+ (X'000103', 1),
+ (X'000101', 2);
+
+statement ok
+CREATE VIEW fixed_size_binary_views
+AS SELECT arrow_cast(column1, 'FixedSizeBinary(3)') as value, column2 as id FROM binaries;
+
+query I?
+SELECT id, MIN(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
+----
+1 000102
+2 000101
+3 000101
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
+----
+1 000104
+2 000109
+3 000101
+4 NULL
+
+statement ok
+DROP VIEW fixed_size_binary_views;
+
+statement ok
+DROP TABLE binaries;
+
+
 #################
 # End min_max on strings/binary with null values and groups
 #################
@@ -4482,9 +4786,7 @@ statement ok
 create table t as
 select
   arrow_cast(column1, 'Date32') as date32,
-  -- Workaround https://github.com/apache/arrow-rs/issues/4512 is fixed, can use this
-  -- arrow_cast(column1, 'Date64') as date64,
-  arrow_cast(arrow_cast(column1, 'Date32'), 'Date64') as date64,
+  arrow_cast(column1, 'Date64') as date64,
   column2 as names,
   column3 as tag
 from t_source;
@@ -4810,7 +5112,7 @@ statement ok
 create table t (c1 decimal(10, 0), c2 int) as values (null, null), (null, null), (null, null);
 
 query RTIT
-select 
+select
   sum(c1), arrow_typeof(sum(c1)),
   sum(c2), arrow_typeof(sum(c2))
 from t;
@@ -4886,10 +5188,6 @@ select c2, count(DISTINCT cast(c1 AS DECIMAL(10, 2))) from d_table GROUP BY c2 O
 ----
 A 2
 B 2
-
-# Use PostgresSQL dialect
-statement ok
-set datafusion.sql_parser.dialect = 'Postgres';
 
 # Creating the table
 statement ok
@@ -5020,33 +5318,45 @@ select c3, count(c2), avg(c2), sum(c2), min(c2), max(c2), count(c4), sum(c4) fro
 700.1 2 15.15 30.3 10.1 20.2 0 NULL
 NULL 1 10.1 10.1 10.1 10.1 0 NULL
 
-# Restore the default dialect
-statement ok
-set datafusion.sql_parser.dialect = 'Generic';
-
 ## Multiple distinct aggregates and dictionaries
 statement ok
-create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
 query IT
-select * from dict_test;
+select * from dict_test order by column1, column2;
 ----
+1 bar
+1 foo
 1 foo
 2 bar
 
 query II
-select count(distinct column1), count(distinct column2) from dict_test group by column1;
+select count(distinct column1), count(distinct column2) from dict_test group by column1 order by column1;
 ----
-1 1
+1 2
 1 1
 
 statement ok
 drop table dict_test;
 
+## count distinct dictionary with null values
+statement ok
+create table dict_null_test as
+    select arrow_cast(NULL, 'Dictionary(Int32, Utf8)') as d
+    from (values (1), (2), (3), (4), (5));
+
+query I
+select count(distinct d) from dict_null_test;
+----
+0
+
+statement ok
+drop table dict_null_test;
+
 # avg_duration
 
 statement ok
-create table d as values 
+create table d as values
   (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'), arrow_cast(3, 'Duration(Microsecond)'), arrow_cast(4, 'Duration(Nanosecond)'), 1),
   (arrow_cast(11, 'Duration(Second)'), arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1);
 
@@ -5100,7 +5410,7 @@ FROM d WHERE column1 IS NOT NULL;
 
 # Centered average window function
 query I??
-SELECT column5, column1, avg(column1) OVER (ORDER BY column5 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as centered_avg 
+SELECT column5, column1, avg(column1) OVER (ORDER BY column5 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as centered_avg
 FROM d WHERE column1 IS NOT NULL;
 ----
 1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 6 secs
@@ -5168,8 +5478,10 @@ select avg(distinct x_dict) from value_dict;
 ----
 3
 
-query error
+query RR
 select avg(x_dict), avg(distinct x_dict) from value_dict;
+----
+2.625 3
 
 query I
 select min(x_dict) from value_dict;
@@ -5294,7 +5606,7 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
+11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
 
 
 #
@@ -5319,7 +5631,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], file_type=csv, has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c3], file_type=csv, has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 order by c3 limit 5;
@@ -5343,7 +5655,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 order by c2, c3 limit 5 offset 4;
@@ -5378,7 +5690,7 @@ physical_plan
 10)------------------CoalesceBatchesExec: target_batch_size=8192
 11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
 12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c3 order by c3 limit 4;
@@ -5404,7 +5716,7 @@ physical_plan
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[max(aggregate_test_100.c1)]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
 
 # TODO(msirek): Extend checking in LimitedDistinctAggregation equal groupings to ignore the order of columns
 # in the group-by column lists, so the limit could be pushed to the lowest AggregateExec in this case
@@ -5428,7 +5740,7 @@ physical_plan
 08)--------------CoalescePartitionsExec
 09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
 SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c3, c2 order by c3, c2 limit 3 offset 10;
@@ -5452,7 +5764,7 @@ physical_plan
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
@@ -5479,7 +5791,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], file_type=csv, has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c3], file_type=csv, has_header=true
 
 statement ok
 set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
@@ -5551,7 +5863,7 @@ NULL NULL 3 NULL 1 4 0 8 0
 
 # regr_*() basic tests
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5566,7 +5878,7 @@ from (values (1,2), (2,4), (3,6));
 2 0 3 1 2 4 2 8 4
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5584,7 +5896,7 @@ from aggregate_test_100;
 
 # regr_*() functions ignore NULLs
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5599,7 +5911,7 @@ from (values (1,NULL), (2,4), (3,6));
 2 0 2 1 2.5 5 0.5 2 1
 
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5614,7 +5926,7 @@ from (values (1,NULL), (NULL,4), (3,6));
 NULL NULL 1 NULL 3 6 0 0 0
 
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5629,8 +5941,8 @@ from (values (1,NULL), (NULL,4), (NULL,NULL));
 NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
 query TRRIRRRRRR rowsort
-select 
-    column3, 
+select
+    column3,
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5654,7 +5966,7 @@ statement ok
 set datafusion.execution.batch_size = 1;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5672,7 +5984,7 @@ statement ok
 set datafusion.execution.batch_size = 2;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5690,7 +6002,7 @@ statement ok
 set datafusion.execution.batch_size = 3;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5874,6 +6186,136 @@ GROUP BY dummy
 ----
 text1
 
+
+# Test string_agg with ORDER BY clasuses (issue #17011)
+statement ok
+create table t (k varchar, v int);
+
+statement ok
+insert into t values ('a', 2), ('b', 3), ('c', 1), ('d', null);
+
+query T
+select string_agg(k, ',' order by k) from t;
+----
+a,b,c,d
+
+query T
+select string_agg(k, ',' order by k desc) from t;
+----
+d,c,b,a
+
+query T
+select string_agg(k, ',' order by v) from t;
+----
+c,a,b,d
+
+query T
+select string_agg(k, ',' order by v nulls first) from t;
+----
+d,c,a,b
+
+query T
+select string_agg(k, ',' order by v desc) from t;
+----
+d,b,a,c
+
+query T
+select string_agg(k, ',' order by v desc nulls last) from t;
+----
+b,a,c,d
+
+query T
+-- odd indexes should appear first, ties solved by v
+select string_agg(k, ',' order by v % 2 == 0, v) from t;
+----
+c,b,a,d
+
+query T
+-- odd indexes should appear first, ties solved by v desc
+select string_agg(k, ',' order by v % 2 == 0, v desc) from t;
+----
+b,c,a,d
+
+query T
+select string_agg(k, ',' order by
+  case
+    when k = 'a' then 3
+    when k = 'b' then 0
+    when k = 'c' then 2
+    when k = 'd' then 1
+  end)
+from t;
+----
+b,d,c,a
+
+query T
+select string_agg(k, ',' order by
+  case
+    when k = 'a' then 3
+    when k = 'b' then 0
+    when k = 'c' then 2
+    when k = 'd' then 1
+  end desc)
+from t;
+----
+a,c,d,b
+
+# Test explain / reverse_expr for string_agg
+query TT
+explain select string_agg(k, ',' order by v) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v ASC NULLS LAST]]]
+02)--TableScan: t projection=[k, v]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[string_agg(t.k,Utf8(",")) ORDER BY [t.v ASC NULLS LAST]]
+02)--SortExec: expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T
+select string_agg(k, ',' order by v) from t;
+----
+c,a,b,d
+
+query TT
+explain select string_agg(k, ',' order by v desc) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]]
+02)--TableScan: t projection=[k, v]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[string_agg(t.k,Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]
+02)--SortExec: expr=[v@1 DESC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T
+select string_agg(k, ',' order by v desc) from t;
+----
+d,b,a,c
+
+# Call string_agg with both ASC and DESC orderings, and expect only one sort
+# (because the aggregate can handle reversed inputs)
+query TT
+explain select string_agg(k, ',' order by v asc), string_agg(k, ',' order by v desc) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v ASC NULLS LAST], string_agg(t.k, Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]]
+02)--TableScan: t projection=[k, v]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[string_agg(t.k,Utf8(",")) ORDER BY [t.v ASC NULLS LAST], string_agg(t.k,Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]
+02)--SortExec: expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+select string_agg(k, ',' order by v asc), string_agg(k, ',' order by v desc) from t;
+----
+c,a,b,d d,b,a,c
+
+
+statement ok
+drop table t;
+
+
 # Tests for aggregating with NaN values
 statement ok
 CREATE TABLE float_table (
@@ -5888,7 +6330,7 @@ CREATE TABLE float_table (
 
 # Test string_agg with largeutf8
 statement ok
-create table string_agg_large_utf8 (c string) as values 
+create table string_agg_large_utf8 (c string) as values
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast('c', 'LargeUtf8'))
@@ -5943,7 +6385,7 @@ select count(*) from (select count(*) a, count(*) b from (select 1));
 
 # UTF8 string matters for string to &[u8] conversion, add it to prevent regression
 statement ok
-create table distinct_count_string_table as values 
+create table distinct_count_string_table as values
     (1, 'a', 'longstringtest_a', '台灣'),
     (2, 'b', 'longstringtest_b1', '日本'),
     (2, 'b', 'longstringtest_b2', '中國'),
@@ -6528,15 +6970,15 @@ logical_plan
 04)------SubqueryAlias: a
 05)--------Union
 06)----------Projection: Int64(1) AS id, Int64(2) AS foo
-07)------------EmptyRelation
+07)------------EmptyRelation: rows=1
 08)----------Projection: Int64(1) AS id, Int64(4) AS foo
-09)------------EmptyRelation
+09)------------EmptyRelation: rows=1
 10)----------Projection: Int64(1) AS id, Int64(5) AS foo
-11)------------EmptyRelation
+11)------------EmptyRelation: rows=1
 12)----------Projection: Int64(1) AS id, Int64(3) AS foo
-13)------------EmptyRelation
+13)------------EmptyRelation: rows=1
 14)----------Projection: Int64(1) AS id, Int64(2) AS foo
-15)------------EmptyRelation
+15)------------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]@1 as last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
 02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
@@ -6570,7 +7012,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(aggregate_test_100.c5)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c5], file_type=csv, has_header=true
 
 statement count 0
 drop table aggregate_test_100;
@@ -6937,6 +7379,38 @@ SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP B
 group0 NULL Int32
 group1 NULL Int32
 
+statement ok
+create table t_decimal (c decimal(10, 4)) as values (100.00), (125.00), (175.00), (200.00), (200.00), (300.00), (null), (null);
+
+# Test avg_distinct for Decimal128
+query RT
+select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal;
+----
+180 Decimal128(14, 8)
+
+statement ok
+drop table t_decimal;
+
+# Test avg_distinct for Decimal256
+statement ok
+create table t_decimal256 (c decimal(50, 2)) as values
+  (100.00),
+  (125.00),
+  (175.00),
+  (200.00),
+  (200.00),
+  (300.00),
+  (null),
+  (null);
+
+query RT
+select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal256;
+----
+180 Decimal256(54, 6)
+
+statement ok
+drop table t_decimal256;
+
 query I
 with test AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
 select count(*) from test WHERE 1 = 1;
@@ -7031,3 +7505,93 @@ VALUES
 );
 ----
 {a: 1, b: 2, c: 3} {a: 1, b: 2, c: 4}
+
+query TI
+SELECT column1, COUNT(DISTINCT column2) FROM (
+VALUES
+  ('x', arrow_cast('NAN','Float64')),
+  ('x', arrow_cast('NAN','Float64'))
+) GROUP BY 1 ORDER BY 1;
+----
+x 1
+
+query ?
+SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
+FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+----
+[a, a, c, d]
+
+query ?
+SELECT array_agg(DISTINCT a_varchar) WITHIN GROUP (ORDER BY a_varchar)
+FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+----
+[a, c, d]
+
+query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
+SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)
+FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+
+# distinct average
+statement ok
+create table distinct_avg (a int, b double, c decimal(10, 4), d decimal(50, 2)) as values
+  (3, null, 100.2562, 90251.21),
+  (2, null, 100.2562, null),
+  (5, 100.5, null, 10000000.11),
+  (5, 1.0, 100.2563, -1.0),
+  (5, 44.112, -132.12, null),
+  (null, 1.0, 100.2562, 90251.21),
+  (5, 100.5, -100.2562, -10000000.11),
+  (1, 4.09, 4222.124, 0.0),
+  (5, 100.5, null, 10000000.11),
+  (5, 100.5, 1.1, 1.0),
+  (4, null, 4222.124, null),
+  (null, null, null, null)
+;
+
+# Need two columns to ensure single_distinct_to_group_by rule doesn't kick in, so we know our actual avg(distinct) code is being tested
+query RTRTRTRTRRRR
+select
+    avg(distinct a),
+    arrow_typeof(avg(distinct a)),
+    avg(distinct b),
+    arrow_typeof(avg(distinct b)),
+    avg(distinct c),
+    arrow_typeof(avg(distinct c)),
+    avg(distinct d),
+    arrow_typeof(avg(distinct d)),
+    avg(a),
+	avg(b),
+    avg(c),
+	avg(d)
+from distinct_avg;
+----
+3 Float64 37.4255 Float64 698.56005 Decimal128(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.11074444 1272562.81625
+
+query RRRR rowsort
+select
+    avg(distinct a),
+    avg(distinct b),
+    avg(distinct c),
+    avg(distinct d)
+from distinct_avg
+group by b;
+----
+1 4.09 4222.124 0
+3 NULL 2161.1901 90251.21
+5 1 100.25625 45125.105
+5 100.5 -49.5781 0.333333
+5 44.112 -132.12 NULL
+
+query RRRR
+select
+    avg(distinct a),
+    avg(distinct b),
+    avg(distinct c),
+    avg(distinct d)
+from distinct_avg
+where a is null and b is null and c is null and d is null;
+----
+NULL NULL NULL NULL
+
+statement ok
+drop table distinct_avg;

@@ -32,7 +32,7 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, not_impl_err, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -183,9 +183,9 @@ impl ExecutionPlan for RecursiveQueryExec {
     ) -> Result<SendableRecordBatchStream> {
         // TODO: we might be able to handle multiple partitions in the future.
         if partition != 0 {
-            return Err(DataFusionError::Internal(format!(
+            return Err(internal_datafusion_err!(
                 "RecursiveQueryExec got an invalid partition {partition} (expected 0)"
-            )));
+            ));
         }
 
         let static_stream = self.static_term.execute(partition, Arc::clone(&context))?;
@@ -351,16 +351,16 @@ fn assign_work_table(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut work_table_refs = 0;
     plan.transform_down(|plan| {
-        if let Some(exec) = plan.as_any().downcast_ref::<WorkTableExec>() {
+        if let Some(new_plan) =
+            plan.with_new_state(Arc::clone(&work_table) as Arc<dyn Any + Send + Sync>)
+        {
             if work_table_refs > 0 {
                 not_impl_err!(
                     "Multiple recursive references to the same CTE are not supported"
                 )
             } else {
                 work_table_refs += 1;
-                Ok(Transformed::yes(Arc::new(
-                    exec.with_work_table(Arc::clone(&work_table)),
-                )))
+                Ok(Transformed::yes(new_plan))
             }
         } else if plan.as_any().is::<RecursiveQueryExec>() {
             not_impl_err!("Recursive queries cannot be nested")
@@ -372,7 +372,7 @@ fn assign_work_table(
 }
 
 /// Some plans will change their internal states after execution, making them unable to be executed again.
-/// This function uses `ExecutionPlan::with_new_children` to fork a new plan with initial states.
+/// This function uses [`ExecutionPlan::reset_state`] to reset any internal state within the plan.
 ///
 /// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
 /// However, if the data of the left table is derived from the work table, it will become outdated
@@ -383,8 +383,7 @@ fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPl
         if plan.as_any().is::<WorkTableExec>() {
             Ok(Transformed::no(plan))
         } else {
-            let new_plan = Arc::clone(&plan)
-                .with_new_children(plan.children().into_iter().cloned().collect())?;
+            let new_plan = Arc::clone(&plan).reset_state()?;
             Ok(Transformed::yes(new_plan))
         }
     })

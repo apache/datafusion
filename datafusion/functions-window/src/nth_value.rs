@@ -23,20 +23,22 @@ use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
-use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
-    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
-    Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
+    TypeSignature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::ops::Range;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 get_or_init_udwf!(
     First,
@@ -76,7 +78,7 @@ pub fn nth_value(arg: datafusion_expr::Expr, n: i64) -> datafusion_expr::Expr {
 }
 
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum NthValueKind {
     First,
     Last,
@@ -93,7 +95,7 @@ impl NthValueKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NthValue {
     signature: Signature,
     kind: NthValueKind,
@@ -125,6 +127,10 @@ impl NthValue {
     pub fn nth() -> Self {
         Self::new(NthValueKind::Nth)
     }
+
+    pub fn kind(&self) -> &NthValueKind {
+        &self.kind
+    }
 }
 
 static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
@@ -135,16 +141,16 @@ static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "first_value(expression)",
     )
     .with_argument("expression", "Expression to operate on")
-        .with_sql_example(r#"```sql
-    --Example usage of the first_value window function:
-    SELECT department,
-           employee_id,
-           salary,
-           first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
-    FROM employees;
-```
-
+    .with_sql_example(
+        r#"
 ```sql
+-- Example usage of the first_value window function:
+SELECT department,
+  employee_id,
+  salary,
+  first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
+FROM employees;
+
 +-------------+-------------+--------+------------+
 | department  | employee_id | salary | top_salary |
 +-------------+-------------+--------+------------+
@@ -154,7 +160,9 @@ static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
 | Engineering | 4           | 90000  | 90000      |
 | Engineering | 5           | 80000  | 90000      |
 +-------------+-------------+--------+------------+
-```"#)
+```
+"#,
+    )
     .build()
 });
 
@@ -177,9 +185,7 @@ SELECT department,
        salary,
        last_value(salary) OVER (PARTITION BY department ORDER BY salary) AS running_last_salary
 FROM employees;
-```
 
-```sql
 +-------------+-------------+--------+---------------------+
 | department  | employee_id | salary | running_last_salary |
 +-------------+-------------+--------+---------------------+
@@ -189,7 +195,8 @@ FROM employees;
 | Engineering | 4           | 40000  | 40000               |
 | Engineering | 5           | 60000  | 60000               |
 +-------------+-------------+--------+---------------------+
-```"#)
+```
+"#)
     .build()
 });
 
@@ -213,7 +220,8 @@ static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "Integer. Specifies the row number (starting from 1) in the window frame.",
     )
     .with_sql_example(
-        r#"```sql
+        r#"
+```sql
 -- Sample employees table:
 CREATE TABLE employees (id INT, salary INT);
 INSERT INTO employees (id, salary) VALUES
@@ -229,9 +237,7 @@ SELECT nth_value(salary, 2) OVER (
   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 ) AS nth_value
 FROM employees;
-```
 
-```text
 +-----------+
 | nth_value |
 +-----------+
@@ -241,7 +247,8 @@ FROM employees;
 | 40000     |
 | 40000     |
 +-----------+
-```"#,
+```
+"#,
     )
     .build()
 });
@@ -334,6 +341,10 @@ impl WindowUDFImpl for NthValue {
             NthValueKind::Last => Some(get_last_value_doc()),
             NthValueKind::Nth => Some(get_nth_value_doc()),
         }
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::None // NthValue is causal
     }
 }
 

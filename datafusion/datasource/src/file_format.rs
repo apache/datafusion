@@ -48,7 +48,7 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[async_trait]
 pub trait FileFormat: Send + Sync + fmt::Debug {
-    /// Returns the table provider as [`Any`](std::any::Any) so that it can be
+    /// Returns the table provider as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
@@ -60,6 +60,9 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         &self,
         _file_compression_type: &FileCompressionType,
     ) -> Result<String>;
+
+    /// Returns whether this instance uses compression if applicable
+    fn compression_type(&self) -> Option<FileCompressionType>;
 
     /// Infer the common schema of the provided objects. The objects will usually
     /// be analysed up to a given number of records or files (as specified in the

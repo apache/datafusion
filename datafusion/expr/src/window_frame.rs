@@ -24,13 +24,12 @@
 //! - An EXCLUDE clause.
 
 use crate::{expr::Sort, lit};
-use arrow::datatypes::DataType;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 
-use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, Result, ScalarValue};
+#[cfg(feature = "sql")]
 use sqlparser::ast::{self, ValueWithSpan};
-use sqlparser::parser::ParserError::ParserError;
 
 /// The frame specification determines which output rows are read by an aggregate
 /// window function. The ending frame boundary can be omitted if the `BETWEEN`
@@ -115,8 +114,9 @@ impl fmt::Debug for WindowFrame {
     }
 }
 
+#[cfg(feature = "sql")]
 impl TryFrom<ast::WindowFrame> for WindowFrame {
-    type Error = DataFusionError;
+    type Error = datafusion_common::error::DataFusionError;
 
     fn try_from(value: ast::WindowFrame) -> Result<Self> {
         let start_bound = WindowFrameBound::try_parse(value.start_bound, &value.units)?;
@@ -160,7 +160,7 @@ impl WindowFrame {
                 } else {
                     WindowFrameUnits::Range
                 },
-                start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
+                start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 end_bound: WindowFrameBound::CurrentRow,
                 causal: strict,
             }
@@ -343,6 +343,7 @@ impl WindowFrameBound {
 }
 
 impl WindowFrameBound {
+    #[cfg(feature = "sql")]
     fn try_parse(
         value: ast::WindowFrameBound,
         units: &ast::WindowFrameUnits,
@@ -351,20 +352,27 @@ impl WindowFrameBound {
             ast::WindowFrameBound::Preceding(Some(v)) => {
                 Self::Preceding(convert_frame_bound_to_scalar_value(*v, units)?)
             }
-            ast::WindowFrameBound::Preceding(None) => Self::Preceding(ScalarValue::Null),
+            ast::WindowFrameBound::Preceding(None) => {
+                Self::Preceding(ScalarValue::UInt64(None))
+            }
             ast::WindowFrameBound::Following(Some(v)) => {
                 Self::Following(convert_frame_bound_to_scalar_value(*v, units)?)
             }
-            ast::WindowFrameBound::Following(None) => Self::Following(ScalarValue::Null),
+            ast::WindowFrameBound::Following(None) => {
+                Self::Following(ScalarValue::UInt64(None))
+            }
             ast::WindowFrameBound::CurrentRow => Self::CurrentRow,
         })
     }
 }
 
+#[cfg(feature = "sql")]
 fn convert_frame_bound_to_scalar_value(
     v: ast::Expr,
     units: &ast::WindowFrameUnits,
 ) -> Result<ScalarValue> {
+    use arrow::datatypes::DataType;
+    use datafusion_common::exec_err;
     match units {
         // For ROWS and GROUPS we are sure that the ScalarValue must be a non-negative integer ...
         ast::WindowFrameUnits::Rows | ast::WindowFrameUnits::Groups => match v {
@@ -381,9 +389,9 @@ fn convert_frame_bound_to_scalar_value(
                 let value = match *value {
                     ast::Expr::Value(ValueWithSpan{value: ast::Value::SingleQuotedString(item), span: _}) => item,
                     e => {
-                        return sql_err!(ParserError(format!(
+                        return exec_err!(
                             "INTERVAL expression cannot be {e:?}"
-                        )));
+                        );
                     }
                 };
                 Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?)
@@ -404,9 +412,9 @@ fn convert_frame_bound_to_scalar_value(
                 let result = match *value {
                     ast::Expr::Value(ValueWithSpan{value: ast::Value::SingleQuotedString(item), span: _}) => item,
                     e => {
-                        return sql_err!(ParserError(format!(
+                        return exec_err!(
                             "INTERVAL expression cannot be {e:?}"
-                        )));
+                        );
                     }
                 };
                 if let Some(leading_field) = leading_field {
@@ -473,6 +481,7 @@ impl fmt::Display for WindowFrameUnits {
     }
 }
 
+#[cfg(feature = "sql")]
 impl From<ast::WindowFrameUnits> for WindowFrameUnits {
     fn from(value: ast::WindowFrameUnits) -> Self {
         match value {
@@ -570,9 +579,9 @@ mod tests {
     #[test]
     fn test_window_frame_bound_creation() -> Result<()> {
         //  Unbounded
-        test_bound!(Rows, None, ScalarValue::Null);
-        test_bound!(Groups, None, ScalarValue::Null);
-        test_bound!(Range, None, ScalarValue::Null);
+        test_bound!(Rows, None, ScalarValue::UInt64(None));
+        test_bound!(Groups, None, ScalarValue::UInt64(None));
+        test_bound!(Range, None, ScalarValue::UInt64(None));
 
         // Number
         let number = Some(Box::new(ast::Expr::Value(

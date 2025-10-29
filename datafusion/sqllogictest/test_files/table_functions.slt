@@ -153,23 +153,23 @@ SELECT * FROM generate_series(1, 5, NULL)
 query TT
 EXPLAIN SELECT * FROM generate_series(1, 5)
 ----
-logical_plan TableScan: tmp_table projection=[value]
+logical_plan TableScan: generate_series() projection=[value]
 physical_plan LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=5, batch_size=8192]
 
 #
 # Test generate_series with invalid arguments
 #
 
-query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
 SELECT * FROM generate_series(5, 1)
 
-query error DataFusion error: Error during planning: start is smaller than end, but increment is negative: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
 SELECT * FROM generate_series(-6, 6, -1)
 
-query error DataFusion error: Error during planning: step cannot be zero
+query error DataFusion error: Error during planning: Step cannot be zero
 SELECT * FROM generate_series(-6, 6, 0)
 
-query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
 SELECT * FROM generate_series(6, -6, 1)
 
 
@@ -177,7 +177,7 @@ statement error DataFusion error: Error during planning: generate_series functio
 SELECT * FROM generate_series(1, 2, 3, 4)
 
 
-statement error DataFusion error: Error during planning: First argument must be an integer literal
+statement error DataFusion error: Error during planning: Argument \#1 must be an INTEGER, TIMESTAMP, DATE or NULL, got Utf8
 SELECT * FROM generate_series('foo', 'bar')
 
 # UDF and UDTF `generate_series` can be used simultaneously
@@ -219,6 +219,12 @@ SELECT * FROM range(3, 6)
 3
 4
 5
+
+query I rowsort
+SELECT * FROM range(1, 1+2)
+----
+1
+2
 
 # #generated_data > batch_size
 query I
@@ -270,23 +276,23 @@ SELECT * FROM range(1, 5, NULL)
 query TT
 EXPLAIN SELECT * FROM range(1, 5)
 ----
-logical_plan TableScan: tmp_table projection=[value]
+logical_plan TableScan: range() projection=[value]
 physical_plan LazyMemoryExec: partitions=1, batch_generators=[range: start=1, end=5, batch_size=8192]
 
 #
 # Test range with invalid arguments
 #
 
-query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
 SELECT * FROM range(5, 1)
 
-query error DataFusion error: Error during planning: start is smaller than end, but increment is negative: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
 SELECT * FROM range(-6, 6, -1)
 
-query error DataFusion error: Error during planning: step cannot be zero
+query error DataFusion error: Error during planning: Step cannot be zero
 SELECT * FROM range(-6, 6, 0)
 
-query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
 SELECT * FROM range(6, -6, 1)
 
 
@@ -294,8 +300,11 @@ statement error DataFusion error: Error during planning: range function requires
 SELECT * FROM range(1, 2, 3, 4)
 
 
-statement error DataFusion error: Error during planning: First argument must be an integer literal
+statement error DataFusion error: Error during planning: Argument \#1 must be an INTEGER, TIMESTAMP, DATE or NULL, got Utf8
 SELECT * FROM range('foo', 'bar')
+
+statement error DataFusion error: Error during planning: Argument #2 must be an INTEGER or NULL, got Literal\(Utf8\("bar"\), None\)
+SELECT * FROM range(1, 'bar')
 
 # UDF and UDTF `range` can be used simultaneously
 query ? rowsort
@@ -303,3 +312,185 @@ SELECT range(1, t1.end) FROM range(3, 5) as t1(end)
 ----
 [1, 2, 3]
 [1, 2]
+
+#
+# Test timestamp ranges
+#
+
+# Basic timestamp range with 1 day interval
+query P rowsort
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-04T00:00:00', INTERVAL '1' DAY)
+----
+2023-01-01T00:00:00
+2023-01-02T00:00:00
+2023-01-03T00:00:00
+
+# Timestamp range with hour interval
+query P rowsort
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-01T03:00:00', INTERVAL '1' HOUR)
+----
+2023-01-01T00:00:00
+2023-01-01T01:00:00
+2023-01-01T02:00:00
+
+# Timestamp range with month interval
+query P rowsort
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-04-01T00:00:00', INTERVAL '1' MONTH)
+----
+2023-01-01T00:00:00
+2023-02-01T00:00:00
+2023-03-01T00:00:00
+
+# Timestamp generate_series (includes end)
+query P rowsort
+SELECT * FROM generate_series(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-03T00:00:00', INTERVAL '1' DAY)
+----
+2023-01-01T00:00:00
+2023-01-02T00:00:00
+2023-01-03T00:00:00
+
+# Timestamp range with timezone
+query P
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00+00:00', TIMESTAMP '2023-01-03T00:00:00+00:00', INTERVAL '1' DAY)
+----
+2023-01-01T00:00:00
+2023-01-02T00:00:00
+
+# Negative timestamp range (going backwards)
+query P
+SELECT * FROM range(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00', INTERVAL '-1' DAY)
+----
+2023-01-03T00:00:00
+2023-01-02T00:00:00
+
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+SELECT * FROM range(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00', INTERVAL '1' DAY)
+
+query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-02T00:00:00', INTERVAL '-1' DAY)
+
+query error DataFusion error: Error during planning: range function with timestamps requires exactly 3 arguments
+SELECT * FROM range(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00')
+
+# Single timestamp (start == end)
+query P
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-01T00:00:00', INTERVAL '1' DAY)  
+----
+
+# Timestamp range with NULL values
+query P
+SELECT * FROM range(NULL::TIMESTAMP, TIMESTAMP '2023-01-03T00:00:00', INTERVAL '1' DAY)
+----
+
+query P
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', NULL::TIMESTAMP, INTERVAL '1' DAY)
+----
+
+# No interval gives no rows
+query P
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-03T00:00:00', NULL::INTERVAL)
+----
+
+# Zero-length interval gives error
+query error DataFusion error: Error during planning: Step interval cannot be zero
+SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-03T00:00:00', INTERVAL '0' DAY)
+
+# Timezone-aware
+query P
+SELECT * FROM range(TIMESTAMPTZ '2023-02-01T00:00:00-07:00', TIMESTAMPTZ '2023-02-01T09:00:00+01:00', INTERVAL '1' HOUR);
+----
+2023-02-01T07:00:00Z
+
+# Basic date range with hour interval
+query P
+SELECT * FROM range(DATE '1992-01-01', DATE '1992-01-03', INTERVAL '6' HOUR);
+----
+1992-01-01T00:00:00
+1992-01-01T06:00:00
+1992-01-01T12:00:00
+1992-01-01T18:00:00
+1992-01-02T00:00:00
+1992-01-02T06:00:00
+1992-01-02T12:00:00
+1992-01-02T18:00:00
+
+# Date range with day interval
+query P
+SELECT * FROM range(DATE '1992-09-01', DATE '1992-09-05', INTERVAL '1' DAY);
+----
+1992-09-01T00:00:00
+1992-09-02T00:00:00
+1992-09-03T00:00:00
+1992-09-04T00:00:00
+
+# Date range with month interval
+query P
+SELECT * FROM range(DATE '1992-09-01', DATE '1993-01-01', INTERVAL '1' MONTH);
+----
+1992-09-01T00:00:00
+1992-10-01T00:00:00
+1992-11-01T00:00:00
+1992-12-01T00:00:00
+
+# Date range generate_series includes end
+query P
+SELECT * FROM generate_series(DATE '1992-09-01', DATE '1992-09-03', INTERVAL '1' DAY);
+----
+1992-09-01T00:00:00
+1992-09-02T00:00:00
+1992-09-03T00:00:00
+
+query TT
+EXPLAIN SELECT * FROM generate_series(DATE '1992-09-01', DATE '1992-09-03', INTERVAL '1' DAY);
+----
+logical_plan TableScan: generate_series() projection=[value]
+physical_plan LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=715305600000000000, end=715478400000000000, batch_size=8192]
+
+# Backwards date range
+query P
+SELECT * FROM range(DATE '1992-09-05', DATE '1992-09-01', INTERVAL '-1' DAY);
+----
+1992-09-05T00:00:00
+1992-09-04T00:00:00
+1992-09-03T00:00:00
+1992-09-02T00:00:00
+
+# NULL handling for dates
+query P
+SELECT * FROM range(DATE '1992-09-01', NULL::DATE, INTERVAL '1' MONTH)
+----
+
+query TT
+EXPLAIN SELECT * FROM range(DATE '1992-09-01', NULL::DATE, INTERVAL '1' MONTH)
+----
+logical_plan TableScan: range() projection=[value]
+physical_plan LazyMemoryExec: partitions=1, batch_generators=[range: empty]
+
+query P
+SELECT * FROM range(NULL::DATE, DATE '1992-09-01', INTERVAL '1' MONTH)
+----
+
+query P
+SELECT * FROM range(DATE '1992-09-01', DATE '1992-10-01', NULL::INTERVAL)
+----
+
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+SELECT * FROM range(DATE '2023-01-03', DATE '2023-01-01', INTERVAL '1' DAY)
+
+query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
+SELECT * FROM range(DATE '2023-01-01', DATE '2023-01-02', INTERVAL '-1' DAY)
+
+query error DataFusion error: Error during planning: range function with dates requires exactly 3 arguments
+SELECT * FROM range(DATE '2023-01-01', DATE '2023-01-03')
+
+# Table function as relation
+statement ok
+CREATE OR REPLACE TABLE json_table (c INT) AS VALUES (1), (2);
+
+query II
+SELECT c, f.*  FROM json_table, LATERAL generate_series(1,2) f;
+----
+1 1
+1 2
+2 1
+2 2

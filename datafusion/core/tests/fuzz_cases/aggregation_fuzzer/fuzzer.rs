@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_common_runtime::JoinSet;
 use rand::{rng, Rng};
 
@@ -171,7 +171,7 @@ impl AggregationFuzzer {
             let datasets = self
                 .dataset_generator
                 .generate()
-                .expect("should success to generate dataset");
+                .expect("should succeed to generate dataset");
 
             // Then for each of them, we random select a test sql for it
             let query_groups = datasets
@@ -197,7 +197,7 @@ impl AggregationFuzzer {
         while let Some(join_handle) = join_set.join_next().await {
             // propagate errors
             join_handle.map_err(|e| {
-                DataFusionError::Internal(format!("AggregationFuzzer task error: {e:?}"))
+                internal_datafusion_err!("AggregationFuzzer task error: {e:?}")
             })??;
         }
         Ok(())
@@ -216,16 +216,16 @@ impl AggregationFuzzer {
             // Generate the baseline context, and get the baseline result firstly
             let baseline_ctx_with_params = ctx_generator
                 .generate_baseline()
-                .expect("should success to generate baseline session context");
+                .expect("should succeed to generate baseline session context");
             let baseline_result = run_sql(&sql, &baseline_ctx_with_params.ctx)
                 .await
-                .expect("should success to run baseline sql");
+                .expect("should succeed to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
             // Generate test tasks
             for _ in 0..CTX_GEN_ROUNDS {
                 let ctx_with_params = ctx_generator
                     .generate()
-                    .expect("should success to generate session context");
+                    .expect("should succeed to generate session context");
                 let task = AggregationFuzzTestTask {
                     dataset_ref: dataset_ref.clone(),
                     expected_result: baseline_result.clone(),
@@ -308,7 +308,7 @@ impl AggregationFuzzTestTask {
                 format_batches_with_limit(expected_result),
                 format_batches_with_limit(&self.dataset_ref.batches),
             );
-            DataFusionError::Internal(message)
+            internal_datafusion_err!("{message}")
         })
     }
 

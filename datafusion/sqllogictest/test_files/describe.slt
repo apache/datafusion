@@ -86,3 +86,33 @@ string_col Utf8View YES
 timestamp_col Timestamp(Nanosecond, None) YES
 year Int32 YES
 month Int32 YES
+
+# Test DESC alias functionality
+statement ok
+CREATE TABLE test_desc_table (id INT, name VARCHAR);
+
+# Test DESC works the same as DESCRIBE
+query TTT
+DESC test_desc_table;
+----
+id Int32 YES
+name Utf8View YES
+
+query TTT
+DESCRIBE test_desc_table;
+----
+id Int32 YES
+name Utf8View YES
+
+# Test with qualified table names
+statement ok
+CREATE TABLE public.test_qualified (col1 INT);
+
+query TTT
+DESC public.test_qualified;
+----
+col1 Int32 YES
+
+# Test error cases
+statement error
+DESC nonexistent_table;

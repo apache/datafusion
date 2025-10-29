@@ -124,10 +124,14 @@ fn evaluate_expr_with_null_column<'a>(
     null_columns: impl IntoIterator<Item = &'a Column>,
 ) -> Result<ColumnarValue> {
     static DUMMY_COL_NAME: &str = "?";
-    let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
-    let input_schema = DFSchema::try_from(schema.clone())?;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        DUMMY_COL_NAME,
+        DataType::Null,
+        true,
+    )]));
+    let input_schema = DFSchema::try_from(Arc::clone(&schema))?;
     let column = new_null_array(&DataType::Null, 1);
-    let input_batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![column])?;
+    let input_batch = RecordBatch::try_new(schema, vec![column])?;
     let execution_props = ExecutionProps::default();
     let null_column = Column::from_name(DUMMY_COL_NAME);
 
@@ -163,7 +167,11 @@ mod tests {
             (Expr::IsNotNull(Box::new(col("a"))), true),
             // a = NULL
             (
-                binary_expr(col("a"), Operator::Eq, Expr::Literal(ScalarValue::Null)),
+                binary_expr(
+                    col("a"),
+                    Operator::Eq,
+                    Expr::Literal(ScalarValue::Null, None),
+                ),
                 true,
             ),
             // a > 8
@@ -226,12 +234,16 @@ mod tests {
             ),
             // a IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], false),
+                in_list(
+                    col("a"),
+                    vec![Expr::Literal(ScalarValue::Null, None)],
+                    false,
+                ),
                 true,
             ),
             // a NOT IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], true),
+                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null, None)], true),
                 true,
             ),
         ];

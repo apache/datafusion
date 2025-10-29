@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
+
 use datafusion_common::{
     assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
     TableReference,
@@ -34,8 +35,8 @@ use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
-    CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect, DefaultDialect,
-    Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
+    BigQueryDialect, CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect,
+    DefaultDialect, Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
     PostgreSqlDialect as UnparserPostgreSqlDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
@@ -51,6 +52,7 @@ use datafusion_expr::builder::{
     project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions::unicode::planner::UnicodeFunctionPlanner;
 use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
 use datafusion_sql::unparser::ast::{
@@ -94,7 +96,7 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     let state = MockSessionState::default().with_aggregate_function(sum_udaf());
     let context = MockContextProvider { state };
     let schema = context.get_table_source(table)?.schema();
-    let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
+    let df_schema = DFSchema::try_from(schema)?;
     let sql_to_rel = SqlToRel::new(&context);
     let expr =
         sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
@@ -307,7 +309,8 @@ macro_rules! roundtrip_statement_with_dialect_helper {
             .with_aggregate_function(max_udaf())
             .with_aggregate_function(min_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
-            .with_expr_planner(Arc::new(NestedFunctionPlanner));
+            .with_expr_planner(Arc::new(NestedFunctionPlanner))
+            .with_expr_planner(Arc::new(FieldAccessPlanner));
 
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
@@ -924,6 +927,41 @@ fn roundtrip_statement_with_dialect_45() -> Result<(), DataFusionError> {
 }
 
 #[test]
+fn roundtrip_statement_with_dialect_special_char_alias() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select min(a) as \"min(a)\" from (select 1 as a)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: BigQueryDialect {},
+        expected: @r#"SELECT min(`a`) AS `min_40a_41` FROM (SELECT 1 AS `a`)"#,
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: BigQueryDialect {},
+        expected: @r#"SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)"#,
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select a as \"a*\", b , c as \"c@\" from (select 1 as a , 2 as b, 3 as c)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: BigQueryDialect {},
+        expected: @r#"SELECT `a` AS `a_42`, `b`, `c` AS `c_64` FROM (SELECT 1 AS `a`, 2 AS `b`, 3 AS `c`)"#,
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select * from (select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)) where \"a*\" = 1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: BigQueryDialect {},
+        expected: @r#"SELECT `a_42`, `b_64` FROM (SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)) WHERE (`a_42` = 1)"#,
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select * from (select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)) where \"a*\" = 1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT "a*", "b@" FROM (SELECT a AS "a*", b AS "b@" FROM (SELECT 1 AS a, 2 AS b)) WHERE ("a*" = 1)"#,
+    );
+    Ok(())
+}
+
+#[test]
 fn test_unnest_logical_plan() -> Result<()> {
     let query = "select unnest(struct_col), unnest(array_col), struct_col, array_col from unnest_table";
 
@@ -1266,7 +1304,7 @@ fn test_pretty_roundtrip() -> Result<()> {
         let expr =
             sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
         let round_trip_sql = unparser.expr_to_sql(&expr)?.to_string();
-        assert_eq!(pretty.to_string(), round_trip_sql);
+        assert_eq!((*pretty).to_string(), round_trip_sql);
 
         // verify that the pretty string parses to the same underlying Expr
         let pretty_sql_expr = Parser::new(&GenericDialect {})
@@ -1302,7 +1340,11 @@ where
             .with_aggregate_function(grouping_udaf())
             .with_window_function(rank_udwf())
             .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
-            .with_scalar_function(make_array_udf()),
+            .with_scalar_function(make_array_udf())
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(UnicodeFunctionPlanner))
+            .with_expr_planner(Arc::new(NestedFunctionPlanner))
+            .with_expr_planner(Arc::new(FieldAccessPlanner)),
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -1877,6 +1919,7 @@ fn test_aggregation_to_sql() {
     let sql = r#"SELECT id, first_name,
         SUM(id) AS total_sum,
         SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+        SUM(id) FILTER (WHERE id > 50 AND first_name = 'John') OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS filtered_sum,
         MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
         rank() OVER (PARTITION BY grouping(id) + grouping(age), CASE WHEN grouping(age) = 0 THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_1,
         rank() OVER (PARTITION BY grouping(age) + grouping(id), CASE WHEN (CAST(grouping(age) AS BIGINT) = 0) THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_2
@@ -1885,7 +1928,7 @@ fn test_aggregation_to_sql() {
     let statement = generate_round_trip_statement(GenericDialect {}, sql);
     assert_snapshot!(
         statement,
-        @"SELECT person.id, person.first_name, sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum, max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total, rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1, rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2 FROM person GROUP BY person.id, person.first_name",
+        @"SELECT person.id, person.first_name, sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum, sum(person.id) FILTER (WHERE ((person.id > 50) AND (person.first_name = 'John'))) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS filtered_sum, max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total, rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1, rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2 FROM person GROUP BY person.id, person.first_name",
     );
 }
 
@@ -2559,5 +2602,62 @@ fn test_not_ilike_filter_with_escape() {
     assert_snapshot!(
         statement,
         @"SELECT person.first_name FROM person WHERE person.first_name NOT ILIKE 'A!_%' ESCAPE '!'"
+    );
+}
+
+#[test]
+fn test_struct_expr() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"WITH test AS (SELECT STRUCT(STRUCT('Product Name' as name) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata.product.name  = 'Product Name'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT test."metadata".product FROM (SELECT {product: {"name": 'Product Name'}} AS "metadata") AS test WHERE (test."metadata".product."name" = 'Product Name')"#
+    );
+
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"WITH test AS (SELECT STRUCT(STRUCT('Product Name' as name) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata['product']['name']  = 'Product Name'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT test."metadata".product FROM (SELECT {product: {"name": 'Product Name'}} AS "metadata") AS test WHERE (test."metadata".product."name" = 'Product Name')"#
+    );
+}
+
+#[test]
+fn test_struct_expr2() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT STRUCT(STRUCT('Product Name' as name) as product)['product']['name']  = 'Product Name';"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT ({product: {"name": 'Product Name'}}.product."name" = 'Product Name')"#
+    );
+}
+
+#[test]
+fn test_struct_expr3() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"WITH
+                test AS (
+                    SELECT
+                        STRUCT (
+                            STRUCT (
+                                STRUCT ('Product Name' as name) as product
+                            ) AS metadata
+                        ) AS c1
+                )
+            SELECT
+                c1.metadata.product.name
+            FROM
+                test"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT test.c1."metadata".product."name" FROM (SELECT {"metadata": {product: {"name": 'Product Name'}}} AS c1) AS test"#
     );
 }

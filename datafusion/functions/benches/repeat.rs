@@ -23,6 +23,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
@@ -66,12 +67,14 @@ fn invoke_repeat_with_args(
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
+    let config_options = Arc::new(ConfigOptions::default());
 
     string::repeat().invoke_with_args(ScalarFunctionArgs {
         args,
         arg_fields,
         number_rows: repeat_times as usize,
         return_field: Field::new("f", DataType::Utf8, true).into(),
+        config_options: Arc::clone(&config_options),
     })
 }
 

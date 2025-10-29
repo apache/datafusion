@@ -114,14 +114,37 @@ pub async fn from_read_rel(
             .await
         }
         Some(ReadType::VirtualTable(vt)) => {
-            if vt.values.is_empty() {
+            if vt.values.is_empty() && vt.expressions.is_empty() {
                 return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row: false,
                     schema: DFSchemaRef::new(substrait_schema),
                 }));
             }
 
-            let values = vt
+            let values = if !vt.expressions.is_empty() {
+                let mut exprs = vec![];
+                for row in &vt.expressions {
+                    let mut name_idx = 0;
+                    let mut row_exprs = vec![];
+                    for expression in &row.fields {
+                        name_idx += 1;
+                        let expr = consumer
+                            .consume_expression(expression, &DFSchema::empty())
+                            .await?;
+                        row_exprs.push(expr);
+                    }
+                    if name_idx != named_struct.names.len() {
+                        return substrait_err!(
+                                "Names list must match exactly to nested schema, but found {} uses for {} names",
+                                name_idx,
+                                named_struct.names.len()
+                            );
+                    }
+                    exprs.push(row_exprs);
+                }
+                exprs
+            } else {
+                vt
                 .values
                 .iter()
                 .map(|row| {
@@ -136,7 +159,7 @@ pub async fn from_read_rel(
                                 lit,
                                 &named_struct.names,
                                 &mut name_idx,
-                            )?))
+                            )?, None))
                         })
                         .collect::<datafusion::common::Result<_>>()?;
                     if name_idx != named_struct.names.len() {
@@ -148,7 +171,8 @@ pub async fn from_read_rel(
                     }
                     Ok(lits)
                 })
-                .collect::<datafusion::common::Result<_>>()?;
+                .collect::<datafusion::common::Result<_>>()?
+            };
 
             Ok(LogicalPlan::Values(Values {
                 schema: DFSchemaRef::new(substrait_schema),
@@ -197,7 +221,7 @@ pub async fn from_read_rel(
             .await
         }
         _ => {
-            not_impl_err!("Unsupported ReadType: {:?}", read.read_type)
+            not_impl_err!("Unsupported Readtype: {:?}", read.read_type)
         }
     }
 }

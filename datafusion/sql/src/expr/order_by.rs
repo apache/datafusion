@@ -63,14 +63,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let mut sort_expr_vec = Vec::with_capacity(order_by_exprs.len());
 
-        let make_sort_expr =
-            |expr: Expr, asc: Option<bool>, nulls_first: Option<bool>| {
-                let asc = asc.unwrap_or(true);
-                // When asc is true, by default nulls last to be consistent with postgres
-                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                let nulls_first = nulls_first.unwrap_or(!asc);
-                Sort::new(expr, asc, nulls_first)
-            };
+        let make_sort_expr = |expr: Expr,
+                              asc: Option<bool>,
+                              nulls_first: Option<bool>| {
+            let asc = asc.unwrap_or(true);
+            let nulls_first = nulls_first
+                .unwrap_or_else(|| self.options.default_null_ordering.nulls_first(asc));
+            Sort::new(expr, asc, nulls_first)
+        };
 
         for order_by_expr in order_by_exprs {
             let OrderByExpr {

@@ -23,18 +23,20 @@ use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
-    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
-    Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
+    TypeSignature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
+use std::hash::Hash;
 use std::ops::{Neg, Range};
 use std::sync::{Arc, LazyLock};
 
@@ -93,8 +95,8 @@ pub fn lead(
     lead_udwf().call(vec![arg, shift_offset_lit, default_lit])
 }
 
-#[derive(Debug)]
-enum WindowShiftKind {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum WindowShiftKind {
     Lag,
     Lead,
 }
@@ -119,7 +121,7 @@ impl WindowShiftKind {
 }
 
 /// window shift expression
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct WindowShift {
     signature: Signature,
     kind: WindowShiftKind,
@@ -147,6 +149,10 @@ impl WindowShift {
     pub fn lead() -> Self {
         Self::new(WindowShiftKind::Lead)
     }
+
+    pub fn kind(&self) -> &WindowShiftKind {
+        &self.kind
+    }
 }
 
 static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
@@ -158,15 +164,14 @@ static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
         not within the partition. Must be of the same type as expression.")
-        .with_sql_example(r#"```sql
-    --Example usage of the lag window function:
-    SELECT employee_id,
-           salary,
-           lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
-    FROM employees;
-```
-
+        .with_sql_example(r#"
 ```sql
+-- Example usage of the lag window function:
+SELECT employee_id,
+    salary,
+    lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
+FROM employees;
+
 +-------------+--------+-------------+
 | employee_id | salary | prev_salary |
 +-------------+--------+-------------+
@@ -175,7 +180,8 @@ static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
 | 3           | 70000  | 50000       |
 | 4           | 60000  | 70000       |
 +-------------+--------+-------------+
-```"#)
+```
+"#)
         .build()
 });
 
@@ -194,17 +200,16 @@ static LEAD_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         forward the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
         not within the partition. Must be of the same type as expression.")
-        .with_sql_example(r#"```sql
--- Example usage of lead() :
+        .with_sql_example(r#"
+```sql
+-- Example usage of lead window function:
 SELECT
     employee_id,
     department,
     salary,
     lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary
 FROM employees;
-```
 
-```sql
 +-------------+-------------+--------+--------------+
 | employee_id | department  | salary | next_salary  |
 +-------------+-------------+--------+--------------+
@@ -214,7 +219,8 @@ FROM employees;
 | 4           | Engineering | 40000  | 60000        |
 | 5           | Engineering | 60000  | 0            |
 +-------------+-------------+--------+--------------+
-```"#)
+```
+"#)
         .build()
 });
 
@@ -298,6 +304,26 @@ impl WindowUDFImpl for WindowShift {
             WindowShiftKind::Lead => Some(get_lead_doc()),
         }
     }
+
+    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        if self.kind == WindowShiftKind::Lag {
+            return LimitEffect::None;
+        }
+        match args {
+            [_, expr, ..] => {
+                let Some(lit) = expr.as_any().downcast_ref::<expressions::Literal>()
+                else {
+                    return LimitEffect::Unknown;
+                };
+                let ScalarValue::Int64(Some(amount)) = lit.value() else {
+                    return LimitEffect::Unknown; // we should only get int64 from the parser
+                };
+                LimitEffect::Relative((*amount).max(0) as usize)
+            }
+            [_] => LimitEffect::Relative(1), // default value
+            _ => LimitEffect::Unknown,       // invalid arguments
+        }
+    }
 }
 
 /// When `lead`/`lag` is evaluated on a `NULL` expression we attempt to
@@ -329,10 +355,8 @@ fn parse_expr(
 
     let default_value = get_scalar_value_from_args(input_exprs, 2)?;
     default_value.map_or(Ok(expr), |value| {
-        ScalarValue::try_from(&value.data_type()).map(|v| {
-            Arc::new(datafusion_physical_expr::expressions::Literal::new(v))
-                as Arc<dyn PhysicalExpr>
-        })
+        ScalarValue::try_from(&value.data_type())
+            .map(|v| Arc::new(expressions::Literal::new(v)) as Arc<dyn PhysicalExpr>)
     })
 }
 

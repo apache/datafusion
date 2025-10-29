@@ -24,8 +24,8 @@ use super::log::LogFunc;
 use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, exec_err, internal_datafusion_err,
-    plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -39,10 +39,18 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = "Returns a base expression raised to the power of an exponent.",
     syntax_example = "power(base, exponent)",
+    sql_example = r#"```sql
+> SELECT power(2, 3);
++-------------+
+| power(2,3)  |
++-------------+
+| 8           |
++-------------+
+```"#,
     standard_argument(name = "base", prefix = "Numeric"),
     standard_argument(name = "exponent", prefix = "Exponent numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PowerFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -156,12 +164,15 @@ impl ScalarUDFImpl for PowerFunc {
 
         let exponent_type = info.get_data_type(&exponent)?;
         match exponent {
-            Expr::Literal(value) if value == ScalarValue::new_zero(&exponent_type)? => {
+            Expr::Literal(value, _)
+                if value == ScalarValue::new_zero(&exponent_type)? =>
+            {
                 Ok(ExprSimplifyResult::Simplified(Expr::Literal(
                     ScalarValue::new_one(&info.get_data_type(&base)?)?,
+                    None,
                 )))
             }
-            Expr::Literal(value) if value == ScalarValue::new_one(&exponent_type)? => {
+            Expr::Literal(value, _) if value == ScalarValue::new_one(&exponent_type)? => {
                 Ok(ExprSimplifyResult::Simplified(base))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
@@ -186,11 +197,11 @@ fn is_log(func: &ScalarUDF) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::array::Float64Array;
     use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int64_array};
-
-    use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_power_f64() {
@@ -210,6 +221,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)
@@ -245,6 +257,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)

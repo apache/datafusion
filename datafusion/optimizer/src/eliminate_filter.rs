@@ -60,7 +60,7 @@ impl OptimizerRule for EliminateFilter {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(v)),
+                predicate: Expr::Literal(ScalarValue::Boolean(v), _),
                 input,
                 ..
             }) => match v {
@@ -117,12 +117,12 @@ mod tests {
             .build()?;
 
         // No aggregate / scan / limit
-        assert_optimized_plan_equal!(plan, @"EmptyRelation")
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     #[test]
     fn filter_null() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(None));
+        let filter_expr = Expr::Literal(ScalarValue::Boolean(None), None);
 
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -131,7 +131,7 @@ mod tests {
             .build()?;
 
         // No aggregate / scan / limit
-        assert_optimized_plan_equal!(plan, @"EmptyRelation")
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     #[test]
@@ -151,7 +151,7 @@ mod tests {
         // Left side is removed
         assert_optimized_plan_equal!(plan, @r"
         Union
-          EmptyRelation
+          EmptyRelation: rows=0
           Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]
             TableScan: test
         ")
@@ -217,7 +217,7 @@ mod tests {
         // Filter is removed
         assert_optimized_plan_equal!(plan, @r"
         Projection: test.a
-          EmptyRelation
+          EmptyRelation: rows=0
         ")
     }
 }

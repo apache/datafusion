@@ -10,3 +10,13 @@ disallowed-types = [
 # Lowering the threshold to help prevent stack overflows (default is 16384)
 # See: https://rust-lang.github.io/rust-clippy/master/index.html#/large_futures
 future-size-threshold = 10000
+
+# Be more aware of large error variants which can impact the "happy path" due
+# to large stack footprint when considering async state machines (default is 128).
+#
+# Value of 70 picked arbitrarily as something less than 100.
+#
+# See:
+# - https://github.com/apache/datafusion/issues/16652
+# - https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+large-error-threshold = 70

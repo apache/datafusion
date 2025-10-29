@@ -27,11 +27,14 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    binary_expr, cast, Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr_common::operator::Operator;
+use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -67,7 +70,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   - **U**: swap the meaning of x* and x*?"#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexpLikeFunc {
     signature: Signature,
 }
@@ -153,8 +156,73 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         }
     }
 
+    fn simplify(
+        &self,
+        mut args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        // Try to simplify regexp_like usage to one of the builtin operators since those have
+        // optimized code paths for the case where the regular expression pattern is a scalar.
+        // Additionally, the expression simplification optimization pass will attempt to further
+        // simplify regular expression patterns used in operator expressions.
+        let Some(op) = derive_operator(&args) else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+
+        let string_type = info.get_data_type(&args[0])?;
+        let regexp_type = info.get_data_type(&args[1])?;
+        let binary_type_coercer = BinaryTypeCoercer::new(&string_type, &op, &regexp_type);
+        let Ok((coerced_string_type, coerced_regexp_type)) =
+            binary_type_coercer.get_input_types()
+        else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+
+        // regexp_like(str, regexp [, flags])
+        let regexp = args.swap_remove(1);
+        let string = args.swap_remove(0);
+
+        Ok(ExprSimplifyResult::Simplified(binary_expr(
+            if string_type != coerced_string_type {
+                cast(string, coerced_string_type)
+            } else {
+                string
+            },
+            op,
+            if regexp_type != coerced_regexp_type {
+                cast(regexp, coerced_regexp_type)
+            } else {
+                regexp
+            },
+        )))
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn derive_operator(args: &[Expr]) -> Option<Operator> {
+    match args.len() {
+        // regexp_like(str, regexp, flags)
+        3 => {
+            match &args[2] {
+                Expr::Literal(ScalarValue::Utf8(Some(flags)), _) => {
+                    match flags.as_str() {
+                        "i" => Some(Operator::RegexIMatch),
+                        "" => Some(Operator::RegexMatch),
+                        // Any flags besides 'i' have no operator equivalent
+                        _ => None,
+                    }
+                }
+                // `flags` is not a literal, so we can't derive the correct operator statically
+                _ => None,
+            }
+        }
+        // regexp_like(str, regexp)
+        2 => Some(Operator::RegexMatch),
+        // Should never happen, but just in case
+        _ => None,
     }
 }
 

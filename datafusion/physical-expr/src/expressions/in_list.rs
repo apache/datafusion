@@ -306,18 +306,31 @@ impl InListExpr {
     }
 }
 
+#[macro_export]
+macro_rules! expr_vec_fmt {
+    ( $ARRAY:expr ) => {{
+        $ARRAY
+            .iter()
+            .map(|e| format!("{e}"))
+            .collect::<Vec<String>>()
+            .join(", ")
+    }};
+}
+
 impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let list = expr_vec_fmt!(self.list);
+
         if self.negated {
             if self.static_filter.is_some() {
-                write!(f, "{} NOT IN (SET) ({:?})", self.expr, self.list)
+                write!(f, "{} NOT IN (SET) ([{list}])", self.expr)
             } else {
-                write!(f, "{} NOT IN ({:?})", self.expr, self.list)
+                write!(f, "{} NOT IN ([{list}])", self.expr)
             }
         } else if self.static_filter.is_some() {
-            write!(f, "Use {} IN (SET) ({:?})", self.expr, self.list)
+            write!(f, "{} IN (SET) ([{list}])", self.expr)
         } else {
-            write!(f, "{} IN ({:?})", self.expr, self.list)
+            write!(f, "{} IN ([{list}])", self.expr)
         }
     }
 }
@@ -463,13 +476,14 @@ pub fn in_list(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::expressions;
     use crate::expressions::{col, lit, try_cast};
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use insta::assert_snapshot;
+    use itertools::Itertools as _;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 
@@ -488,7 +502,8 @@ mod tests {
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
             None => plan_err!(
-                "Can not find compatible types to compare {expr_type:?} with {list_types:?}"
+                "Can not find compatible types to compare {expr_type} with [{}]",
+                list_types.iter().join(", ")
             ),
             Some(data_type) => {
                 // find the coerced type
@@ -1441,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fmt_sql() -> Result<()> {
+    fn test_fmt_sql_1() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let col_a = col("a", &schema)?;
 
@@ -1450,33 +1465,53 @@ mod tests {
         let expr = in_list(Arc::clone(&col_a), list, &false, &schema)?;
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
-        assert_eq!(sql_string, "a IN (a, b)");
-        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])");
+        assert_snapshot!(sql_string, @"a IN (a, b)");
+        assert_snapshot!(display_string, @"a@0 IN (SET) ([a, b])");
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql_2() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let col_a = col("a", &schema)?;
 
         // Test: a NOT IN ('a', 'b')
         let list = vec![lit("a"), lit("b")];
         let expr = in_list(Arc::clone(&col_a), list, &true, &schema)?;
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
-        assert_eq!(sql_string, "a NOT IN (a, b)");
-        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])");
 
+        assert_snapshot!(sql_string, @"a NOT IN (a, b)");
+        assert_snapshot!(display_string, @"a@0 NOT IN (SET) ([a, b])");
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql_3() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let col_a = col("a", &schema)?;
         // Test: a IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         let expr = in_list(Arc::clone(&col_a), list, &false, &schema)?;
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
-        assert_eq!(sql_string, "a IN (a, b, NULL)");
-        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])");
 
+        assert_snapshot!(sql_string, @"a IN (a, b, NULL)");
+        assert_snapshot!(display_string, @"a@0 IN (SET) ([a, b, NULL])");
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql_4() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let col_a = col("a", &schema)?;
         // Test: a NOT IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         let expr = in_list(Arc::clone(&col_a), list, &true, &schema)?;
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
-        assert_eq!(sql_string, "a NOT IN (a, b, NULL)");
-        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])");
-
+        assert_snapshot!(sql_string, @"a NOT IN (a, b, NULL)");
+        assert_snapshot!(display_string, @"a@0 NOT IN (SET) ([a, b, NULL])");
         Ok(())
     }
 }

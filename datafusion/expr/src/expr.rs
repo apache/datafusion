@@ -17,18 +17,20 @@
 
 //! Logical Expressions: [`Expr`]
 
-use std::collections::HashSet;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
+use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::Volatility;
-use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
+use crate::{AggregateUDF, Volatility};
+use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -37,10 +39,38 @@ use datafusion_common::{
     Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+#[cfg(feature = "sql")]
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
-    NullTreatment, RenameSelectItem, ReplaceSelectElement,
+    RenameSelectItem, ReplaceSelectElement,
 };
+
+// This mirrors sqlparser::ast::NullTreatment but we need our own variant
+// for when the sql feature is disabled.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub enum NullTreatment {
+    IgnoreNulls,
+    RespectNulls,
+}
+
+impl Display for NullTreatment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            NullTreatment::IgnoreNulls => "IGNORE NULLS",
+            NullTreatment::RespectNulls => "RESPECT NULLS",
+        })
+    }
+}
+
+#[cfg(feature = "sql")]
+impl From<sqlparser::ast::NullTreatment> for NullTreatment {
+    fn from(value: sqlparser::ast::NullTreatment) -> Self {
+        match value {
+            sqlparser::ast::NullTreatment::IgnoreNulls => Self::IgnoreNulls,
+            sqlparser::ast::NullTreatment::RespectNulls => Self::RespectNulls,
+        }
+    }
+}
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
@@ -50,7 +80,7 @@ use sqlparser::ast::{
 ///  BinaryExpr {
 ///    left: Expr::Column("A"),
 ///    op: Operator::Plus,
-///    right: Expr::Literal(ScalarValue::Int32(Some(1)))
+///    right: Expr::Literal(ScalarValue::Int32(Some(1)), None)
 /// }
 /// ```
 ///
@@ -112,10 +142,10 @@ use sqlparser::ast::{
 /// # use datafusion_expr::{lit, col, Expr};
 /// // All literals are strongly typed in DataFusion. To make an `i64` 42:
 /// let expr = lit(42i64);
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42)), None));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42)), None));
 /// // To make a (typed) NULL:
-/// let expr = Expr::Literal(ScalarValue::Int64(None));
+/// let expr = Expr::Literal(ScalarValue::Int64(None), None);
 /// // to make an (untyped) NULL (the optimizer will coerce this to the correct type):
 /// let expr = lit(ScalarValue::Null);
 /// ```
@@ -149,7 +179,7 @@ use sqlparser::ast::{
 /// if let Expr::BinaryExpr(binary_expr) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(*binary_expr.right, Expr::Literal(scalar, None));
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
@@ -193,7 +223,7 @@ use sqlparser::ast::{
 /// ```
 /// # use datafusion_expr::{lit, col};
 /// let expr = col("c1") + lit(42);
-/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42)) })");
+/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42), None) })");
 /// ```
 ///
 /// ## Use the `Display` trait  (detailed expression)
@@ -239,7 +269,7 @@ use sqlparser::ast::{
 /// let mut scalars = HashSet::new();
 /// // apply recursively visits all nodes in the expression tree
 /// expr.apply(|e| {
-///    if let Expr::Literal(scalar) = e {
+///    if let Expr::Literal(scalar, _) = e {
 ///       scalars.insert(scalar);
 ///    }
 ///    // The return value controls whether to continue visiting the tree
@@ -274,7 +304,7 @@ use sqlparser::ast::{
 /// assert!(rewritten.transformed);
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -282,8 +312,8 @@ pub enum Expr {
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
-    /// A constant value.
-    Literal(ScalarValue),
+    /// A constant value along with associated [`FieldMetadata`].
+    Literal(ScalarValue, Option<FieldMetadata>),
     /// A binary expression such as "age > 21"
     BinaryExpr(BinaryExpr),
     /// LIKE expression
@@ -330,7 +360,7 @@ pub enum Expr {
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
     /// Call a window function with a set of arguments.
-    WindowFunction(WindowFunction),
+    WindowFunction(Box<WindowFunction>),
     /// Returns whether the list contains the expr value.
     InList(InList),
     /// EXISTS subquery
@@ -360,14 +390,20 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
 }
 
 impl Default for Expr {
     fn default() -> Self {
-        Expr::Literal(ScalarValue::Null)
+        Expr::Literal(ScalarValue::Null, None)
+    }
+}
+
+impl AsRef<Expr> for Expr {
+    fn as_ref(&self) -> &Expr {
+        self
     }
 }
 
@@ -375,6 +411,13 @@ impl Default for Expr {
 impl From<Column> for Expr {
     fn from(value: Column) -> Self {
         Expr::Column(value)
+    }
+}
+
+/// Create an [`Expr`] from a [`WindowFunction`]
+impl From<WindowFunction> for Expr {
+    fn from(value: WindowFunction) -> Self {
+        Expr::WindowFunction(Box::new(value))
     }
 }
 
@@ -404,6 +447,294 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
     }
 }
 
+/// Literal metadata
+///
+/// Stores metadata associated with a literal expressions
+/// and is designed to be fast to `clone`.
+///
+/// This structure is used to store metadata associated with a literal expression, and it
+/// corresponds to the `metadata` field on [`Field`].
+///
+/// # Example: Create [`FieldMetadata`] from a [`Field`]
+/// ```
+/// # use std::collections::HashMap;
+/// # use datafusion_expr::expr::FieldMetadata;
+/// # use arrow::datatypes::{Field, DataType};
+/// # let field = Field::new("c1", DataType::Int32, true)
+/// #  .with_metadata(HashMap::from([("foo".to_string(), "bar".to_string())]));
+/// // Create a new `FieldMetadata` instance from a `Field`
+/// let metadata = FieldMetadata::new_from_field(&field);
+/// // There is also a `From` impl:
+/// let metadata = FieldMetadata::from(&field);
+/// ```
+///
+/// # Example: Update a [`Field`] with [`FieldMetadata`]
+/// ```
+/// # use datafusion_expr::expr::FieldMetadata;
+/// # use arrow::datatypes::{Field, DataType};
+/// # let field = Field::new("c1", DataType::Int32, true);
+/// # let metadata = FieldMetadata::new_from_field(&field);
+/// // Add any metadata from `FieldMetadata` to `Field`
+/// let updated_field = metadata.add_to_field(field);
+/// ```
+///
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct FieldMetadata {
+    /// The inner metadata of a literal expression, which is a map of string
+    /// keys to string values.
+    ///
+    /// Note this is not a `HashMap` because `HashMap` does not provide
+    /// implementations for traits like `Debug` and `Hash`.
+    inner: Arc<BTreeMap<String, String>>,
+}
+
+impl Default for FieldMetadata {
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
+impl FieldMetadata {
+    /// Create a new empty metadata instance.
+    pub fn new_empty() -> Self {
+        Self {
+            inner: Arc::new(BTreeMap::new()),
+        }
+    }
+
+    /// Merges two optional `FieldMetadata` instances, overwriting any existing
+    /// keys in `m` with keys from `n` if present.
+    ///
+    /// This function is commonly used in alias operations, particularly for literals
+    /// with metadata. When creating an alias expression, the metadata from the original
+    /// expression (such as a literal) is combined with any metadata specified on the alias.
+    ///
+    /// # Arguments
+    ///
+    /// * `m` - The first metadata (typically from the original expression like a literal)
+    /// * `n` - The second metadata (typically from the alias definition)
+    ///
+    /// # Merge Strategy
+    ///
+    /// - If both metadata instances exist, they are merged with `n` taking precedence
+    /// - Keys from `n` will overwrite keys from `m` if they have the same name
+    /// - If only one metadata instance exists, it is returned unchanged
+    /// - If neither exists, `None` is returned
+    ///
+    /// # Example usage
+    /// ```rust
+    /// use datafusion_expr::expr::FieldMetadata;
+    /// use std::collections::BTreeMap;
+    ///
+    /// // Create metadata for a literal expression
+    /// let literal_metadata = Some(FieldMetadata::from(BTreeMap::from([
+    ///     ("source".to_string(), "constant".to_string()),
+    ///     ("type".to_string(), "int".to_string()),
+    /// ])));
+    ///
+    /// // Create metadata for an alias
+    /// let alias_metadata = Some(FieldMetadata::from(BTreeMap::from([
+    ///     ("description".to_string(), "answer".to_string()),
+    ///     ("source".to_string(), "user".to_string()), // This will override literal's "source"
+    /// ])));
+    ///
+    /// // Merge the metadata
+    /// let merged = FieldMetadata::merge_options(
+    ///     literal_metadata.as_ref(),
+    ///     alias_metadata.as_ref(),
+    /// );
+    ///
+    /// // Result contains: {"source": "user", "type": "int", "description": "answer"}
+    /// assert!(merged.is_some());
+    /// ```
+    pub fn merge_options(
+        m: Option<&FieldMetadata>,
+        n: Option<&FieldMetadata>,
+    ) -> Option<FieldMetadata> {
+        match (m, n) {
+            (Some(m), Some(n)) => {
+                let mut merged = m.clone();
+                merged.extend(n.clone());
+                Some(merged)
+            }
+            (Some(m), None) => Some(m.clone()),
+            (None, Some(n)) => Some(n.clone()),
+            (None, None) => None,
+        }
+    }
+
+    /// Create a new metadata instance from a `Field`'s metadata.
+    pub fn new_from_field(field: &Field) -> Self {
+        let inner = field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Create a new metadata instance from a map of string keys to string values.
+    pub fn new(inner: BTreeMap<String, String>) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Get the inner metadata as a reference to a `BTreeMap`.
+    pub fn inner(&self) -> &BTreeMap<String, String> {
+        &self.inner
+    }
+
+    /// Return the inner metadata
+    pub fn into_inner(self) -> Arc<BTreeMap<String, String>> {
+        self.inner
+    }
+
+    /// Adds metadata from `other` into `self`, overwriting any existing keys.
+    pub fn extend(&mut self, other: Self) {
+        if other.is_empty() {
+            return;
+        }
+        let other = Arc::unwrap_or_clone(other.into_inner());
+        Arc::make_mut(&mut self.inner).extend(other);
+    }
+
+    /// Returns true if the metadata is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of key-value pairs in the metadata.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Convert this `FieldMetadata` into a `HashMap<String, String>`
+    pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
+        self.inner
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// Updates the metadata on the Field with this metadata, if it is not empty.
+    pub fn add_to_field(&self, field: Field) -> Field {
+        if self.inner.is_empty() {
+            return field;
+        }
+
+        field.with_metadata(self.to_hashmap())
+    }
+}
+
+impl From<&Field> for FieldMetadata {
+    fn from(field: &Field) -> Self {
+        Self::new_from_field(field)
+    }
+}
+
+impl From<BTreeMap<String, String>> for FieldMetadata {
+    fn from(inner: BTreeMap<String, String>) -> Self {
+        Self::new(inner)
+    }
+}
+
+impl From<std::collections::HashMap<String, String>> for FieldMetadata {
+    fn from(map: std::collections::HashMap<String, String>) -> Self {
+        Self::new(map.into_iter().collect())
+    }
+}
+
+/// From reference
+impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
+    fn from(map: &std::collections::HashMap<String, String>) -> Self {
+        let inner = map
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
+    }
+}
+
+/// From hashbrown map
+impl From<HashMap<String, String>> for FieldMetadata {
+    fn from(map: HashMap<String, String>) -> Self {
+        let inner = map.into_iter().collect();
+        Self::new(inner)
+    }
+}
+
+impl From<&HashMap<String, String>> for FieldMetadata {
+    fn from(map: &HashMap<String, String>) -> Self {
+        let inner = map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
+    }
+}
+
+/// The metadata used in [`Field::metadata`].
+///
+/// This represents the metadata associated with an Arrow [`Field`]. The metadata consists of key-value pairs.
+///
+/// # Common Use Cases
+///
+/// Field metadata is commonly used to store:
+/// - Default values for columns when data is missing
+/// - Column descriptions or documentation
+/// - Data lineage information
+/// - Custom application-specific annotations
+/// - Encoding hints or display formatting preferences
+///
+/// # Example: Storing Default Values
+///
+/// A practical example of using field metadata is storing default values for columns
+/// that may be missing in the physical data but present in the logical schema.
+/// See the [default_column_values.rs] example implementation.
+///
+/// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs
+pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
+
+/// Intersects multiple metadata instances for UNION operations.
+///
+/// This function implements the intersection strategy used by UNION operations,
+/// where only metadata keys that exist in ALL inputs with identical values
+/// are preserved in the result.
+///
+/// # Union Metadata Behavior
+///
+/// Union operations require consistent metadata across all branches:
+/// - Only metadata keys present in ALL union branches are kept
+/// - For each kept key, the value must be identical across all branches
+/// - If a key has different values across branches, it is excluded from the result
+/// - If any input has no metadata, the result will be empty
+///
+/// # Arguments
+///
+/// * `metadatas` - An iterator of `SchemaFieldMetadata` instances to intersect
+///
+/// # Returns
+///
+/// A new `SchemaFieldMetadata` containing only the intersected metadata
+pub fn intersect_metadata_for_union<'a>(
+    metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
+) -> SchemaFieldMetadata {
+    let mut metadatas = metadatas.into_iter();
+    let Some(mut intersected) = metadatas.next().cloned() else {
+        return Default::default();
+    };
+
+    for metadata in metadatas {
+        // Only keep keys that exist in both with the same value
+        intersected.retain(|k, v| metadata.get(k) == Some(v));
+    }
+
+    intersected
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -430,7 +761,7 @@ pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
-    pub metadata: Option<std::collections::HashMap<String, String>>,
+    pub metadata: Option<FieldMetadata>,
 }
 
 impl Hash for Alias {
@@ -442,16 +773,19 @@ impl Hash for Alias {
 }
 
 impl PartialOrd for Alias {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let cmp = self.expr.partial_cmp(&other.expr);
-        let Some(std::cmp::Ordering::Equal) = cmp else {
+        let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
         let cmp = self.relation.partial_cmp(&other.relation);
-        let Some(std::cmp::Ordering::Equal) = cmp else {
+        let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
-        self.name.partial_cmp(&other.name)
+        self.name
+            .partial_cmp(&other.name)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -470,10 +804,7 @@ impl Alias {
         }
     }
 
-    pub fn with_metadata(
-        mut self,
-        metadata: Option<std::collections::HashMap<String, String>>,
-    ) -> Self {
+    pub fn with_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
         self.metadata = metadata;
         self
     }
@@ -790,7 +1121,7 @@ impl<'a> TreeNodeContainer<'a, Expr> for Sort {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub func: Arc<crate::AggregateUDF>,
+    pub func: Arc<AggregateUDF>,
     pub params: AggregateFunctionParams,
 }
 
@@ -802,18 +1133,18 @@ pub struct AggregateFunctionParams {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
-    pub order_by: Option<Vec<Sort>>,
+    pub order_by: Vec<Sort>,
     pub null_treatment: Option<NullTreatment>,
 }
 
 impl AggregateFunction {
     /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
-        func: Arc<crate::AggregateUDF>,
+        func: Arc<AggregateUDF>,
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Sort>>,
+        order_by: Vec<Sort>,
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
@@ -837,7 +1168,7 @@ impl AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
-    AggregateUDF(Arc<crate::AggregateUDF>),
+    AggregateUDF(Arc<AggregateUDF>),
     /// A user defined aggregate function
     WindowUDF(Arc<WindowUDF>),
 }
@@ -847,7 +1178,6 @@ impl WindowFunctionDefinition {
     pub fn return_field(
         &self,
         input_expr_fields: &[FieldRef],
-        _input_expr_nullable: &[bool],
         display_name: &str,
     ) -> Result<FieldRef> {
         match self {
@@ -875,6 +1205,16 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
     }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        match self {
+            WindowFunctionDefinition::AggregateUDF(_) => None,
+            WindowFunctionDefinition::WindowUDF(udwf) => udwf.simplify(),
+        }
+    }
 }
 
 impl Display for WindowFunctionDefinition {
@@ -886,8 +1226,8 @@ impl Display for WindowFunctionDefinition {
     }
 }
 
-impl From<Arc<crate::AggregateUDF>> for WindowFunctionDefinition {
-    fn from(value: Arc<crate::AggregateUDF>) -> Self {
+impl From<Arc<AggregateUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<AggregateUDF>) -> Self {
         Self::AggregateUDF(value)
     }
 }
@@ -927,8 +1267,12 @@ pub struct WindowFunctionParams {
     pub order_by: Vec<Sort>,
     /// Window frame
     pub window_frame: WindowFrame,
+    /// Optional filter expression (FILTER (WHERE ...))
+    pub filter: Option<Box<Expr>>,
     /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
+    /// Distinct flag
+    pub distinct: bool,
 }
 
 impl WindowFunction {
@@ -942,9 +1286,18 @@ impl WindowFunction {
                 partition_by: Vec::default(),
                 order_by: Vec::default(),
                 window_frame: WindowFrame::new(None),
+                filter: None,
                 null_treatment: None,
+                distinct: false,
             },
         }
+    }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.fun.simplify()
     }
 }
 
@@ -961,38 +1314,6 @@ impl Exists {
     // Create a new Exists expression.
     pub fn new(subquery: Subquery, negated: bool) -> Self {
         Self { subquery, negated }
-    }
-}
-
-/// User Defined Aggregate Function
-///
-/// See [`udaf::AggregateUDF`] for more information.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct AggregateUDF {
-    /// The function
-    pub fun: Arc<udaf::AggregateUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
-    /// Optional filter
-    pub filter: Option<Box<Expr>>,
-    /// Optional ORDER BY applied prior to aggregating
-    pub order_by: Option<Vec<Expr>>,
-}
-
-impl AggregateUDF {
-    /// Create a new AggregateUDF expression
-    pub fn new(
-        fun: Arc<udaf::AggregateUDF>,
-        args: Vec<Expr>,
-        filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Expr>>,
-    ) -> Self {
-        Self {
-            fun,
-            args,
-            filter,
-            order_by,
-        }
     }
 }
 
@@ -1093,6 +1414,130 @@ impl GroupingSet {
                 }
                 exprs
             }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub struct IlikeSelectItem {
+    pub pattern: String,
+}
+#[cfg(not(feature = "sql"))]
+impl Display for IlikeSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "ILIKE '{}'", &self.pattern)?;
+        Ok(())
+    }
+}
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub enum ExcludeSelectItem {
+    Single(Ident),
+    Multiple(Vec<Ident>),
+}
+#[cfg(not(feature = "sql"))]
+impl Display for ExcludeSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "EXCLUDE")?;
+        match self {
+            Self::Single(column) => {
+                write!(f, " {column}")?;
+            }
+            Self::Multiple(columns) => {
+                write!(f, " ({})", display_comma_separated(columns))?;
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub struct ExceptSelectItem {
+    pub first_element: Ident,
+    pub additional_elements: Vec<Ident>,
+}
+#[cfg(not(feature = "sql"))]
+impl Display for ExceptSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "EXCEPT ")?;
+        if self.additional_elements.is_empty() {
+            write!(f, "({})", self.first_element)?;
+        } else {
+            write!(
+                f,
+                "({}, {})",
+                self.first_element,
+                display_comma_separated(&self.additional_elements)
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "sql"))]
+pub fn display_comma_separated<T>(slice: &[T]) -> String
+where
+    T: Display,
+{
+    use itertools::Itertools;
+    slice.iter().map(|v| format!("{v}")).join(", ")
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub enum RenameSelectItem {
+    Single(String),
+    Multiple(Vec<String>),
+}
+#[cfg(not(feature = "sql"))]
+impl Display for RenameSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "RENAME")?;
+        match self {
+            Self::Single(column) => {
+                write!(f, " {column}")?;
+            }
+            Self::Multiple(columns) => {
+                write!(f, " ({})", display_comma_separated(columns))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub struct Ident {
+    /// The value of the identifier without quotes.
+    pub value: String,
+    /// The starting quote if any. Valid quote characters are the single quote,
+    /// double quote, backtick, and opening square bracket.
+    pub quote_style: Option<char>,
+    /// The span of the identifier in the original SQL string.
+    pub span: String,
+}
+#[cfg(not(feature = "sql"))]
+impl Display for Ident {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "[{}]", self.value)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub struct ReplaceSelectElement {
+    pub expr: String,
+    pub column_name: Ident,
+    pub as_keyword: bool,
+}
+#[cfg(not(feature = "sql"))]
+impl Display for ReplaceSelectElement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if self.as_keyword {
+            write!(f, "{} AS {}", self.expr, self.column_name)
+        } else {
+            write!(f, "{} {}", self.expr, self.column_name)
         }
     }
 }
@@ -1249,12 +1694,6 @@ impl Expr {
         }
     }
 
-    /// Returns a full and complete string representation of this expression.
-    #[deprecated(since = "42.0.0", note = "use format! instead")]
-    pub fn canonical_name(&self) -> String {
-        format!("{self}")
-    }
-
     /// Return String representation of the variant represented by `self`
     /// Useful for non-rust based bindings
     pub fn variant_name(&self) -> &str {
@@ -1403,15 +1842,17 @@ impl Expr {
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
-    /// use std::collections::HashMap;
+    /// # use std::collections::HashMap;
+    /// # use datafusion_expr::expr::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
     /// ```
     ///
     pub fn alias_with_metadata(
         self,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
     }
@@ -1433,8 +1874,10 @@ impl Expr {
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
-    /// use std::collections::HashMap;
+    /// # use std::collections::HashMap;
+    /// # use datafusion_expr::expr::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
     /// ```
     ///
@@ -1442,7 +1885,7 @@ impl Expr {
         self,
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
     }
@@ -1512,8 +1955,16 @@ impl Expr {
             |expr| {
                 // f_up: unalias on up so we can remove nested aliases like
                 // `(x as foo) as bar`
-                if let Expr::Alias(Alias { expr, .. }) = expr {
-                    Ok(Transformed::yes(*expr))
+                if let Expr::Alias(alias) = expr {
+                    match alias
+                        .metadata
+                        .as_ref()
+                        .map(|h| h.is_empty())
+                        .unwrap_or(true)
+                    {
+                        true => Ok(Transformed::yes(*alias.expr)),
+                        false => Ok(Transformed::no(Expr::Alias(alias))),
+                    }
                 } else {
                     Ok(Transformed::no(expr))
                 }
@@ -1848,6 +2299,15 @@ impl Expr {
             _ => None,
         }
     }
+
+    /// Check if the Expr is literal and get the literal value if it is.
+    pub fn as_literal(&self) -> Option<&ScalarValue> {
+        if let Expr::Literal(lit, _) = self {
+            Some(lit)
+        } else {
+            None
+        }
+    }
 }
 
 impl Normalizeable for Expr {
@@ -2073,48 +2533,51 @@ impl NormalizeEq for Expr {
                         (None, None) => true,
                         _ => false,
                     }
-                    && match (self_order_by, other_order_by) {
-                        (Some(self_order_by), Some(other_order_by)) => self_order_by
-                            .iter()
-                            .zip(other_order_by.iter())
-                            .all(|(a, b)| {
-                                a.asc == b.asc
-                                    && a.nulls_first == b.nulls_first
-                                    && a.expr.normalize_eq(&b.expr)
-                            }),
-                        (None, None) => true,
-                        _ => false,
-                    }
+                    && self_order_by
+                        .iter()
+                        .zip(other_order_by.iter())
+                        .all(|(a, b)| {
+                            a.asc == b.asc
+                                && a.nulls_first == b.nulls_first
+                                && a.expr.normalize_eq(&b.expr)
+                        })
+                    && self_order_by.len() == other_order_by.len()
             }
-            (
-                Expr::WindowFunction(WindowFunction {
+            (Expr::WindowFunction(left), Expr::WindowFunction(other)) => {
+                let WindowFunction {
                     fun: self_fun,
-                    params: self_params,
-                }),
-                Expr::WindowFunction(WindowFunction {
+                    params:
+                        WindowFunctionParams {
+                            args: self_args,
+                            window_frame: self_window_frame,
+                            partition_by: self_partition_by,
+                            order_by: self_order_by,
+                            filter: self_filter,
+                            null_treatment: self_null_treatment,
+                            distinct: self_distinct,
+                        },
+                } = left.as_ref();
+                let WindowFunction {
                     fun: other_fun,
-                    params: other_params,
-                }),
-            ) => {
-                let (
-                    WindowFunctionParams {
-                        args: self_args,
-                        window_frame: self_window_frame,
-                        partition_by: self_partition_by,
-                        order_by: self_order_by,
-                        null_treatment: self_null_treatment,
-                    },
-                    WindowFunctionParams {
-                        args: other_args,
-                        window_frame: other_window_frame,
-                        partition_by: other_partition_by,
-                        order_by: other_order_by,
-                        null_treatment: other_null_treatment,
-                    },
-                ) = (self_params, other_params);
+                    params:
+                        WindowFunctionParams {
+                            args: other_args,
+                            window_frame: other_window_frame,
+                            partition_by: other_partition_by,
+                            order_by: other_order_by,
+                            filter: other_filter,
+                            null_treatment: other_null_treatment,
+                            distinct: other_distinct,
+                        },
+                } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
                     && self_window_frame == other_window_frame
+                    && match (self_filter, other_filter) {
+                        (Some(a), Some(b)) => a.normalize_eq(b),
+                        (None, None) => true,
+                        _ => false,
+                    }
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
                     && self_args
@@ -2133,6 +2596,7 @@ impl NormalizeEq for Expr {
                                 && a.nulls_first == b.nulls_first
                                 && a.expr.normalize_eq(&b.expr)
                         })
+                    && self_distinct == other_distinct
             }
             (
                 Expr::Exists(Exists {
@@ -2277,7 +2741,7 @@ impl HashNode for Expr {
                 data_type.hash(state);
                 name.hash(state);
             }
-            Expr::Literal(scalar_value) => {
+            Expr::Literal(scalar_value, _) => {
                 scalar_value.hash(state);
             }
             Expr::BinaryExpr(BinaryExpr {
@@ -2356,17 +2820,25 @@ impl HashNode for Expr {
                 distinct.hash(state);
                 null_treatment.hash(state);
             }
-            Expr::WindowFunction(WindowFunction { fun, params }) => {
-                let WindowFunctionParams {
-                    args: _args,
-                    partition_by: _,
-                    order_by: _,
-                    window_frame,
-                    null_treatment,
-                } = params;
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        WindowFunctionParams {
+                            args: _args,
+                            partition_by: _,
+                            order_by: _,
+                            window_frame,
+                            filter,
+                            null_treatment,
+                            distinct,
+                        },
+                } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
+                filter.hash(state);
                 null_treatment.hash(state);
+                distinct.hash(state);
             }
             Expr::InList(InList {
                 expr: _expr,
@@ -2405,8 +2877,8 @@ impl HashNode for Expr {
             Expr::Placeholder(place_holder) => {
                 place_holder.hash(state);
             }
-            Expr::OuterReferenceColumn(data_type, column) => {
-                data_type.hash(state);
+            Expr::OuterReferenceColumn(field, column) => {
+                field.hash(state);
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
@@ -2453,7 +2925,7 @@ impl Display for SchemaDisplay<'_> {
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Column(_)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::ScalarVariable(..)
             | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
@@ -2646,52 +3118,79 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
-                WindowFunctionDefinition::AggregateUDF(fun) => {
-                    match fun.window_function_schema_name(params) {
-                        Ok(name) => {
-                            write!(f, "{name}")
-                        }
-                        Err(e) => {
-                            write!(f, "got error from window_function_schema_name {e}")
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction { fun, params } = window_fun.as_ref();
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(fun) => {
+                        match fun.window_function_schema_name(params) {
+                            Ok(name) => {
+                                write!(f, "{name}")
+                            }
+                            Err(e) => {
+                                write!(
+                                    f,
+                                    "got error from window_function_schema_name {e}"
+                                )
+                            }
                         }
                     }
-                }
-                _ => {
-                    let WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    } = params;
+                    _ => {
+                        let WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            filter,
+                            null_treatment,
+                            distinct,
+                        } = params;
 
-                    write!(
-                        f,
-                        "{}({})",
-                        fun,
-                        schema_name_from_exprs_comma_separated_without_space(args)?
-                    )?;
+                        // Write function name and open parenthesis
+                        write!(f, "{fun}(")?;
 
-                    if let Some(null_treatment) = null_treatment {
-                        write!(f, " {null_treatment}")?;
-                    }
+                        // If DISTINCT, emit the keyword
+                        if *distinct {
+                            write!(f, "DISTINCT ")?;
+                        }
 
-                    if !partition_by.is_empty() {
+                        // Write the comma‑separated argument list
                         write!(
                             f,
-                            " PARTITION BY [{}]",
-                            schema_name_from_exprs(partition_by)?
+                            "{}",
+                            schema_name_from_exprs_comma_separated_without_space(args)?
                         )?;
+
+                        // **Close the argument parenthesis**
+                        write!(f, ")")?;
+
+                        if let Some(null_treatment) = null_treatment {
+                            write!(f, " {null_treatment}")?;
+                        }
+
+                        if let Some(filter) = filter {
+                            write!(f, " FILTER (WHERE {filter})")?;
+                        }
+
+                        if !partition_by.is_empty() {
+                            write!(
+                                f,
+                                " PARTITION BY [{}]",
+                                schema_name_from_exprs(partition_by)?
+                            )?;
+                        }
+
+                        if !order_by.is_empty() {
+                            write!(
+                                f,
+                                " ORDER BY [{}]",
+                                schema_name_from_sorts(order_by)?
+                            )?;
+                        };
+
+                        write!(f, " {window_frame}")
                     }
-
-                    if !order_by.is_empty() {
-                        write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
-                    };
-
-                    write!(f, " {window_frame}")
                 }
-            },
+            }
         }
     }
 }
@@ -2702,7 +3201,7 @@ struct SqlDisplay<'a>(&'a Expr);
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
-            Expr::Literal(scalar) => scalar.fmt(f),
+            Expr::Literal(scalar, _) => scalar.fmt(f),
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -2969,7 +3468,12 @@ impl Display for Expr {
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
-            Expr::Literal(v) => write!(f, "{v:?}"),
+            Expr::Literal(v, metadata) => {
+                match metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
+                    false => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
+                    true => write!(f, "{v:?}"),
+                }
+            }
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {
@@ -2984,10 +3488,10 @@ impl Display for Expr {
                 write!(f, "END")
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                write!(f, "CAST({expr} AS {data_type:?})")
+                write!(f, "CAST({expr} AS {data_type})")
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
-                write!(f, "TRY_CAST({expr} AS {data_type:?})")
+                write!(f, "TRY_CAST({expr} AS {data_type})")
             }
             Expr::Not(expr) => write!(f, "NOT {expr}"),
             Expr::Negative(expr) => write!(f, "(- {expr})"),
@@ -3022,51 +3526,59 @@ impl Display for Expr {
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
-            // TODO: use udf's display_name, need to fix the separator issue, <https://github.com/apache/datafusion/issues/10364>
-            // Expr::ScalarFunction(ScalarFunction { func, args }) => {
-            //     write!(f, "{}", func.display_name(args).unwrap())
-            // }
-            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
-                WindowFunctionDefinition::AggregateUDF(fun) => {
-                    match fun.window_function_display_name(params) {
-                        Ok(name) => {
-                            write!(f, "{name}")
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction { fun, params } = window_fun.as_ref();
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(fun) => {
+                        match fun.window_function_display_name(params) {
+                            Ok(name) => {
+                                write!(f, "{name}")
+                            }
+                            Err(e) => {
+                                write!(
+                                    f,
+                                    "got error from window_function_display_name {e}"
+                                )
+                            }
                         }
-                        Err(e) => {
-                            write!(f, "got error from window_function_display_name {e}")
+                    }
+                    WindowFunctionDefinition::WindowUDF(fun) => {
+                        let WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            filter,
+                            null_treatment,
+                            distinct,
+                        } = params;
+
+                        fmt_function(f, &fun.to_string(), *distinct, args, true)?;
+
+                        if let Some(nt) = null_treatment {
+                            write!(f, "{nt}")?;
                         }
+
+                        if let Some(fe) = filter {
+                            write!(f, " FILTER (WHERE {fe})")?;
+                        }
+
+                        if !partition_by.is_empty() {
+                            write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
+                        }
+                        if !order_by.is_empty() {
+                            write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+                        }
+                        write!(
+                            f,
+                            " {} BETWEEN {} AND {}",
+                            window_frame.units,
+                            window_frame.start_bound,
+                            window_frame.end_bound
+                        )
                     }
                 }
-                WindowFunctionDefinition::WindowUDF(fun) => {
-                    let WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    } = params;
-
-                    fmt_function(f, &fun.to_string(), false, args, true)?;
-
-                    if let Some(nt) = null_treatment {
-                        write!(f, "{nt}")?;
-                    }
-
-                    if !partition_by.is_empty() {
-                        write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
-                    }
-                    if !order_by.is_empty() {
-                        write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
-                    }
-                    write!(
-                        f,
-                        " {} BETWEEN {} AND {}",
-                        window_frame.units,
-                        window_frame.start_bound,
-                        window_frame.end_bound
-                    )
-                }
-            },
+            }
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {
                     Ok(name) => {
@@ -3318,27 +3830,23 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn format_case_when() -> Result<()> {
         let expr = case(col("a"))
             .when(lit(1), lit(true))
             .when(lit(0), lit(false))
             .otherwise(lit(ScalarValue::Null))?;
         let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
-        assert_eq!(expected, expr.canonical_name());
         assert_eq!(expected, format!("{expr}"));
         Ok(())
     }
 
     #[test]
-    #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
+            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
-        assert_eq!(expected_canonical, expr.canonical_name());
         assert_eq!(expected_canonical, format!("{expr}"));
         // Note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
@@ -3420,7 +3928,7 @@ mod test {
     #[test]
     fn test_is_volatile_scalar_func() {
         // UDF
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq, Hash)]
         struct TestScalarUDF {
             signature: Signature,
         }
@@ -3590,6 +4098,75 @@ mod test {
             except: opt_except,
             replace: opt_replace,
             rename: opt_rename,
+        }
+    }
+
+    #[test]
+    fn test_size_of_expr() {
+        // because Expr is such a widely used struct in DataFusion
+        // it is important to keep its size as small as possible
+        //
+        // If this test fails when you change `Expr`, please try
+        // `Box`ing the fields to make `Expr` smaller
+        // See https://github.com/apache/datafusion/issues/16199 for details
+        assert_eq!(size_of::<Expr>(), 112);
+        assert_eq!(size_of::<ScalarValue>(), 64);
+        assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
+        assert_eq!(size_of::<Vec<Expr>>(), 24);
+        assert_eq!(size_of::<Arc<Expr>>(), 8);
+    }
+
+    #[test]
+    fn test_accept_exprs() {
+        fn accept_exprs<E: AsRef<Expr>>(_: &[E]) {}
+
+        let expr = || -> Expr { lit(1) };
+
+        // Call accept_exprs with owned expressions
+        let owned_exprs = vec![expr(), expr()];
+        accept_exprs(&owned_exprs);
+
+        // Call accept_exprs with expressions from expr tree
+        let udf = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::new_from_impl(TestUDF {})),
+            args: vec![expr(), expr()],
+        });
+        let Expr::ScalarFunction(scalar) = &udf else {
+            unreachable!()
+        };
+        accept_exprs(&scalar.args);
+
+        // Call accept_exprs with expressions collected from expr tree, without cloning
+        let mut collected_refs: Vec<&Expr> = scalar.args.iter().collect();
+        collected_refs.extend(&owned_exprs);
+        accept_exprs(&collected_refs);
+
+        // test helpers
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUDF {}
+        impl ScalarUDFImpl for TestUDF {
+            fn as_any(&self) -> &dyn Any {
+                unimplemented!()
+            }
+
+            fn name(&self) -> &str {
+                unimplemented!()
+            }
+
+            fn signature(&self) -> &Signature {
+                unimplemented!()
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                unimplemented!()
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                unimplemented!()
+            }
         }
     }
 }

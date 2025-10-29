@@ -26,6 +26,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::cot;
 
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::config::ConfigOptions;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -40,6 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
             })
             .collect::<Vec<_>>();
+        let config_options = Arc::new(ConfigOptions::default());
 
         c.bench_function(&format!("cot f32 array: {size}"), |b| {
             b.iter(|| {
@@ -50,6 +52,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: size,
                             return_field: Field::new("f", DataType::Float32, true).into(),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )
@@ -75,6 +78,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: size,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )

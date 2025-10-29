@@ -57,6 +57,7 @@ make_udaf_expr_and_func!(
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxMedian {
     signature: Signature,
 }

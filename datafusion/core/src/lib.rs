@@ -19,7 +19,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 //
@@ -39,7 +39,8 @@
 //! [DataFusion] is an extensible query engine written in Rust that
 //! uses [Apache Arrow] as its in-memory format. DataFusion's target users are
 //! developers building fast and feature rich database and analytic systems,
-//! customized to particular workloads. See [use cases] for examples.
+//! customized to particular workloads. Please see the [DataFusion website] for
+//! additional documentation, [use cases] and examples.
 //!
 //! "Out of the box," DataFusion offers [SQL] and [`Dataframe`] APIs,
 //! excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
@@ -53,6 +54,7 @@
 //! See the [Architecture] section below for more details.
 //!
 //! [DataFusion]: https://datafusion.apache.org/
+//! [DataFusion website]: https://datafusion.apache.org
 //! [Apache Arrow]: https://arrow.apache.org
 //! [use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
 //! [SQL]: https://datafusion.apache.org/user-guide/sql/index.html
@@ -311,17 +313,17 @@
 //! ```
 //!
 //! A [`TableProvider`] provides information for planning and
-//! an [`ExecutionPlan`] for execution. DataFusion includes [`ListingTable`],
-//! a [`TableProvider`] which reads individual files or directories of files
-//! ("partitioned datasets") of the same file format. Users can add
-//! support for new file formats by implementing the [`TableProvider`]
-//! trait.
+//! an [`ExecutionPlan`] for execution. DataFusion includes two built-in
+//! table providers that support common file formats and require no runtime services,
+//! [`ListingTable`] and [`MemTable`]. You can add support for any other data
+//! source and/or file formats by implementing the [`TableProvider`] trait.
 //!
 //! See also:
 //!
 //! 1. [`ListingTable`]: Reads data from one or more Parquet, JSON, CSV, or AVRO
-//!    files supporting HIVE style partitioning, optional compression, directly
-//!    reading from remote object store and more.
+//!    files in one or more local or remote directories. Supports HIVE style
+//!    partitioning, optional compression, directly reading from remote
+//!    object store, file metadata caching, and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
 //!
@@ -498,9 +500,20 @@
 //! While preparing for execution, DataFusion tries to create this many distinct
 //! `async` [`Stream`]s for each [`ExecutionPlan`].
 //! The [`Stream`]s for certain [`ExecutionPlan`]s, such as [`RepartitionExec`]
-//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that are run by
+//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that run on
 //! threads managed by the [`Runtime`].
 //! Many DataFusion [`Stream`]s perform CPU intensive processing.
+//!
+//! ### Cooperative Scheduling
+//!
+//! DataFusion uses cooperative scheduling, which means that each [`Stream`]
+//! is responsible for yielding control back to the [`Runtime`] after
+//! some amount of work is done. Please see the [`coop`] module documentation
+//! for more details.
+//!
+//! [`coop`]: datafusion_physical_plan::coop
+//!
+//! ### Network I/O and CPU intensive tasks
 //!
 //! Using `async` for CPU intensive tasks makes it easy for [`TableProvider`]s
 //! to perform network I/O using standard Rust `async` during execution.
@@ -510,17 +523,20 @@
 //! initial development and processing local files, but it can lead to problems
 //! under load and/or when reading from network sources such as AWS S3.
 //!
+//! ### Optimizing Latency: Throttled CPU / IO under Highly Concurrent Load
+//!
 //! If your system does not fully utilize either the CPU or network bandwidth
 //! during execution, or you see significantly higher tail (e.g. p99) latencies
 //! responding to network requests, **it is likely you need to use a different
-//! [`Runtime`] for CPU intensive DataFusion plans**. This effect can be especially
-//! pronounced when running several queries concurrently.
+//! [`Runtime`] for DataFusion plans**. The [thread_pools example]
+//! has  an example of how to do so.
 //!
-//! As shown in the following figure, using the same [`Runtime`] for both CPU
-//! intensive processing and network requests can introduce significant
-//! delays in responding to those network requests. Delays in processing network
-//! requests can and does lead network flow control to throttle the available
-//! bandwidth in response.
+//! As shown below, using the same [`Runtime`] for both CPU intensive processing
+//! and network requests can introduce significant delays in responding to
+//! those network requests. Delays in processing network requests can and does
+//! lead network flow control to throttle the available bandwidth in response.
+//! This effect can be especially pronounced when running multiple queries
+//! concurrently.
 //!
 //! ```text
 //!                                                                          Legend
@@ -602,6 +618,7 @@
 //!
 //! [Tokio]:  https://tokio.rs
 //! [`Runtime`]: tokio::runtime::Runtime
+//! [thread_pools example]: https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/thread_pools.rs
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec
@@ -717,6 +734,8 @@
 pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 extern crate core;
+
+#[cfg(feature = "sql")]
 extern crate sqlparser;
 
 pub mod dataframe;
@@ -727,10 +746,15 @@ pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 
-// re-export dependencies from arrow-rs to minimize version maintenance for crate users
+// Re-export dependencies that are part of DataFusion public API (e.g. via DataFusionError)
 pub use arrow;
+pub use object_store;
+
 #[cfg(feature = "parquet")]
 pub use parquet;
+
+#[cfg(feature = "avro")]
+pub use datafusion_datasource_avro::apache_avro;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
@@ -786,6 +810,11 @@ pub mod physical_expr {
     pub use datafusion_physical_expr::*;
 }
 
+/// re-export of [`datafusion_physical_expr_adapter`] crate
+pub mod physical_expr_adapter {
+    pub use datafusion_physical_expr_adapter::*;
+}
+
 /// re-export of [`datafusion_physical_plan`] crate
 pub mod physical_plan {
     pub use datafusion_physical_plan::*;
@@ -796,6 +825,7 @@ pub use datafusion_common::assert_batches_eq;
 pub use datafusion_common::assert_batches_sorted_eq;
 
 /// re-export of [`datafusion_sql`] crate
+#[cfg(feature = "sql")]
 pub mod sql {
     pub use datafusion_sql::*;
 }
@@ -807,13 +837,6 @@ pub mod functions {
 
 /// re-export of [`datafusion_functions_nested`] crate, if "nested_expressions" feature is enabled
 pub mod functions_nested {
-    #[cfg(feature = "nested_expressions")]
-    pub use datafusion_functions_nested::*;
-}
-
-/// re-export of [`datafusion_functions_nested`] crate as [`functions_array`] for backward compatibility, if "nested_expressions" feature is enabled
-#[deprecated(since = "41.0.0", note = "use datafusion-functions-nested instead")]
-pub mod functions_array {
     #[cfg(feature = "nested_expressions")]
     pub use datafusion_functions_nested::*;
 }
@@ -884,12 +907,6 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/user-guide/configs.md",
     user_guide_configs
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/user-guide/runtime_configs.md",
-    user_guide_runtime_configs
 );
 
 #[cfg(doctest)]
@@ -1047,8 +1064,14 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/adding-udfs.md",
-    library_user_guide_adding_udfs
+    "../../../docs/source/library-user-guide/functions/adding-udfs.md",
+    library_user_guide_functions_adding_udfs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/functions/spark.md",
+    library_user_guide_functions_spark
 );
 
 #[cfg(doctest)]

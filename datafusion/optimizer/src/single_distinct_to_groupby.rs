@@ -79,7 +79,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 },
         }) = expr
         {
-            if filter.is_some() || order_by.is_some() {
+            if filter.is_some() || !order_by.is_empty() {
                 return Ok(false);
             }
             aggregate_count += 1;
@@ -200,7 +200,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
                                     None,
-                                    None,
+                                    vec![],
                                     None,
                                 )))
                                 // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
@@ -213,7 +213,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         args,
                                         false,
                                         None,
-                                        None,
+                                        vec![],
                                         None,
                                     ))
                                     .alias(&alias_str),
@@ -223,7 +223,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     vec![col(&alias_str)],
                                     false,
                                     None,
-                                    None,
+                                    vec![],
                                     None,
                                 )))
                             }
@@ -296,7 +296,7 @@ mod tests {
             vec![expr],
             true,
             None,
-            None,
+            vec![],
             None,
         ))
     }
@@ -627,7 +627,7 @@ mod tests {
             vec![col("a")],
             false,
             Some(Box::new(col("a").gt(lit(5)))),
-            None,
+            vec![],
             None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -678,7 +678,7 @@ mod tests {
             vec![col("a")],
             false,
             None,
-            Some(vec![col("a").sort(true, false)]),
+            vec![col("a").sort(true, false)],
             None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)

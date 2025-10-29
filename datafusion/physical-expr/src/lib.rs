@@ -19,7 +19,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
@@ -30,6 +30,7 @@ pub mod analysis;
 pub mod binary_map {
     pub use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
 }
+pub mod async_scalar_function;
 pub mod equivalence;
 pub mod expressions;
 pub mod intervals;
@@ -37,6 +38,7 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 mod scalar_function;
+pub mod simplifier;
 pub mod statistics;
 pub mod utils;
 pub mod window;
@@ -54,20 +56,20 @@ pub use equivalence::{
 };
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
+    add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,
     create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
-    PhysicalExprRef,
 };
 
-pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+pub use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 pub use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
-
-pub use datafusion_physical_expr_common::utils::reverse_order_bys;
+pub use simplifier::PhysicalExprSimplifier;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
 
 // For backwards compatibility

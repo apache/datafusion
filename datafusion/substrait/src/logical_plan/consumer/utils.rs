@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
-    TableReference,
+    exec_err, not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
+    DFSchemaRef,
 };
 use datafusion::logical_expr::expr::Sort;
-use datafusion::logical_expr::{Cast, Expr, ExprSchemable, LogicalPlanBuilder};
+use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::sort_field::SortDirection;
@@ -35,33 +35,6 @@ use substrait::proto::SortField;
 // However, DF uses the timezone also for some arithmetic and display purposes (see e.g.
 // https://github.com/apache/arrow-rs/blob/ee5694078c86c8201549654246900a4232d531a9/arrow-cast/src/cast/mod.rs#L1749).
 pub(super) const DEFAULT_TIMEZONE: &str = "UTC";
-
-/// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
-/// conflict with the columns from the other.
-/// Substrait doesn't currently allow specifying aliases, neither for columns nor for tables. For
-/// Substrait the names don't matter since it only refers to columns by indices, however DataFusion
-/// requires columns to be uniquely identifiable, in some places (see e.g. DFSchema::check_names).
-pub(super) fn requalify_sides_if_needed(
-    left: LogicalPlanBuilder,
-    right: LogicalPlanBuilder,
-) -> datafusion::common::Result<(LogicalPlanBuilder, LogicalPlanBuilder)> {
-    let left_cols = left.schema().columns();
-    let right_cols = right.schema().columns();
-    if left_cols.iter().any(|l| {
-        right_cols.iter().any(|r| {
-            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
-        })
-    }) {
-        // These names have no connection to the original plan, but they'll make the columns
-        // (mostly) unique.
-        Ok((
-            left.alias(TableReference::bare("left"))?,
-            right.alias(TableReference::bare("right"))?,
-        ))
-    } else {
-        Ok((left, right))
-    }
-}
 
 pub(super) fn next_struct_field_name(
     column_idx: usize,
@@ -81,98 +54,169 @@ pub(super) fn next_struct_field_name(
     }
 }
 
-pub(super) fn rename_field(
+/// Traverse through the field, renaming the provided field itself and all its inner struct fields.
+pub fn rename_field(
     field: &Field,
     dfs_names: &Vec<String>,
     unnamed_field_suffix: usize, // If Substrait doesn't provide a name, we'll use this "c{unnamed_field_suffix}"
     name_idx: &mut usize,        // Index into dfs_names
-    rename_self: bool, // Some fields (e.g. list items) don't have names in Substrait and this will be false to keep old name
 ) -> datafusion::common::Result<Field> {
-    let name = if rename_self {
-        next_struct_field_name(unnamed_field_suffix, dfs_names, name_idx)?
-    } else {
-        field.name().to_string()
-    };
-    match field.data_type() {
+    let name = next_struct_field_name(unnamed_field_suffix, dfs_names, name_idx)?;
+    rename_fields_data_type(field.clone().with_name(name), dfs_names, name_idx)
+}
+
+/// Rename the field's data type but not the field itself.
+pub fn rename_fields_data_type(
+    field: Field,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize, // Index into dfs_names
+) -> datafusion::common::Result<Field> {
+    let dt = rename_data_type(field.data_type(), dfs_names, name_idx)?;
+    Ok(field.with_data_type(dt))
+}
+
+/// Traverse through the data type (incl. lists/maps/etc), renaming all inner struct fields.
+pub fn rename_data_type(
+    data_type: &DataType,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize, // Index into dfs_names
+) -> datafusion::common::Result<DataType> {
+    match data_type {
         DataType::Struct(children) => {
             let children = children
                 .iter()
                 .enumerate()
-                .map(|(child_idx, f)| {
-                    rename_field(
-                        f.as_ref(),
-                        dfs_names,
-                        child_idx,
-                        name_idx,
-                        /*rename_self=*/ true,
-                    )
+                .map(|(field_idx, f)| {
+                    rename_field(f.as_ref(), dfs_names, field_idx, name_idx)
                 })
                 .collect::<datafusion::common::Result<_>>()?;
-            Ok(field
-                .to_owned()
-                .with_name(name)
-                .with_data_type(DataType::Struct(children)))
+            Ok(DataType::Struct(children))
         }
-        DataType::List(inner) => {
-            let renamed_inner = rename_field(
-                inner.as_ref(),
+        DataType::List(inner) => Ok(DataType::List(Arc::new(rename_fields_data_type(
+            inner.as_ref().to_owned(),
+            dfs_names,
+            name_idx,
+        )?))),
+        DataType::LargeList(inner) => Ok(DataType::LargeList(Arc::new(
+            rename_fields_data_type(inner.as_ref().to_owned(), dfs_names, name_idx)?,
+        ))),
+        DataType::ListView(inner) => Ok(DataType::ListView(Arc::new(
+            rename_fields_data_type(inner.as_ref().to_owned(), dfs_names, name_idx)?,
+        ))),
+        DataType::LargeListView(inner) => Ok(DataType::LargeListView(Arc::new(
+            rename_fields_data_type(inner.as_ref().to_owned(), dfs_names, name_idx)?,
+        ))),
+        DataType::FixedSizeList(inner, len) => Ok(DataType::FixedSizeList(
+            Arc::new(rename_fields_data_type(
+                inner.as_ref().to_owned(),
                 dfs_names,
-                0,
                 name_idx,
-                /*rename_self=*/ false,
-            )?;
-            Ok(field
-                .to_owned()
-                .with_data_type(DataType::List(FieldRef::new(renamed_inner)))
-                .with_name(name))
+            )?),
+            *len,
+        )),
+        DataType::Map(entries, sorted) => {
+            let entries_data_type = match entries.data_type() {
+                DataType::Struct(fields) => {
+                    // This should be two fields, normally "key" and "value", but not guaranteed
+                    let fields = fields
+                        .iter()
+                        .map(|f| {
+                            rename_fields_data_type(
+                                f.as_ref().to_owned(),
+                                dfs_names,
+                                name_idx,
+                            )
+                        })
+                        .collect::<datafusion::common::Result<_>>()?;
+                    Ok(DataType::Struct(fields))
+                }
+                _ => exec_err!("Expected map type to contain an inner struct type"),
+            }?;
+            Ok(DataType::Map(
+                Arc::new(
+                    entries
+                        .as_ref()
+                        .to_owned()
+                        .with_data_type(entries_data_type),
+                ),
+                *sorted,
+            ))
         }
-        DataType::LargeList(inner) => {
-            let renamed_inner = rename_field(
-                inner.as_ref(),
+        DataType::Dictionary(key_type, value_type) => {
+            // Dicts probably shouldn't contain structs, but support them just in case one does
+            Ok(DataType::Dictionary(
+                Box::new(rename_data_type(key_type, dfs_names, name_idx)?),
+                Box::new(rename_data_type(value_type, dfs_names, name_idx)?),
+            ))
+        }
+        DataType::RunEndEncoded(run_ends_field, values_field) => {
+            // At least the run_ends_field shouldn't contain names (since it should be i16/i32/i64),
+            // but we'll try renaming its datatype just in case.
+            let run_ends_field = rename_fields_data_type(
+                run_ends_field.as_ref().clone(),
                 dfs_names,
-                0,
                 name_idx,
-                /*rename_self= */ false,
             )?;
-            Ok(field
-                .to_owned()
-                .with_data_type(DataType::LargeList(FieldRef::new(renamed_inner)))
-                .with_name(name))
+            let values_field = rename_fields_data_type(
+                values_field.as_ref().clone(),
+                dfs_names,
+                name_idx,
+            )?;
+
+            Ok(DataType::RunEndEncoded(
+                Arc::new(run_ends_field),
+                Arc::new(values_field),
+            ))
         }
-        DataType::Map(inner, sorted) => match inner.data_type() {
-            DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
-                let renamed_keys = rename_field(
-                    key_and_value[0].as_ref(),
-                    dfs_names,
-                    0,
-                    name_idx,
-                    /*rename_self=*/ false,
-                )?;
-                let renamed_values = rename_field(
-                    key_and_value[1].as_ref(),
-                    dfs_names,
-                    0,
-                    name_idx,
-                    /*rename_self=*/ false,
-                )?;
-                Ok(field
-                    .to_owned()
-                    .with_data_type(DataType::Map(
-                        Arc::new(Field::new(
-                            inner.name(),
-                            DataType::Struct(Fields::from(vec![
-                                renamed_keys,
-                                renamed_values,
-                            ])),
-                            inner.is_nullable(),
-                        )),
-                        *sorted,
+        DataType::Union(fields, mode) => {
+            let fields = fields
+                .iter()
+                .map(|(i, f)| {
+                    Ok((
+                        i,
+                        Arc::new(rename_fields_data_type(
+                            f.as_ref().clone(),
+                            dfs_names,
+                            name_idx,
+                        )?),
                     ))
-                    .with_name(name))
-            }
-            _ => substrait_err!("Map fields must contain a Struct with exactly 2 fields"),
-        },
-        _ => Ok(field.to_owned().with_name(name)),
+                })
+                .collect::<datafusion::common::Result<UnionFields>>()?;
+            Ok(DataType::Union(fields, *mode))
+        }
+        // Explicitly listing the rest (which can not contain inner fields needing renaming)
+        // to ensure we're exhaustive
+        DataType::Null
+        | DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Timestamp(_, _)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(_)
+        | DataType::Interval(_)
+        | DataType::Binary
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => Ok(data_type.clone()),
     }
 }
 
@@ -190,13 +234,8 @@ pub(super) fn make_renamed_schema(
         .iter()
         .enumerate()
         .map(|(field_idx, (q, f))| {
-            let renamed_f = rename_field(
-                f.as_ref(),
-                dfs_names,
-                field_idx,
-                &mut name_idx,
-                /*rename_self=*/ true,
-            )?;
+            let renamed_f =
+                rename_field(f.as_ref(), dfs_names, field_idx, &mut name_idx)?;
             Ok((q.cloned(), renamed_f))
         })
         .collect::<datafusion::common::Result<Vec<_>>>()?
@@ -412,6 +451,21 @@ pub async fn from_substrait_sorts(
     Ok(sorts)
 }
 
+pub(crate) fn from_substrait_precision(
+    precision: i32,
+    type_name: &str,
+) -> datafusion::common::Result<TimeUnit> {
+    match precision {
+        0 => Ok(TimeUnit::Second),
+        3 => Ok(TimeUnit::Millisecond),
+        6 => Ok(TimeUnit::Microsecond),
+        9 => Ok(TimeUnit::Nanosecond),
+        precision => {
+            not_impl_err!("Unsupported Substrait precision {precision}, for {type_name}")
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::make_renamed_schema;
@@ -473,17 +527,29 @@ pub(crate) mod tests {
             ),
             (
                 Some(table_ref.clone()),
-                Arc::new(Field::new_map(
+                Arc::new(Field::new_large_list(
                     "7",
+                    Arc::new(Field::new_struct(
+                        "item",
+                        vec![Field::new("8", DataType::Int32, false)],
+                        false,
+                    )),
+                    false,
+                )),
+            ),
+            (
+                Some(table_ref.clone()),
+                Arc::new(Field::new_map(
+                    "9",
                     "entries",
                     Arc::new(Field::new_struct(
                         "keys",
-                        vec![Field::new("8", DataType::Int32, false)],
+                        vec![Field::new("10", DataType::Int32, false)],
                         false,
                     )),
                     Arc::new(Field::new_struct(
                         "values",
-                        vec![Field::new("9", DataType::Int32, false)],
+                        vec![Field::new("11", DataType::Int32, false)],
                         false,
                     )),
                     false,
@@ -504,10 +570,12 @@ pub(crate) mod tests {
             "h".to_string(),
             "i".to_string(),
             "j".to_string(),
+            "k".to_string(),
+            "l".to_string(),
         ];
         let renamed_schema = make_renamed_schema(&schema, &dfs_names)?;
 
-        assert_eq!(renamed_schema.fields().len(), 4);
+        assert_eq!(renamed_schema.fields().len(), 5);
         assert_eq!(
             *renamed_schema.field(0),
             Field::new("a", DataType::Int32, false)
@@ -541,17 +609,29 @@ pub(crate) mod tests {
         );
         assert_eq!(
             *renamed_schema.field(3),
-            Field::new_map(
+            Field::new_large_list(
                 "h",
+                Arc::new(Field::new_struct(
+                    "item",
+                    vec![Field::new("i", DataType::Int32, false)],
+                    false,
+                )),
+                false,
+            )
+        );
+        assert_eq!(
+            *renamed_schema.field(4),
+            Field::new_map(
+                "j",
                 "entries",
                 Arc::new(Field::new_struct(
                     "keys",
-                    vec![Field::new("i", DataType::Int32, false)],
+                    vec![Field::new("k", DataType::Int32, false)],
                     false,
                 )),
                 Arc::new(Field::new_struct(
                     "values",
-                    vec![Field::new("j", DataType::Int32, false)],
+                    vec![Field::new("l", DataType::Int32, false)],
                     false,
                 )),
                 false,

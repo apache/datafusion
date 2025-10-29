@@ -28,6 +28,12 @@ set -e
 # https://stackoverflow.com/questions/59895/how-do-i-get-the-directory-where-a-bash-script-is-located-from-within-the-script
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
+# Execute command and also print it, for debugging purposes
+debug_run() {
+    set -x
+    "$@"
+    set +x
+}
 
 # Set Defaults
 COMMAND=
@@ -43,58 +49,89 @@ usage() {
 Orchestrates running benchmarks against DataFusion checkouts
 
 Usage:
-$0 data [benchmark] [query]
-$0 run [benchmark]
+$0 data [benchmark]
+$0 run [benchmark] [query]
 $0 compare <branch1> <branch2>
+$0 compare_detail <branch1> <branch2>
 $0 venv
 
-**********
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Examples:
-**********
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Create the datasets for all benchmarks in $DATA_DIR
 ./bench.sh data
 
 # Run the 'tpch' benchmark on the datafusion checkout in /source/datafusion
 DATAFUSION_DIR=/source/datafusion ./bench.sh run tpch
 
-**********
-* Commands
-**********
-data:         Generates or downloads data needed for benchmarking
-run:          Runs the named benchmark
-compare:      Compares results from benchmark runs
-venv:         Creates new venv (unless already exists) and installs compare's requirements into it
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Commands
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+data:            Generates or downloads data needed for benchmarking
+run:             Runs the named benchmark
+compare:         Compares fastest results from benchmark runs
+compare_detail:  Compares minimum, average (±stddev), and maximum results from benchmark runs
+venv:            Creates new venv (unless already exists) and installs compare's requirements into it
 
-**********
-* Benchmarks
-**********
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Benchmarks
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Run all of the following benchmarks
 all(default): Data/Run/Compare for all benchmarks
+
+# TPC-H Benchmarks
 tpch:                   TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
+tpch_csv:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single csv file per table, hash join
 tpch_mem:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
 tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table, hash join
+tpch_csv10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single csv file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
-cancellation:           How long cancelling a query takes
-parquet:                Benchmark of parquet reader's filtering speed
-sort:                   Benchmark of sorting speed
-sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPCH dataset
+
+# Extended TPC-H Benchmarks
+sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
+sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
+topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
+external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
+
+# ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
-clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
+clickbench_partitioned: ClickBench queries against partitioned (100 files) parquet
+clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
-external_aggr:          External aggregation benchmark
-h2o_small:              h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
-h2o_medium:             h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
-h2o_big:                h2oai benchmark with large dataset (1e9 rows) for groupby,  default file format is csv
-h2o_small_join:         h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
-h2o_medium_join:        h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
-h2o_big_join:           h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
-h2o_small_window:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
-h2o_medium_window:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
-h2o_big_window:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+
+# H2O.ai Benchmarks (Group By, Join, Window)
+h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
+h2o_medium:                     h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
+h2o_big:                        h2oai benchmark with large dataset (1e9 rows) for groupby,  default file format is csv
+h2o_small_join:                 h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
+h2o_medium_join:                h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
+h2o_big_join:                   h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
+h2o_small_window:               Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
+h2o_medium_window:              Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
+h2o_big_window:                 Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+h2o_small_parquet:              h2oai benchmark with small dataset (1e7 rows) for groupby,  file format is parquet
+h2o_medium_parquet:             h2oai benchmark with medium dataset (1e8 rows) for groupby, file format is parquet
+h2o_big_parquet:                h2oai benchmark with large dataset (1e9 rows) for groupby,  file format is parquet
+h2o_small_join_parquet:         h2oai benchmark with small dataset (1e7 rows) for join,  file format is parquet
+h2o_medium_join_parquet:        h2oai benchmark with medium dataset (1e8 rows) for join, file format is parquet
+h2o_big_join_parquet:           h2oai benchmark with large dataset (1e9 rows) for join,  file format is parquet
+h2o_small_window_parquet:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  file format is parquet
+h2o_medium_window_parquet:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, file format is parquet
+h2o_big_window_parquet:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  file format is parquet
+
+# Join Order Benchmark (IMDB)
 imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
 
-**********
-* Supported Configuration (Environment Variables)
-**********
+# Micro-Benchmarks (specific operators and features)
+cancellation:           How long cancelling a query takes
+nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
+hj:                     Benchmark for simple hash joins, testing various join scenarios
+compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Supported Configuration (Environment Variables)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DATA_DIR            directory to store datasets
 CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
@@ -163,6 +200,7 @@ main() {
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
+                    # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
                     data_tpch "1"
@@ -183,6 +221,9 @@ main() {
                     ;;
                 clickbench_partitioned)
                     data_clickbench_partitioned
+                    ;;
+                clickbench_pushdown)
+                    data_clickbench_partitioned # same data as clickbench_partitioned
                     ;;
                 clickbench_extended)
                     data_clickbench_1
@@ -218,12 +259,59 @@ main() {
                 h2o_big_window)
                     data_h2o_join "BIG" "CSV"
                     ;;
+                h2o_small_parquet)
+                    data_h2o "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_parquet)
+                    data_h2o "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_parquet)
+                    data_h2o "BIG" "PARQUET"
+                    ;;
+                h2o_small_join_parquet)
+                    data_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_join_parquet)
+                    data_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_join_parquet)
+                    data_h2o_join "BIG" "PARQUET"
+                    ;;
+                # h2o window benchmark uses the same data as the h2o join
+                h2o_small_window_parquet)
+                    data_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_window_parquet)
+                    data_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_window_parquet)
+                    data_h2o_join "BIG" "PARQUET"
+                    ;;
                 external_aggr)
                     # same data as for tpch
                     data_tpch "1"
                     ;;
                 sort_tpch)
                     # same data as for tpch
+                    data_tpch "1"
+                    ;;
+                sort_tpch10)
+                    # same data as for tpch10
+                    data_tpch "10"
+                    ;;
+                topk_tpch)
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
+                nlj)
+                    # nlj uses range() function, no data generation needed
+                    echo "NLJ benchmark does not require data generation"
+                    ;;
+                hj)
+                    # hj uses range() function, no data generation needed
+                    echo "HJ benchmark does not require data generation"
+                    ;;
+                compile_profile)
                     data_tpch "1"
                     ;;
                 *)
@@ -235,6 +323,18 @@ main() {
         run)
             # Parse positional parameters
             BENCHMARK=${ARG2:-"${BENCHMARK}"}
+            EXTRA_ARGS=("${POSITIONAL_ARGS[@]:2}")
+            PROFILE_ARGS=()
+            QUERY=""
+            QUERY_ARG=""
+            if [ "$BENCHMARK" = "compile_profile" ]; then
+                PROFILE_ARGS=("${EXTRA_ARGS[@]}")
+            else
+                QUERY=${EXTRA_ARGS[0]}
+                if [ -n "$QUERY" ]; then
+                    QUERY_ARG="--query ${QUERY}"
+                fi
+            fi
             BRANCH_NAME=$(cd "${DATAFUSION_DIR}" && git rev-parse --abbrev-ref HEAD)
             BRANCH_NAME=${BRANCH_NAME//\//_} # mind blowing syntax to replace / with _
             RESULTS_NAME=${RESULTS_NAME:-"${BRANCH_NAME}"}
@@ -244,6 +344,11 @@ main() {
             echo "DataFusion Benchmark Script"
             echo "COMMAND: ${COMMAND}"
             echo "BENCHMARK: ${BENCHMARK}"
+            if [ "$BENCHMARK" = "compile_profile" ]; then
+                echo "PROFILES: ${PROFILE_ARGS[*]:-All}"
+            else
+                echo "QUERY: ${QUERY:-All}"
+            fi
             echo "DATAFUSION_DIR: ${DATAFUSION_DIR}"
             echo "BRANCH_NAME: ${BRANCH_NAME}"
             echo "DATA_DIR: ${DATA_DIR}"
@@ -258,15 +363,16 @@ main() {
             mkdir -p "${DATA_DIR}"
             case "$BENCHMARK" in
                 all)
-                    run_tpch "1"
+                    run_tpch "1" "parquet"
+                    run_tpch "1" "csv"
                     run_tpch_mem "1"
-                    run_tpch "10"
+                    run_tpch "10" "parquet"
+                    run_tpch "10" "csv"
                     run_tpch_mem "10"
                     run_cancellation
-                    run_parquet
-                    run_sort
                     run_clickbench_1
                     run_clickbench_partitioned
+                    run_clickbench_pushdown
                     run_clickbench_extended
                     run_h2o "SMALL" "PARQUET" "groupby"
                     run_h2o "MEDIUM" "PARQUET" "groupby"
@@ -276,15 +382,23 @@ main() {
                     run_h2o_join "BIG" "PARQUET" "join"
                     run_imdb
                     run_external_aggr
+                    run_nlj
+                    run_hj
                     ;;
                 tpch)
-                    run_tpch "1"
+                    run_tpch "1" "parquet"
+                    ;;
+                tpch_csv)
+                    run_tpch "1" "csv"
                     ;;
                 tpch_mem)
                     run_tpch_mem "1"
                     ;;
                 tpch10)
-                    run_tpch "10"
+                    run_tpch "10" "parquet"
+                    ;;
+                tpch_csv10)
+                    run_tpch "10" "csv"
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
@@ -292,17 +406,14 @@ main() {
                 cancellation)
                     run_cancellation
                     ;;
-                parquet)
-                    run_parquet
-                    ;;
-                sort)
-                    run_sort
-                    ;;
                 clickbench_1)
                     run_clickbench_1
                     ;;
                 clickbench_partitioned)
                     run_clickbench_partitioned
+                    ;;
+                clickbench_pushdown)
+                    run_clickbench_pushdown
                     ;;
                 clickbench_extended)
                     run_clickbench_extended
@@ -337,11 +448,54 @@ main() {
                 h2o_big_window) 
                     run_h2o_window "BIG" "CSV" "window"
                     ;;
+                h2o_small_parquet)
+                    run_h2o "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_parquet)
+                    run_h2o "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_parquet)
+                    run_h2o "BIG" "PARQUET"
+                    ;;
+                h2o_small_join_parquet)
+                    run_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_join_parquet)
+                    run_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_join_parquet)
+                    run_h2o_join "BIG" "PARQUET"
+                    ;;
+                # h2o window benchmark uses the same data as the h2o join
+                h2o_small_window_parquet)
+                    run_h2o_window "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_window_parquet)
+                    run_h2o_window "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_window_parquet)
+                    run_h2o_window "BIG" "PARQUET"
+                    ;;
                 external_aggr)
                     run_external_aggr
                     ;;
                 sort_tpch)
-                    run_sort_tpch
+                    run_sort_tpch "1"
+                    ;;
+                sort_tpch10)
+                    run_sort_tpch "10"
+                    ;;
+                topk_tpch)
+                    run_topk_tpch
+                    ;;
+                nlj)
+                    run_nlj
+                    ;;
+                hj)
+                    run_hj
+                    ;;
+                compile_profile)
+                    run_compile_profile "${PROFILE_ARGS[@]}"
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -353,6 +507,9 @@ main() {
             ;;
         compare)
             compare_benchmarks "$ARG2" "$ARG3"
+            ;;
+        compare_detail)
+            compare_benchmarks "$ARG2" "$ARG3" "--detailed"
             ;;
         venv)
             setup_venv
@@ -419,6 +576,17 @@ data_tpch() {
         $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
         popd > /dev/null
     fi
+
+    # Create 'csv' files from tbl
+    FILE="${TPCH_DIR}/csv/supplier"
+    if test -d "${FILE}"; then
+        echo " csv files exist ($FILE exists)."
+    else
+        echo " creating csv files using benchmark binary ..."
+        pushd "${SCRIPT_DIR}" > /dev/null
+        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}/csv" --format csv
+        popd > /dev/null
+    fi
 }
 
 # Runs the tpch benchmark
@@ -433,12 +601,9 @@ run_tpch() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
-    # Optional query filter to run specific query
-    QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
-    # debug the target command
-    set -x
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" $QUERY
-    set +x
+
+    FORMAT=$2
+    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the tpch in memory
@@ -453,13 +618,22 @@ run_tpch_mem() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
-    # Optional query filter to run specific query
-    QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
-    # debug the target command
-    set -x
     # -m means in memory
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" $QUERY
-    set +x
+    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the compile profile benchmark helper
+run_compile_profile() {
+    local profiles=("$@")
+    local runner="${SCRIPT_DIR}/compile_profile.py"
+    local data_path="${DATA_DIR}/tpch_sf1"
+
+    echo "Running compile profile benchmark..."
+    local cmd=(python3 "${runner}" --data "${data_path}")
+    if [ ${#profiles[@]} -gt 0 ]; then
+        cmd+=(--profiles "${profiles[@]}")
+    fi
+    debug_run "${cmd[@]}"
 }
 
 # Runs the cancellation benchmark
@@ -467,23 +641,7 @@ run_cancellation() {
     RESULTS_FILE="${RESULTS_DIR}/cancellation.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running cancellation benchmark..."
-    $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
-}
-
-# Runs the parquet filter benchmark
-run_parquet() {
-    RESULTS_FILE="${RESULTS_DIR}/parquet.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running parquet filter benchmark..."
-    $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
-}
-
-# Runs the sort benchmark
-run_sort() {
-    RESULTS_FILE="${RESULTS_DIR}/sort.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running sort benchmark..."
-    $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
 }
 
 
@@ -537,23 +695,33 @@ run_clickbench_1() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
- # Runs the clickbench benchmark with the partitioned parquet files
+ # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
 run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
+
+
+ # Runs the clickbench benchmark with the partitioned parquet files and filter_pushdown enabled
+run_clickbench_pushdown() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_pushdown.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
 
 # Runs the clickbench "extended" benchmark with a single large parquet file
 run_clickbench_extended() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
@@ -668,7 +836,7 @@ run_imdb() {
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 data_h2o() {
@@ -859,11 +1027,12 @@ run_h2o() {
     QUERY_FILE="${SCRIPT_DIR}/queries/h2o/${RUN_Type}.sql"
 
     # Run the benchmark using the dynamically constructed file path and query file
-    $CARGO_COMMAND --bin dfbench -- h2o \
+    debug_run $CARGO_COMMAND --bin dfbench -- h2o \
         --iterations 3 \
         --path "${H2O_DIR}/${FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
-        -o "${RESULTS_FILE}"
+        -o "${RESULTS_FILE}" \
+         ${QUERY_ARG}
 }
 
 # Utility function to run h2o join/window benchmark
@@ -910,11 +1079,12 @@ h2o_runner() {
     # Set the query file name based on the RUN_Type
     QUERY_FILE="${SCRIPT_DIR}/queries/h2o/${RUN_Type}.sql"
 
-    $CARGO_COMMAND --bin dfbench -- h2o \
+    debug_run $CARGO_COMMAND --bin dfbench -- h2o \
         --iterations 3 \
         --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
-        -o "${RESULTS_FILE}"
+        -o "${RESULTS_FILE}" \
+         ${QUERY_ARG}
 }
 
 # Runners for h2o join benchmark
@@ -940,17 +1110,48 @@ run_external_aggr() {
     # number-of-partitions), and by default `--partitions` is set to number of
     # CPU cores, we set a constant number of partitions to prevent this
     # benchmark to fail on some machines.
-    $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the sort integration benchmark
 run_sort_tpch() {
-    TPCH_DIR="${DATA_DIR}/tpch_sf1"
-    RESULTS_FILE="${RESULTS_DIR}/sort_tpch.json"
+    SCALE_FACTOR=$1
+    if [ -z "$SCALE_FACTOR" ] ; then
+        echo "Internal error: Scale factor not specified"
+        exit 1
+    fi
+    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+    RESULTS_FILE="${RESULTS_DIR}/sort_tpch${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort tpch benchmark..."
 
-    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the sort tpch integration benchmark with limit 100 (topk)
+run_topk_tpch() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/run_topk_tpch.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running topk tpch benchmark..."
+
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG}
+}
+
+# Runs the nlj benchmark
+run_nlj() {
+    RESULTS_FILE="${RESULTS_DIR}/nlj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running nlj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the hj benchmark
+run_hj() {
+    RESULTS_FILE="${RESULTS_DIR}/hj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running hj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 
@@ -958,6 +1159,8 @@ compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"
     BRANCH1="$1"
     BRANCH2="$2"
+    OPTS="$3"
+
     if [ -z "$BRANCH1" ] ; then
         echo "<branch1> not specified. Available branches:"
         ls -1 "${BASE_RESULTS_DIR}"
@@ -978,7 +1181,7 @@ compare_benchmarks() {
             echo "--------------------"
             echo "Benchmark ${BENCH}"
             echo "--------------------"
-            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
         else
             echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
         fi

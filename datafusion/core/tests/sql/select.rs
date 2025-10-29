@@ -17,6 +17,7 @@
 
 use super::*;
 use datafusion_common::ScalarValue;
+use insta::assert_snapshot;
 
 #[tokio::test]
 async fn test_list_query_parameters() -> Result<()> {
@@ -217,10 +218,12 @@ async fn test_parameter_invalid_types() -> Result<()> {
         .with_param_values(vec![ScalarValue::from(4_i32)])?
         .collect()
         .await;
-    assert_eq!(
-        results.unwrap_err().strip_backtrace(),
-        "type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) = Int32"
-);
+    assert_snapshot!(results.unwrap_err().strip_backtrace(),
+        @r#"
+    type_coercion
+    caused by
+    Error during planning: Cannot infer common argument type for comparison operation List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) = Int32
+    "#);
     Ok(())
 }
 
@@ -342,4 +345,29 @@ async fn test_version_function() {
     assert_eq!(version.len(), 1);
 
     assert_eq!(version.value(0), expected_version);
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/17513
+/// See https://github.com/apache/datafusion/pull/17520
+#[tokio::test]
+async fn test_select_no_projection() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    // `create_ctx_with_partition` creates 10 rows per partition and we chose 1 partition
+    let ctx = create_ctx_with_partition(&tmp_dir, 1).await?;
+
+    let results = ctx.sql("SELECT FROM test").await?.collect().await?;
+    // We should get all of the rows, just without any columns
+    let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_rows, 10);
+    // Check that none of the batches have any columns
+    for batch in &results {
+        assert_eq!(batch.num_columns(), 0);
+    }
+    // Sanity check the output, should be just empty columns
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    ++
+    ++
+    ++
+    ");
+    Ok(())
 }

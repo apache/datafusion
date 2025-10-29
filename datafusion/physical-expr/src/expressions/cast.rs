@@ -97,8 +97,10 @@ impl CastExpr {
     pub fn cast_options(&self) -> &CastOptions<'static> {
         &self.cast_options
     }
-    pub fn is_bigger_cast(&self, src: DataType) -> bool {
-        if src == self.cast_type {
+
+    /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
+    pub fn is_bigger_cast(&self, src: &DataType) -> bool {
+        if self.cast_type.eq(src) {
             return true;
         }
         matches!(
@@ -230,7 +232,7 @@ pub fn cast_with_options(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
-        not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")
+        not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
     }
 }
 
@@ -260,8 +262,8 @@ mod tests {
         },
         datatypes::*,
     };
-    use datafusion_common::assert_contains;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use insta::assert_snapshot;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -436,11 +438,8 @@ mod tests {
         )?;
         let expression =
             cast_with_options(col("a", &schema)?, &schema, Decimal128(6, 2), None)?;
-        let e = expression.evaluate(&batch).unwrap_err(); // panics on OK
-        assert_contains!(
-            e.to_string(),
-            "Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"
-        );
+        let e = expression.evaluate(&batch).unwrap_err().strip_backtrace(); // panics on OK
+        assert_snapshot!(e, @"Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999");
 
         let expression_safe = cast_with_options(
             col("a", &schema)?,

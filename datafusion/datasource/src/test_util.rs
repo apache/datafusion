@@ -17,7 +17,7 @@
 
 use crate::{
     file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
-    impl_schema_adapter_methods, schema_adapter::SchemaAdapterFactory,
+    schema_adapter::SchemaAdapterFactory,
 };
 
 use std::sync::Arc;
@@ -34,6 +34,14 @@ pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
+}
+
+impl MockSource {
+    pub fn with_filter(mut self, filter: Arc<dyn PhysicalExpr>) -> Self {
+        self.filter = Some(filter);
+        self
+    }
 }
 
 impl FileSource for MockSource {
@@ -48,6 +56,10 @@ impl FileSource for MockSource {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
@@ -84,7 +96,19 @@ impl FileSource for MockSource {
         "mock"
     }
 
-    impl_schema_adapter_methods!();
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 /// Create a column expression

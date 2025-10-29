@@ -171,11 +171,11 @@ fn is_binary_eq(binary_expr: &BinaryExpr) -> bool {
 
 /// Return true if the expression is a literal or column reference
 fn is_lit_or_col(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+    matches!(expr, Expr::Column(_) | Expr::Literal(_, _))
 }
 
 /// A simple user defined filter function
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct MyEq {
     signature: Signature,
 }

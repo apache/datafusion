@@ -37,7 +37,7 @@ The `now()` return value is determined at query time and will return the same ti
 "#,
     syntax_example = "now()"
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NowFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -108,6 +108,7 @@ impl ScalarUDFImpl for NowFunc {
             .timestamp_nanos_opt();
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
+            None,
         )))
     }
 

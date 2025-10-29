@@ -18,8 +18,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{get_imdb_table_schema, get_query_sql, IMDB_TABLES};
-use crate::util::{BenchmarkRun, CommonOpt};
+use super::{
+    get_imdb_table_schema, get_query_sql, IMDB_QUERY_END_ID, IMDB_QUERY_START_ID,
+    IMDB_TABLES,
+};
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -51,7 +54,7 @@ type BoolDefaultTrue = bool;
 /// [2] and [3].
 ///
 /// [1]: https://www.vldb.org/pvldb/vol9/p204-leis.pdf
-/// [2]: http://homepages.cwi.nl/~boncz/job/imdb.tgz
+/// [2]: https://event.cwi.nl/da/job/imdb.tgz
 /// [3]: https://db.in.tum.de/~leis/qo/job.tgz
 
 #[derive(Debug, StructOpt, Clone)]
@@ -59,7 +62,7 @@ type BoolDefaultTrue = bool;
 pub struct RunOpt {
     /// Query number. If not specified, runs all queries
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Common options
     #[structopt(flatten)]
@@ -90,9 +93,6 @@ pub struct RunOpt {
     #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
 }
-
-const IMDB_QUERY_START_ID: usize = 1;
-const IMDB_QUERY_END_ID: usize = 113;
 
 fn map_query_id_to_str(query_id: usize) -> &'static str {
     match query_id {
@@ -341,6 +341,9 @@ impl RunOpt {
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
 
+        // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
+        print_memory_stats();
+
         Ok(query_results)
     }
 
@@ -475,11 +478,6 @@ impl RunOpt {
     }
 }
 
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
-}
-
 #[cfg(test)]
 // Only run with "ci" mode when we have the data
 #[cfg(feature = "ci")]
@@ -572,7 +570,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.create_physical_plan().await?;
             let bytes = physical_plan_to_bytes(plan.clone())?;
-            let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", displayable(plan.as_ref()).indent(false));
             let plan2_formatted =
                 format!("{}", displayable(plan2.as_ref()).indent(false));

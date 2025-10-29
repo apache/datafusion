@@ -43,7 +43,7 @@ use crate::physical_plan::{
 use crate::prelude::SessionContext;
 use std::any::Any;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
@@ -51,8 +51,9 @@ use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
+    exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
+    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
+    TableReference, UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -61,7 +62,7 @@ use datafusion_expr::{
     expr::{Alias, ScalarFunction},
     is_null, lit,
     utils::COUNT_STAR_EXPANSION,
-    SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
+    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
@@ -70,7 +71,6 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_sql::TableReference;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -267,6 +267,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn parse_sql_expr(&self, sql: &str) -> Result<Expr> {
         let df_schema = self.schema();
 
@@ -333,6 +334,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn select_exprs(self, exprs: &[&str]) -> Result<DataFrame> {
         let expr_list = exprs
             .iter()
@@ -375,15 +377,12 @@ impl DataFrame {
         let expr_list: Vec<SelectExpr> =
             expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
 
-        let expressions = expr_list
-            .iter()
-            .filter_map(|e| match e {
-                SelectExpr::Expression(expr) => Some(expr.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let expressions = expr_list.iter().filter_map(|e| match e {
+            SelectExpr::Expression(expr) => Some(expr),
+            _ => None,
+        });
 
-        let window_func_exprs = find_window_exprs(&expressions);
+        let window_func_exprs = find_window_exprs(expressions);
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
@@ -1337,7 +1336,10 @@ impl DataFrame {
     /// ```
     pub async fn count(self) -> Result<usize> {
         let rows = self
-            .aggregate(vec![], vec![count(Expr::Literal(COUNT_STAR_EXPANSION))])?
+            .aggregate(
+                vec![],
+                vec![count(Expr::Literal(COUNT_STAR_EXPANSION, None))],
+            )?
             .collect()
             .await?;
         let len = *rows
@@ -1345,9 +1347,9 @@ impl DataFrame {
             .and_then(|r| r.columns().first())
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
             .and_then(|a| a.values().first())
-            .ok_or(DataFusionError::Internal(
-                "Unexpected output when collecting for count()".to_string(),
-            ))? as usize;
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unexpected output when collecting for count()")
+            })? as usize;
         Ok(len)
     }
 
@@ -1602,6 +1604,8 @@ impl DataFrame {
     /// Return a DataFrame with the explanation of its plan so far.
     ///
     /// if `analyze` is specified, runs the plan and reports metrics
+    /// if `verbose` is true, prints out additional details.
+    /// The default format is Indent format.
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -1615,11 +1619,38 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        // Set the default format to Indent to keep the previous behavior
+        let opts = ExplainOption::default()
+            .with_verbose(verbose)
+            .with_analyze(analyze);
+        self.explain_with_options(opts)
+    }
+
+    /// Return a DataFrame with the explanation of its plan so far.
+    ///
+    /// `opt` is used to specify the options for the explain operation.
+    /// Details of the options can be found in [`ExplainOption`].
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// use datafusion_expr::{Explain, ExplainOption};
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let batches = df.limit(0, Some(100))?.explain_with_options(ExplainOption::default().with_verbose(false).with_analyze(false))?.collect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn explain_with_options(
+        self,
+        explain_option: ExplainOption,
+    ) -> Result<DataFrame> {
         if matches!(self.plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
         let plan = LogicalPlanBuilder::from(self.plan)
-            .explain(verbose, analyze)?
+            .explain_option_format(explain_option)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -1681,6 +1712,40 @@ impl DataFrame {
         })
     }
 
+    /// Calculate the distinct intersection of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// let df = df.intersect_distinct(d2)?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn intersect_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let left_plan = self.plan;
+        let right_plan = dataframe.plan;
+        let plan = LogicalPlanBuilder::intersect(left_plan, right_plan, false)?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
     /// Calculate the exception of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
     ///
     /// ```
@@ -1710,6 +1775,42 @@ impl DataFrame {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
         let plan = LogicalPlanBuilder::except(left_plan, right_plan, true)?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Calculate the distinct exception of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// let d2 = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let result = df.except_distinct(d2)?;
+    /// // those columns are not in example.csv, but in example_long.csv
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 7 | 8 | 9 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &result.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn except_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let left_plan = self.plan;
+        let right_plan = dataframe.plan;
+        let plan = LogicalPlanBuilder::except(left_plan, right_plan, false)?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -1920,33 +2021,40 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(std::slice::from_ref(&expr));
+        let window_func_exprs = find_window_exprs([&expr]);
 
-        let (window_fn_str, plan) = if window_func_exprs.is_empty() {
-            (None, self.plan)
+        let original_names: HashSet<String> = self
+            .plan
+            .schema()
+            .iter()
+            .map(|(_, f)| f.name().clone())
+            .collect();
+
+        // Maybe build window plan
+        let plan = if window_func_exprs.is_empty() {
+            self.plan
         } else {
-            (
-                Some(window_func_exprs[0].to_string()),
-                LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?,
-            )
+            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
 
-        let mut col_exists = false;
         let new_column = expr.alias(name);
+        let mut col_exists = false;
+
         let mut fields: Vec<(Expr, bool)> = plan
             .schema()
             .iter()
             .filter_map(|(qualifier, field)| {
+                // Skip new fields introduced by window_plan
+                if !original_names.contains(field.name()) {
+                    return None;
+                }
+
                 if field.name() == name {
                     col_exists = true;
                     Some((new_column.clone(), true))
                 } else {
                     let e = col(Column::from((qualifier, field)));
-                    window_fn_str
-                        .as_ref()
-                        .filter(|s| *s == &e.to_string())
-                        .is_none()
-                        .then_some((e, self.projection_requires_validation))
+                    Some((e, self.projection_requires_validation))
                 }
             })
             .collect();
@@ -2007,10 +2115,11 @@ impl DataFrame {
             match self.plan.schema().qualified_field_from_column(&old_column) {
                 Ok(qualifier_and_field) => qualifier_and_field,
                 // no-op if field not found
-                Err(DataFusionError::SchemaError(
-                    SchemaError::FieldNotFound { .. },
-                    _,
-                )) => return Ok(self),
+                Err(DataFusionError::SchemaError(e, _))
+                    if matches!(*e, SchemaError::FieldNotFound { .. }) =>
+                {
+                    return Ok(self);
+                }
                 Err(err) => return Err(err),
             };
         let projection = self
@@ -2325,7 +2434,7 @@ impl TableProvider for DataFrameTableProvider {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.plan))
     }
 
@@ -2338,8 +2447,7 @@ impl TableProvider for DataFrameTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        let schema: Schema = self.plan.schema().as_ref().into();
-        Arc::new(schema)
+        Arc::clone(self.plan.schema().inner())
     }
 
     fn table_type(&self) -> TableType {

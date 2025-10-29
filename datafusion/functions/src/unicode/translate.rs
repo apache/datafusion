@@ -52,7 +52,7 @@ use datafusion_macros::user_doc;
         description = "Translation characters. Translation characters replace only characters at the same position in the **chars** string."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TranslateFunc {
     signature: Signature,
 }

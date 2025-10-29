@@ -23,6 +23,9 @@ Like other areas of DataFusion, you extend DataFusion's functionality by impleme
 
 This section describes how to create a [`TableProvider`] and how to configure DataFusion to use it for reading.
 
+For details on how table constraints such as primary keys or unique
+constraints are handled, see [Table Constraint Enforcement](table-constraints.md).
+
 ## Table Provider and Scan
 
 The [`TableProvider::scan`] method reads data from the table and is likely the most important. It returns an [`ExecutionPlan`] that DataFusion will use to read the actual data during execution of the query. The [`TableProvider::insert_into`] method is used to `INSERT` data into the table.

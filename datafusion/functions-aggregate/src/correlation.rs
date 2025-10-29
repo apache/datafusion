@@ -26,7 +26,7 @@ use arrow::array::{
     downcast_array, Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder,
     UInt64Array,
 };
-use arrow::compute::{and, filter, is_not_null, kernels::cast};
+use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
 use arrow::{
     array::ArrayRef,
@@ -38,10 +38,9 @@ use log::debug;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
-    type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
@@ -71,7 +70,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression1", prefix = "First"),
     standard_argument(name = "expression2", prefix = "Second")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Correlation {
     signature: Signature,
 }
@@ -83,10 +82,13 @@ impl Default for Correlation {
 }
 
 impl Correlation {
-    /// Create a new COVAR_POP aggregate function
+    /// Create a new CORR aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::exact(
+                vec![DataType::Float64, DataType::Float64],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -105,11 +107,7 @@ impl AggregateUDFImpl for Correlation {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Correlation requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -196,6 +194,11 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        let n = self.covar.get_count();
+        if n < 2 {
+            return Ok(ScalarValue::Float64(None));
+        }
+
         let covar = self.covar.evaluate()?;
         let stddev1 = self.stddev1.evaluate()?;
         let stddev2 = self.stddev2.evaluate()?;
@@ -204,7 +207,7 @@ impl Accumulator for CorrelationAccumulator {
             if let ScalarValue::Float64(Some(s1)) = stddev1 {
                 if let ScalarValue::Float64(Some(s2)) = stddev2 {
                     if s1 == 0_f64 || s2 == 0_f64 {
-                        return Ok(ScalarValue::Float64(Some(0_f64)));
+                        return Ok(ScalarValue::Float64(None));
                     } else {
                         return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
                     }
@@ -375,10 +378,8 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         self.sum_xx.resize(total_num_groups, 0.0);
         self.sum_yy.resize(total_num_groups, 0.0);
 
-        let array_x = &cast(&values[0], &DataType::Float64)?;
-        let array_x = downcast_array::<Float64Array>(array_x);
-        let array_y = &cast(&values[1], &DataType::Float64)?;
-        let array_y = downcast_array::<Float64Array>(array_y);
+        let array_x = downcast_array::<Float64Array>(&values[0]);
+        let array_y = downcast_array::<Float64Array>(&values[1]);
 
         accumulate_multiple(
             group_indices,
@@ -463,11 +464,8 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         //   the `denominator` state is 0. In these cases, the final aggregation
         //   result should be `Null` (according to PostgreSQL's behavior).
         //
-        // TODO: Old datafusion implementation returns 0.0 for these invalid cases.
-        // Update this to match PostgreSQL's behavior.
         for i in 0..n {
             if self.count[i] < 2 {
-                // TODO: Evaluate as `Null` (see notes above)
                 values.push(0.0);
                 nulls.append_null();
                 continue;
@@ -488,7 +486,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
                 ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
 
             if denominator == 0.0 {
-                // TODO: Evaluate as `Null` (see notes above)
                 values.push(0.0);
                 nulls.append_null();
             } else {

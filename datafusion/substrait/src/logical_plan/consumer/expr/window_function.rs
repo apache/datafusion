@@ -94,12 +94,12 @@ pub async fn from_window_function(
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
     let args = if fun.name() == "count" && window.arguments.is_empty() {
-        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+        vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         from_substrait_func_args(consumer, &window.arguments, input_schema).await?
     };
 
-    Ok(Expr::WindowFunction(expr::WindowFunction {
+    Ok(Expr::from(expr::WindowFunction {
         fun,
         params: WindowFunctionParams {
             args,
@@ -111,7 +111,9 @@ pub async fn from_window_function(
             .await?,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: None,
+            distinct: false,
         },
     }))
 }

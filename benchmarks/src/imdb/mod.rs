@@ -54,6 +54,9 @@ pub const IMDB_TABLES: &[&str] = &[
     "person_info",
 ];
 
+pub const IMDB_QUERY_START_ID: usize = 1;
+pub const IMDB_QUERY_END_ID: usize = 113;
+
 /// Get the schema for the IMDB dataset tables
 /// see benchmarks/data/imdb/schematext.sql
 pub fn get_imdb_table_schema(table: &str) -> Schema {

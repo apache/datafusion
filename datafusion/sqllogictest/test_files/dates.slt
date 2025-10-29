@@ -108,6 +108,17 @@ SELECT '2023-01-01T00:00:00'::timestamp - DATE '2021-01-01';
 ----
 730 days 0 hours 0 mins 0.000000000 secs
 
+# NULL with DATE arithmetic should yield NULL
+query ?
+SELECT NULL - DATE '1984-02-28';
+----
+NULL
+
+query ?
+SELECT DATE '1984-02-28' - NULL
+----
+NULL
+
 # to_date_test
 statement ok
 create table to_date_t1(ts bigint) as VALUES

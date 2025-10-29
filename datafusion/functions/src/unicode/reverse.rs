@@ -44,7 +44,7 @@ use DataType::{LargeUtf8, Utf8, Utf8View};
 ```"#,
     standard_argument(name = "str", prefix = "String")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ReverseFunc {
     signature: Signature,
 }

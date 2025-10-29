@@ -62,7 +62,7 @@ If count is negative, everything to the right of the final delimiter (counting f
         description = "The number of times to search for the delimiter. Can be either a positive or negative number."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SubstrIndexFunc {
     signature: Signature,
     aliases: Vec<String>,

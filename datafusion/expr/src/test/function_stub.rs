@@ -23,6 +23,7 @@ use std::any::Any;
 
 use arrow::datatypes::{
     DataType, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
 };
 
 use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, Result};
@@ -60,7 +61,7 @@ pub fn sum(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -73,7 +74,7 @@ pub fn count(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -86,13 +87,13 @@ pub fn avg(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Stub `sum` used for optimizer testing
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Sum {
     signature: Signature,
 }
@@ -135,13 +136,14 @@ impl AggregateUDFImpl for Sum {
                 DataType::Dictionary(_, v) => coerced_type(v),
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)
                 // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
-                    Ok(data_type.clone())
-                }
+                DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => Ok(data_type.clone()),
                 dt if dt.is_signed_integer() => Ok(DataType::Int64),
                 dt if dt.is_unsigned_integer() => Ok(DataType::UInt64),
                 dt if dt.is_floating() => Ok(DataType::Float64),
-                _ => exec_err!("Sum not supported for {}", data_type),
+                _ => exec_err!("Sum not supported for {data_type}"),
             }
         }
 
@@ -153,6 +155,18 @@ impl AggregateUDFImpl for Sum {
             DataType::Int64 => Ok(DataType::Int64),
             DataType::UInt64 => Ok(DataType::UInt64),
             DataType::Float64 => Ok(DataType::Float64),
+            DataType::Decimal32(precision, scale) => {
+                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
+                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+                let new_precision = DECIMAL32_MAX_PRECISION.min(*precision + 10);
+                Ok(DataType::Decimal32(new_precision, *scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
+                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+                let new_precision = DECIMAL64_MAX_PRECISION.min(*precision + 10);
+                Ok(DataType::Decimal64(new_precision, *scale))
+            }
             DataType::Decimal128(precision, scale) => {
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)
                 // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
@@ -179,10 +193,6 @@ impl AggregateUDFImpl for Sum {
         unreachable!("stub should not have state_fields()")
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         false
     }
@@ -204,6 +214,7 @@ impl AggregateUDFImpl for Sum {
 }
 
 /// Testing stub implementation of COUNT aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Count {
     signature: Signature,
     aliases: Vec<String>,
@@ -286,12 +297,13 @@ pub fn min(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Testing stub implementation of Min aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Min {
     signature: Signature,
 }
@@ -344,10 +356,6 @@ impl AggregateUDFImpl for Min {
         not_impl_err!("no impl for stub")
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn create_groups_accumulator(
         &self,
         _args: AccumulatorArgs,
@@ -371,12 +379,13 @@ pub fn max(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Testing stub implementation of MAX aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Max {
     signature: Signature,
 }
@@ -429,10 +438,6 @@ impl AggregateUDFImpl for Max {
         not_impl_err!("no impl for stub")
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn create_groups_accumulator(
         &self,
         _args: AccumulatorArgs,
@@ -449,7 +454,7 @@ impl AggregateUDFImpl for Max {
 }
 
 /// Testing stub implementation of avg aggregate
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Avg {
     signature: Signature,
     aliases: Vec<String>,
@@ -494,6 +499,7 @@ impl AggregateUDFImpl for Avg {
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }

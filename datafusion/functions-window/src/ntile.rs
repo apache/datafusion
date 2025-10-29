@@ -23,13 +23,15 @@ use crate::utils::{
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::{
-    Documentation, Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, Expr, LimitEffect, PartitionEvaluator, Signature, Volatility,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
@@ -53,15 +55,14 @@ pub fn ntile(arg: Expr) -> Expr {
         name = "expression",
         description = "An integer describing the number groups the partition should be split into"
     ),
-    sql_example = r#"```sql
-    --Example usage of the ntile window function:
-    SELECT employee_id,
-           salary,
-           ntile(4) OVER (ORDER BY salary DESC) AS quartile
-    FROM employees;
-```
-
+    sql_example = r#"
 ```sql
+-- Example usage of the ntile window function:
+SELECT employee_id,
+    salary,
+    ntile(4) OVER (ORDER BY salary DESC) AS quartile
+FROM employees;
+
 +-------------+--------+----------+
 | employee_id | salary | quartile |
 +-------------+--------+----------+
@@ -74,9 +75,10 @@ pub fn ntile(arg: Expr) -> Expr {
 | 7           | 40000  | 4        |
 | 8           | 30000  | 4        |
 +-------------+--------+----------+
-```"#
+```
+"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Ntile {
     signature: Signature,
 }
@@ -129,9 +131,7 @@ impl WindowUDFImpl for Ntile {
         let scalar_n =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 0)?
                 .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "NTILE requires a positive integer".to_string(),
-                    )
+                    exec_datafusion_err!("NTILE requires a positive integer")
                 })?;
 
         if scalar_n.is_null() {
@@ -157,6 +157,10 @@ impl WindowUDFImpl for Ntile {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 

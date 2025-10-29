@@ -18,17 +18,18 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
+use crate::datasource::physical_plan::{FileOpenFuture, FileOpener};
 use crate::error::Result;
+use datafusion_datasource::as_file_source;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::{as_file_source, impl_schema_adapter_methods};
 
 use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
-use datafusion_common::Statistics;
+use datafusion_common::{exec_datafusion_err, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::PartitionedFile;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use futures::StreamExt;
@@ -99,7 +100,19 @@ impl FileSource for ArrowSource {
         "arrow"
     }
 
-    impl_schema_adapter_methods!();
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 /// The struct arrow that implements `[FileOpener]` trait
@@ -109,21 +122,25 @@ pub struct ArrowOpener {
 }
 
 impl FileOpener for ArrowOpener {
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
         Ok(Box::pin(async move {
-            let range = file_meta.range.clone();
+            let range = partitioned_file.range.clone();
             match range {
                 None => {
-                    let r = object_store.get(file_meta.location()).await?;
+                    let r = object_store
+                        .get(&partitioned_file.object_meta.location)
+                        .await?;
                     match r.payload {
                         #[cfg(not(target_arch = "wasm32"))]
                         GetResultPayload::File(file, _) => {
                             let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                                 file, projection,
                             )?;
-                            Ok(futures::stream::iter(arrow_reader).boxed())
+                            Ok(futures::stream::iter(arrow_reader)
+                                .map(|r| r.map_err(Into::into))
+                                .boxed())
                         }
                         GetResultPayload::Stream(_) => {
                             let bytes = r.bytes().await?;
@@ -131,7 +148,9 @@ impl FileOpener for ArrowOpener {
                             let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                                 cursor, projection,
                             )?;
-                            Ok(futures::stream::iter(arrow_reader).boxed())
+                            Ok(futures::stream::iter(arrow_reader)
+                                .map(|r| r.map_err(Into::into))
+                                .boxed())
                         }
                     }
                 }
@@ -143,7 +162,7 @@ impl FileOpener for ArrowOpener {
                         ..Default::default()
                     };
                     let get_result = object_store
-                        .get_opts(file_meta.location(), get_option)
+                        .get_opts(&partitioned_file.object_meta.location, get_option)
                         .await?;
                     let footer_len_buf = get_result.bytes().await?;
                     let footer_len = arrow_ipc::reader::read_footer_length(
@@ -155,16 +174,14 @@ impl FileOpener for ArrowOpener {
                         ..Default::default()
                     };
                     let get_result = object_store
-                        .get_opts(file_meta.location(), get_option)
+                        .get_opts(&partitioned_file.object_meta.location, get_option)
                         .await?;
                     let footer_buf = get_result.bytes().await?;
                     let footer = arrow_ipc::root_as_footer(
                         footer_buf[..footer_len].try_into().unwrap(),
                     )
                     .map_err(|err| {
-                        arrow::error::ArrowError::ParseError(format!(
-                            "Unable to get root as footer: {err:?}"
-                        ))
+                        exec_datafusion_err!("Unable to get root as footer: {err:?}")
                     })?;
                     // build decoder according to footer & projection
                     let schema =
@@ -185,7 +202,7 @@ impl FileOpener for ArrowOpener {
                         })
                         .collect_vec();
                     let dict_results = object_store
-                        .get_ranges(file_meta.location(), &dict_ranges)
+                        .get_ranges(&partitioned_file.object_meta.location, &dict_ranges)
                         .await?;
                     for (dict_block, dict_result) in
                         footer.dictionaries().iter().flatten().zip(dict_results)
@@ -218,7 +235,10 @@ impl FileOpener for ArrowOpener {
                         .collect_vec();
 
                     let recordbatch_results = object_store
-                        .get_ranges(file_meta.location(), &recordbatch_ranges)
+                        .get_ranges(
+                            &partitioned_file.object_meta.location,
+                            &recordbatch_ranges,
+                        )
                         .await?;
 
                     Ok(futures::stream::iter(
@@ -231,6 +251,7 @@ impl FileOpener for ArrowOpener {
                                     .transpose()
                             }),
                     )
+                    .map(|r| r.map_err(Into::into))
                     .boxed())
                 }
             }

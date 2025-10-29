@@ -466,6 +466,7 @@ impl Unparser<'_> {
                             "Offset operator only valid in a statement context."
                         );
                     };
+
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
                         value: self.expr_to_sql(skip)?,
@@ -695,13 +696,6 @@ impl Unparser<'_> {
                     join_filters.as_ref(),
                 )?;
 
-                self.select_to_sql_recursively(
-                    right_plan.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
-
                 let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected
                 {
                     Some(select.pop_projections())
@@ -714,7 +708,8 @@ impl Unparser<'_> {
                     | JoinType::LeftAnti
                     | JoinType::LeftMark
                     | JoinType::RightSemi
-                    | JoinType::RightAnti => {
+                    | JoinType::RightAnti
+                    | JoinType::RightMark => {
                         let mut query_builder = QueryBuilder::default();
                         let mut from = TableWithJoinsBuilder::default();
                         let mut exists_select: SelectBuilder = SelectBuilder::default();
@@ -738,7 +733,8 @@ impl Unparser<'_> {
                         let negated = match join.join_type {
                             JoinType::LeftSemi
                             | JoinType::RightSemi
-                            | JoinType::LeftMark => false,
+                            | JoinType::LeftMark
+                            | JoinType::RightMark => false,
                             JoinType::LeftAnti | JoinType::RightAnti => true,
                             _ => unreachable!(),
                         };
@@ -746,13 +742,25 @@ impl Unparser<'_> {
                             subquery: Box::new(query_builder.build()?),
                             negated,
                         };
-                        if join.join_type == JoinType::LeftMark {
-                            let (table_ref, _) = right_plan.schema().qualified_field(0);
-                            let column = self
-                                .col_to_sql(&Column::new(table_ref.cloned(), "mark"))?;
-                            select.replace_mark(&column, &exists_expr);
-                        } else {
-                            select.selection(Some(exists_expr));
+
+                        match join.join_type {
+                            JoinType::LeftMark | JoinType::RightMark => {
+                                let source_schema =
+                                    if join.join_type == JoinType::LeftMark {
+                                        right_plan.schema()
+                                    } else {
+                                        left_plan.schema()
+                                    };
+                                let (table_ref, _) = source_schema.qualified_field(0);
+                                let column = self.col_to_sql(&Column::new(
+                                    table_ref.cloned(),
+                                    "mark",
+                                ))?;
+                                select.replace_mark(&column, &exists_expr);
+                            }
+                            _ => {
+                                select.selection(Some(exists_expr));
+                            }
                         }
                         if let Some(projection) = left_projection {
                             select.projection(projection);
@@ -785,7 +793,7 @@ impl Unparser<'_> {
 
                             let projection = left_projection
                                 .into_iter()
-                                .chain(right_projection.into_iter())
+                                .chain(right_projection)
                                 .collect();
                             select.projection(projection);
                         }
@@ -1078,6 +1086,7 @@ impl Unparser<'_> {
                         if project_vec.is_empty() {
                             builder = builder.project(vec![Expr::Literal(
                                 ScalarValue::Int64(Some(1)),
+                                None,
                             )])?;
                         } else {
                             let project_columns = project_vec
@@ -1198,9 +1207,18 @@ impl Unparser<'_> {
             Expr::Alias(Alias { expr, name, .. }) => {
                 let inner = self.expr_to_sql(expr)?;
 
+                // Determine the alias name to use
+                let col_name = if let Some(rewritten_name) =
+                    self.dialect.col_alias_overrides(name)?
+                {
+                    rewritten_name.to_string()
+                } else {
+                    name.to_string()
+                };
+
                 Ok(ast::SelectItem::ExprWithAlias {
                     expr: inner,
-                    alias: self.new_ident_quoted_if_needs(name.to_string()),
+                    alias: self.new_ident_quoted_if_needs(col_name),
                 })
             }
             _ => {
@@ -1233,7 +1251,7 @@ impl Unparser<'_> {
                 ast::JoinConstraint::None => {
                     // Inner joins with no conditions or filters are not valid SQL in most systems,
                     // return a CROSS JOIN instead
-                    ast::JoinOperator::CrossJoin
+                    ast::JoinOperator::CrossJoin(constraint)
                 }
             },
             JoinType::Left => ast::JoinOperator::LeftOuter(constraint),
@@ -1243,7 +1261,9 @@ impl Unparser<'_> {
             JoinType::LeftSemi => ast::JoinOperator::LeftSemi(constraint),
             JoinType::RightAnti => ast::JoinOperator::RightAnti(constraint),
             JoinType::RightSemi => ast::JoinOperator::RightSemi(constraint),
-            JoinType::LeftMark => unimplemented!("Unparsing of Left Mark join type"),
+            JoinType::LeftMark | JoinType::RightMark => {
+                unimplemented!("Unparsing of Mark join type")
+            }
         })
     }
 

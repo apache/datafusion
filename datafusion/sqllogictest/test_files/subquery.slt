@@ -210,9 +210,9 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[2]
 12)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)--------DataSourceExec: partitions=1, partition_sizes=[1]
+13)--------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
@@ -245,9 +245,9 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[2]
 12)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)--------DataSourceExec: partitions=1, partition_sizes=[1]
+13)--------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query IR rowsort
 SELECT t1_id, (SELECT sum(t2_int * 1.0) + 1 FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
@@ -280,9 +280,9 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[2]
 12)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)--------DataSourceExec: partitions=1, partition_sizes=[1]
+13)--------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id group by t2_id, 'a') as t2_sum from t1
@@ -318,9 +318,9 @@ physical_plan
 10)------------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 11)--------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
 12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+13)------------------------DataSourceExec: partitions=1, partition_sizes=[2]
 14)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-15)--------DataSourceExec: partitions=1, partition_sizes=[1]
+15)--------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id having sum(t2_int) < 3) as t2_sum from t1
@@ -499,7 +499,7 @@ logical_plan
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: Int64(1) AS a
-06)--------EmptyRelation
+06)--------EmptyRelation: rows=1
 
 query II rowsort
 SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1
@@ -619,7 +619,7 @@ logical_plan
 01)LeftSemi Join: 
 02)--TableScan: t1 projection=[t1_id, t1_name]
 03)--SubqueryAlias: __correlated_sq_1
-04)----EmptyRelation
+04)----EmptyRelation: rows=1
 
 #exists_subquery_with_limit
 #de-correlated, limit is removed
@@ -644,7 +644,7 @@ SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id
 query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 query IT rowsort
 SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
@@ -701,7 +701,7 @@ logical_plan
 01)Projection: t1.t1_id, __scalar_sq_1.t2_id AS t2_id
 02)--Left Join: 
 03)----TableScan: t1 projection=[t1_id]
-04)----EmptyRelation
+04)----EmptyRelation: rows=0
 
 query II rowsort
 SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
@@ -1192,10 +1192,10 @@ physical_plan
 01)CoalesceBatchesExec: target_batch_size=2
 02)--FilterExec: t1_id@0 > 40 OR NOT mark@3, projection=[t1_id@0, t1_name@1, t1_int@2]
 03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(t1_id@0, t2_id@0)]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(t2_id@0, t1_id@0)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[2]
 06)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----------DataSourceExec: partitions=1, partition_sizes=[2]
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
@@ -1453,9 +1453,7 @@ logical_plan
 01)LeftSemi Join: 
 02)--TableScan: t1 projection=[a]
 03)--SubqueryAlias: __correlated_sq_1
-04)----Projection:
-05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-06)--------TableScan: t2 projection=[]
+04)----EmptyRelation: rows=1
 
 statement count 0
 drop table t1;

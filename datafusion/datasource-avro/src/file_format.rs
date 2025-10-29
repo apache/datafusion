@@ -110,6 +110,10 @@ impl FileFormat for AvroFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         _state: &dyn Session,

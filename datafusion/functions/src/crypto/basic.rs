@@ -21,7 +21,7 @@ use arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryArrayType, BinaryViewArray, GenericBinaryArray,
     OffsetSizeTrait,
 };
-use arrow::array::{AsArray, GenericStringArray, StringArray, StringViewArray};
+use arrow::array::{AsArray, GenericStringArray, StringViewArray};
 use arrow::datatypes::DataType;
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
@@ -169,18 +169,18 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let [data] = take_function_args("md5", args)?;
     let value = digest_process(data, DigestAlgorithm::Md5)?;
 
-    // md5 requires special handling because of its unique utf8 return type
+    // md5 requires special handling because of its unique utf8view return type
     Ok(match value {
         ColumnarValue::Array(array) => {
             let binary_array = as_binary_array(&array)?;
-            let string_array: StringArray = binary_array
+            let string_array: StringViewArray = binary_array
                 .iter()
                 .map(|opt| opt.map(hex_encode::<_>))
                 .collect();
             ColumnarValue::Array(Arc::new(string_array))
         }
         ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-            ColumnarValue::Scalar(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
+            ColumnarValue::Scalar(ScalarValue::Utf8View(opt.map(hex_encode::<_>)))
         }
         _ => return exec_err!("Impossibly got invalid results from digest"),
     })

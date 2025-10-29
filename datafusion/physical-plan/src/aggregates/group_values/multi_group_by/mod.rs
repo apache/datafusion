@@ -17,15 +17,16 @@
 
 //! `GroupValues` implementations for multi group by cases
 
+mod boolean;
 mod bytes;
-mod bytes_view;
-mod primitive;
+pub mod bytes_view;
+pub mod primitive;
 
 use std::mem::{self, size_of};
 
 use crate::aggregates::group_values::multi_group_by::{
-    bytes::ByteGroupValueBuilder, bytes_view::ByteViewGroupValueBuilder,
-    primitive::PrimitiveGroupValueBuilder,
+    boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
+    bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
@@ -40,7 +41,7 @@ use arrow::datatypes::{
     UInt8Type,
 };
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, not_impl_err, Result};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -90,6 +91,11 @@ pub trait GroupColumn: Send + Sync {
 
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
+
+    /// true if len == 0
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Returns the number of bytes used by this [`GroupColumn`]
     fn size(&self) -> usize;
@@ -1042,6 +1048,15 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                         let b = ByteViewGroupValueBuilder::<BinaryViewType>::new();
                         v.push(Box::new(b) as _)
                     }
+                    &DataType::Boolean => {
+                        if nullable {
+                            let b = BooleanGroupValueBuilder::<true>::new();
+                            v.push(Box::new(b) as _)
+                        } else {
+                            let b = BooleanGroupValueBuilder::<false>::new();
+                            v.push(Box::new(b) as _)
+                        }
+                    }
                     dt => {
                         return not_impl_err!("{dt} not supported in GroupValuesColumn")
                     }
@@ -1165,9 +1180,9 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             if let DataType::Dictionary(_, v) = expected {
                 let actual = array.data_type();
                 if v.as_ref() != actual {
-                    return Err(DataFusionError::Internal(format!(
+                    return Err(internal_datafusion_err!(
                         "Converted group rows expected dictionary of {v} got {actual}"
-                    )));
+                    ));
                 }
                 *array = cast(array.as_ref(), expected)?;
             }
@@ -1231,6 +1246,7 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
+            | DataType::Boolean
     )
 }
 
@@ -1736,16 +1752,19 @@ mod tests {
     }
 
     fn check_result(actual_batch: &RecordBatch, expected_batch: &RecordBatch) {
-        let formatted_actual_batch = pretty_format_batches(&[actual_batch.clone()])
-            .unwrap()
-            .to_string();
+        let formatted_actual_batch =
+            pretty_format_batches(std::slice::from_ref(actual_batch))
+                .unwrap()
+                .to_string();
         let mut formatted_actual_batch_sorted: Vec<&str> =
             formatted_actual_batch.trim().lines().collect();
         formatted_actual_batch_sorted.sort_unstable();
 
-        let formatted_expected_batch = pretty_format_batches(&[expected_batch.clone()])
-            .unwrap()
-            .to_string();
+        let formatted_expected_batch =
+            pretty_format_batches(std::slice::from_ref(expected_batch))
+                .unwrap()
+                .to_string();
+
         let mut formatted_expected_batch_sorted: Vec<&str> =
             formatted_expected_batch.trim().lines().collect();
         formatted_expected_batch_sorted.sort_unstable();

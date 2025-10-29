@@ -71,7 +71,7 @@ use url::Url;
 /// (using the same underlying APIs)
 ///
 /// For a more advanced example of using an index to prune row groups within a
-/// file, see the (forthcoming) `advanced_parquet_index` example.
+/// file, see the `advanced_parquet_index` example.
 ///
 /// # Diagram
 ///
@@ -313,7 +313,7 @@ impl Display for ParquetMetadataIndex {
             "ParquetMetadataIndex(last_num_pruned: {})",
             self.last_num_pruned()
         )?;
-        let batches = pretty_format_batches(&[self.index.clone()]).unwrap();
+        let batches = pretty_format_batches(std::slice::from_ref(&self.index)).unwrap();
         write!(f, "{batches}",)
     }
 }

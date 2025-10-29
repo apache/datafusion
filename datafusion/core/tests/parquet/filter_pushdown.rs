@@ -26,8 +26,6 @@
 //! select * from data limit 10;
 //! ```
 
-use std::path::Path;
-
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
@@ -37,7 +35,10 @@ use datafusion::prelude::{
 };
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
+use std::path::Path;
 
+use datafusion_common::test_util::parquet_test_data;
+use datafusion_execution::config::SessionConfig;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
@@ -599,5 +600,101 @@ fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
                 "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn predicate_cache_default() -> datafusion_common::Result<()> {
+    let ctx = SessionContext::new();
+    // The cache is on by default, but not used unless filter pushdown is enabled
+    PredicateCacheTest {
+        expected_inner_records: 0,
+        expected_records: 0,
+    }
+    .run(&ctx)
+    .await
+}
+
+#[tokio::test]
+async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    let ctx = SessionContext::new_with_config(config);
+    // The cache is on by default, and used when filter pushdown is enabled
+    PredicateCacheTest {
+        expected_inner_records: 8,
+        expected_records: 4,
+    }
+    .run(&ctx)
+    .await
+}
+
+#[tokio::test]
+async fn predicate_cache_pushdown_disable() -> datafusion_common::Result<()> {
+    // Can disable the cache even with filter pushdown by setting the size to 0. In this case we
+    // expect the inner records are reported but no records are read from the cache
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    config
+        .options_mut()
+        .execution
+        .parquet
+        .max_predicate_cache_size = Some(0);
+    let ctx = SessionContext::new_with_config(config);
+    PredicateCacheTest {
+        // file has 8 rows, which need to be read twice, one for filter, one for
+        // final output
+        expected_inner_records: 16,
+        // Expect this to 0 records read as the cache is disabled. However, it is
+        // non zero due to https://github.com/apache/arrow-rs/issues/8307
+        expected_records: 3,
+    }
+    .run(&ctx)
+    .await
+}
+
+/// Runs the query "SELECT * FROM alltypes_plain WHERE double_col != 0.0"
+/// with a given SessionContext and asserts that the predicate cache metrics
+/// are as expected
+#[derive(Debug)]
+struct PredicateCacheTest {
+    /// Expected records read from the underlying reader (to evaluate filters)
+    /// -- this is the total number of records in the file
+    expected_inner_records: usize,
+    /// Expected records to be read from the cache (after filtering)
+    expected_records: usize,
+}
+
+impl PredicateCacheTest {
+    async fn run(self, ctx: &SessionContext) -> datafusion_common::Result<()> {
+        let Self {
+            expected_inner_records,
+            expected_records,
+        } = self;
+        // Create a dataframe that scans the "alltypes_plain.parquet" file with
+        // a filter on `double_col != 0.0`
+        let path = parquet_test_data() + "/alltypes_plain.parquet";
+        let exec = ctx
+            .read_parquet(path, ParquetReadOptions::default())
+            .await?
+            .filter(col("double_col").not_eq(lit(0.0)))?
+            .create_physical_plan()
+            .await?;
+
+        // run the plan to completion
+        let _ = collect(exec.clone(), ctx.task_ctx()).await?; // run plan
+        let metrics =
+            TestParquetFile::parquet_metrics(&exec).expect("found parquet metrics");
+
+        // verify the predicate cache metrics
+        assert_eq!(
+            get_value(&metrics, "predicate_cache_inner_records"),
+            expected_inner_records
+        );
+        assert_eq!(
+            get_value(&metrics, "predicate_cache_records"),
+            expected_records
+        );
+        Ok(())
     }
 }

@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     let expr2 = Expr::BinaryExpr(BinaryExpr::new(
         Box::new(col("a")),
         Operator::Plus,
-        Box::new(Expr::Literal(ScalarValue::Int32(Some(5)))),
+        Box::new(Expr::Literal(ScalarValue::Int32(Some(5)), None)),
     ));
     assert_eq!(expr, expr2);
 
@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
     boundary_analysis_and_selectivity_demo()?;
 
     // See how boundary analysis works for `AND` & `OR` conjunctions.
-    boundary_analysis_in_conjuctions_demo()?;
+    boundary_analysis_in_conjunctions_demo()?;
 
     // See how to determine the data types of expressions
     expression_type_demo()?;
@@ -351,7 +351,7 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
 
 /// This function shows how to think about and leverage the analysis API
 /// to infer boundaries in `AND` & `OR` conjunctions.
-fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
+fn boundary_analysis_in_conjunctions_demo() -> Result<()> {
     // Let us consider the more common case of AND & OR conjunctions.
     //
     // age > 18 AND age <= 25
@@ -519,7 +519,7 @@ fn type_coercion_demo() -> Result<()> {
     )?;
     let i8_array = Int8Array::from_iter_values(vec![0, 1, 2]);
     let batch = RecordBatch::try_new(
-        Arc::new(df_schema.as_arrow().to_owned()),
+        Arc::clone(df_schema.inner()),
         vec![Arc::new(i8_array) as _],
     )?;
 

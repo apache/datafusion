@@ -28,16 +28,22 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::ArrayData;
+use arrow::array::{layout, ArrayData, BufferSpec};
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
+use arrow::ipc::{
+    reader::StreamReader,
+    writer::{IpcWriteOptions, StreamWriter},
+    MetadataVersion,
+};
 use arrow::record_batch::RecordBatch;
 
+use datafusion_common::config::SpillCompression;
 use datafusion_common::{exec_datafusion_err, DataFusionError, HashSet, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::RecordBatchStream;
 use futures::{FutureExt as _, Stream};
+use log::warn;
 
 /// Stream that reads spill files from disk where each batch is read in a spawned blocking task
 /// It will read one batch at a time and will not do any buffering, to buffer data use [`crate::common::spawn_buffered`]
@@ -49,7 +55,15 @@ use futures::{FutureExt as _, Stream};
 struct SpillReaderStream {
     schema: SchemaRef,
     state: SpillReaderStreamState,
+    /// Maximum memory size observed among spilling sorted record batches.
+    /// This is used for validation purposes during reading each RecordBatch from spill.
+    /// For context on why this value is recorded and validated,
+    /// see `physical_plan/sort/multi_level_merge.rs`.
+    max_record_batch_memory: Option<usize>,
 }
+
+// Small margin allowed to accommodate slight memory accounting variation
+const SPILL_BATCH_MEMORY_MARGIN: usize = 4096;
 
 /// When we poll for the next batch, we will get back both the batch and the reader,
 /// so we can call `next` again.
@@ -71,10 +85,15 @@ enum SpillReaderStreamState {
 }
 
 impl SpillReaderStream {
-    fn new(schema: SchemaRef, spill_file: RefCountedTempFile) -> Self {
+    fn new(
+        schema: SchemaRef,
+        spill_file: RefCountedTempFile,
+        max_record_batch_memory: Option<usize>,
+    ) -> Self {
         Self {
             schema,
             state: SpillReaderStreamState::Uninitialized(spill_file),
+            max_record_batch_memory,
         }
     }
 
@@ -120,6 +139,23 @@ impl SpillReaderStream {
                     Ok((reader, batch)) => {
                         match batch {
                             Some(batch) => {
+                                if let Some(max_record_batch_memory) =
+                                    self.max_record_batch_memory
+                                {
+                                    let actual_size =
+                                        get_record_batch_memory_size(&batch);
+                                    if actual_size
+                                        > max_record_batch_memory
+                                            + SPILL_BATCH_MEMORY_MARGIN
+                                    {
+                                        warn!(
+                                                "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
+                                                by more than the allowed tolerance ({SPILL_BATCH_MEMORY_MARGIN} bytes).\n\
+                                                This likely indicates a bug in memory accounting during spilling.\n\
+                                                Please report this issue in https://github.com/apache/datafusion/issues/17340."
+                                            );
+                                    }
+                                }
                                 self.state = SpillReaderStreamState::Waiting(reader);
 
                                 Poll::Ready(Some(Ok(batch)))
@@ -194,7 +230,8 @@ pub fn spill_record_batch_by_size(
 ) -> Result<()> {
     let mut offset = 0;
     let total_rows = batch.num_rows();
-    let mut writer = IPCStreamWriter::new(&path, schema.as_ref())?;
+    let mut writer =
+        IPCStreamWriter::new(&path, schema.as_ref(), SpillCompression::Uncompressed)?;
 
     while offset < total_rows {
         let length = std::cmp::min(total_rows - offset, batch_size_rows);
@@ -292,15 +329,32 @@ struct IPCStreamWriter {
 
 impl IPCStreamWriter {
     /// Create new writer
-    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
+    pub fn new(
+        path: &Path,
+        schema: &Schema,
+        compression_type: SpillCompression,
+    ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
-            exec_datafusion_err!("Failed to create partition file at {path:?}: {e:?}")
+            exec_datafusion_err!("(Hint: you may increase the file descriptor limit with shell command 'ulimit -n 4096') Failed to create partition file at {path:?}: {e:?}")
         })?;
+
+        let metadata_version = MetadataVersion::V5;
+        // Depending on the schema, some array types such as StringViewArray require larger (16 byte in this case) alignment.
+        // If the actual buffer layout after IPC read does not satisfy the alignment requirement,
+        // Arrow ArrayBuilder will copy the buffer into a newly allocated, properly aligned buffer.
+        // This copying may lead to memory blowup during IPC read due to duplicated buffers.
+        // To avoid this, we compute the maximum required alignment based on the schema and configure the IPCStreamWriter accordingly.
+        let alignment = get_max_alignment_for_schema(schema);
+        let mut write_options =
+            IpcWriteOptions::try_new(alignment, false, metadata_version)?;
+        write_options = write_options.try_with_compression(compression_type.into())?;
+
+        let writer = StreamWriter::try_new_with_options(file, schema, write_options)?;
         Ok(Self {
             num_batches: 0,
             num_rows: 0,
             num_bytes: 0,
-            writer: StreamWriter::try_new(file, schema)?,
+            writer,
         })
     }
 
@@ -323,6 +377,29 @@ impl IPCStreamWriter {
     }
 }
 
+// Returns the maximum byte alignment required by any field in the schema (>= 8), derived from Arrow buffer layouts.
+fn get_max_alignment_for_schema(schema: &Schema) -> usize {
+    let minimum_alignment = 8;
+    let mut max_alignment = minimum_alignment;
+    for field in schema.fields() {
+        let layout = layout(field.data_type());
+        let required_alignment = layout
+            .buffers
+            .iter()
+            .map(|buffer_spec| {
+                if let BufferSpec::FixedWidth { alignment, .. } = buffer_spec {
+                    *alignment
+                } else {
+                    minimum_alignment
+                }
+            })
+            .max()
+            .unwrap_or(minimum_alignment);
+        max_alignment = std::cmp::max(max_alignment, required_alignment);
+    }
+    max_alignment
+}
+
 #[cfg(test)]
 mod tests {
     use super::in_progress_spill_file::InProgressSpillFile;
@@ -332,7 +409,7 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
-    use arrow::array::{Float64Array, Int32Array, ListArray, StringArray};
+    use arrow::array::{ArrayRef, Float64Array, Int32Array, ListArray, StringArray};
     use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
@@ -371,7 +448,7 @@ mod tests {
         let spilled_rows = spill_manager.metrics.spilled_rows.value();
         assert_eq!(spilled_rows, num_rows);
 
-        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
         assert_eq!(stream.schema(), schema);
 
         let batches = collect(stream).await?;
@@ -435,7 +512,7 @@ mod tests {
         let spilled_rows = spill_manager.metrics.spilled_rows.value();
         assert_eq!(spilled_rows, num_rows);
 
-        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
         assert_eq!(stream.schema(), dict_schema);
         let batches = collect(stream).await?;
         assert_eq!(batches.len(), 2);
@@ -456,17 +533,129 @@ mod tests {
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
 
-        let spill_file = spill_manager
-            .spill_record_batch_by_size(&batch1, "Test Spill", 1)?
+        let (spill_file, max_batch_mem) = spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &batch1,
+                "Test Spill",
+                1,
+            )?
             .unwrap();
         assert!(spill_file.path().exists());
+        assert!(max_batch_mem > 0);
 
-        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
         assert_eq!(stream.schema(), schema);
 
         let batches = collect(stream).await?;
         assert_eq!(batches.len(), 4);
 
+        Ok(())
+    }
+
+    fn build_compressible_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, true),
+        ]));
+
+        let a: ArrayRef = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+            "repeated", 100,
+        )));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![1; 100]));
+        let c: ArrayRef = Arc::new(Int32Array::from(vec![2; 100]));
+
+        RecordBatch::try_new(schema, vec![a, b, c]).unwrap()
+    }
+
+    async fn validate(
+        spill_manager: &SpillManager,
+        spill_file: RefCountedTempFile,
+        num_rows: usize,
+        schema: SchemaRef,
+        batch_count: usize,
+    ) -> Result<()> {
+        let spilled_rows = spill_manager.metrics.spilled_rows.value();
+        assert_eq!(spilled_rows, num_rows);
+
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
+        assert_eq!(stream.schema(), schema);
+
+        let batches = collect(stream).await?;
+        assert_eq!(batches.len(), batch_count);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_compression() -> Result<()> {
+        let batch = build_compressible_batch();
+        let num_rows = batch.num_rows();
+        let schema = batch.schema();
+        let batch_count = 1;
+        let batches = [batch];
+
+        // Construct SpillManager
+        let env = Arc::new(RuntimeEnv::default());
+        let uncompressed_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let lz4_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let zstd_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let uncompressed_spill_manager = SpillManager::new(
+            Arc::clone(&env),
+            uncompressed_metrics,
+            Arc::clone(&schema),
+        );
+        let lz4_spill_manager =
+            SpillManager::new(Arc::clone(&env), lz4_metrics, Arc::clone(&schema))
+                .with_compression_type(SpillCompression::Lz4Frame);
+        let zstd_spill_manager =
+            SpillManager::new(env, zstd_metrics, Arc::clone(&schema))
+                .with_compression_type(SpillCompression::Zstd);
+        let uncompressed_spill_file = uncompressed_spill_manager
+            .spill_record_batch_and_finish(&batches, "Test")?
+            .unwrap();
+        let lz4_spill_file = lz4_spill_manager
+            .spill_record_batch_and_finish(&batches, "Lz4_Test")?
+            .unwrap();
+        let zstd_spill_file = zstd_spill_manager
+            .spill_record_batch_and_finish(&batches, "ZSTD_Test")?
+            .unwrap();
+        assert!(uncompressed_spill_file.path().exists());
+        assert!(lz4_spill_file.path().exists());
+        assert!(zstd_spill_file.path().exists());
+
+        let lz4_spill_size = std::fs::metadata(lz4_spill_file.path())?.len();
+        let zstd_spill_size = std::fs::metadata(zstd_spill_file.path())?.len();
+        let uncompressed_spill_size =
+            std::fs::metadata(uncompressed_spill_file.path())?.len();
+
+        assert!(uncompressed_spill_size > lz4_spill_size);
+        assert!(uncompressed_spill_size > zstd_spill_size);
+
+        validate(
+            &lz4_spill_manager,
+            lz4_spill_file,
+            num_rows,
+            Arc::clone(&schema),
+            batch_count,
+        )
+        .await?;
+        validate(
+            &zstd_spill_manager,
+            zstd_spill_file,
+            num_rows,
+            Arc::clone(&schema),
+            batch_count,
+        )
+        .await?;
+        validate(
+            &uncompressed_spill_manager,
+            uncompressed_spill_file,
+            num_rows,
+            schema,
+            batch_count,
+        )
+        .await?;
         Ok(())
     }
 
@@ -594,7 +783,7 @@ mod tests {
         .unwrap();
 
         let size = get_record_batch_memory_size(&batch);
-        assert_eq!(size, 8320);
+        assert_eq!(size, 8208);
     }
 
     // ==== Spill manager tests ====
@@ -684,12 +873,13 @@ mod tests {
                 Arc::new(StringArray::from(vec!["d", "e", "f"])),
             ],
         )?;
-
+        // After appending each batch, spilled_rows should increase, while spill_file_count and
+        // spilled_bytes remain the same (spilled_bytes is updated only after finish() is called)
         in_progress_file.append_batch(&batch1)?;
-        verify_metrics(&in_progress_file, 1, 356, 3)?;
+        verify_metrics(&in_progress_file, 1, 0, 3)?;
 
         in_progress_file.append_batch(&batch2)?;
-        verify_metrics(&in_progress_file, 1, 712, 6)?;
+        verify_metrics(&in_progress_file, 1, 0, 6)?;
 
         let completed_file = in_progress_file.finish()?;
         assert!(completed_file.is_some());
@@ -724,7 +914,7 @@ mod tests {
         let completed_file = spill_manager.spill_record_batch_and_finish(&[], "Test")?;
         assert!(completed_file.is_none());
 
-        // Test write empty batch with interface `spill_record_batch_by_size()`
+        // Test write empty batch with interface `spill_record_batch_by_size_and_return_max_batch_memory()`
         let empty_batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -732,8 +922,12 @@ mod tests {
                 Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
             ],
         )?;
-        let completed_file =
-            spill_manager.spill_record_batch_by_size(&empty_batch, "Test", 1)?;
+        let completed_file = spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &empty_batch,
+                "Test",
+                1,
+            )?;
         assert!(completed_file.is_none());
 
         Ok(())
@@ -768,12 +962,29 @@ mod tests {
                     .spill_record_batch_and_finish(&batches, "Test2")?
                     .unwrap();
 
-                let mut stream_1 = spill_manager.read_spill_as_stream(spill_file_1)?;
-                let mut stream_2 = spill_manager.read_spill_as_stream(spill_file_2)?;
+                let mut stream_1 =
+                    spill_manager.read_spill_as_stream(spill_file_1, None)?;
+                let mut stream_2 =
+                    spill_manager.read_spill_as_stream(spill_file_2, None)?;
                 stream_1.next().await;
                 stream_2.next().await;
 
                 Ok(())
             })
+    }
+
+    #[test]
+    fn test_alignment_for_schema() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("strings", DataType::Utf8View, false)]);
+        let alignment = get_max_alignment_for_schema(&schema);
+        assert_eq!(alignment, 16);
+
+        let schema = Schema::new(vec![
+            Field::new("int32", DataType::Int32, false),
+            Field::new("int64", DataType::Int64, false),
+        ]);
+        let alignment = get_max_alignment_for_schema(&schema);
+        assert_eq!(alignment, 8);
+        Ok(())
     }
 }

@@ -21,10 +21,9 @@ use datafusion::common::{
     not_impl_err, plan_err, substrait_err, DFSchema, DataFusionError, ScalarValue,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{expr, BinaryExpr, Expr, Like, Operator};
+use datafusion::logical_expr::{expr, Between, BinaryExpr, Expr, Like, Operator};
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
-use substrait::proto::function_argument::ArgType;
 
 pub async fn from_scalar_function(
     consumer: &impl SubstraitConsumer,
@@ -41,12 +40,21 @@ pub async fn from_scalar_function(
             f.function_reference
         );
     };
+
     let fn_name = substrait_fun_name(fn_signature);
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
+    let udf_func = consumer.get_function_registry().udf(fn_name).or_else(|e| {
+        if let Some(alt_name) = substrait_to_df_name(fn_name) {
+            consumer.get_function_registry().udf(alt_name).or(Err(e))
+        } else {
+            Err(e)
+        }
+    });
+
     // try to first match the requested function into registered udfs, then built-in ops
     // and finally built-in expressions
-    if let Ok(func) = consumer.get_function_registry().udf(fn_name) {
+    if let Ok(func) = udf_func {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
             args,
@@ -61,7 +69,7 @@ pub async fn from_scalar_function(
         // In those cases we build a balanced tree of BinaryExprs
         arg_list_to_binary_op_tree(op, args)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
-        builder.build(consumer, f, input_schema).await
+        builder.build(consumer, f, args).await
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
     }
@@ -109,6 +117,13 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
         "bitwise_xor" => Some(Operator::BitwiseXor),
         "bitwise_shift_right" => Some(Operator::BitwiseShiftRight),
         "bitwise_shift_left" => Some(Operator::BitwiseShiftLeft),
+        _ => None,
+    }
+}
+
+pub fn substrait_to_df_name(name: &str) -> Option<&str> {
+    match name {
+        "is_nan" => Some("isnan"),
         _ => None,
     }
 }
@@ -164,7 +179,8 @@ impl BuiltinExprBuilder {
         match name {
             "not" | "like" | "ilike" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
-            | "is_not_unknown" | "negative" | "negate" => Some(Self {
+            | "is_not_unknown" | "negative" | "negate" | "and_not" | "xor"
+            | "between" | "logb" => Some(Self {
                 expr_name: name.to_string(),
             }),
             _ => None,
@@ -175,15 +191,18 @@ impl BuiltinExprBuilder {
         self,
         consumer: &impl SubstraitConsumer,
         f: &ScalarFunction,
-        input_schema: &DFSchema,
+        args: Vec<Expr>,
     ) -> Result<Expr> {
         match self.expr_name.as_str() {
-            "like" => Self::build_like_expr(consumer, false, f, input_schema).await,
-            "ilike" => Self::build_like_expr(consumer, true, f, input_schema).await,
+            "like" => Self::build_like_expr(false, f, args).await,
+            "ilike" => Self::build_like_expr(true, f, args).await,
             "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
-            | "is_not_unknown" => {
-                Self::build_unary_expr(consumer, &self.expr_name, f, input_schema).await
+            | "is_not_unknown" => Self::build_unary_expr(&self.expr_name, args).await,
+            "and_not" | "xor" => Self::build_binary_expr(&self.expr_name, args).await,
+            "between" => Self::build_between_expr(&self.expr_name, args).await,
+            "logb" => {
+                Self::build_custom_handling_expr(consumer, &self.expr_name, args).await
             }
             _ => {
                 not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
@@ -191,21 +210,11 @@ impl BuiltinExprBuilder {
         }
     }
 
-    async fn build_unary_expr(
-        consumer: &impl SubstraitConsumer,
-        fn_name: &str,
-        f: &ScalarFunction,
-        input_schema: &DFSchema,
-    ) -> Result<Expr> {
-        if f.arguments.len() != 1 {
-            return substrait_err!("Expect one argument for {fn_name} expr");
-        }
-        let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
-            return substrait_err!("Invalid arguments type for {fn_name} expr");
+    async fn build_unary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+        let [arg] = match args.try_into() {
+            Ok(args_arr) => args_arr,
+            Err(_) => return substrait_err!("Expected one argument for {fn_name} expr"),
         };
-        let arg = consumer
-            .consume_expression(expr_substrait, input_schema)
-            .await?;
         let arg = Box::new(arg);
 
         let expr = match fn_name {
@@ -226,42 +235,31 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_like_expr(
-        consumer: &impl SubstraitConsumer,
         case_insensitive: bool,
         f: &ScalarFunction,
-        input_schema: &DFSchema,
+        args: Vec<Expr>,
     ) -> Result<Expr> {
         let fn_name = if case_insensitive { "ILIKE" } else { "LIKE" };
-        if f.arguments.len() != 2 && f.arguments.len() != 3 {
+        if args.len() != 2 && args.len() != 3 {
             return substrait_err!("Expect two or three arguments for `{fn_name}` expr");
         }
 
-        let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
-            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
+        let mut args_iter = args.into_iter();
+        let Some(expr) = args_iter.next() else {
+            return substrait_err!("Missing first argument for {fn_name} expression");
         };
-        let expr = consumer
-            .consume_expression(expr_substrait, input_schema)
-            .await?;
-        let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
-            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
+        let Some(pattern) = args_iter.next() else {
+            return substrait_err!("Missing second argument for {fn_name} expression");
         };
-        let pattern = consumer
-            .consume_expression(pattern_substrait, input_schema)
-            .await?;
 
         // Default case: escape character is Literal(Utf8(None))
         let escape_char = if f.arguments.len() == 3 {
-            let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type
-            else {
-                return substrait_err!("Invalid arguments type for `{fn_name}` expr");
+            let Some(escape_char_expr) = args_iter.next() else {
+                return substrait_err!("Missing third argument for {fn_name} expression");
             };
 
-            let escape_char_expr = consumer
-                .consume_expression(escape_char_substrait, input_schema)
-                .await?;
-
             match escape_char_expr {
-                Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {
+                Expr::Literal(ScalarValue::Utf8(escape_char_string), _) => {
                     // Convert Option<String> to Option<char>
                     escape_char_string.and_then(|s| s.chars().next())
                 }
@@ -282,6 +280,80 @@ impl BuiltinExprBuilder {
             escape_char,
             case_insensitive,
         }))
+    }
+
+    async fn build_binary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+        let [a, b] = match args.try_into() {
+            Ok(args_arr) => args_arr,
+            Err(_) => {
+                return substrait_err!("Expected two arguments for `{fn_name}` expr")
+            }
+        };
+        match fn_name {
+            "and_not" => Ok(Self::build_and_not_expr(a, b)),
+            "xor" => Ok(Self::build_xor_expr(a, b)),
+            _ => not_impl_err!("Unsupported builtin expression: {}", fn_name),
+        }
+    }
+
+    fn build_and_not_expr(a: Expr, b: Expr) -> Expr {
+        a.and(Expr::Not(Box::new(b)))
+    }
+
+    fn build_xor_expr(a: Expr, b: Expr) -> Expr {
+        let or_expr = a.clone().or(b.clone());
+        let and_expr = a.and(b);
+        Self::build_and_not_expr(or_expr, and_expr)
+    }
+
+    async fn build_between_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+        let [expression, low, high] = match args.try_into() {
+            Ok(args_arr) => args_arr,
+            Err(_) => {
+                return substrait_err!("Expected three arguments for `{fn_name}` expr")
+            }
+        };
+
+        Ok(Expr::Between(Between {
+            expr: Box::new(expression),
+            negated: false,
+            low: Box::new(low),
+            high: Box::new(high),
+        }))
+    }
+
+    //This handles any functions that require custom handling
+    async fn build_custom_handling_expr(
+        consumer: &impl SubstraitConsumer,
+        fn_name: &str,
+        args: Vec<Expr>,
+    ) -> Result<Expr> {
+        match fn_name {
+            "logb" => Self::build_logb_expr(consumer, args).await,
+            _ => not_impl_err!("Unsupported custom handled expression: {}", fn_name),
+        }
+    }
+
+    async fn build_logb_expr(
+        consumer: &impl SubstraitConsumer,
+        args: Vec<Expr>,
+    ) -> Result<Expr> {
+        if args.len() != 2 {
+            return substrait_err!("Expect two arguments for logb function");
+        }
+
+        let mut args = args;
+        args.swap(0, 1);
+
+        //The equivalent of logb in DataFusion is the log function (which has its arguments in reverse order)
+        if let Ok(func) = consumer.get_function_registry().udf("log") {
+            Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+                func.to_owned(),
+                args,
+            )))
+        } else {
+            not_impl_err!("Unsupported function name: logb")
+        }
     }
 }
 
@@ -337,7 +409,7 @@ mod tests {
     fn int64_literals(integers: &[i64]) -> Vec<Expr> {
         integers
             .iter()
-            .map(|value| Expr::Literal(ScalarValue::Int64(Some(*value))))
+            .map(|value| Expr::Literal(ScalarValue::Int64(Some(*value)), None))
             .collect()
     }
 
@@ -367,6 +439,41 @@ mod tests {
         let expr =
             arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1, 2, 3, 4]))?;
         assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3) OR Int64(4)");
+        Ok(())
+    }
+
+    //Test that DataFusion can consume scalar functions that have a different name in Substrait
+    #[tokio::test]
+    async fn test_substrait_to_df_name_mapping() -> Result<()> {
+        // Build substrait extensions (we are using only one function)
+        let mut extensions = Extensions::default();
+        //is_nan is one of the functions that has a different name in Substrait (mapping is in substrait_to_df_name())
+        extensions.functions.insert(0, String::from("is_nan:fp32"));
+        // Build substrait consumer
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+
+        // Build arguments for the function call
+        let arg = FunctionArgument {
+            arg_type: Some(ArgType::Value(Expression {
+                rex_type: Some(RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::Fp32(1.0)),
+                })),
+            })),
+        };
+        let arguments = vec![arg];
+        let func = ScalarFunction {
+            function_reference: 0,
+            arguments,
+            ..Default::default()
+        };
+        // Trivial input schema
+        let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        // Consume the expression and ensure we don't get an error
+        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
         Ok(())
     }
 }
