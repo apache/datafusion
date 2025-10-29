@@ -58,7 +58,7 @@ pub enum InstrumentedObjectStoreMode {
 
 impl fmt::Display for InstrumentedObjectStoreMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -426,7 +426,7 @@ pub enum Operation {
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -556,11 +556,11 @@ impl RequestSummaries {
                 let size_stats = s.size_stats.as_ref();
                 let dur_avg = duration_stats.map(|d| {
                     let avg = d.sum.as_secs_f32() / count;
-                    format!("{:.6}s", avg)
+                    format!("{avg:.6}s")
                 });
                 let size_avg = size_stats.map(|s| {
                     let avg = s.sum as f32 / count;
-                    format!("{} B", avg)
+                    format!("{avg} B")
                 });
                 [dur_avg, size_avg]
             })

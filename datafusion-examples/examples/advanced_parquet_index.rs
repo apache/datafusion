@@ -502,7 +502,7 @@ impl TableProvider for IndexTableProvider {
         let file_scan_config =
             FileScanConfigBuilder::new(object_store_url, schema, file_source)
                 .with_limit(limit)
-                .with_projection(projection.cloned())
+                .with_projection_indices(projection.cloned())
                 .with_file(partitioned_file)
                 .build();
 

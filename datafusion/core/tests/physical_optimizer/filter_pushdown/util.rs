@@ -165,7 +165,7 @@ impl FileSource for TestSource {
 
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(TestSource {
-            projection: config.projection.clone(),
+            projection: config.projection_exprs.as_ref().map(|p| p.column_indices()),
             ..self.clone()
         })
     }
