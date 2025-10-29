@@ -312,7 +312,7 @@ pub fn update_from_iter<'a, T>(
     for (row, hash_value) in items {
         let is_same_as_prev = hash_value == prev_hash;
 
-        if is_same_as_prev {
+        if is_same_as_prev && prev_entry.is_some() {
             // without lookup
             let e = prev_entry.as_mut().unwrap();
             let (_, index): &mut (u64, T) = e.get_mut();
