@@ -86,26 +86,29 @@
 //! let ctx = SessionContext::new();
 //!
 //! // create the dataframe
-//! let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+//! let df = ctx
+//!     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+//!     .await?;
 //!
 //! // create a plan
-//! let df = df.filter(col("a").lt_eq(col("b")))?
-//!            .aggregate(vec![col("a")], vec![min(col("b"))])?
-//!            .limit(0, Some(100))?;
+//! let df = df
+//!     .filter(col("a").lt_eq(col("b")))?
+//!     .aggregate(vec![col("a")], vec![min(col("b"))])?
+//!     .limit(0, Some(100))?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!    .to_string();
+//! let pretty_results =
+//!     arrow::util::pretty::pretty_format_batches(&results)?.to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
 //!     "| a | min(?table?.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+----------------+",
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -126,24 +129,27 @@
 //! # async fn main() -> Result<()> {
 //! let ctx = SessionContext::new();
 //!
-//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new())
+//!     .await?;
 //!
 //! // create a plan
-//! let df = ctx.sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
+//! let df = ctx
+//!     .sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100")
+//!     .await?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!   .to_string();
+//! let pretty_results =
+//!     arrow::util::pretty::pretty_format_batches(&results)?.to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
 //!     "| a | min(example.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+----------------+",
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -630,7 +636,7 @@
 //! └─────────────┘           ┗━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
 //!                          ─────────────────────────────────────────────────────────────▶
 //!                                                                                           time
-//!```
+//! ```
 //!
 //! Note that DataFusion does not use [`tokio::task::spawn_blocking`] for
 //! CPU-bounded work, because `spawn_blocking` is designed for blocking **IO**,

@@ -22,9 +22,9 @@ use std::hash::Hash;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::internal_err;
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
+use datafusion_common::{internal_err, plan_err, Result};
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -82,6 +82,15 @@ pub enum Volatility {
     /// `random()` function will be evaluated for each output row, resulting in
     /// a unique random value for each row.
     Volatile,
+}
+
+/// Represents the arity (number of arguments) of a function signature
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arity {
+    /// Fixed number of arguments
+    Fixed(usize),
+    /// Variable number of arguments (e.g., Variadic, VariadicAny, UserDefined)
+    Variable,
 }
 
 /// The types of arguments for which a function has implementations.
@@ -245,6 +254,69 @@ impl TypeSignature {
     pub fn is_one_of(&self) -> bool {
         matches!(self, TypeSignature::OneOf(_))
     }
+
+    /// Returns the arity (expected number of arguments) for this type signature.
+    ///
+    /// Returns `Arity::Fixed(n)` for signatures with a specific argument count,
+    /// or `Arity::Variable` for variable-arity signatures like `Variadic`, `VariadicAny`, `UserDefined`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use datafusion_expr_common::signature::{TypeSignature, Arity};
+    /// # use arrow::datatypes::DataType;
+    /// // Exact signature has fixed arity
+    /// let sig = TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]);
+    /// assert_eq!(sig.arity(), Arity::Fixed(2));
+    ///
+    /// // Variadic signature has variable arity
+    /// let sig = TypeSignature::VariadicAny;
+    /// assert_eq!(sig.arity(), Arity::Variable);
+    /// ```
+    pub fn arity(&self) -> Arity {
+        match self {
+            TypeSignature::Exact(types) => Arity::Fixed(types.len()),
+            TypeSignature::Uniform(count, _) => Arity::Fixed(*count),
+            TypeSignature::Numeric(count) => Arity::Fixed(*count),
+            TypeSignature::String(count) => Arity::Fixed(*count),
+            TypeSignature::Comparable(count) => Arity::Fixed(*count),
+            TypeSignature::Any(count) => Arity::Fixed(*count),
+            TypeSignature::Coercible(types) => Arity::Fixed(types.len()),
+            TypeSignature::Nullary => Arity::Fixed(0),
+            TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                arguments,
+                ..
+            }) => Arity::Fixed(arguments.len()),
+            TypeSignature::ArraySignature(ArrayFunctionSignature::RecursiveArray) => {
+                Arity::Fixed(1)
+            }
+            TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray) => {
+                Arity::Fixed(1)
+            }
+            TypeSignature::OneOf(variants) => {
+                // If any variant is Variable, the whole OneOf is Variable
+                let has_variable = variants.iter().any(|v| v.arity() == Arity::Variable);
+                if has_variable {
+                    return Arity::Variable;
+                }
+                // Otherwise, get max arity from all fixed arity variants
+                let max_arity = variants
+                    .iter()
+                    .filter_map(|v| match v.arity() {
+                        Arity::Fixed(n) => Some(n),
+                        Arity::Variable => None,
+                    })
+                    .max();
+                match max_arity {
+                    Some(n) => Arity::Fixed(n),
+                    None => Arity::Variable,
+                }
+            }
+            TypeSignature::Variadic(_)
+            | TypeSignature::VariadicAny
+            | TypeSignature::UserDefined => Arity::Variable,
+        }
+    }
 }
 
 /// Represents the class of types that can be used in a function signature.
@@ -336,7 +408,7 @@ impl TypeSignatureClass {
         &self,
         native_type: &NativeType,
         origin_type: &DataType,
-    ) -> datafusion_common::Result<DataType> {
+    ) -> Result<DataType> {
         match self {
             TypeSignatureClass::Native(logical_type) => {
                 logical_type.native().default_cast_for(origin_type)
@@ -482,6 +554,174 @@ impl TypeSignature {
             }
             TypeSignature::ArraySignature(array_signature) => {
                 vec![array_signature.to_string()]
+            }
+        }
+    }
+
+    /// Return string representation of the function signature with parameter names.
+    ///
+    /// This method is similar to [`Self::to_string_repr`] but uses parameter names
+    /// instead of types when available. This is useful for generating more helpful
+    /// error messages.
+    ///
+    /// # Arguments
+    /// * `parameter_names` - Optional slice of parameter names. When provided, these
+    ///   names will be used instead of type names in the output.
+    ///
+    /// # Examples
+    /// ```
+    /// # use datafusion_expr_common::signature::TypeSignature;
+    /// # use arrow::datatypes::DataType;
+    /// let sig = TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]);
+    ///
+    /// // Without names: shows types only
+    /// assert_eq!(sig.to_string_repr_with_names(None), vec!["Int32, Utf8"]);
+    ///
+    /// // With names: shows parameter names with types
+    /// assert_eq!(
+    ///     sig.to_string_repr_with_names(Some(&["id".to_string(), "name".to_string()])),
+    ///     vec!["id: Int32, name: Utf8"]
+    /// );
+    /// ```
+    pub fn to_string_repr_with_names(
+        &self,
+        parameter_names: Option<&[String]>,
+    ) -> Vec<String> {
+        match self {
+            TypeSignature::Exact(types) => {
+                if let Some(names) = parameter_names {
+                    vec![names
+                        .iter()
+                        .zip(types.iter())
+                        .map(|(name, typ)| format!("{name}: {typ}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")]
+                } else {
+                    vec![Self::join_types(types, ", ")]
+                }
+            }
+            TypeSignature::Any(count) => {
+                if let Some(names) = parameter_names {
+                    vec![names
+                        .iter()
+                        .take(*count)
+                        .map(|name| format!("{name}: Any"))
+                        .collect::<Vec<_>>()
+                        .join(", ")]
+                } else {
+                    vec![std::iter::repeat_n("Any", *count)
+                        .collect::<Vec<&str>>()
+                        .join(", ")]
+                }
+            }
+            TypeSignature::Uniform(count, types) => {
+                if let Some(names) = parameter_names {
+                    let type_str = Self::join_types(types, "/");
+                    vec![names
+                        .iter()
+                        .take(*count)
+                        .map(|name| format!("{name}: {type_str}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")]
+                } else {
+                    self.to_string_repr()
+                }
+            }
+            TypeSignature::Coercible(coercions) => {
+                if let Some(names) = parameter_names {
+                    vec![names
+                        .iter()
+                        .zip(coercions.iter())
+                        .map(|(name, coercion)| format!("{name}: {coercion}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")]
+                } else {
+                    vec![Self::join_types(coercions, ", ")]
+                }
+            }
+            TypeSignature::Comparable(count) => {
+                if let Some(names) = parameter_names {
+                    vec![names
+                        .iter()
+                        .take(*count)
+                        .map(|name| format!("{name}: Comparable"))
+                        .collect::<Vec<_>>()
+                        .join(", ")]
+                } else {
+                    self.to_string_repr()
+                }
+            }
+            TypeSignature::Numeric(count) => {
+                if let Some(names) = parameter_names {
+                    vec![names
+                        .iter()
+                        .take(*count)
+                        .map(|name| format!("{name}: Numeric"))
+                        .collect::<Vec<_>>()
+                        .join(", ")]
+                } else {
+                    self.to_string_repr()
+                }
+            }
+            TypeSignature::String(count) => {
+                if let Some(names) = parameter_names {
+                    vec![names
+                        .iter()
+                        .take(*count)
+                        .map(|name| format!("{name}: String"))
+                        .collect::<Vec<_>>()
+                        .join(", ")]
+                } else {
+                    self.to_string_repr()
+                }
+            }
+            TypeSignature::Nullary => self.to_string_repr(),
+            TypeSignature::ArraySignature(array_sig) => {
+                if let Some(names) = parameter_names {
+                    match array_sig {
+                        ArrayFunctionSignature::Array { arguments, .. } => {
+                            vec![names
+                                .iter()
+                                .zip(arguments.iter())
+                                .map(|(name, arg_type)| format!("{name}: {arg_type}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")]
+                        }
+                        ArrayFunctionSignature::RecursiveArray => {
+                            vec![names
+                                .iter()
+                                .take(1)
+                                .map(|name| format!("{name}: recursive_array"))
+                                .collect::<Vec<_>>()
+                                .join(", ")]
+                        }
+                        ArrayFunctionSignature::MapArray => {
+                            vec![names
+                                .iter()
+                                .take(1)
+                                .map(|name| format!("{name}: map_array"))
+                                .collect::<Vec<_>>()
+                                .join(", ")]
+                        }
+                    }
+                } else {
+                    self.to_string_repr()
+                }
+            }
+            TypeSignature::OneOf(sigs) => sigs
+                .iter()
+                .flat_map(|s| s.to_string_repr_with_names(parameter_names))
+                .collect(),
+            TypeSignature::UserDefined => {
+                if let Some(names) = parameter_names {
+                    vec![names.join(", ")]
+                } else {
+                    self.to_string_repr()
+                }
+            }
+            // Variable arity signatures cannot use parameter names
+            TypeSignature::Variadic(_) | TypeSignature::VariadicAny => {
+                self.to_string_repr()
             }
         }
     }
@@ -804,6 +1044,13 @@ pub struct Signature {
     pub type_signature: TypeSignature,
     /// The volatility of the function. See [Volatility] for more information.
     pub volatility: Volatility,
+    /// Optional parameter names for the function arguments.
+    ///
+    /// If provided, enables named argument notation for function calls (e.g., `func(a => 1, b => 2)`).
+    /// The length must match the number of arguments defined by `type_signature`.
+    ///
+    /// Defaults to `None`, meaning only positional arguments are supported.
+    pub parameter_names: Option<Vec<String>>,
 }
 
 impl Signature {
@@ -812,6 +1059,7 @@ impl Signature {
         Signature {
             type_signature,
             volatility,
+            parameter_names: None,
         }
     }
     /// An arbitrary number of arguments with the same type, from those listed in `common_types`.
@@ -819,6 +1067,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Variadic(common_types),
             volatility,
+            parameter_names: None,
         }
     }
     /// User-defined coercion rules for the function.
@@ -826,6 +1075,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::UserDefined,
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -834,6 +1084,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Numeric(arg_count),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -842,6 +1093,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::String(arg_count),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -850,6 +1102,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::VariadicAny,
             volatility,
+            parameter_names: None,
         }
     }
     /// A fixed number of arguments of the same type, from those listed in `valid_types`.
@@ -861,6 +1114,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Uniform(arg_count, valid_types),
             volatility,
+            parameter_names: None,
         }
     }
     /// Exactly matches the types in `exact_types`, in order.
@@ -868,6 +1122,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Exact(exact_types),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -876,6 +1131,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -884,6 +1140,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Comparable(arg_count),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -891,6 +1148,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Nullary,
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -899,6 +1157,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Any(arg_count),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -907,6 +1166,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::OneOf(type_signatures),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -923,6 +1183,7 @@ impl Signature {
                 },
             ),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -939,6 +1200,7 @@ impl Signature {
                 },
             ),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -956,6 +1218,7 @@ impl Signature {
                 },
             ),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -980,6 +1243,7 @@ impl Signature {
                 }),
             ]),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -996,6 +1260,7 @@ impl Signature {
                 },
             ),
             volatility,
+            parameter_names: None,
         }
     }
 
@@ -1003,13 +1268,72 @@ impl Signature {
     pub fn array(volatility: Volatility) -> Self {
         Signature::arrays(1, Some(ListCoercion::FixedSizedListToList), volatility)
     }
+
+    /// Add parameter names to this signature, enabling named argument notation.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr_common::signature::{Signature, Volatility};
+    /// # use arrow::datatypes::DataType;
+    /// let sig = Signature::exact(vec![DataType::Int32, DataType::Utf8], Volatility::Immutable)
+    ///     .with_parameter_names(vec!["count".to_string(), "name".to_string()]);
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an error if the number of parameter names doesn't match the signature's arity.
+    /// For signatures with variable arity (e.g., `Variadic`, `VariadicAny`), parameter names
+    /// cannot be specified.
+    pub fn with_parameter_names(mut self, names: Vec<impl Into<String>>) -> Result<Self> {
+        let names = names.into_iter().map(Into::into).collect::<Vec<String>>();
+        // Validate that the number of names matches the signature
+        self.validate_parameter_names(&names)?;
+        self.parameter_names = Some(names);
+        Ok(self)
+    }
+
+    /// Validate that parameter names are compatible with this signature
+    fn validate_parameter_names(&self, names: &[String]) -> Result<()> {
+        match self.type_signature.arity() {
+            Arity::Fixed(expected) => {
+                if names.len() != expected {
+                    return plan_err!(
+                        "Parameter names count ({}) does not match signature arity ({})",
+                        names.len(),
+                        expected
+                    );
+                }
+            }
+            Arity::Variable => {
+                // For UserDefined signatures, allow parameter names
+                // The function implementer is responsible for validating the names match the actual arguments
+                if !matches!(self.type_signature, TypeSignature::UserDefined) {
+                    return plan_err!(
+                        "Cannot specify parameter names for variable arity signature: {:?}",
+                        self.type_signature
+                    );
+                }
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            if !seen.insert(name) {
+                return plan_err!("Duplicate parameter name: '{}'", name);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::types::{logical_int64, logical_string};
+    use datafusion_common::types::{logical_int32, logical_int64, logical_string};
 
     use super::*;
+    use crate::signature::{
+        ArrayFunctionArgument, ArrayFunctionSignature, Coercion, TypeSignatureClass,
+    };
 
     #[test]
     fn supports_zero_argument_tests() {
@@ -1166,5 +1490,431 @@ mod tests {
                 vec![DataType::Utf8View, DataType::Utf8View]
             ]
         );
+    }
+
+    #[test]
+    fn test_signature_with_parameter_names() {
+        let sig = Signature::exact(
+            vec![DataType::Int32, DataType::Utf8],
+            Volatility::Immutable,
+        )
+        .with_parameter_names(vec!["count".to_string(), "name".to_string()])
+        .unwrap();
+
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["count".to_string(), "name".to_string()])
+        );
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8])
+        );
+    }
+
+    #[test]
+    fn test_signature_parameter_names_wrong_count() {
+        let result = Signature::exact(
+            vec![DataType::Int32, DataType::Utf8],
+            Volatility::Immutable,
+        )
+        .with_parameter_names(vec!["count".to_string()]); // Only 1 name for 2 args
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("does not match signature arity"));
+    }
+
+    #[test]
+    fn test_signature_parameter_names_duplicate() {
+        let result = Signature::exact(
+            vec![DataType::Int32, DataType::Int32],
+            Volatility::Immutable,
+        )
+        .with_parameter_names(vec!["count".to_string(), "count".to_string()]);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Duplicate parameter name"));
+    }
+
+    #[test]
+    fn test_signature_parameter_names_variadic() {
+        let result = Signature::variadic(vec![DataType::Int32], Volatility::Immutable)
+            .with_parameter_names(vec!["arg".to_string()]);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("variable arity signature"));
+    }
+
+    #[test]
+    fn test_signature_without_parameter_names() {
+        let sig = Signature::exact(
+            vec![DataType::Int32, DataType::Utf8],
+            Volatility::Immutable,
+        );
+
+        assert_eq!(sig.parameter_names, None);
+    }
+
+    #[test]
+    fn test_signature_uniform_with_parameter_names() {
+        let sig = Signature::uniform(3, vec![DataType::Float64], Volatility::Immutable)
+            .with_parameter_names(vec!["x".to_string(), "y".to_string(), "z".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["x".to_string(), "y".to_string(), "z".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_numeric_with_parameter_names() {
+        let sig = Signature::numeric(2, Volatility::Immutable)
+            .with_parameter_names(vec!["a".to_string(), "b".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_nullary_with_empty_names() {
+        let sig = Signature::nullary(Volatility::Immutable)
+            .with_parameter_names(Vec::<String>::new())
+            .unwrap();
+
+        assert_eq!(sig.parameter_names, Some(vec![]));
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_exact() {
+        let sig = TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]);
+
+        assert_eq!(sig.to_string_repr_with_names(None), vec!["Int32, Utf8"]);
+
+        let names = vec!["id".to_string(), "name".to_string()];
+        assert_eq!(
+            sig.to_string_repr_with_names(Some(&names)),
+            vec!["id: Int32, name: Utf8"]
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_any() {
+        let sig = TypeSignature::Any(3);
+
+        assert_eq!(sig.to_string_repr_with_names(None), vec!["Any, Any, Any"]);
+
+        let names = vec!["x".to_string(), "y".to_string(), "z".to_string()];
+        assert_eq!(
+            sig.to_string_repr_with_names(Some(&names)),
+            vec!["x: Any, y: Any, z: Any"]
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_one_of() {
+        let sig =
+            TypeSignature::OneOf(vec![TypeSignature::Any(2), TypeSignature::Any(3)]);
+
+        assert_eq!(
+            sig.to_string_repr_with_names(None),
+            vec!["Any, Any", "Any, Any, Any"]
+        );
+
+        let names = vec![
+            "str".to_string(),
+            "start_pos".to_string(),
+            "length".to_string(),
+        ];
+        assert_eq!(
+            sig.to_string_repr_with_names(Some(&names)),
+            vec![
+                "str: Any, start_pos: Any",
+                "str: Any, start_pos: Any, length: Any"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_partial() {
+        // This simulates providing max arity names for a OneOf signature
+        let sig = TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]);
+
+        // Provide 3 names for 2-parameter signature (extra name is ignored via zip)
+        let names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(
+            sig.to_string_repr_with_names(Some(&names)),
+            vec!["a: Int32, b: Utf8"]
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_uniform() {
+        let sig = TypeSignature::Uniform(2, vec![DataType::Float64]);
+
+        assert_eq!(
+            sig.to_string_repr_with_names(None),
+            vec!["Float64, Float64"]
+        );
+
+        let names = vec!["x".to_string(), "y".to_string()];
+        assert_eq!(
+            sig.to_string_repr_with_names(Some(&names)),
+            vec!["x: Float64, y: Float64"]
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_coercible() {
+        let sig = TypeSignature::Coercible(vec![
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
+        ]);
+
+        let names = vec!["a".to_string(), "b".to_string()];
+        let result = sig.to_string_repr_with_names(Some(&names));
+        // Check that it contains the parameter names with type annotations
+        assert_eq!(result.len(), 1);
+        assert!(result[0].starts_with("a: "));
+        assert!(result[0].contains(", b: "));
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_comparable_numeric_string() {
+        let comparable = TypeSignature::Comparable(3);
+        let numeric = TypeSignature::Numeric(2);
+        let string_sig = TypeSignature::String(2);
+
+        let names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        // All should show parameter names with type annotations
+        assert_eq!(
+            comparable.to_string_repr_with_names(Some(&names)),
+            vec!["a: Comparable, b: Comparable, c: Comparable"]
+        );
+        assert_eq!(
+            numeric.to_string_repr_with_names(Some(&names)),
+            vec!["a: Numeric, b: Numeric"]
+        );
+        assert_eq!(
+            string_sig.to_string_repr_with_names(Some(&names)),
+            vec!["a: String, b: String"]
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_variadic_fallback() {
+        let variadic = TypeSignature::Variadic(vec![DataType::Utf8, DataType::LargeUtf8]);
+        let names = vec!["x".to_string()];
+        assert_eq!(
+            variadic.to_string_repr_with_names(Some(&names)),
+            variadic.to_string_repr()
+        );
+
+        let variadic_any = TypeSignature::VariadicAny;
+        assert_eq!(
+            variadic_any.to_string_repr_with_names(Some(&names)),
+            variadic_any.to_string_repr()
+        );
+
+        // UserDefined now shows parameter names when available
+        let user_defined = TypeSignature::UserDefined;
+        assert_eq!(
+            user_defined.to_string_repr_with_names(Some(&names)),
+            vec!["x"]
+        );
+        assert_eq!(
+            user_defined.to_string_repr_with_names(None),
+            user_defined.to_string_repr()
+        );
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_nullary() {
+        let sig = TypeSignature::Nullary;
+        let names = vec!["x".to_string()];
+
+        // Should return empty representation, names don't apply
+        assert_eq!(
+            sig.to_string_repr_with_names(Some(&names)),
+            vec!["NullAry()"]
+        );
+        assert_eq!(sig.to_string_repr_with_names(None), vec!["NullAry()"]);
+    }
+
+    #[test]
+    fn test_to_string_repr_with_names_array_signature() {
+        let sig = TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+            arguments: vec![
+                ArrayFunctionArgument::Array,
+                ArrayFunctionArgument::Index,
+                ArrayFunctionArgument::Element,
+            ],
+            array_coercion: None,
+        });
+
+        assert_eq!(
+            sig.to_string_repr_with_names(None),
+            vec!["array, index, element"]
+        );
+
+        let names = vec!["arr".to_string(), "idx".to_string(), "val".to_string()];
+        assert_eq!(
+            sig.to_string_repr_with_names(Some(&names)),
+            vec!["arr: array, idx: index, val: element"]
+        );
+
+        let recursive =
+            TypeSignature::ArraySignature(ArrayFunctionSignature::RecursiveArray);
+        let names = vec!["array".to_string()];
+        assert_eq!(
+            recursive.to_string_repr_with_names(Some(&names)),
+            vec!["array: recursive_array"]
+        );
+
+        // Test MapArray (1 argument)
+        let map_array = TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray);
+        let names = vec!["map".to_string()];
+        assert_eq!(
+            map_array.to_string_repr_with_names(Some(&names)),
+            vec!["map: map_array"]
+        );
+    }
+
+    #[test]
+    fn test_type_signature_arity_exact() {
+        let sig = TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]);
+        assert_eq!(sig.arity(), Arity::Fixed(2));
+
+        let sig = TypeSignature::Exact(vec![]);
+        assert_eq!(sig.arity(), Arity::Fixed(0));
+    }
+
+    #[test]
+    fn test_type_signature_arity_uniform() {
+        let sig = TypeSignature::Uniform(3, vec![DataType::Float64]);
+        assert_eq!(sig.arity(), Arity::Fixed(3));
+
+        let sig = TypeSignature::Uniform(1, vec![DataType::Int32]);
+        assert_eq!(sig.arity(), Arity::Fixed(1));
+    }
+
+    #[test]
+    fn test_type_signature_arity_numeric() {
+        let sig = TypeSignature::Numeric(2);
+        assert_eq!(sig.arity(), Arity::Fixed(2));
+    }
+
+    #[test]
+    fn test_type_signature_arity_string() {
+        let sig = TypeSignature::String(3);
+        assert_eq!(sig.arity(), Arity::Fixed(3));
+    }
+
+    #[test]
+    fn test_type_signature_arity_comparable() {
+        let sig = TypeSignature::Comparable(2);
+        assert_eq!(sig.arity(), Arity::Fixed(2));
+    }
+
+    #[test]
+    fn test_type_signature_arity_any() {
+        let sig = TypeSignature::Any(4);
+        assert_eq!(sig.arity(), Arity::Fixed(4));
+    }
+
+    #[test]
+    fn test_type_signature_arity_coercible() {
+        let sig = TypeSignature::Coercible(vec![
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+        ]);
+        assert_eq!(sig.arity(), Arity::Fixed(2));
+    }
+
+    #[test]
+    fn test_type_signature_arity_nullary() {
+        let sig = TypeSignature::Nullary;
+        assert_eq!(sig.arity(), Arity::Fixed(0));
+    }
+
+    #[test]
+    fn test_type_signature_arity_array_signature() {
+        // Test Array variant with 2 arguments
+        let sig = TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+            arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Index],
+            array_coercion: None,
+        });
+        assert_eq!(sig.arity(), Arity::Fixed(2));
+
+        // Test Array variant with 3 arguments
+        let sig = TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+            arguments: vec![
+                ArrayFunctionArgument::Array,
+                ArrayFunctionArgument::Element,
+                ArrayFunctionArgument::Index,
+            ],
+            array_coercion: None,
+        });
+        assert_eq!(sig.arity(), Arity::Fixed(3));
+
+        // Test RecursiveArray variant
+        let sig = TypeSignature::ArraySignature(ArrayFunctionSignature::RecursiveArray);
+        assert_eq!(sig.arity(), Arity::Fixed(1));
+
+        // Test MapArray variant
+        let sig = TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray);
+        assert_eq!(sig.arity(), Arity::Fixed(1));
+    }
+
+    #[test]
+    fn test_type_signature_arity_one_of_fixed() {
+        // OneOf with all fixed arity variants should return max arity
+        let sig = TypeSignature::OneOf(vec![
+            TypeSignature::Exact(vec![DataType::Int32]),
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]),
+            TypeSignature::Exact(vec![
+                DataType::Int32,
+                DataType::Utf8,
+                DataType::Float64,
+            ]),
+        ]);
+        assert_eq!(sig.arity(), Arity::Fixed(3));
+    }
+
+    #[test]
+    fn test_type_signature_arity_one_of_variable() {
+        // OneOf with variable arity variant should return Variable
+        let sig = TypeSignature::OneOf(vec![
+            TypeSignature::Exact(vec![DataType::Int32]),
+            TypeSignature::VariadicAny,
+        ]);
+        assert_eq!(sig.arity(), Arity::Variable);
+    }
+
+    #[test]
+    fn test_type_signature_arity_variadic() {
+        let sig = TypeSignature::Variadic(vec![DataType::Int32]);
+        assert_eq!(sig.arity(), Arity::Variable);
+
+        let sig = TypeSignature::VariadicAny;
+        assert_eq!(sig.arity(), Arity::Variable);
+    }
+
+    #[test]
+    fn test_type_signature_arity_user_defined() {
+        let sig = TypeSignature::UserDefined;
+        assert_eq!(sig.arity(), Arity::Variable);
     }
 }
