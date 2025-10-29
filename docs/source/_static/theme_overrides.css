@@ -64,6 +64,11 @@ html[data-theme="dark"] .dark-logo {
   background-color: transparent !important;
 }
 
+/* Align search bar & theme switch right */
+.navbar-header-items__end {
+  margin-left: auto;
+}
+
 /* Ensure the logo is properly displayed */
 
 .navbar-brand {

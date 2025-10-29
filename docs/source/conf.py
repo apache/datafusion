@@ -93,7 +93,8 @@ html_theme_options = {
         "image_dark": "_static/images/original_dark.svg", 
     },
     "use_edit_page_button": True,
-    "navbar_end": ["theme-switcher", "navbar-icon-links"],
+    "navbar_center": [],
+    "navbar_end": ["theme-switcher"],
 }
 
 html_context = {
