@@ -2637,13 +2637,6 @@ The `now()` return value is determined at query time and will return the same ti
 now()
 ```
 
-> **Note:** When constructing DataFusion directly from Rust, prefer
-> [`NowFunc::new_with_config`](https://docs.rs/datafusion/latest/datafusion/functions/datetime/struct.NowFunc.html#method.new_with_config)
-> to supply a configuration with the desired timezone. The deprecated
-> [`NowFunc::new`](https://docs.rs/datafusion/latest/datafusion/functions/datetime/struct.NowFunc.html#method.new)
-> helper remains available for backwards compatibility and now mirrors
-> the canonical default offset (`+00:00`).
-
 #### Aliases
 
 - current_timestamp
