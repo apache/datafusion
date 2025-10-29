@@ -482,9 +482,20 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
 
     if let Some(unit) = unit {
         let original_type = array.data_type();
-        let array = arrow::compute::cast(array, &DataType::Int64)?;
-        let array = arrow::compute::kernels::numeric::div(&array, &unit)?;
+        let input = arrow::compute::cast(array, &DataType::Int64)?;
+        let array = arrow::compute::kernels::numeric::div(&input, &unit)?;
         let array = arrow::compute::kernels::numeric::mul(&array, &unit)?;
+        // For timestamps before 1970-01-01T00:00:00Z (negative values)
+        // it is possible that the truncated value is actually later
+        // than the original value. Correct any such cases by
+        // subtracting `unit`.
+        let too_late = arrow::compute::kernels::cmp::gt(&array, &input)?;
+        let array = if too_late.true_count() > 0 {
+            let earlier = arrow::compute::kernels::numeric::sub(&array, &unit)?;
+            arrow::compute::kernels::zip::zip(&too_late, &earlier, &array)?
+        } else {
+            array
+        };
         let array = arrow::compute::cast(&array, original_type)?;
         Ok(array)
     } else {
