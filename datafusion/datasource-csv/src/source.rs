@@ -29,7 +29,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
     as_file_source, calculate_range, FileRange, ListingTableUrl, PartitionedFile,
-    RangeCalculation,
+    RangeCalculation, TableSchema,
 };
 
 use arrow::csv;
@@ -258,9 +258,9 @@ impl FileSource for CsvSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.file_schema = Some(schema);
+        conf.file_schema = Some(Arc::clone(schema.file_schema()));
         Arc::new(conf)
     }
 
