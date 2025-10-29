@@ -45,6 +45,7 @@ use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
@@ -2990,6 +2991,119 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                  |
     |               |                                                                                                                                                                                                                                                                                                          |
     +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    "#
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reproducer_e2e_with_repartition_sorts_false() -> Result<()> {
+    reproducer_e2e_impl(false).await?;
+
+    // 💥 Doesn't pass, and generates this plan:
+    //
+    // AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    //   SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+    //     CoalescePartitionsExec
+    //       AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+    //         UnionExec
+    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reproducer_e2e_with_repartition_sorts_true() -> Result<()> {
+    reproducer_e2e_impl(true).await?;
+
+    // 💥 Doesn't pass, and generates this plan:
+    //
+    // AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    //   SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+    //     SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+    //       AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+    //         UnionExec
+    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+
+    Ok(())
+}
+
+async fn reproducer_e2e_impl(repartition_sorts: bool) -> Result<()> {
+    let config = SessionConfig::default()
+        .with_target_partitions(1)
+        .with_repartition_sorts(repartition_sorts);
+    let ctx = SessionContext::new_with_config(config);
+
+    let testdata = parquet_test_data();
+
+    // Register "sorted" table, that is sorted
+    ctx.register_parquet(
+        "sorted",
+        &format!("{testdata}/alltypes_tiny_pages.parquet"),
+        ParquetReadOptions::default()
+            .file_sort_order(vec![vec![col("id").sort(true, false)]]),
+    )
+        .await?;
+
+    // Register "unsorted" table
+    ctx.register_parquet(
+        "unsorted",
+        &format!("{testdata}/alltypes_tiny_pages.parquet"),
+        ParquetReadOptions::default()
+    )
+        .await?;
+
+    let source_sorted = ctx
+        .table("sorted")
+        .await
+        .unwrap()
+        .select(vec![col("id")])
+        .unwrap();
+
+    let source_unsorted = ctx
+        .table("unsorted")
+        .await
+        .unwrap()
+        .select(vec![col("id")])
+        .unwrap();
+
+    let source_unsorted_resorted = source_unsorted
+        .sort(vec![col("id").sort(true, false)])?;
+
+    let union = source_sorted.union(source_unsorted_resorted)?;
+
+    let agg = union.aggregate(vec![col("id")], vec![])?;
+
+    let df = agg;
+
+    // To be able to remove user specific paths from the plan, for stable assertions
+    let testdata_clean = Path::new(&testdata).canonicalize()?.display().to_string();
+    let testdata_clean = testdata_clean.strip_prefix("/").unwrap_or(&testdata_clean);
+
+    let plan = df.explain(false, false)?.collect().await?;
+    assert_snapshot!(
+        pretty_format_batches(&plan)?.to_string().replace(&testdata_clean, "{testdata}"),
+        @r#"
+    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                                                                                                            |
+    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Aggregate: groupBy=[[id]], aggr=[[]]                                                                                                                                                                            |
+    |               |   Union                                                                                                                                                                                                         |
+    |               |     TableScan: sorted projection=[id]                                                                                                                                                                           |
+    |               |     Sort: unsorted.id ASC NULLS LAST                                                                                                                                                                            |
+    |               |       TableScan: unsorted projection=[id]                                                                                                                                                                       |
+    | physical_plan | AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                      |
+    |               |   SortPreservingMergeExec: [id@0 ASC NULLS LAST]                                                                                                                                                                |
+    |               |     AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                |
+    |               |       UnionExec                                                                                                                                                                                                 |
+    |               |         DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet |
+    |               |         SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                     |
+    |               |           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                      |
+    |               |                                                                                                                                                                                                                 |
+    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
     "#
     );
 
