@@ -482,7 +482,7 @@ fn test_apply_schema_adapter_with_factory() {
     ]));
 
     // Create a parquet source
-    let source = ParquetSource::default();
+    let source = ParquetSource::new(schema.clone());
 
     // Create a file scan config with source that has a schema adapter factory
     let factory = Arc::new(PrefixAdapterFactory {
@@ -532,7 +532,7 @@ fn test_apply_schema_adapter_without_factory() {
     ]));
 
     // Create a parquet source
-    let source = ParquetSource::default();
+    let source = ParquetSource::new(schema.clone());
 
     // Convert to Arc<dyn FileSource>
     let file_source: Arc<dyn FileSource> = Arc::new(source.clone());

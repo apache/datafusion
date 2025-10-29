@@ -85,8 +85,8 @@ pub(crate) mod test_util {
                 state,
                 FileScanConfigBuilder::new(
                     ObjectStoreUrl::local_filesystem(),
-                    file_schema,
-                    format.file_source(),
+                    file_schema.clone(),
+                    format.file_source(file_schema),
                 )
                 .with_file_groups(file_groups)
                 .with_statistics(statistics)

@@ -338,7 +338,10 @@ impl ListingTable {
     fn create_file_source_with_schema_adapter(
         &self,
     ) -> datafusion_common::Result<Arc<dyn FileSource>> {
-        let mut source = self.options.format.file_source();
+        let mut source = self
+            .options
+            .format
+            .file_source(Arc::clone(&self.file_schema));
         // Apply schema adapter to source if available
         //
         // The source will use this SchemaAdapter to adapt data batches as they flow up the plan.

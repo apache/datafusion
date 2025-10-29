@@ -281,7 +281,8 @@ impl FileFormat for JsonFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
+    fn file_source(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
+        // JsonSource doesn't store schema, but signature must match trait
         Arc::new(JsonSource::default())
     }
 }

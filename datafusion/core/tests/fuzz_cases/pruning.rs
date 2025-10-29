@@ -276,9 +276,9 @@ async fn execute_with_predicate(
     ctx: &SessionContext,
 ) -> Vec<String> {
     let parquet_source = if prune_stats {
-        ParquetSource::default().with_predicate(predicate.clone())
+        ParquetSource::new(schema.clone()).with_predicate(predicate.clone())
     } else {
-        ParquetSource::default()
+        ParquetSource::new(schema.clone())
     };
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("memory://").unwrap(),

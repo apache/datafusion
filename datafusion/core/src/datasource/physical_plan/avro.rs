@@ -81,7 +81,7 @@ mod tests {
             .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
-        let source = Arc::new(AvroSource::new());
+        let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
         let conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             file_schema,
@@ -157,7 +157,7 @@ mod tests {
         // Include the missing column in the projection
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
-        let source = Arc::new(AvroSource::new());
+        let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
         let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file(meta.into())
             .with_projection_indices(projection)
@@ -227,7 +227,7 @@ mod tests {
         partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
-        let source = Arc::new(AvroSource::new());
+        let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
         let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.

@@ -73,9 +73,6 @@ impl FileSource for ArrowSource {
         Arc::new(Self { ..self.clone() })
     }
 
-    fn with_schema(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projected_statistics = Some(statistics);

@@ -35,6 +35,7 @@ mod tests {
     use crate::prelude::CsvReadOptions;
     use crate::prelude::SessionContext;
     use crate::test::partitioned_file_groups;
+    use datafusion_common::config::CsvOptions;
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_batches_eq, Result};
@@ -110,7 +111,13 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -175,7 +182,13 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -240,7 +253,13 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -303,7 +322,13 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -362,7 +387,13 @@ mod tests {
 
         let num_file_schema_fields = file_schema.fields().len();
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -463,7 +494,13 @@ mod tests {
         )
         .unwrap();
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,

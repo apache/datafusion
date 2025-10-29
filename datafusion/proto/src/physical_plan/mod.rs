@@ -23,7 +23,8 @@ use self::to_proto::{serialize_partitioning, serialize_physical_expr};
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches,
+    parse_physical_window_expr, parse_protobuf_file_scan_config,
+    parse_protobuf_file_scan_schema, parse_record_batches,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
@@ -42,6 +43,7 @@ use crate::{convert_required, into_required};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{IntervalMonthDayNanoType, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
+use datafusion_common::config::CsvOptions;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
 };
@@ -51,6 +53,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource::TableSchema;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
 use datafusion_datasource_csv::file_format::CsvSink;
@@ -612,11 +615,19 @@ impl protobuf::PhysicalPlanNode {
             None
         };
 
+        // Parse schema first so we can use it to create CsvSource
+        let schema = parse_protobuf_file_scan_schema(scan.base_conf.as_ref().unwrap())?;
+
+        let csv_options = CsvOptions {
+            has_header: Some(scan.has_header),
+            delimiter: str_to_byte(&scan.delimiter, "delimiter")?,
+            quote: str_to_byte(&scan.quote, "quote")?,
+            ..Default::default()
+        };
         let source = Arc::new(
             CsvSource::new(
-                scan.has_header,
-                str_to_byte(&scan.delimiter, "delimiter")?,
-                0,
+                TableSchema::from_file_schema(schema),
+                csv_options,
             )
             .with_escape(escape)
             .with_comment(comment),
@@ -695,7 +706,12 @@ impl protobuf::PhysicalPlanNode {
             if let Some(table_options) = scan.parquet_options.as_ref() {
                 options = table_options.try_into()?;
             }
-            let mut source = ParquetSource::new(options);
+
+            // Parse schema first so we can use it to create ParquetSource
+            let schema = parse_protobuf_file_scan_schema(base_conf)?;
+
+            let mut source =
+                ParquetSource::new(TableSchema::from_file_schema(schema)).with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);

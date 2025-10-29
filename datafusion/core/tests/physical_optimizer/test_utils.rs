@@ -73,8 +73,8 @@ use datafusion_physical_plan::{
 pub fn parquet_exec(schema: SchemaRef) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema,
-        Arc::new(ParquetSource::default()),
+        schema.clone(),
+        Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .build();
@@ -89,8 +89,8 @@ pub(crate) fn parquet_exec_with_sort(
 ) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema,
-        Arc::new(ParquetSource::default()),
+        schema.clone(),
+        Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
@@ -128,7 +128,7 @@ pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
-        Arc::new(ParquetSource::new(Default::default())),
+        Arc::new(ParquetSource::new(schema())),
     )
     .with_file(PartitionedFile::new("x".to_string(), file_size))
     .with_statistics(statistics)

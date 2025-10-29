@@ -24,7 +24,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -386,8 +386,16 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
     ]));
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema,
-        Arc::new(CsvSource::new(false, 0, 0)),
+        schema.clone(),
+        {
+            let options = CsvOptions {
+                has_header: Some(false),
+                delimiter: 0,
+                quote: 0,
+                ..Default::default()
+            };
+            Arc::new(CsvSource::new(schema.clone(), options))
+        },
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection_indices(Some(vec![0, 1, 2, 3, 4]))
@@ -405,8 +413,16 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
     ]));
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema,
-        Arc::new(CsvSource::new(false, 0, 0)),
+        schema.clone(),
+        {
+            let options = CsvOptions {
+                has_header: Some(false),
+                delimiter: 0,
+                quote: 0,
+                ..Default::default()
+            };
+            Arc::new(CsvSource::new(schema.clone(), options))
+        },
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection_indices(Some(vec![3, 2, 1]))
@@ -1589,10 +1605,16 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         Field::new("string_col", DataType::Utf8, true),
     ]));
 
+    let options = CsvOptions {
+        has_header: Some(false),
+        delimiter: b',',
+        quote: b'"',
+        ..Default::default()
+    };
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         file_schema.clone(),
-        Arc::new(CsvSource::default()),
+        Arc::new(CsvSource::new(file_schema, options)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_table_partition_cols(vec![Field::new("partition_col", DataType::Utf8, true)])

@@ -128,8 +128,8 @@ impl FileFormat for TSVFileFormat {
             .await
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        self.csv_file_format.file_source()
+    fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+        self.csv_file_format.file_source(schema)
     }
 }
 

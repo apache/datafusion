@@ -25,6 +25,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, ParquetSource,
 };
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -53,7 +54,6 @@ pub async fn from_substrait_rel(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut base_config_builder;
 
-    let source = Arc::new(ParquetSource::default());
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
             if read.filter.is_some() || read.best_effort_filter.is_some() {
@@ -80,9 +80,11 @@ pub async fn from_substrait_rel(
                 .collect::<Result<Vec<Field>>>()
             {
                 Ok(fields) => {
+                    let schema = Arc::new(Schema::new(fields));
+                    let source = Arc::new(ParquetSource::new(TableSchema::from_file_schema(Arc::clone(&schema))));
                     base_config_builder = FileScanConfigBuilder::new(
                         ObjectStoreUrl::local_filesystem(),
-                        Arc::new(Schema::new(fields)),
+                        schema,
                         source,
                     );
                 }

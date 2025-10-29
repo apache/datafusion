@@ -30,6 +30,7 @@ use datafusion::{
     physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
+use datafusion_common::config::CsvOptions;
 
 use datafusion::datasource::{
     physical_plan::FileScanConfigBuilder, table_schema::TableSchema,
@@ -57,19 +58,25 @@ async fn csv_opener() -> Result<()> {
 
     let path = std::path::Path::new(&path).canonicalize()?;
 
+    let options = CsvOptions {
+        has_header: Some(true),
+        delimiter: b',',
+        quote: b'"',
+        ..Default::default()
+    };
+
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         Arc::clone(&schema),
-        Arc::new(CsvSource::default()),
+        Arc::new(CsvSource::new(TableSchema::from_file_schema(Arc::clone(&schema)), options.clone())),
     )
     .with_projection_indices(Some(vec![12, 0]))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.display().to_string(), 10))
     .build();
 
-    let config = CsvSource::new(true, b',', b'"')
+    let config = CsvSource::new(TableSchema::from_file_schema(schema), options)
         .with_comment(Some(b'#'))
-        .with_schema(TableSchema::from_file_schema(schema))
         .with_batch_size(8192)
         .with_projection(&scan_config);
 

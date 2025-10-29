@@ -37,7 +37,6 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::TableSchema;
@@ -157,7 +156,10 @@ impl TestParquetFile {
         maybe_filter: Option<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let parquet_options = ctx.copied_table_options().parquet;
-        let source = Arc::new(ParquetSource::new(parquet_options.clone()));
+        let source = Arc::new(
+            ParquetSource::new(TableSchema::from_file_schema(Arc::clone(&self.schema)))
+                .with_table_parquet_options(parquet_options.clone()),
+        );
         let scan_config_builder = FileScanConfigBuilder::new(
             self.object_store_url.clone(),
             Arc::clone(&self.schema),
@@ -184,10 +186,10 @@ impl TestParquetFile {
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
             let source = Arc::new(
-                ParquetSource::new(parquet_options)
+                ParquetSource::new(TableSchema::from_file_schema(Arc::clone(&self.schema)))
+                    .with_table_parquet_options(parquet_options)
                     .with_predicate(Arc::clone(&physical_filter_expr)),
-            )
-            .with_schema(TableSchema::from_file_schema(Arc::clone(&self.schema)));
+            );
             let config = scan_config_builder.with_source(source).build();
             let parquet_exec = DataSourceExec::from_data_source(config);
 

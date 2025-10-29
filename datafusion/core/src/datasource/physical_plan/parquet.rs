@@ -161,7 +161,7 @@ mod tests {
                 .as_ref()
                 .map(|p| logical2physical(p, &table_schema));
 
-            let mut source = ParquetSource::default();
+            let mut source = ParquetSource::new(TableSchema::from_file_schema(table_schema));
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
             }
@@ -186,7 +186,7 @@ mod tests {
                 source = source.with_bloom_filter_on_read(false);
             }
 
-            source.with_schema(TableSchema::new(Arc::clone(&table_schema), vec![]))
+            Arc::new(source)
         }
 
         fn build_parquet_exec(
@@ -1550,8 +1550,8 @@ mod tests {
         ) -> Result<()> {
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
-                file_schema,
-                Arc::new(ParquetSource::default()),
+                Arc::clone(&file_schema),
+                Arc::new(ParquetSource::new(file_schema)),
             )
             .with_file_groups(file_groups)
             .build();
@@ -1653,7 +1653,7 @@ mod tests {
             ),
         ]);
 
-        let source = Arc::new(ParquetSource::default());
+        let source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
         let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
             .with_file(partitioned_file)
             // file has 10 cols so index 12 should be month and 13 should be day
@@ -1731,8 +1731,8 @@ mod tests {
         let file_schema = Arc::new(Schema::empty());
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
-            file_schema,
-            Arc::new(ParquetSource::default()),
+            Arc::clone(&file_schema),
+            Arc::new(ParquetSource::new(file_schema)),
         )
         .with_file(partitioned_file)
         .build();
@@ -2279,7 +2279,7 @@ mod tests {
         let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
 
         let source = Arc::new(
-            ParquetSource::default()
+            ParquetSource::new(Arc::clone(&schema))
                 .with_parquet_file_reader_factory(reader_factory)
                 .with_metadata_size_hint(456),
         );

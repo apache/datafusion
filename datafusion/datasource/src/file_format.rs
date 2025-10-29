@@ -111,7 +111,10 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     }
 
     /// Return the related FileSource such as `CsvSource`, `JsonSource`, etc.
-    fn file_source(&self) -> Arc<dyn FileSource>;
+    ///
+    /// # Arguments
+    /// * `schema` - The file schema to use for the FileSource
+    fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource>;
 }
 
 /// Factory for creating [`FileFormat`] instances based on session and command level options

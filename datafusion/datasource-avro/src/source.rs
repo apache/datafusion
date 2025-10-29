@@ -36,9 +36,9 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
 
 /// AvroSource holds the extra configuration that is necessary for opening avro files
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AvroSource {
-    schema: Option<SchemaRef>,
+    table_schema: TableSchema,
     batch_size: Option<usize>,
     projection: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
@@ -47,15 +47,22 @@ pub struct AvroSource {
 }
 
 impl AvroSource {
-    /// Initialize an AvroSource with default values
-    pub fn new() -> Self {
-        Self::default()
+    /// Initialize an AvroSource with the provided schema
+    pub fn new(table_schema: TableSchema) -> Self {
+        Self {
+            table_schema,
+            batch_size: None,
+            projection: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projected_statistics: None,
+            schema_adapter_factory: None,
+        }
     }
 
     fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
         AvroReader::try_new(
             reader,
-            Arc::clone(self.schema.as_ref().expect("Schema must set before open")),
+            Arc::clone(self.table_schema.file_schema()),
             self.batch_size.expect("Batch size must set before open"),
             self.projection.clone(),
         )
@@ -82,13 +89,6 @@ impl FileSource for AvroSource {
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
-        Arc::new(conf)
-    }
-
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        // TableSchema may have partition columns, but AvroSource does not use partition columns or values atm
-        conf.schema = Some(Arc::clone(schema.file_schema()));
         Arc::new(conf)
     }
 

@@ -883,7 +883,11 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let mut options = TableParquetOptions::new();
     options.global.pushdown_filters = true;
 
-    let file_source = Arc::new(ParquetSource::new(options).with_predicate(predicate));
+    let file_source = Arc::new(
+        ParquetSource::new(Arc::clone(&file_schema))
+            .with_table_parquet_options(options)
+            .with_predicate(predicate),
+    );
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -914,7 +918,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let file_source = Arc::new(ParquetSource::default());
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         schema,
@@ -942,8 +946,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         inner: Arc::new(Column::new("col", 1)),
     });
 
-    let file_source =
-        Arc::new(ParquetSource::default().with_predicate(custom_predicate_expr));
+    let file_source = Arc::new(
+        ParquetSource::new(Arc::clone(&file_schema))
+            .with_predicate(custom_predicate_expr),
+    );
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -1803,7 +1809,8 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let statistics = Statistics::new_unknown(&schema);
 
-    let file_source = ParquetSource::default().with_statistics(statistics.clone());
+    let file_source =
+        ParquetSource::new(Arc::clone(&schema)).with_statistics(statistics.clone());
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         schema.clone(),
