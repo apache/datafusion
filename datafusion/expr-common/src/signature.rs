@@ -127,11 +127,10 @@ pub enum Arity {
 /// ```
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_expr_common::signature::{TypeSignature};
-///  // Declares the function must be invoked with a single argument of type `Utf8View`.
-///  // if a user calls the function with `Utf8` or `LargeUtf8`, DataFusion will
-///  // automatically add a cast to `Utf8View` during planning.
-///  let type_signature = TypeSignature::Exact(vec![DataType::Utf8View]);
-///
+/// // Declares the function must be invoked with a single argument of type `Utf8View`.
+/// // if a user calls the function with `Utf8` or `LargeUtf8`, DataFusion will
+/// // automatically add a cast to `Utf8View` during planning.
+/// let type_signature = TypeSignature::Exact(vec![DataType::Utf8View]);
 /// ```
 ///
 /// # Example: Timestamps
@@ -144,11 +143,11 @@ pub enum Arity {
 /// # use arrow::datatypes::{DataType, TimeUnit};
 /// # use datafusion_expr_common::signature::{TIMEZONE_WILDCARD, TypeSignature};
 /// let type_signature = TypeSignature::Exact(vec![
-///   // A nanosecond precision timestamp with ANY timezone
-///   // matches  Timestamp(Nanosecond, Some("+0:00"))
-///   // matches  Timestamp(Nanosecond, Some("+5:00"))
-///   // does not match  Timestamp(Nanosecond, None)
-///   DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+///     // A nanosecond precision timestamp with ANY timezone
+///     // matches  Timestamp(Nanosecond, Some("+0:00"))
+///     // matches  Timestamp(Nanosecond, Some("+5:00"))
+///     // does not match  Timestamp(Nanosecond, None)
+///     DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
 /// ]);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -858,8 +857,8 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 /// # Examples
 ///
 /// ```
+/// use datafusion_common::types::{logical_binary, logical_string, NativeType};
 /// use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-/// use datafusion_common::types::{NativeType, logical_binary, logical_string};
 ///
 /// // Exact coercion that only accepts timestamp types
 /// let exact = Coercion::new_exact(TypeSignatureClass::Timestamp);
@@ -868,7 +867,7 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 /// let implicit = Coercion::new_implicit(
 ///     TypeSignatureClass::Native(logical_string()),
 ///     vec![TypeSignatureClass::Native(logical_binary())],
-///     NativeType::String
+///     NativeType::String,
 /// );
 /// ```
 ///
@@ -1275,8 +1274,9 @@ impl Signature {
     /// ```
     /// # use datafusion_expr_common::signature::{Signature, Volatility};
     /// # use arrow::datatypes::DataType;
-    /// let sig = Signature::exact(vec![DataType::Int32, DataType::Utf8], Volatility::Immutable)
-    ///     .with_parameter_names(vec!["count".to_string(), "name".to_string()]);
+    /// let sig =
+    ///     Signature::exact(vec![DataType::Int32, DataType::Utf8], Volatility::Immutable)
+    ///         .with_parameter_names(vec!["count".to_string(), "name".to_string()]);
     /// ```
     ///
     /// # Errors
