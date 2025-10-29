@@ -1886,6 +1886,8 @@ version = "50.3.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "criterion",
+ "datafusion",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-datasource",
@@ -1900,6 +1902,8 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store",
+ "testcontainers",
+ "testcontainers-modules",
  "tokio",
 ]
 

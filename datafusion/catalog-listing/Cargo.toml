@@ -49,7 +49,17 @@ object_store = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+datafusion = { workspace = true }
 datafusion-datasource-parquet = { workspace = true }
+criterion = { workspace = true, features = ["async_tokio"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["minio"] }
+object_store = { workspace = true, features = ["aws"] }
+
+[[bench]]
+name = "pruned_partition_list"
+harness = false
 
 [lints]
 workspace = true
