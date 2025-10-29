@@ -89,6 +89,7 @@ use log::{debug, warn};
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::file_stream::FileOpener;
 /// # use datafusion_datasource::source::DataSourceExec;
+/// # use datafusion_datasource::table_schema::TableSchema;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -109,7 +110,7 @@ use log::{debug, warn};
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
-/// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { Arc::new(self.clone()) as Arc<dyn FileSource> }
+/// #  fn with_schema(&self, _: TableSchema) -> Arc<dyn FileSource> { Arc::new(self.clone()) as Arc<dyn FileSource> }
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics), schema_adapter_factory: self.schema_adapter_factory.clone()} ) }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
@@ -470,7 +471,7 @@ impl FileScanConfigBuilder {
 
         let file_source = file_source
             .with_statistics(statistics.clone())
-            .with_schema(Arc::clone(table_schema.file_schema()));
+            .with_schema(table_schema.clone());
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
@@ -1388,25 +1389,25 @@ fn create_output_array(
 /// correctly sorted on `(A, B, C)`
 ///
 /// ```text
-///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
-///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-///┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
-///  │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
-///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
-///  │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
-///┃                                          │                    │                     ┃
-///  │                   │ │                    │                    │                 │
-///┃                                          │                    │                     ┃
-///  │                   │ │                    │                    │                 │
-///┃                                          │                    │                     ┃
-///  │                   │ │                    │                    │                 │
-///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
-///     DataFusion           DataFusion           DataFusion           DataFusion
-///┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
-/// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+/// ┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
+///   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+/// ┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
+///   │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
+/// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
+///   │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
+/// ┃                                          │                    │                     ┃
+///   │                   │ │                    │                    │                 │
+/// ┃                                          │                    │                     ┃
+///   │                   │ │                    │                    │                 │
+/// ┃                                          │                    │                     ┃
+///   │                   │ │                    │                    │                 │
+/// ┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+///      DataFusion           DataFusion           DataFusion           DataFusion
+/// ┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
+///  ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
 ///
 ///                                      DataSourceExec
-///```
+/// ```
 ///
 /// However, when more than 1 file is assigned to each partition, each
 /// partition is NOT correctly sorted on `(A, B, C)`. Once the second
@@ -1414,25 +1415,25 @@ fn create_output_array(
 /// the same sorted stream
 ///
 ///```text
-///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
-///┃   ┌───────────────┐     ┌──────────────┐ │
-///  │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
-///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
-///  │ └───────────────┘ │ │ └──────────────┘   ┃
-///┃   ┌───────────────┐     ┌──────────────┐ │
-///  │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
-///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
-///  │ └───────────────┘ │ │ └──────────────┘   ┃
-///┃                                          │
-///  │                   │ │                    ┃
-///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
-///     DataFusion           DataFusion         ┃
-///┃    Partition 1          Partition 2
-/// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
+/// ┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+///   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+/// ┃   ┌───────────────┐     ┌──────────────┐ │
+///   │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
+/// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+///   │ └───────────────┘ │ │ └──────────────┘   ┃
+/// ┃   ┌───────────────┐     ┌──────────────┐ │
+///   │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
+/// ┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+///   │ └───────────────┘ │ │ └──────────────┘   ┃
+/// ┃                                          │
+///   │                   │ │                    ┃
+/// ┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///      DataFusion           DataFusion         ┃
+/// ┃    Partition 1          Partition 2
+///  ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
 ///
 ///              DataSourceExec
-///```
+/// ```
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,

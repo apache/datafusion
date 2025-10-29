@@ -1940,7 +1940,8 @@ impl protobuf::PhysicalPlanNode {
         };
 
         let table = GenerateSeriesTable::new(Arc::clone(&schema), args);
-        let generator = table.as_generator(generate_series.target_batch_size as usize)?;
+        let generator =
+            table.as_generator(generate_series.target_batch_size as usize, None)?;
 
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
