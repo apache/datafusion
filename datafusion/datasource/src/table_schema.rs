@@ -85,6 +85,11 @@ impl TableSchema {
     /// The table schema is automatically computed by appending the partition columns
     /// to the file schema.
     ///
+    /// You should prefer calling this method over
+    /// chaining [`TableSchema::from_file_schema`] and [`TableSchema::with_table_partition_cols`]
+    /// if you have both the file schema and partition columns available at construction time
+    /// since it avoids re-computing the table schema.
+    ///
     /// # Arguments
     ///
     /// * `file_schema` - Schema of the data files (without partition columns)
@@ -119,6 +124,27 @@ impl TableSchema {
             table_partition_cols,
             table_schema: Arc::new(builder.finish()),
         }
+    }
+
+    /// Create a new TableSchema with no partition columns.
+    ///
+    /// You should prefer calling [`TableSchema::new`] if you have partition columns at
+    /// construction time since it avoids re-computing the table schema.
+    pub fn from_file_schema(file_schema: SchemaRef) -> Self {
+        Self::new(file_schema, vec![])
+    }
+
+    /// Add partition columns to an existing TableSchema, returning a new instance.
+    ///
+    /// You should prefer calling [`TableSchema::new`] instead of chaining [`TableSchema::from_file_schema`]
+    /// into [`TableSchema::with_table_partition_cols`] if you have partition columns at construction time
+    /// since it avoids re-computing the table schema.
+    pub fn with_table_partition_cols(mut self, partition_cols: Vec<FieldRef>) -> Self {
+        self.table_partition_cols = partition_cols;
+        let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
+        builder.extend(self.table_partition_cols.iter().cloned());
+        self.table_schema = Arc::new(builder.finish());
+        self
     }
 
     /// Get the file schema (without partition columns).

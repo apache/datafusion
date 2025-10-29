@@ -67,9 +67,9 @@ use url::Url;
 /// // restrict to using at most 100MB of memory
 /// let pool_size = 100 * 1024 * 1024;
 /// let runtime_env = RuntimeEnvBuilder::new()
-///   .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
-///   .build()
-///   .unwrap();
+///     .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+///     .build()
+///     .unwrap();
 /// ```
 pub struct RuntimeEnv {
     /// Runtime memory management

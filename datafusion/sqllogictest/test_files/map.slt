@@ -43,8 +43,8 @@ LOCATION '../core/tests/data/parquet_map.parquet';
 query TTT
 describe data;
 ----
-ints Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) NO
-strings Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) NO
+ints Map("entries": Struct("key": Utf8, "value": Int64), unsorted) NO
+strings Map("entries": Struct("key": Utf8, "value": Utf8), unsorted) NO
 timestamp Utf8View NO
 
 query ??T

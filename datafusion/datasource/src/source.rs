@@ -151,7 +151,21 @@ pub trait DataSource: Send + Sync + Debug {
     fn scheduling_type(&self) -> SchedulingType {
         SchedulingType::NonCooperative
     }
-    fn statistics(&self) -> Result<Statistics>;
+
+    /// Returns statistics for a specific partition, or aggregate statistics
+    /// across all partitions if `partition` is `None`.
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
+
+    /// Returns aggregate statistics across all partitions.
+    ///
+    /// # Deprecated
+    /// Use [`Self::partition_statistics`] instead, which provides more fine-grained
+    /// control over statistics retrieval (per-partition or aggregate).
+    #[deprecated(since = "51.0.0", note = "Use partition_statistics instead")]
+    fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
@@ -285,21 +299,7 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if let Some(partition) = partition {
-            let mut statistics = Statistics::new_unknown(&self.schema());
-            if let Some(file_config) =
-                self.data_source.as_any().downcast_ref::<FileScanConfig>()
-            {
-                if let Some(file_group) = file_config.file_groups.get(partition) {
-                    if let Some(stat) = file_group.file_statistics(None) {
-                        statistics = stat.clone();
-                    }
-                }
-            }
-            Ok(statistics)
-        } else {
-            Ok(self.data_source.statistics()?)
-        }
+        self.data_source.partition_statistics(partition)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
