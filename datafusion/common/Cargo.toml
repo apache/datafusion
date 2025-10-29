@@ -38,7 +38,6 @@ workspace = true
 name = "datafusion_common"
 
 [features]
-avro = ["apache-avro"]
 backtrace = []
 parquet_encryption = [
     "parquet",
@@ -53,12 +52,6 @@ sql = ["sqlparser"]
 
 [dependencies]
 ahash = { workspace = true }
-apache-avro = { version = "0.20", default-features = false, features = [
-    "bzip",
-    "snappy",
-    "xz",
-    "zstandard",
-], optional = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 chrono = { workspace = true }

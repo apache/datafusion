@@ -90,7 +90,6 @@ version = "50.3.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-#apache-avro = { version = "0.20", default-features = false }
 arrow = { version = "57.0.0", features = [
     "prettyprint",
     "chrono-tz",
@@ -104,7 +103,9 @@ arrow-ipc = { version = "57.0.0", default-features = false, features = [
 ] }
 arrow-ord = { version = "57.0.0", default-features = false }
 arrow-schema = { version = "57.0.0", default-features = false }
-arrow-avro = { version = "57.0.0", default-features = false }
+arrow-avro = { version = "57.0.0", default-features = false, features = [
+    "deflate", "snappy", "zstd", "bzip2", "xz"
+] }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.10"
