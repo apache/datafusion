@@ -37,6 +37,7 @@ pub mod intervals;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
+pub mod projection;
 mod scalar_function;
 pub mod simplifier;
 pub mod statistics;

@@ -41,7 +41,7 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
-num-traits = { version = "0.2" }
+num-traits = { workspace = true }
 object_store = { workspace = true }
 
 [dev-dependencies]

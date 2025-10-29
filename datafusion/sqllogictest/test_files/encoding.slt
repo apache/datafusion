@@ -23,7 +23,7 @@ CREATE TABLE test(
   hex_field TEXT
 ) as VALUES
   (0, 'abc',  encode('abc', 'base64'), encode('abc', 'hex')),
-  (1, 'qweqwe', encode('qweqwe', 'base64'), encode('qweqwe', 'hex')),
+  (1, 'qweqw', encode('qweqw', 'base64') || '=', encode('qweqw', 'hex')),
   (2, NULL, NULL, NULL),
   (3, X'8f50d3f60eae370ddbf85c86219c55108a350165', encode('8f50d3f60eae370ddbf85c86219c55108a350165', 'base64'), encode('8f50d3f60eae370ddbf85c86219c55108a350165', 'hex'))
 ;
@@ -52,7 +52,7 @@ query T
 SELECT encode(bin_field, 'hex') FROM test ORDER BY num;
 ----
 616263
-717765717765
+7177657177
 NULL
 8f50d3f60eae370ddbf85c86219c55108a350165
 
@@ -60,7 +60,7 @@ query T
 SELECT arrow_cast(decode(base64_field, 'base64'), 'Utf8') FROM test ORDER BY num;
 ----
 abc
-qweqwe
+qweqw
 NULL
 8f50d3f60eae370ddbf85c86219c55108a350165
 
@@ -68,7 +68,7 @@ query T
 SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test ORDER BY num;
 ----
 abc
-qweqwe
+qweqw
 NULL
 8f50d3f60eae370ddbf85c86219c55108a350165
 
@@ -110,7 +110,6 @@ SELECT
   column1_utf8view,
   encode(column1_utf8view, 'base64') AS column1_base64,
   encode(column1_utf8view, 'hex') AS column1_hex,
-  
   column2_utf8view,
   encode(column2_utf8view, 'base64') AS column2_base64,
   encode(column2_utf8view, 'hex') AS column2_hex

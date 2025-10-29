@@ -53,11 +53,11 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 #[cfg(feature = "parquet_encryption")]
-use datafusion_common::encryption::map_config_decryption_to_decryption;
-#[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use itertools::Itertools;
 use object_store::ObjectStore;
+#[cfg(feature = "parquet_encryption")]
+use parquet::encryption::decrypt::FileDecryptionProperties;
 
 /// Execution plan for reading one or more Parquet files.
 ///
@@ -85,7 +85,6 @@ use object_store::ObjectStore;
 ///  │.───────────────────.│
 ///  │                     )
 ///   `───────────────────'
-///
 /// ```
 ///
 /// # Example: Create a `DataSourceExec`
@@ -349,7 +348,6 @@ impl ParquetSource {
     }
 
     /// Optional user defined parquet file reader factory.
-    ///
     pub fn with_parquet_file_reader_factory(
         mut self,
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
@@ -497,7 +495,7 @@ impl FileSource for ParquetSource {
     ) -> Arc<dyn FileOpener> {
         let projection = base_config
             .file_column_projection_indices()
-            .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
+            .unwrap_or_else(|| (0..base_config.file_schema().fields().len()).collect());
 
         let (expr_adapter_factory, schema_adapter_factory) = match (
             base_config.expr_adapter_factory.as_ref(),
@@ -547,8 +545,8 @@ impl FileSource for ParquetSource {
             .table_parquet_options()
             .crypto
             .file_decryption
-            .as_ref()
-            .map(map_config_decryption_to_decryption)
+            .clone()
+            .map(FileDecryptionProperties::from)
             .map(Arc::new);
 
         let coerce_int96 = self
@@ -566,8 +564,8 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            logical_file_schema: Arc::clone(&base_config.file_schema),
-            partition_fields: base_config.table_partition_cols.clone(),
+            logical_file_schema: Arc::clone(base_config.file_schema()),
+            partition_fields: base_config.table_partition_cols().clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,

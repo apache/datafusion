@@ -411,8 +411,8 @@ async fn test_object_store_profiling() {
     // Output:
     // <TIMESTAMP> operation=Get duration=[DURATION] size=1006 path=cars.csv
     settings.add_filter(
-        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2} operation=(Get|Put|Delete|List|Head) duration=\d+\.\d{6}s size=(\d+) path=(.*)",
-        "<TIMESTAMP> operation=$1 duration=[DURATION] size=$2 path=$3",
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2} operation=(Get|Put|Delete|List|Head) duration=\d+\.\d{6}s (size=\d+\s+)?path=(.*)",
+        "<TIMESTAMP> operation=$1 duration=[DURATION] ${2}path=$3",
     );
 
     // We also need to filter out the summary statistics (anything with an 's' at the end)
