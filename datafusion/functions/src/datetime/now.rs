@@ -33,7 +33,7 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r#"
-Returns the current UTC timestamp.
+Returns the current timestamp in the system configured timezone (None by default).
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
 "#,
@@ -58,7 +58,7 @@ impl NowFunc {
         Self {
             signature: Signature::nullary(Volatility::Stable),
             aliases: vec!["current_timestamp".to_string()],
-            timezone: Some(Arc::from("+00")),
+            timezone: None,
         }
     }
 
@@ -66,7 +66,11 @@ impl NowFunc {
         Self {
             signature: Signature::nullary(Volatility::Stable),
             aliases: vec!["current_timestamp".to_string()],
-            timezone: Some(Arc::from(config.execution.time_zone.as_str())),
+            timezone: config
+                .execution
+                .time_zone
+                .as_ref()
+                .map(|tz| Arc::from(tz.as_str())),
         }
     }
 }

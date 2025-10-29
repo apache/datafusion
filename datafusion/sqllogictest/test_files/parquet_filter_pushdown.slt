@@ -583,4 +583,4 @@ WHERE trace_id = '00000000000000000000000000000002' AND deployment_environment =
 ORDER BY start_timestamp, trace_id
 LIMIT 1;
 ----
-2024-10-01T00:00:00Z
+2024-10-01T00:00:00

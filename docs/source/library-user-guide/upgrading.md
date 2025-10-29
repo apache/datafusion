@@ -182,6 +182,20 @@ let indices = projection_exprs.column_indices();
 _execution plan_ of the query. With this release, `DESCRIBE query` now outputs
 the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
 
+### `datafusion.execution.time_zone` default configuration changed
+
+The default value for `datafusion.execution.time_zone` previously was a string value of `+00:00` (GMT/Zulu time).
+This was changed to be an `Option<String>` with a default of `None`. If you want to change the timezone back
+to the previous value you can execute the sql:
+
+```sql
+SET
+TIMEZONE = '+00:00';
+```
+
+This change was made to better support using the default timezone in scalar UDF functions such as
+`now`, `current_date`, `current_time`, and `to_timestamp` among others.
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
