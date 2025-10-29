@@ -460,8 +460,10 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint = Some(metadata);
         }
 
-        let mut source = ParquetSource::new(TableSchema::from_file_schema(Arc::clone(conf.file_schema())))
-            .with_table_parquet_options(self.options.clone());
+        let mut source = ParquetSource::new(TableSchema::from_file_schema(Arc::clone(
+            conf.file_schema(),
+        )))
+        .with_table_parquet_options(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -505,7 +507,8 @@ impl FileFormat for ParquetFormat {
 
     fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
         Arc::new(
-            ParquetSource::new(TableSchema::from_file_schema(schema)).with_table_parquet_options(self.options.clone()),
+            ParquetSource::new(schema.into())
+                .with_table_parquet_options(self.options.clone()),
         )
     }
 }

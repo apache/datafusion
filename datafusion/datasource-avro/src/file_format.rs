@@ -157,12 +157,14 @@ impl FileFormat for AvroFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let file_schema = Arc::clone(conf.file_schema());
         let config = FileScanConfigBuilder::from(conf)
-            .with_source(Arc::new(AvroSource::new(TableSchema::from_file_schema(file_schema))))
+            .with_source(Arc::new(AvroSource::new(TableSchema::from_file_schema(
+                file_schema,
+            ))))
             .build();
         Ok(DataSourceExec::from_data_source(config))
     }
 
     fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(AvroSource::new(TableSchema::from_file_schema(schema)))
+        Arc::new(AvroSource::new(schema.into()))
     }
 }

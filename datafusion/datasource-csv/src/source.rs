@@ -177,15 +177,16 @@ impl CsvSource {
     }
 
     fn builder(&self) -> csv::ReaderBuilder {
-        let mut builder = csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
-            .with_delimiter(self.delimiter())
-            .with_batch_size(
-                self.batch_size
-                    .expect("Batch size must be set before initializing builder"),
-            )
-            .with_header(self.has_header())
-            .with_quote(self.quote())
-            .with_truncated_rows(self.truncate_rows());
+        let mut builder =
+            csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
+                .with_delimiter(self.delimiter())
+                .with_batch_size(
+                    self.batch_size
+                        .expect("Batch size must be set before initializing builder"),
+                )
+                .with_header(self.has_header())
+                .with_quote(self.quote())
+                .with_truncated_rows(self.truncate_rows());
         if let Some(terminator) = self.terminator() {
             builder = builder.with_terminator(terminator);
         }

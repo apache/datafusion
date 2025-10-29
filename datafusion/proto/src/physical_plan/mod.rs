@@ -625,12 +625,9 @@ impl protobuf::PhysicalPlanNode {
             ..Default::default()
         };
         let source = Arc::new(
-            CsvSource::new(
-                TableSchema::from_file_schema(schema),
-                csv_options,
-            )
-            .with_escape(escape)
-            .with_comment(comment),
+            CsvSource::new(TableSchema::from_file_schema(schema), csv_options)
+                .with_escape(escape)
+                .with_comment(comment),
         );
 
         let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(
@@ -710,8 +707,8 @@ impl protobuf::PhysicalPlanNode {
             // Parse schema first so we can use it to create ParquetSource
             let schema = parse_protobuf_file_scan_schema(base_conf)?;
 
-            let mut source =
-                ParquetSource::new(TableSchema::from_file_schema(schema)).with_table_parquet_options(options);
+            let mut source = ParquetSource::new(TableSchema::from_file_schema(schema))
+                .with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);

@@ -68,14 +68,14 @@ async fn csv_opener() -> Result<()> {
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         Arc::clone(&schema),
-        Arc::new(CsvSource::new(TableSchema::from_file_schema(Arc::clone(&schema)), options.clone())),
+        Arc::new(CsvSource::new((&schema).into(), options.clone())),
     )
     .with_projection_indices(Some(vec![12, 0]))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.display().to_string(), 10))
     .build();
 
-    let config = CsvSource::new(TableSchema::from_file_schema(schema), options)
+    let config = CsvSource::new((&schema).into(), options)
         .with_comment(Some(b'#'))
         .with_batch_size(8192)
         .with_projection(&scan_config);

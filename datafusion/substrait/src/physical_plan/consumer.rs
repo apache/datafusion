@@ -81,7 +81,9 @@ pub async fn from_substrait_rel(
             {
                 Ok(fields) => {
                     let schema = Arc::new(Schema::new(fields));
-                    let source = Arc::new(ParquetSource::new(TableSchema::from_file_schema(Arc::clone(&schema))));
+                    let source = Arc::new(ParquetSource::new(
+                        TableSchema::from_file_schema(Arc::clone(&schema)),
+                    ));
                     base_config_builder = FileScanConfigBuilder::new(
                         ObjectStoreUrl::local_filesystem(),
                         schema,

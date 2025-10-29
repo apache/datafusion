@@ -161,7 +161,8 @@ mod tests {
                 .as_ref()
                 .map(|p| logical2physical(p, &table_schema));
 
-            let mut source = ParquetSource::new(TableSchema::from_file_schema(table_schema));
+            let mut source =
+                ParquetSource::new(TableSchema::from_file_schema(table_schema));
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
             }

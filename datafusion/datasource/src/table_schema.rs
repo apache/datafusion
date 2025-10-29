@@ -170,3 +170,15 @@ impl TableSchema {
         &self.table_schema
     }
 }
+
+impl From<&SchemaRef> for TableSchema {
+    fn from(schema: &SchemaRef) -> Self {
+        Self::from_file_schema(Arc::clone(schema))
+    }
+}
+
+impl From<SchemaRef> for TableSchema {
+    fn from(schema: SchemaRef) -> Self {
+        Self::from_file_schema(schema)
+    }
+}

@@ -799,10 +799,9 @@ mod tests {
     fn test_parquet_source_predicate_same_as_filter() {
         let predicate = lit(true);
 
-        let parquet_source = ParquetSource::new(TableSchema::from_file_schema(Arc::new(
-            Schema::empty(),
-        )))
-        .with_predicate(predicate);
+        let parquet_source =
+            ParquetSource::new(TableSchema::from_file_schema(Arc::new(Schema::empty())))
+                .with_predicate(predicate);
         // same value. but filter() call Arc::clone internally
         assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
     }

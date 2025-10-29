@@ -157,7 +157,7 @@ impl TestParquetFile {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let parquet_options = ctx.copied_table_options().parquet;
         let source = Arc::new(
-            ParquetSource::new(TableSchema::from_file_schema(Arc::clone(&self.schema)))
+            ParquetSource::new((&self.schema).into())
                 .with_table_parquet_options(parquet_options.clone()),
         );
         let scan_config_builder = FileScanConfigBuilder::new(
@@ -186,7 +186,7 @@ impl TestParquetFile {
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
             let source = Arc::new(
-                ParquetSource::new(TableSchema::from_file_schema(Arc::clone(&self.schema)))
+                ParquetSource::new((&self.schema).into())
                     .with_table_parquet_options(parquet_options)
                     .with_predicate(Arc::clone(&physical_filter_expr)),
             );
