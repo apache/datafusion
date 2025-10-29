@@ -501,8 +501,7 @@ mod tests {
 
     #[test]
     fn remaining_row_group_count_reports_non_skipped_groups() {
-        let mut filter =
-            RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(4));
+        let mut filter = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(4));
         assert_eq!(filter.remaining_row_group_count(), 4);
 
         filter.access_plan.skip(1);

@@ -196,11 +196,13 @@ impl TestOutput {
     }
 
     /// The number of row_groups matched by bloom filter or statistics
+    ///
+    /// E.g. starting with 10 row groups, statistics: 10 total -> 7 matched, bloom
+    /// filter: 7 total -> 3 matched, this function returns 3 for the final matched
+    /// count.
     fn row_groups_matched(&self) -> Option<usize> {
         self.row_groups_bloom_filter()
             .map(|(_pruned, matched)| matched)
-            .zip(self.row_groups_matched_statistics())
-            .map(|(a, b)| a + b)
     }
 
     /// The number of row_groups pruned
