@@ -157,6 +157,7 @@ To get started, see
    contributor-guide/development_environment
    contributor-guide/architecture
    contributor-guide/testing
+   contributor-guide/benchmarking
    contributor-guide/api-health
    contributor-guide/howtos
    contributor-guide/roadmap
