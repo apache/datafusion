@@ -46,7 +46,10 @@ use crate::aggregates::{
     order::GroupOrdering,
 };
 
+mod metrics;
 mod null_builder;
+
+pub(crate) use metrics::GroupByMetrics;
 
 /// Stores the group values during hash aggregation.
 ///
