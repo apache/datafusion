@@ -1656,7 +1656,7 @@ impl DataFrame {
     pub fn into_view(self) -> Arc<dyn TableProvider> {
         Arc::new(DataFrameTableProvider {
             plan: self.plan,
-            df_table_type: DataFrameTableType::View,
+            table_type: TableType::Temporary,
         })
     }
 
@@ -1665,7 +1665,7 @@ impl DataFrame {
     pub fn into_temporary_view(self) -> Arc<dyn TableProvider> {
         Arc::new(DataFrameTableProvider {
             plan: self.plan,
-            df_table_type: DataFrameTableType::TemporaryView,
+            table_type: TableType::Temporary,
         })
     }
 
@@ -2533,25 +2533,10 @@ macro_rules! dataframe {
     }};
 }
 
-#[derive(Debug, Clone, Copy)]
-enum DataFrameTableType {
-    View,
-    TemporaryView,
-}
-
-impl From<DataFrameTableType> for TableType {
-    fn from(value: DataFrameTableType) -> TableType {
-        match value {
-            DataFrameTableType::View => TableType::View,
-            DataFrameTableType::TemporaryView => TableType::Temporary,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct DataFrameTableProvider {
     plan: LogicalPlan,
-    df_table_type: DataFrameTableType,
+    table_type: TableType,
 }
 
 #[async_trait]
@@ -2577,7 +2562,7 @@ impl TableProvider for DataFrameTableProvider {
     }
 
     fn table_type(&self) -> TableType {
-        self.df_table_type.into()
+        self.table_type
     }
 
     async fn scan(
