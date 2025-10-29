@@ -39,10 +39,10 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// # struct Dummy { }
     ///
     /// # impl Dummy {
-    ///   // canonical boiler plate
-    ///   fn as_any(&self) -> &dyn Any {
-    ///      self
-    ///   }
+    /// // canonical boiler plate
+    /// fn as_any(&self) -> &dyn Any {
+    ///     self
+    /// }
     /// # }
     /// ```
     fn as_any(&self) -> &dyn Any;
@@ -131,18 +131,18 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// // User defined node that derives Hash
     /// #[derive(Hash, Debug, PartialEq, Eq)]
     /// struct MyNode {
-    ///   val: u64
+    ///     val: u64,
     /// }
     ///
     /// // impl UserDefinedLogicalNode {
     /// // ...
     /// # impl MyNode {
-    ///   // Boiler plate to call the derived Hash impl
-    ///   fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
+    /// // Boiler plate to call the derived Hash impl
+    /// fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
     ///     use std::hash::Hash;
     ///     let mut s = state;
     ///     self.hash(&mut s);
-    ///   }
+    /// }
     /// // }
     /// # }
     /// ```
@@ -169,19 +169,19 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// // User defined node that derives Eq
     /// #[derive(Hash, Debug, PartialEq, Eq)]
     /// struct MyNode {
-    ///   val: u64
+    ///     val: u64,
     /// }
     ///
     /// // impl UserDefinedLogicalNode {
     /// // ...
     /// # impl MyNode {
-    ///   // Boiler plate to call the derived Eq impl
-    ///   fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
+    /// // Boiler plate to call the derived Eq impl
+    /// fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
     ///     match other.as_any().downcast_ref::<Self>() {
-    ///       Some(o) => self == o,
-    ///       None => false,
+    ///         Some(o) => self == o,
+    ///         None => false,
     ///     }
-    ///   }
+    /// }
     /// // }
     /// # }
     /// ```
