@@ -360,6 +360,79 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn reproducer_with_repartition_sorts_true() -> Result<()> {
+    reproducer_impl(true).await?; // ✅ Passes
+    Ok(())
+}
+
+#[tokio::test]
+async fn reproducer_with_repartition_sorts_false() -> Result<()> {
+    reproducer_impl(false).await?;
+
+    // 💥 Doesn't pass, and generates this plan:
+    //
+    // OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+    //   SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+    //     CoalescePartitionsExec
+    //       UnionExec
+    //         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+    //         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+
+    Ok(())
+}
+
+async fn reproducer_impl(repartition_sorts: bool) -> Result<()> {
+    let schema = create_test_schema()?;
+
+    // Source 1, will be sorted explicitly (on `nullable_col`)
+    let source1 = parquet_exec(schema.clone());
+    let ordering1 = [sort_expr("nullable_col", &schema)].into();
+    let sort1 = sort_exec(ordering1, source1.clone());
+
+    // Source 2, pre-sorted (on `nullable_col`)
+    let parquet_ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let source2 = parquet_exec_with_sort(schema.clone(), vec![parquet_ordering.clone()]);
+
+    let union = union_exec(vec![sort1, source2]);
+
+    let coalesced = coalesce_partitions_exec(union);
+
+    // Required sorted / single partitioned output
+    let requirement = [PhysicalSortRequirement::new(
+        col("nullable_col", &schema)?,
+        Some(SortOptions::new(false, true)),
+    )]
+        .into();
+    let physical_plan = Arc::new(OutputRequirementExec::new(
+        coalesced,
+        Some(OrderingRequirements::new(requirement)),
+        Distribution::SinglePartition,
+        None,
+    ));
+
+    let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(repartition_sorts);
+
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      CoalescePartitionsExec
+        UnionExec
+          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+
+    Optimized Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [nullable_col@0 ASC]
+        UnionExec
+          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_union_inputs_different_sorted3() -> Result<()> {
     let schema = create_test_schema()?;
     let source1 = parquet_exec(schema.clone());
