@@ -2170,7 +2170,7 @@ mod tests {
             ),
             (
                 Expr::ScalarVariable(
-                    Arc::new(Field::new("", Int8, true)),
+                    Int8.into_nullable_field_ref(),
                     vec![String::from("@a")],
                 ),
                 r#"@a"#,
