@@ -164,6 +164,23 @@ impl CaseBody {
 
 /// A derived case body that can be used to evaluate a case expression after projecting
 /// record batches using a projection vector.
+///
+/// This is used to avoid filtering / copying columns that are not used in the
+/// input `RecordBatch` when progressively evaluating a `CASE` expression's
+/// remainder batches.
+///
+/// For example, if we are evaluating the following case expression that
+/// only references columns B and D:
+///
+/// ```sql
+/// CASE WHEN B > 10 THEN D ELSE NULL END
+/// ```
+///
+/// If the input has 4 columns, `[A, B, C, D]` it is wasteful to carry through
+/// columns A and C that are not used in the expression. Instead, the projection 
+/// vector will be `[1, 3]` and the case body
+/// will be rewritten to refer to columns `[0, 1]` 
+/// (i.e. remap references from `B` -> 0`, and `D` -> `1`)
 #[derive(Debug, Hash, PartialEq, Eq)]
 struct ProjectedCaseBody {
     projection: Vec<usize>,
