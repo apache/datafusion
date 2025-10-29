@@ -143,12 +143,7 @@ macro_rules! ansi_compute_op {
 }
 
 fn arithmetic_overflow_error(from_type: &str) -> DataFusionError {
-    ArrowError(
-        Box::from(arrow::error::ArrowError::ComputeError(format!(
-            "arithmetic overflow from {from_type}",
-        ))),
-        None,
-    )
+    DataFusionError::Execution(format!("arithmetic overflow from {from_type}"))
 }
 
 pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
