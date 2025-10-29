@@ -1654,7 +1654,19 @@ impl DataFrame {
     /// Note: This discards the [`SessionState`] associated with this
     /// [`DataFrame`] in favour of the one passed to [`TableProvider::scan`]
     pub fn into_view(self) -> Arc<dyn TableProvider> {
-        Arc::new(DataFrameTableProvider { plan: self.plan })
+        Arc::new(DataFrameTableProvider {
+            plan: self.plan,
+            table_type: TableType::Temporary,
+        })
+    }
+
+    /// See [`Self::into_view`]. The returned [`TableProvider`] will
+    /// create a transient table.
+    pub fn into_temporary_view(self) -> Arc<dyn TableProvider> {
+        Arc::new(DataFrameTableProvider {
+            plan: self.plan,
+            table_type: TableType::Temporary,
+        })
     }
 
     /// Return a DataFrame with the explanation of its plan so far.
@@ -2524,6 +2536,7 @@ macro_rules! dataframe {
 #[derive(Debug)]
 struct DataFrameTableProvider {
     plan: LogicalPlan,
+    table_type: TableType,
 }
 
 #[async_trait]
@@ -2549,7 +2562,7 @@ impl TableProvider for DataFrameTableProvider {
     }
 
     fn table_type(&self) -> TableType {
-        TableType::View
+        self.table_type
     }
 
     async fn scan(
