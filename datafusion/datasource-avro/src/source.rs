@@ -51,9 +51,12 @@ impl AvroSource {
         Self::default()
     }
 
-    fn open<R: std::io::Read>(&self, reader: R) -> Result<Reader<R>> {
+    fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
         let avro_schema = AvroSchema::try_from(
-            self.schema.expect("Schema must set before open").as_ref(),
+            self.schema
+                .as_ref()
+                .expect("Schema must set before open")
+                .as_ref(),
         )?;
         ReaderBuilder::new()
             .with_reader_schema(avro_schema) // Used for projection on read.
@@ -145,6 +148,7 @@ impl FileSource for AvroSource {
 
 mod private {
     use super::*;
+    use std::io::BufReader;
 
     use bytes::Buf;
     use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
@@ -166,14 +170,14 @@ mod private {
                     .await?;
                 match r.payload {
                     GetResultPayload::File(file, _) => {
-                        let reader = config.open(file)?;
+                        let reader = config.open(BufReader::new(file))?;
                         Ok(futures::stream::iter(reader)
                             .map(|r| r.map_err(Into::into))
                             .boxed())
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
-                        let reader = config.open(bytes.reader())?;
+                        let reader = config.open(BufReader::new(bytes.reader()))?;
                         Ok(futures::stream::iter(reader)
                             .map(|r| r.map_err(Into::into))
                             .boxed())

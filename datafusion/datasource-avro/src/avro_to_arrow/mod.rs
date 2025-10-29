@@ -27,12 +27,12 @@ use arrow::datatypes::Schema;
 use arrow_avro::reader::ReaderBuilder;
 
 // pub use schema::to_arrow_schema;
-use std::io::Read;
+use std::io::{BufReader, Read};
 
 /// Read Avro schema given a reader
 pub fn read_avro_schema_from_reader<R: Read>(
     reader: &mut R,
 ) -> datafusion_common::Result<Schema> {
-    let avro_reader = ReaderBuilder::new().build(reader)?;
+    let avro_reader = ReaderBuilder::new().build(BufReader::new(reader))?;
     Ok(avro_reader.schema().as_ref().clone())
 }
