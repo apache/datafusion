@@ -28,8 +28,9 @@ use arrow::array::types::{
     ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::array::{Array, ArrayRef, Int64Array, PrimitiveArray};
+use arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
+use arrow::datatypes::Int64Type;
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
@@ -455,52 +456,76 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     array: &PrimitiveArray<T>,
     granularity: &str,
 ) -> Result<ArrayRef> {
-    let unit = match (tu, granularity) {
-        (Second, "minute") => Some(Int64Array::new_scalar(60)),
-        (Second, "hour") => Some(Int64Array::new_scalar(3600)),
-        (Second, "day") => Some(Int64Array::new_scalar(86400)),
+    let unit: Option<i64> = match (tu, granularity) {
+        (Second, "minute") => Some(60),
+        (Second, "hour") => Some(3600),
+        (Second, "day") => Some(86400),
 
-        (Millisecond, "second") => Some(Int64Array::new_scalar(1_000)),
-        (Millisecond, "minute") => Some(Int64Array::new_scalar(60_000)),
-        (Millisecond, "hour") => Some(Int64Array::new_scalar(3_600_000)),
-        (Millisecond, "day") => Some(Int64Array::new_scalar(86_400_000)),
+        (Millisecond, "second") => Some(1_000),
+        (Millisecond, "minute") => Some(60_000),
+        (Millisecond, "hour") => Some(3_600_000),
+        (Millisecond, "day") => Some(86_400_000),
 
-        (Microsecond, "millisecond") => Some(Int64Array::new_scalar(1_000)),
-        (Microsecond, "second") => Some(Int64Array::new_scalar(1_000_000)),
-        (Microsecond, "minute") => Some(Int64Array::new_scalar(60_000_000)),
-        (Microsecond, "hour") => Some(Int64Array::new_scalar(3_600_000_000)),
-        (Microsecond, "day") => Some(Int64Array::new_scalar(86_400_000_000)),
+        (Microsecond, "millisecond") => Some(1_000),
+        (Microsecond, "second") => Some(1_000_000),
+        (Microsecond, "minute") => Some(60_000_000),
+        (Microsecond, "hour") => Some(3_600_000_000),
+        (Microsecond, "day") => Some(86_400_000_000),
 
-        (Nanosecond, "microsecond") => Some(Int64Array::new_scalar(1_000)),
-        (Nanosecond, "millisecond") => Some(Int64Array::new_scalar(1_000_000)),
-        (Nanosecond, "second") => Some(Int64Array::new_scalar(1_000_000_000)),
-        (Nanosecond, "minute") => Some(Int64Array::new_scalar(60_000_000_000)),
-        (Nanosecond, "hour") => Some(Int64Array::new_scalar(3_600_000_000_000)),
-        (Nanosecond, "day") => Some(Int64Array::new_scalar(86_400_000_000_000)),
+        (Nanosecond, "microsecond") => Some(1_000),
+        (Nanosecond, "millisecond") => Some(1_000_000),
+        (Nanosecond, "second") => Some(1_000_000_000),
+        (Nanosecond, "minute") => Some(60_000_000_000),
+        (Nanosecond, "hour") => Some(3_600_000_000_000),
+        (Nanosecond, "day") => Some(86_400_000_000_000),
         _ => None,
     };
 
     if let Some(unit) = unit {
         let original_type = array.data_type();
         let input = arrow::compute::cast(array, &DataType::Int64)?;
-        let array = arrow::compute::kernels::numeric::div(&input, &unit)?;
-        let array = arrow::compute::kernels::numeric::mul(&array, &unit)?;
-        // For timestamps before 1970-01-01T00:00:00Z (negative values)
-        // it is possible that the truncated value is actually later
-        // than the original value. Correct any such cases by
-        // subtracting `unit`.
-        let too_late = arrow::compute::kernels::cmp::gt(&array, &input)?;
-        let array = if too_late.true_count() > 0 {
-            let earlier = arrow::compute::kernels::numeric::sub(&array, &unit)?;
-            arrow::compute::kernels::zip::zip(&too_late, &earlier, &array)?
-        } else {
-            array
-        };
+        // operate in place
+        let array = input.as_primitive::<Int64Type>().clone();
+        let array = try_unary_mut_or_clone(array, |i| {
+            i.checked_div(unit)
+                .ok_or_else(|| exec_datafusion_err!("division overflow"))
+        })?;
+        let array = try_unary_mut_or_clone(array, |i| {
+            i.checked_mul(unit)
+                .ok_or_else(|| exec_datafusion_err!("multiplication overflow"))
+        })?;
+        let array = try_unary_mut_or_clone(array, |i| {
+            // For timestamps before 1970-01-01T00:00:00Z (negative values)
+            // it is possible that the truncated value is actually later
+            // than the original value. Correct any such cases by
+            // subtracting `unit`.
+            if i > 0 {
+                Ok(i)
+            } else {
+                i.checked_sub(unit)
+                    .ok_or_else(|| exec_datafusion_err!("subtraction overflow"))
+            }
+        })?;
         let array = arrow::compute::cast(&array, original_type)?;
         Ok(array)
     } else {
         // truncate to the same or smaller unit
         Ok(Arc::new(array.clone()))
+    }
+}
+
+/// Applies the unary operation in place if possible, or cloning the array if not
+fn try_unary_mut_or_clone<F>(
+    array: PrimitiveArray<Int64Type>,
+    op: F,
+) -> Result<PrimitiveArray<Int64Type>>
+where
+    F: Fn(i64) -> Result<i64>,
+{
+    match array.try_unary_mut(&op) {
+        Ok(result) => result,
+        // on error, make a new array
+        Err(array) => array.try_unary(op),
     }
 }
 
