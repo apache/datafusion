@@ -362,13 +362,9 @@ impl FileOpener for ParquetOpener {
                 row_groups.prune_by_range(rg_metadata, range);
             }
 
-            let mut row_group_stat_checked = false;
-            let mut row_group_bloom_filter_checked = false;
-
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
                 if enable_row_group_stats_pruning {
-                    row_group_stat_checked = true;
                     row_groups.prune_by_statistics(
                         &physical_file_schema,
                         builder.parquet_schema(),
@@ -376,10 +372,15 @@ impl FileOpener for ParquetOpener {
                         predicate,
                         &file_metrics,
                     );
+                } else {
+                    // Update metrics: statistics unavailable, so all row groups are
+                    // matched (not pruned)
+                    file_metrics
+                        .row_groups_pruned_statistics
+                        .add_matched(row_groups.remaining_row_group_count());
                 }
 
                 if enable_bloom_filter && !row_groups.is_empty() {
-                    row_group_bloom_filter_checked = true;
                     row_groups
                         .prune_by_bloom_filters(
                             &physical_file_schema,
@@ -388,17 +389,22 @@ impl FileOpener for ParquetOpener {
                             &file_metrics,
                         )
                         .await;
+                } else {
+                    // Update metrics: bloom filter unavailable, so all row groups are
+                    // matched (not pruned)
+                    file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(row_groups.remaining_row_group_count());
                 }
-            }
-
-            // Inside `prune_by_statistics()` and `prune_by_bloom_filters()` utilities,
-            // metrics will be updated internally, if they're not entered, update the
-            // metrics here.
-            if !row_group_stat_checked {
-                file_metrics.row_groups_pruned_statistics.add_matched(1);
-            }
-            if !row_group_bloom_filter_checked {
-                file_metrics.row_groups_pruned_bloom_filter.add_matched(1);
+            } else {
+                // Update metrics: no predicate, so all row groups are matched (not pruned)
+                let n_remaining_row_groups = row_groups.remaining_row_group_count();
+                file_metrics
+                    .row_groups_pruned_statistics
+                    .add_matched(n_remaining_row_groups);
+                file_metrics
+                    .row_groups_pruned_bloom_filter
+                    .add_matched(n_remaining_row_groups);
             }
 
             let mut access_plan = row_groups.build();
