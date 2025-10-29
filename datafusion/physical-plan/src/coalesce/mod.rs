@@ -67,7 +67,6 @@ use std::sync::Arc;
 ///
 /// 3. Eventually this may also be able to handle other optimizations such as a
 ///    combined filter/coalesce operation.
-///
 #[derive(Debug)]
 pub struct BatchCoalescer {
     /// The input schema

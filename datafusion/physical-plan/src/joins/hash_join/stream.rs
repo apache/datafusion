@@ -107,7 +107,7 @@ impl BuildSide {
 /// Expected state transitions performed by HashJoinStream are:
 ///
 /// ```text
-///
+/// 
 ///       WaitBuildSide
 ///             │
 ///             ▼
@@ -115,7 +115,6 @@ impl BuildSide {
 ///  │          │
 ///  │          ▼
 ///  └─ ProcessProbeBatch
-///
 /// ```
 #[derive(Debug, Clone)]
 pub(super) enum HashJoinStreamState {
