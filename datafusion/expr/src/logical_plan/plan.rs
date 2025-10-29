@@ -203,7 +203,6 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
-///
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -1267,7 +1266,6 @@ impl LogicalPlan {
     ///    \n  TableScan: t1",
     ///    plan.display_indent().to_string()
     ///  );
-    ///
     /// ```
     pub fn with_param_values(
         self,
@@ -1561,20 +1559,20 @@ impl LogicalPlan {
     /// ```
     ///
     /// ```
-    /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
-    /// let schema = Schema::new(vec![
-    ///     Field::new("id", DataType::Int32, false),
-    /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
-    ///     .filter(col("id").eq(lit(5))).unwrap()
-    ///     .build().unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t1"), &schema, None)
+    ///     .unwrap()
+    ///     .filter(col("id").eq(lit(5)))
+    ///     .unwrap()
+    ///     .build()
+    ///     .unwrap();
     ///
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1",
-    ///             display_string);
+    /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1", display_string);
     /// ```
     pub fn display_indent(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
@@ -1603,21 +1601,24 @@ impl LogicalPlan {
     /// ```
     ///
     /// ```
-    /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
-    /// let schema = Schema::new(vec![
-    ///     Field::new("id", DataType::Int32, false),
-    /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
-    ///     .filter(col("id").eq(lit(5))).unwrap()
-    ///     .build().unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t1"), &schema, None)
+    ///     .unwrap()
+    ///     .filter(col("id").eq(lit(5)))
+    ///     .unwrap()
+    ///     .build()
+    ///     .unwrap();
     ///
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: t1.id = Int32(5) [id:Int32]\
+    /// assert_eq!(
+    ///     "Filter: t1.id = Int32(5) [id:Int32]\
     ///             \n  TableScan: t1 [id:Int32]",
-    ///             display_string);
+    ///     display_string
+    /// );
     /// ```
     pub fn display_indent_schema(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
@@ -1665,14 +1666,15 @@ impl LogicalPlan {
     /// structure, and one with additional details such as schema.
     ///
     /// ```
-    /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
-    /// let schema = Schema::new(vec![
-    ///     Field::new("id", DataType::Int32, false),
-    /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
-    ///     .filter(col("id").eq(lit(5))).unwrap()
-    ///     .build().unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t1"), &schema, None)
+    ///     .unwrap()
+    ///     .filter(col("id").eq(lit(5)))
+    ///     .unwrap()
+    ///     .build()
+    ///     .unwrap();
     ///
     /// // Format using display_graphviz
     /// let graphviz_string = format!("{}", plan.display_graphviz());
@@ -1684,7 +1686,6 @@ impl LogicalPlan {
     /// ```bash
     ///   dot -Tpdf < /tmp/example.dot  > /tmp/example.pdf
     /// ```
-    ///
     pub fn display_graphviz(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
@@ -1723,13 +1724,13 @@ impl LogicalPlan {
     /// Projection: id
     /// ```
     /// ```
-    /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
-    /// let schema = Schema::new(vec![
-    ///     Field::new("id", DataType::Int32, false),
-    /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
-    ///     .build().unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t1"), &schema, None)
+    ///     .unwrap()
+    ///     .build()
+    ///     .unwrap();
     ///
     /// // Format using display
     /// let display_string = format!("{}", plan.display());

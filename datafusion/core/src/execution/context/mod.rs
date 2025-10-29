@@ -166,22 +166,23 @@ where
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
-/// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-/// let df = df.filter(col("a").lt_eq(col("b")))?
-///            .aggregate(vec![col("a")], vec![min(col("b"))])?
-///            .limit(0, Some(100))?;
-/// let results = df
-///   .collect()
-///   .await?;
+/// let df = ctx
+///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+///     .await?;
+/// let df = df
+///     .filter(col("a").lt_eq(col("b")))?
+///     .aggregate(vec![col("a")], vec![min(col("b"))])?
+///     .limit(0, Some(100))?;
+/// let results = df.collect().await?;
 /// assert_batches_eq!(
-///  &[
-///    "+---+----------------+",
-///    "| a | min(?table?.b) |",
-///    "+---+----------------+",
-///    "| 1 | 2              |",
-///    "+---+----------------+",
-///  ],
-///  &results
+///     &[
+///         "+---+----------------+",
+///         "| a | min(?table?.b) |",
+///         "+---+----------------+",
+///         "| 1 | 2              |",
+///         "+---+----------------+",
+///     ],
+///     &results
 /// );
 /// # Ok(())
 /// # }
@@ -197,21 +198,22 @@ where
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
-/// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+/// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new())
+///     .await?;
 /// let results = ctx
-///   .sql("SELECT a, min(b) FROM example GROUP BY a LIMIT 100")
-///   .await?
-///   .collect()
-///   .await?;
+///     .sql("SELECT a, min(b) FROM example GROUP BY a LIMIT 100")
+///     .await?
+///     .collect()
+///     .await?;
 /// assert_batches_eq!(
-///  &[
-///    "+---+----------------+",
-///    "| a | min(example.b) |",
-///    "+---+----------------+",
-///    "| 1 | 2              |",
-///    "+---+----------------+",
-///  ],
-///  &results
+///     &[
+///         "+---+----------------+",
+///         "| a | min(example.b) |",
+///         "+---+----------------+",
+///         "| 1 | 2              |",
+///         "+---+----------------+",
+///     ],
+///     &results
 /// );
 /// # Ok(())
 /// # }
@@ -231,18 +233,18 @@ where
 /// let config = SessionConfig::new().with_batch_size(4 * 1024);
 ///
 /// // configure a memory limit of 1GB with 20%  slop
-///  let runtime_env = RuntimeEnvBuilder::new()
+/// let runtime_env = RuntimeEnvBuilder::new()
 ///     .with_memory_limit(1024 * 1024 * 1024, 0.80)
 ///     .build_arc()
 ///     .unwrap();
 ///
 /// // Create a SessionState using the config and runtime_env
 /// let state = SessionStateBuilder::new()
-///   .with_config(config)
-///   .with_runtime_env(runtime_env)
-///   // include support for built in functions and configurations
-///   .with_default_features()
-///   .build();
+///     .with_config(config)
+///     .with_runtime_env(runtime_env)
+///     // include support for built in functions and configurations
+///     .with_default_features()
+///     .build();
 ///
 /// // Create a SessionContext
 /// let ctx = SessionContext::from(state);
@@ -428,16 +430,14 @@ impl SessionContext {
     /// # use datafusion::prelude::*;
     /// # use datafusion::execution::SessionStateBuilder;
     /// # use datafusion_optimizer::push_down_filter::PushDownFilter;
-    /// let my_rule = PushDownFilter{}; // pretend it is a new rule
-    /// // Create a new builder with a custom optimizer rule
+    /// let my_rule = PushDownFilter {}; // pretend it is a new rule
+    ///                                  // Create a new builder with a custom optimizer rule
     /// let context: SessionContext = SessionStateBuilder::new()
-    ///   .with_optimizer_rule(Arc::new(my_rule))
-    ///   .build()
-    ///   .into();
+    ///     .with_optimizer_rule(Arc::new(my_rule))
+    ///     .build()
+    ///     .into();
     /// // Enable local file access and convert context back to a builder
-    /// let builder = context
-    ///   .enable_url_table()
-    ///   .into_state_builder();
+    /// let builder = context.enable_url_table().into_state_builder();
     /// ```
     pub fn into_state_builder(self) -> SessionStateBuilder {
         let SessionContext {
@@ -585,11 +585,10 @@ impl SessionContext {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// ctx
-    ///   .sql("CREATE TABLE foo (x INTEGER)")
-    ///   .await?
-    ///   .collect()
-    ///   .await?;
+    /// ctx.sql("CREATE TABLE foo (x INTEGER)")
+    ///     .await?
+    ///     .collect()
+    ///     .await?;
     /// assert!(ctx.table_exist("foo").unwrap());
     /// # Ok(())
     /// # }
@@ -614,14 +613,14 @@ impl SessionContext {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let options = SQLOptions::new()
-    ///   .with_allow_ddl(false);
-    /// let err = ctx.sql_with_options("CREATE TABLE foo (x INTEGER)", options)
-    ///   .await
-    ///   .unwrap_err();
-    /// assert!(
-    ///   err.to_string().starts_with("Error during planning: DDL not supported: CreateMemoryTable")
-    /// );
+    /// let options = SQLOptions::new().with_allow_ddl(false);
+    /// let err = ctx
+    ///     .sql_with_options("CREATE TABLE foo (x INTEGER)", options)
+    ///     .await
+    ///     .unwrap_err();
+    /// assert!(err
+    ///     .to_string()
+    ///     .starts_with("Error during planning: DDL not supported: CreateMemoryTable"));
     /// # Ok(())
     /// # }
     /// ```
@@ -653,8 +652,7 @@ impl SessionContext {
     /// // provide type information that `a` is an Int32
     /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
     /// let df_schema = DFSchema::try_from(schema).unwrap();
-    /// let expr = SessionContext::new()
-    ///  .parse_sql_expr(sql, &df_schema)?;
+    /// let expr = SessionContext::new().parse_sql_expr(sql, &df_schema)?;
     /// assert_eq!(expected, expr);
     /// # Ok(())
     /// # }
@@ -1143,8 +1141,14 @@ impl SessionContext {
     /// ```
     /// use datafusion::execution::context::SessionContext;
     ///
-    /// assert_eq!(SessionContext::parse_memory_limit("1M").unwrap(), 1024 * 1024);
-    /// assert_eq!(SessionContext::parse_memory_limit("1.5G").unwrap(), (1.5 * 1024.0 * 1024.0 * 1024.0) as usize);
+    /// assert_eq!(
+    ///     SessionContext::parse_memory_limit("1M").unwrap(),
+    ///     1024 * 1024
+    /// );
+    /// assert_eq!(
+    ///     SessionContext::parse_memory_limit("1.5G").unwrap(),
+    ///     (1.5 * 1024.0 * 1024.0 * 1024.0) as usize
+    /// );
     /// ```
     pub fn parse_memory_limit(limit: &str) -> Result<usize> {
         let (number, unit) = limit.split_at(limit.len() - 1);
