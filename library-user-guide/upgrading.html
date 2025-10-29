@@ -850,6 +850,76 @@ Users may need to update their paths to account for these changes.</p>
 <em>execution plan</em> of the query. With this release, <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">query</span></code> now outputs
 the computed <em>schema</em> of the query, consistent with the behavior of <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">table_name</span></code>.</p>
 </section>
+<section id="introduction-of-tableschema-and-changes-to-filesource-with-schema-method">
+<h3>Introduction of <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> and changes to <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method<a class="headerlink" href="#introduction-of-tableschema-and-changes-to-filesource-with-schema-method" title="Link to this heading">#</a></h3>
+<p>A new <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> struct has been introduced in the <code class="docutils literal notranslate"><span class="pre">datafusion-datasource</span></code> crate to better manage table schemas with partition columns. This struct helps distinguish between:</p>
+<ul class="simple">
+<li><p><strong>File schema</strong>: The schema of actual data files on disk</p></li>
+<li><p><strong>Partition columns</strong>: Columns derived from directory structure (e.g., Hive-style partitioning)</p></li>
+<li><p><strong>Table schema</strong>: The complete schema combining both file and partition columns</p></li>
+</ul>
+<p>As part of this change, the <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method signature has changed from accepting a <code class="docutils literal notranslate"><span class="pre">SchemaRef</span></code> to accepting a <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code>.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who have implemented custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations will need to update their code</p></li>
+<li><p>Users who only use built-in file sources (Parquet, CSV, JSON, AVRO, Arrow) are not affected</p></li>
+</ul>
+<p><strong>Migration guide for custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations:</strong></p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span>use datafusion_datasource::file::FileSource;
+<span class="gd">-use arrow::datatypes::SchemaRef;</span>
+<span class="gi">+use datafusion_datasource::TableSchema;</span>
+
+<span class="w"> </span>impl FileSource for MyCustomSource {
+<span class="gd">-    fn with_schema(&amp;self, schema: SchemaRef) -&gt; Arc&lt;dyn FileSource&gt; {</span>
+<span class="gi">+    fn with_schema(&amp;self, schema: TableSchema) -&gt; Arc&lt;dyn FileSource&gt; {</span>
+<span class="w"> </span>        Arc::new(Self {
+<span class="gd">-            schema: Some(schema),</span>
+<span class="gi">+            // Use schema.file_schema() to get the file schema without partition columns</span>
+<span class="gi">+            schema: Some(Arc::clone(schema.file_schema())),</span>
+<span class="w"> </span>            ..self.clone()
+<span class="w"> </span>        })
+<span class="w"> </span>    }
+<span class="w"> </span>}
+</pre></div>
+</div>
+<p>For implementations that need access to partition columns:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">with_schema</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">schema</span><span class="p">:</span><span class="w"> </span><span class="nc">TableSchema</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">FileSource</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">file_schema</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="p">::</span><span class="n">clone</span><span class="p">(</span><span class="n">schema</span><span class="p">.</span><span class="n">file_schema</span><span class="p">()),</span>
+<span class="w">        </span><span class="n">partition_cols</span><span class="p">:</span><span class="w"> </span><span class="nc">schema</span><span class="p">.</span><span class="n">table_partition_cols</span><span class="p">().</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">table_schema</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="p">::</span><span class="n">clone</span><span class="p">(</span><span class="n">schema</span><span class="p">.</span><span class="n">table_schema</span><span class="p">()),</span>
+<span class="w">        </span><span class="o">..</span><span class="bp">self</span><span class="p">.</span><span class="n">clone</span><span class="p">()</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Note</strong>: Most <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations only need to store the file schema (without partition columns), as shown in the first example. The second pattern of storing all three schema components is typically only needed for advanced use cases where you need access to different schema representations for different operations (e.g., ParquetSource uses the file schema for building pruning predicates but needs the table schema for filter pushdown logic).</p>
+<p><strong>Using <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> directly:</strong></p>
+<p>If you’re constructing a <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> or working with table schemas and partition columns, you can now use <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_datasource</span><span class="p">::</span><span class="n">TableSchema</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::{</span><span class="n">Schema</span><span class="p">,</span><span class="w"> </span><span class="n">Field</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+
+<span class="c1">// Create a TableSchema with partition columns</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">file_schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Schema</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;user_id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;amount&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
+<span class="p">]));</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">partition_cols</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;date&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)),</span>
+<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;region&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)),</span>
+<span class="p">];</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">table_schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TableSchema</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">file_schema</span><span class="p">,</span><span class="w"> </span><span class="n">partition_cols</span><span class="p">);</span>
+
+<span class="c1">// Access different schema representations</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">file_schema_ref</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">table_schema</span><span class="p">.</span><span class="n">file_schema</span><span class="p">();</span><span class="w">      </span><span class="c1">// Schema without partition columns</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">full_schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">table_schema</span><span class="p">.</span><span class="n">table_schema</span><span class="p">();</span><span class="w">          </span><span class="c1">// Complete schema with partition columns</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">partition_cols_ref</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">table_schema</span><span class="p">.</span><span class="n">table_partition_cols</span><span class="p">();</span><span class="w"> </span><span class="c1">// Just the partition columns</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="datafusion-50-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">50.0.0</span></code><a class="headerlink" href="#datafusion-50-0-0" title="Link to this heading">#</a></h2>
@@ -1806,6 +1876,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reorganization-of-arrowsource-into-datafusion-datasource-arrow-crate">Reorganization of <code class="docutils literal notranslate"><span class="pre">ArrowSource</span></code> into <code class="docutils literal notranslate"><span class="pre">datafusion-datasource-arrow</span></code> crate</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filescanconfig-projection-renamed-to-filescanconfig-projection-exprs"><code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection</span></code> renamed to <code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection_exprs</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#describe-query-support"><code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">query</span></code> support</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#introduction-of-tableschema-and-changes-to-filesource-with-schema-method">Introduction of <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> and changes to <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-50-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">50.0.0</span></code></a><ul class="nav section-nav flex-column">
