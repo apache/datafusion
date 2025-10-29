@@ -124,7 +124,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .or_else(|| {
                     self.context_provider
                         .get_variable_type(&var_names)
-                        .map(|ty| Arc::new(Field::new("", ty, true)))
+                        .map(|ty| ty.into_nullable_field_ref())
                 })
                 .ok_or_else(|| {
                     exec_datafusion_err!("variable {var_names:?} has no type information")
