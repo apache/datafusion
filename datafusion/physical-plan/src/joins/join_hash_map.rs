@@ -22,7 +22,7 @@
 use std::fmt::{self, Debug};
 use std::ops::IndexMut;
 
-use hashbrown::hash_table::Entry::{Occupied, Vacant};
+use hashbrown::hash_table::OccupiedEntry;
 use hashbrown::HashTable;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -170,29 +170,34 @@ pub trait JoinHashMapType {
         deleted_offset: usize,
     ) {
         let (mut_map, mut_list) = self.get_mut();
-        for (row, &hash_value) in iter {
-            let entry = mut_map.entry(
-                hash_value,
-                |&(hash, _)| hash_value == hash,
-                |&(hash, _)| hash,
-            );
+        let mut items: Vec<(usize, u64)> = iter.map(|(row, &hash_value)| (row, hash_value)).collect();
+        let mut prev_hash = if let Some((_, first_hash)) = items.first() {
+            *first_hash
+        } else {
+            return;
+        };
+        items.sort_unstable_by_key(|&(_, hash_value)| hash_value);
 
-            match entry {
-                Occupied(mut occupied_entry) => {
-                    // Already exists: add index to next array
-                    let (_, index) = occupied_entry.get_mut();
-                    let prev_index = *index;
-                    // Store new value inside hashmap
-                    *index = (row + 1) as u64;
-                    // Update chained Vec at `row` with previous value
-                    mut_list[row - deleted_offset] = prev_index;
-                }
-                Vacant(vacant_entry) => {
-                    vacant_entry.insert((hash_value, (row + 1) as u64));
-                    // chained list at `row` is already initialized with 0
-                    // meaning end of list
-                }
+        let mut prev_entry: Option<OccupiedEntry<'_, (u64, u64)>> = None;
+
+        for (row, hash_value) in items {
+            let is_same_as_prev = hash_value == prev_hash;
+
+            if is_same_as_prev && prev_entry.is_some() {
+                // without lookup
+                let e = prev_entry.as_mut().unwrap();
+                let (_, index): &mut (u64, u64) = e.get_mut();
+                let prev_index = *index;
+                // Store new value inside hashmap
+                *index = (row + 1) as u64;
+                // Update chained Vec at `row` with previous value
+                mut_list[row - deleted_offset] = prev_index;
+            } else {
+                // New, unique hash value
+                prev_entry = Some(mut_map.insert_unique(hash_value, (hash_value, (row + 1) as u64), |&(hash, _)| hash));
             }
+
+            prev_hash = hash_value;
         }
     }
 
