@@ -346,8 +346,10 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     /// # Example
     ///
     /// ```rust
+    /// use datafusion_execution::memory_pool::{
+    ///     FairSpillPool, GreedyMemoryPool, TrackConsumersPool,
+    /// };
     /// use std::num::NonZeroUsize;
-    /// use datafusion_execution::memory_pool::{TrackConsumersPool, GreedyMemoryPool, FairSpillPool};
     ///
     /// // Create with a greedy pool backend, reporting top 3 consumers in error messages
     /// let tracked_greedy = TrackConsumersPool::new(

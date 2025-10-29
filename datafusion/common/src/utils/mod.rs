@@ -46,26 +46,23 @@ use std::thread::available_parallelism;
 ///
 /// Example:
 /// ```
-/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 /// use datafusion_common::project_schema;
 ///
 /// // Schema with columns 'a', 'b', and 'c'
 /// let schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("a", DataType::Int32, true),
-///   Field::new("b", DataType::Int64, true),
-///   Field::new("c", DataType::Utf8, true),
+///     Field::new("a", DataType::Int32, true),
+///     Field::new("b", DataType::Int64, true),
+///     Field::new("c", DataType::Utf8, true),
 /// ]));
 ///
 /// // Pick columns 'c' and 'b'
-/// let projection = Some(vec![2,1]);
-/// let projected_schema = project_schema(
-///    &schema,
-///    projection.as_ref()
-///  ).unwrap();
+/// let projection = Some(vec![2, 1]);
+/// let projected_schema = project_schema(&schema, projection.as_ref()).unwrap();
 ///
 /// let expected_schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("c", DataType::Utf8, true),
-///   Field::new("b", DataType::Int64, true),
+///     Field::new("c", DataType::Utf8, true),
+///     Field::new("b", DataType::Int64, true),
 /// ]));
 ///
 /// assert_eq!(projected_schema, expected_schema);
@@ -398,9 +395,11 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// # use arrow::array::types::Int64Type;
 /// # use datafusion_common::utils::SingleRowListArrayBuilder;
 /// // Array is [1, 2, 3]
-/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-///       Some(vec![Some(1), Some(2), Some(3)]),
-/// ]);
+/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+///     Some(1),
+///     Some(2),
+///     Some(3),
+/// ])]);
 /// // Wrap as a list array: [[1, 2, 3]]
 /// let list_arr = SingleRowListArrayBuilder::new(Arc::new(arr)).build_list_array();
 /// assert_eq!(list_arr.len(), 1);
@@ -554,7 +553,8 @@ pub fn fixed_size_list_to_arrays(a: &ArrayRef) -> Vec<ArrayRef> {
 /// use datafusion_common::utils::base_type;
 /// use std::sync::Arc;
 ///
-/// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+/// let data_type =
+///     DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// assert_eq!(base_type(&data_type), DataType::Int32);
 ///
 /// let data_type = DataType::Int32;
@@ -906,16 +906,19 @@ pub fn get_available_parallelism() -> usize {
 /// # use datafusion_common::utils::take_function_args;
 /// # use datafusion_common::ScalarValue;
 /// fn my_function(args: &[ScalarValue]) -> Result<()> {
-///   // function expects 2 args, so create a 2-element array
-///   let [arg1, arg2] = take_function_args("my_function", args)?;
-///   // ... do stuff..
-///   Ok(())
+///     // function expects 2 args, so create a 2-element array
+///     let [arg1, arg2] = take_function_args("my_function", args)?;
+///     // ... do stuff..
+///     Ok(())
 /// }
 ///
 /// // Calling the function with 1 argument produces an error:
 /// let args = vec![ScalarValue::Int32(Some(10))];
 /// let err = my_function(&args).unwrap_err();
-/// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
+/// assert_eq!(
+///     err.to_string(),
+///     "Execution error: my_function function requires 2 arguments, got 1"
+/// );
 /// // Calling the function with 2 arguments works great
 /// let args = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))];
 /// my_function(&args).unwrap();
