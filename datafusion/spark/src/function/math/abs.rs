@@ -116,41 +116,28 @@ impl ScalarUDFImpl for SparkAbs {
 
 macro_rules! legacy_compute_op {
     ($ARRAY:expr, $FUNC:ident, $TYPE:ident, $RESULT:ident) => {{
-        let n = $ARRAY.as_any().downcast_ref::<$TYPE>();
-        match n {
-            Some(array) => {
-                let res: $RESULT =
-                    arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
-                Ok(res)
-            }
-            _ => Err(DataFusionError::Internal(format!(
-                "Invalid data type for abs"
-            ))),
-        }
+        let array = $ARRAY.as_any().downcast_ref::<$TYPE>().unwrap();
+        let res: $RESULT = arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
+        res
     }};
 }
 
 macro_rules! ansi_compute_op {
     ($ARRAY:expr, $FUNC:ident, $TYPE:ident, $RESULT:ident, $NATIVE:ident, $FROM_TYPE:expr) => {{
-        let n = $ARRAY.as_any().downcast_ref::<$TYPE>();
-        match n {
-            Some(array) => {
-                match arrow::compute::kernels::arity::try_unary(array, |x| {
-                    if x == $NATIVE::MIN {
-                        Err(arrow::error::ArrowError::ArithmeticOverflow(
-                            $FROM_TYPE.to_string(),
-                        ))
-                    } else {
-                        Ok(x.$FUNC())
-                    }
-                }) {
-                    Ok(res) => Ok(ColumnarValue::Array(
-                        Arc::<PrimitiveArray<$RESULT>>::new(res),
-                    )),
-                    Err(_) => Err(arithmetic_overflow_error($FROM_TYPE)),
-                }
+        let array = $ARRAY.as_any().downcast_ref::<$TYPE>().unwrap();
+        match arrow::compute::kernels::arity::try_unary(array, |x| {
+            if x == $NATIVE::MIN {
+                Err(arrow::error::ArrowError::ArithmeticOverflow(
+                    $FROM_TYPE.to_string(),
+                ))
+            } else {
+                Ok(x.$FUNC())
             }
-            _ => Err(DataFusionError::Internal("Invalid data type".to_string())),
+        }) {
+            Ok(res) => Ok(ColumnarValue::Array(Arc::<PrimitiveArray<$RESULT>>::new(
+                res,
+            ))),
+            Err(_) => Err(arithmetic_overflow_error($FROM_TYPE)),
         }
     }};
 }
@@ -196,7 +183,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 if !fail_on_error {
                     let result =
                         legacy_compute_op!(array, wrapping_abs, Int8Array, Int8Array);
-                    Ok(ColumnarValue::Array(Arc::new(result?)))
+                    Ok(ColumnarValue::Array(Arc::new(result)))
                 } else {
                     ansi_compute_op!(array, abs, Int8Array, Int8Type, i8, "Int8")
                 }
@@ -205,7 +192,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 if !fail_on_error {
                     let result =
                         legacy_compute_op!(array, wrapping_abs, Int16Array, Int16Array);
-                    Ok(ColumnarValue::Array(Arc::new(result?)))
+                    Ok(ColumnarValue::Array(Arc::new(result)))
                 } else {
                     ansi_compute_op!(array, abs, Int16Array, Int16Type, i16, "Int16")
                 }
@@ -214,7 +201,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 if !fail_on_error {
                     let result =
                         legacy_compute_op!(array, wrapping_abs, Int32Array, Int32Array);
-                    Ok(ColumnarValue::Array(Arc::new(result?)))
+                    Ok(ColumnarValue::Array(Arc::new(result)))
                 } else {
                     ansi_compute_op!(array, abs, Int32Array, Int32Type, i32, "Int32")
                 }
@@ -223,18 +210,18 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 if !fail_on_error {
                     let result =
                         legacy_compute_op!(array, wrapping_abs, Int64Array, Int64Array);
-                    Ok(ColumnarValue::Array(Arc::new(result?)))
+                    Ok(ColumnarValue::Array(Arc::new(result)))
                 } else {
                     ansi_compute_op!(array, abs, Int64Array, Int64Type, i64, "Int64")
                 }
             }
             DataType::Float32 => {
                 let result = legacy_compute_op!(array, abs, Float32Array, Float32Array);
-                Ok(ColumnarValue::Array(Arc::new(result?)))
+                Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Float64 => {
                 let result = legacy_compute_op!(array, abs, Float64Array, Float64Array);
-                Ok(ColumnarValue::Array(Arc::new(result?)))
+                Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Decimal128(precision, scale) => {
                 if !fail_on_error {
@@ -243,7 +230,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                         wrapping_abs,
                         Decimal128Array,
                         Decimal128Array
-                    )?;
+                    );
                     let result =
                         result.with_data_type(DataType::Decimal128(*precision, *scale));
                     Ok(ColumnarValue::Array(Arc::new(result)))
@@ -284,7 +271,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                         wrapping_abs,
                         Decimal256Array,
                         Decimal256Array
-                    )?;
+                    );
                     let result =
                         result.with_data_type(DataType::Decimal256(*precision, *scale));
                     Ok(ColumnarValue::Array(Arc::new(result)))
@@ -325,7 +312,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                         wrapping_abs,
                         IntervalYearMonthArray,
                         IntervalYearMonthArray
-                    )?;
+                    );
                     let result = result.with_data_type(DataType::Interval(*unit));
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 }
@@ -335,7 +322,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                         wrapping_abs,
                         IntervalDayTimeArray,
                         IntervalDayTimeArray
-                    )?;
+                    );
                     let result = result.with_data_type(DataType::Interval(*unit));
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 }
