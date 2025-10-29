@@ -22,7 +22,6 @@
 use std::fmt::{self, Debug};
 use std::ops::Sub;
 
-use hashbrown::hash_table::OccupiedEntry;
 use hashbrown::HashTable;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -307,15 +306,18 @@ pub fn update_from_iter<'a, T>(
     };
     items.sort_unstable_by_key(|&(_, hash_value)| hash_value);
 
-    let mut prev_entry: Option<OccupiedEntry<'_, (u64, T)>> = None;
+    let mut prev_entry = map.insert_unique(
+        prev_hash,
+        (prev_hash, (T::try_from(items[0].0 + 1).unwrap())),
+        |&(hash, _)| hash,
+    );
 
-    for (row, hash_value) in items {
+    for &(row, hash_value) in items[1..].iter() {
         let is_same_as_prev = hash_value == prev_hash;
 
-        if is_same_as_prev && prev_entry.is_some() {
+        if is_same_as_prev {
             // without lookup
-            let e = prev_entry.as_mut().unwrap();
-            let (_, index): &mut (u64, T) = e.get_mut();
+            let (_, index): &mut (u64, T) = prev_entry.get_mut();
             let prev_index = *index;
             // Store new value inside hashmap
             *index = T::try_from(row + 1).unwrap();
@@ -323,11 +325,11 @@ pub fn update_from_iter<'a, T>(
             next[row - deleted_offset] = prev_index;
         } else {
             // New, unique hash value
-            prev_entry = Some(map.insert_unique(
+            prev_entry = map.insert_unique(
                 hash_value,
                 (hash_value, (T::try_from(row + 1).unwrap())),
                 |&(hash, _)| hash,
-            ));
+            );
         }
 
         prev_hash = hash_value;
