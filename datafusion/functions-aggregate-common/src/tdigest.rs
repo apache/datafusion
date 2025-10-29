@@ -554,7 +554,7 @@ impl TDigest {
     /// [`ScalarValue::Float64`]:
     ///
     /// ```text
-    ///
+    /// 
     ///    ┌────────┬────────┬────────┬───────┬────────┬────────┐
     ///    │max_size│  sum   │ count  │  max  │  min   │centroid│
     ///    └────────┴────────┴────────┴───────┴────────┴────────┘
@@ -575,7 +575,6 @@ impl TDigest {
     ///                          │└ ─ ─ ─ ┘│
     ///                          │         │
     ///                              ...
-    ///
     /// ```
     ///
     /// The [`TDigest::from_scalar_state()`] method reverses this processes,
