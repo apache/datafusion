@@ -16,11 +16,13 @@ DataFusion includes an extensive suite of benchmarks designed to measure perform
 ### Performance Benchmarks
 
 #### TPCH (TPC-H Benchmark)
+
 Industry-standard decision support benchmark derived from TPC-H version 2.17.1.
 
 **Purpose**: Tests complex analytical queries with joins, aggregations, and sorting
 **Data**: Synthetic business data (customers, orders, parts, suppliers)
 **Usage**:
+
 ```bash
 # Generate data
 ./bench.sh data tpch
@@ -33,39 +35,45 @@ Industry-standard decision support benchmark derived from TPC-H version 2.17.1.
 ```
 
 #### ClickBench
+
 Widely cited benchmark focusing on grouping, aggregation, and filtering operations.
 
 **Purpose**: Tests analytical query performance on real-world-like data
 **Data**: Web analytics dataset
 **Usage**:
+
 ```bash
 ./bench.sh data clickbench
 ./bench.sh run clickbench
 ```
 
 #### IMDB (Join Order Benchmark)
+
 Real-world movie database benchmark testing query optimization with skewed data.
 
 **Purpose**: Tests join ordering and cardinality estimation with realistic data distribution
 **Data**: Internet Movie Database with correlated columns and data skew
 **Usage**:
+
 ```bash
 ./bench.sh data imdb
 ./bench.sh run imdb
 ```
 
 #### H2O.ai Benchmarks
+
 Performance tests for groupby, join, and window operations with configurable data sizes.
 
 **Purpose**: Tests scalability across different data volumes
 **Data Sizes**: Small (1e7), Medium (1e8), Big (1e9 rows)
 **Usage**:
+
 ```bash
 # Groupby benchmarks
 ./bench.sh data h2o_small
 ./bench.sh run h2o_small
 
-# Join benchmarks  
+# Join benchmarks
 ./bench.sh data h2o_small_join
 ./bench.sh run h2o_small_join
 
@@ -77,35 +85,42 @@ Performance tests for groupby, join, and window operations with configurable dat
 ### Specialized Benchmarks
 
 #### Sort Benchmarks
+
 Tests sorting performance on large datasets.
 
 **Sort TPCH**: End-to-end sorting on TPCH lineitem table
+
 ```bash
 ./bench.sh run sort_tpch
 ./bench.sh run topk_tpch  # TopK variant
 ```
 
 **Sort**: General sorting performance on synthetic web server logs
+
 ```bash
 ./bench.sh run sort
 ```
 
 #### External Aggregation
+
 Tests aggregation performance with memory limits and spilling to disk.
 
 **Purpose**: Validates out-of-core aggregation performance
 **Usage**:
+
 ```bash
 ./bench.sh data external_aggr
 ./bench.sh run external_aggr
 ```
 
 #### Parquet Filter
+
 Tests Parquet filter pushdown performance.
 
 **Purpose**: Measures filter pushdown optimization effectiveness
 **Data**: Synthetic web server access logs
 **Usage**:
+
 ```bash
 ./bench.sh run parquet_filter
 ```
@@ -113,29 +128,35 @@ Tests Parquet filter pushdown performance.
 ### Micro-benchmarks
 
 #### Hash Join
+
 Focuses specifically on hash join performance with minimal overhead.
 
 **Purpose**: Isolated hash join performance testing
 **Data**: Uses `range()` table function
 **Usage**:
+
 ```bash
 ./bench.sh run hj
 ```
 
 #### Nested Loop Join
+
 Tests nested loop join performance across various workloads.
 
 **Purpose**: Isolated nested loop join performance testing
 **Usage**:
+
 ```bash
 ./bench.sh run nlj
 ```
 
 #### Cancellation
+
 Tests query cancellation performance and cleanup time.
 
 **Purpose**: Ensures queries stop executing quickly when cancelled
 **Usage**:
+
 ```bash
 ./bench.sh run cancellation
 ```
@@ -168,7 +189,7 @@ cd benchmarks/
 # Compare results between branches
 git checkout main
 ./bench.sh run tpch
-git checkout my-branch  
+git checkout my-branch
 ./bench.sh run tpch
 ./bench.sh compare main my-branch
 ```
@@ -274,7 +295,7 @@ Enable alternative allocators for performance testing:
 cargo run --release --features "mimalloc" --bin dfbench -- tpch \
   --path ./data --format parquet
 
-# Using snmalloc  
+# Using snmalloc
 cargo run --release --features "snmalloc" --bin dfbench -- tpch \
   --path ./data --format parquet
 ```
@@ -332,7 +353,7 @@ use structopt::StructOpt;
 pub struct RunOpt {
     #[structopt(long, help = "Path to data directory")]
     path: String,
-    
+
     #[structopt(long, help = "Output file for results")]
     output: Option<String>,
 }
@@ -340,12 +361,12 @@ pub struct RunOpt {
 impl RunOpt {
     pub async fn run(self) -> Result<()> {
         let mut benchmark_run = BenchmarkRun::new();
-        
+
         // Benchmark implementation
         benchmark_run.start_new_case("My Test Case");
         // ... run and time your benchmark
         benchmark_run.write_iter(elapsed_time);
-        
+
         benchmark_run.maybe_write_json(self.output.as_ref());
         Ok(())
     }
@@ -375,12 +396,14 @@ impl RunOpt {
 ### Common Issues
 
 **Out of memory errors**:
+
 ```bash
 # Reduce scale factor or increase memory limit
 cargo run --release --bin dfbench -- tpch --path ./data --format parquet --memory-limit 4G
 ```
 
 **Slow benchmark execution**:
+
 ```bash
 # Ensure release build
 cargo build --release
@@ -390,6 +413,7 @@ htop
 ```
 
 **Missing data**:
+
 ```bash
 # Regenerate benchmark data
 ./bench.sh data tpch

@@ -131,8 +131,8 @@ tested in the same way using the [doc_comment] crate. See the end of
 [core/src/lib.rs]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583
 
 ## Benchmarks
-For comprehensive information about all available benchmarks in DataFusion, see the dedicated {doc}`benchmarking` page.
 
+For comprehensive information about all available benchmarks in DataFusion, see the dedicated {doc}`benchmarking` page.
 
 ### Criterion Benchmarks
 
