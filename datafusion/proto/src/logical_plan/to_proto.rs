@@ -608,18 +608,20 @@ pub fn serialize_expr(
                 })),
             }
         }
-        Expr::Placeholder(Placeholder { id, data_type }) => {
-            let data_type = match data_type {
-                Some(data_type) => Some(data_type.try_into()?),
-                None => None,
-            };
-            protobuf::LogicalExprNode {
-                expr_type: Some(ExprType::Placeholder(PlaceholderNode {
-                    id: id.clone(),
-                    data_type,
-                })),
-            }
-        }
+        Expr::Placeholder(Placeholder { id, field }) => protobuf::LogicalExprNode {
+            expr_type: Some(ExprType::Placeholder(PlaceholderNode {
+                id: id.clone(),
+                data_type: match field {
+                    Some(field) => Some(field.data_type().try_into()?),
+                    None => None,
+                },
+                nullable: field.as_ref().map(|f| f.is_nullable()),
+                metadata: field
+                    .as_ref()
+                    .map(|f| f.metadata().clone())
+                    .unwrap_or(HashMap::new()),
+            })),
+        },
     };
 
     Ok(expr_node)

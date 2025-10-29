@@ -37,6 +37,7 @@ ObjectStore Profile mode set to Trace
 
 Object Store Profiling
 Instrumented Object Store: instrument_mode: Trace, inner: AmazonS3(data)
+<TIMESTAMP> operation=Head duration=[DURATION] path=cars.csv
 <TIMESTAMP> operation=Get duration=[DURATION] size=1006 path=cars.csv
 
 Summaries:
@@ -45,6 +46,8 @@ Summaries:
 +-----------+----------+-----------+-----------+-----------+-----------+-------+
 | Get        | duration | ...NORMALIZED...| 1     |
 | Get       | size     | 1006 B    | 1006 B    | 1006 B    | 1006 B    | 1     |
+| Head       | duration | ...NORMALIZED...| 1     |
+| Head      | size     |           |           |           |           | 1     |
 +-----------+----------+-----------+-----------+-----------+-----------+-------+
 ObjectStore Profile mode set to Summary
 +-----+-------+---------------------+
@@ -63,6 +66,8 @@ Summaries:
 +-----------+----------+-----------+-----------+-----------+-----------+-------+
 | Get        | duration | ...NORMALIZED...| 1     |
 | Get       | size     | 1006 B    | 1006 B    | 1006 B    | 1006 B    | 1     |
+| Head       | duration | ...NORMALIZED...| 1     |
+| Head      | size     |           |           |           |           | 1     |
 +-----------+----------+-----------+-----------+-----------+-----------+-------+
 ObjectStore Profile mode set to Disabled
 +-----+-------+---------------------+

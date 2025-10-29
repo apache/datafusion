@@ -545,7 +545,7 @@ pub fn parse_protobuf_file_scan_config(
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
-        .with_projection(Some(projection))
+        .with_projection_indices(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)
         .with_output_ordering(output_ordering)

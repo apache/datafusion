@@ -638,12 +638,13 @@ impl TreeNodeRecursion {
 /// # fn make_new_expr(i: i64) -> i64 { 2 }
 /// let expr = orig_expr();
 /// let ret = Transformed::no(expr.clone())
-///   .transform_data(|expr| {
-///    // closure returns a result and potentially transforms the node
-///    // in this example, it does transform the node
-///    let new_expr = make_new_expr(expr);
-///    Ok(Transformed::yes(new_expr))
-///  }).unwrap();
+///     .transform_data(|expr| {
+///         // closure returns a result and potentially transforms the node
+///         // in this example, it does transform the node
+///         let new_expr = make_new_expr(expr);
+///         Ok(Transformed::yes(new_expr))
+///     })
+///     .unwrap();
 /// // transformed flag is the union of the original ans closure's  transformed flag
 /// assert!(ret.transformed);
 /// ```

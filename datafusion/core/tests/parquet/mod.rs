@@ -37,6 +37,7 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_physical_plan::metrics::MetricValue;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
@@ -155,8 +156,30 @@ impl TestOutput {
         self.metric_value("row_groups_pruned_statistics")
     }
 
+    /// Metric `files_ranges_pruned_statistics` tracks both pruned and matched count,
+    /// for testing purpose, here it only aggregate the `pruned` count.
     fn files_ranges_pruned_statistics(&self) -> Option<usize> {
-        self.metric_value("files_ranges_pruned_statistics")
+        let mut total_pruned = 0;
+        let mut found = false;
+
+        for metric in self.parquet_metrics.iter() {
+            let metric = metric.as_ref();
+            if metric.value().name() == "files_ranges_pruned_statistics" {
+                if let MetricValue::PruningMetrics {
+                    pruning_metrics, ..
+                } = metric.value()
+                {
+                    total_pruned += pruning_metrics.pruned();
+                    found = true;
+                }
+            }
+        }
+
+        if found {
+            Some(total_pruned)
+        } else {
+            None
+        }
     }
 
     /// The number of row_groups matched by bloom filter or statistics

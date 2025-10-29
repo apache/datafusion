@@ -80,7 +80,7 @@ impl FileStream {
         let pc_projector = PartitionColumnProjector::new(
             Arc::clone(&projected_schema),
             &config
-                .table_partition_cols
+                .table_partition_cols()
                 .iter()
                 .map(|x| x.name().clone())
                 .collect::<Vec<_>>(),

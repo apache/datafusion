@@ -41,10 +41,15 @@
 /// * `arg`: 0 or more named arguments for the function
 /// * `DOC`: documentation string for the function
 /// * `SCALAR_UDF_FUNC`: name of the function to create (just) the `ScalarUDF`
+/// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
+///   automatically resolves to `$UDF::new()`.
 ///
 /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
 macro_rules! make_udf_expr_and_func {
-    ($UDF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr , $SCALAR_UDF_FN:ident) => {
+    ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $SCALAR_UDF_FN:ident) => {
+        make_udf_expr_and_func!($UDF, $EXPR_FN, $($arg)*, $DOC, $SCALAR_UDF_FN, $UDF::new);
+    };
+    ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $SCALAR_UDF_FN:ident, $CTOR:path) => {
         paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]
@@ -54,10 +59,13 @@ macro_rules! make_udf_expr_and_func {
                     vec![$($arg),*],
                 ))
             }
-            create_func!($UDF, $SCALAR_UDF_FN);
+            create_func!($UDF, $SCALAR_UDF_FN, $CTOR);
         }
     };
-    ($UDF:ty, $EXPR_FN:ident, $DOC:expr , $SCALAR_UDF_FN:ident) => {
+    ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $SCALAR_UDF_FN:ident) => {
+        make_udf_expr_and_func!($UDF, $EXPR_FN, $DOC, $SCALAR_UDF_FN, $UDF::new);
+    };
+    ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $SCALAR_UDF_FN:ident, $CTOR:path) => {
         paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]
@@ -67,7 +75,7 @@ macro_rules! make_udf_expr_and_func {
                     arg,
                 ))
             }
-            create_func!($UDF, $SCALAR_UDF_FN);
+            create_func!($UDF, $SCALAR_UDF_FN, $CTOR);
         }
     };
 }
@@ -80,10 +88,15 @@ macro_rules! make_udf_expr_and_func {
 /// # Arguments
 /// * `UDF`: name of the [`ScalarUDFImpl`]
 /// * `SCALAR_UDF_FUNC`: name of the function to create (just) the `ScalarUDF`
+/// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
+///   automatically resolves to `$UDF::new()`.
 ///
 /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
 macro_rules! create_func {
-    ($UDF:ty, $SCALAR_UDF_FN:ident) => {
+    ($UDF:ident, $SCALAR_UDF_FN:ident) => {
+        create_func!($UDF, $SCALAR_UDF_FN, $UDF::new);
+    };
+    ($UDF:ident, $SCALAR_UDF_FN:ident, $CTOR:path) => {
         paste::paste! {
             #[doc = concat!("ScalarFunction that returns a [`ScalarUDF`](datafusion_expr::ScalarUDF) for ")]
             #[doc = stringify!($UDF)]
@@ -92,7 +105,7 @@ macro_rules! create_func {
                 static INSTANCE: std::sync::LazyLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
                     std::sync::LazyLock::new(|| {
                         std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
-                            <$UDF>::new(),
+                            $CTOR(),
                         ))
                     });
                 std::sync::Arc::clone(&INSTANCE)

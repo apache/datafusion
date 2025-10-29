@@ -51,9 +51,10 @@ use crate::{
     WindowFunctionDefinition,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::ExplainFormat;
+use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -1098,15 +1099,13 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
-                name,
-                data_types,
-                ..
+                name, fields, ..
             })) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Statement(Statement::Prepare(Prepare {
                     name: name.clone(),
-                    data_types: data_types.clone(),
+                    fields: fields.clone(),
                     input: Arc::new(input),
                 })))
             }
@@ -1282,7 +1281,7 @@ impl LogicalPlan {
             if let LogicalPlan::Statement(Statement::Prepare(prepare_lp)) =
                 plan_with_values
             {
-                param_values.verify(&prepare_lp.data_types)?;
+                param_values.verify_fields(&prepare_lp.fields)?;
                 // try and take ownership of the input if is not shared, clone otherwise
                 Arc::unwrap_or_clone(prepare_lp.input)
             } else {
@@ -1463,8 +1462,10 @@ impl LogicalPlan {
                     let original_name = name_preserver.save(&e);
                     let transformed_expr = e.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
-                            let value = param_values.get_placeholders_with_values(&id)?;
-                            Ok(Transformed::yes(Expr::Literal(value, None)))
+                            let (value, metadata) = param_values
+                                .get_placeholders_with_values(&id)?
+                                .into_inner();
+                            Ok(Transformed::yes(Expr::Literal(value, metadata)))
                         } else {
                             Ok(Transformed::no(e))
                         }
@@ -1494,24 +1495,43 @@ impl LogicalPlan {
     }
 
     /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
+    ///
+    /// Note that this will drop any extension or field metadata attached to parameters. Use
+    /// [`LogicalPlan::get_parameter_fields`] to keep extension metadata.
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
-        let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
+        let mut parameter_fields = self.get_parameter_fields()?;
+        Ok(parameter_fields
+            .drain()
+            .map(|(name, maybe_field)| {
+                (name, maybe_field.map(|field| field.data_type().clone()))
+            })
+            .collect())
+    }
+
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs
+    pub fn get_parameter_fields(
+        &self,
+    ) -> Result<HashMap<String, Option<FieldRef>>, DataFusionError> {
+        let mut param_types: HashMap<String, Option<FieldRef>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
                 expr.apply(|expr| {
-                    if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
+                    if let Expr::Placeholder(Placeholder { id, field }) = expr {
                         let prev = param_types.get(id);
-                        match (prev, data_type) {
-                            (Some(Some(prev)), Some(dt)) => {
-                                if prev != dt {
-                                    plan_err!("Conflicting types for {id}")?;
-                                }
+                        match (prev, field) {
+                            (Some(Some(prev)), Some(field)) => {
+                                check_metadata_with_storage_equal(
+                                    (field.data_type(), Some(field.metadata())),
+                                    (prev.data_type(), Some(prev.metadata())),
+                                    "parameter",
+                                    &format!(": Conflicting types for id {id}"),
+                                )?;
                             }
-                            (_, Some(dt)) => {
-                                param_types.insert(id.clone(), Some(dt.clone()));
+                            (_, Some(field)) => {
+                                param_types.insert(id.clone(), Some(Arc::clone(field)));
                             }
                             _ => {
                                 param_types.insert(id.clone(), None);
@@ -4231,6 +4251,7 @@ mod tests {
         binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
         GroupingSet,
     };
+    use datafusion_common::metadata::ScalarAndMetadata;
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
@@ -4772,6 +4793,38 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_placeholder_mismatched_metadata() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        // Create a prepared statement with explicit fields that do not have metadata
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(placeholder("$1")))
+            .unwrap()
+            .build()
+            .unwrap();
+        let prepared_builder = LogicalPlanBuilder::new(plan)
+            .prepare(
+                "".to_string(),
+                vec![Field::new("", DataType::Int32, true).into()],
+            )
+            .unwrap();
+
+        // Attempt to bind a parameter with metadata
+        let mut scalar_meta = HashMap::new();
+        scalar_meta.insert("some_key".to_string(), "some_value".to_string());
+        let param_values = ParamValues::List(vec![ScalarAndMetadata::new(
+            ScalarValue::Int32(Some(42)),
+            Some(scalar_meta.into()),
+        )]);
+        prepared_builder
+            .plan()
+            .clone()
+            .with_param_values(param_values)
+            .expect_err("prepared field metadata mismatch unexpectedly succeeded");
+    }
+
+    #[test]
     fn test_nullable_schema_after_grouping_set() {
         let schema = Schema::new(vec![
             Field::new("foo", DataType::Int32, false),
@@ -5143,7 +5196,7 @@ mod tests {
             .unwrap();
 
         // Check that the placeholder parameters have not received a DataType.
-        let params = plan.get_parameter_types().unwrap();
+        let params = plan.get_parameter_fields().unwrap();
         assert_eq!(params.len(), 1);
 
         let parameter_type = params.clone().get(placeholder_value).unwrap().clone();

@@ -24,38 +24,10 @@ pub use parquet::encryption::decrypt::FileDecryptionProperties;
 pub use parquet::encryption::encrypt::FileEncryptionProperties;
 
 #[cfg(not(feature = "parquet_encryption"))]
-#[derive(Default, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct FileDecryptionProperties;
 #[cfg(not(feature = "parquet_encryption"))]
-#[derive(Default, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct FileEncryptionProperties;
 
 pub use crate::config::{ConfigFileDecryptionProperties, ConfigFileEncryptionProperties};
-
-#[cfg(feature = "parquet_encryption")]
-pub fn map_encryption_to_config_encryption(
-    encryption: Option<&FileEncryptionProperties>,
-) -> Option<ConfigFileEncryptionProperties> {
-    encryption.map(|fe| fe.into())
-}
-
-#[cfg(not(feature = "parquet_encryption"))]
-pub fn map_encryption_to_config_encryption(
-    _encryption: Option<&FileEncryptionProperties>,
-) -> Option<ConfigFileEncryptionProperties> {
-    None
-}
-
-#[cfg(feature = "parquet_encryption")]
-pub fn map_config_decryption_to_decryption(
-    decryption: &ConfigFileDecryptionProperties,
-) -> FileDecryptionProperties {
-    decryption.clone().into()
-}
-
-#[cfg(not(feature = "parquet_encryption"))]
-pub fn map_config_decryption_to_decryption(
-    _decryption: &ConfigFileDecryptionProperties,
-) -> FileDecryptionProperties {
-    FileDecryptionProperties {}
-}

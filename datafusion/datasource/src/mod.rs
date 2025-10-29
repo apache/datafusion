@@ -41,6 +41,7 @@ pub mod schema_adapter;
 pub mod sink;
 pub mod source;
 mod statistics;
+pub mod table_schema;
 
 #[cfg(test)]
 pub mod test_util;
@@ -57,6 +58,7 @@ use datafusion_common::{ScalarValue, Statistics};
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
 #[allow(deprecated)]
 pub use statistics::add_row_stats;

@@ -40,6 +40,18 @@ code {
   text-align: center;
 }
 
+/* Display appropriate logo for dark and light mode */
+.light-logo { display: inline; }
+.dark-logo { display: none; }
+
+@media (prefers-color-scheme: dark) {
+  .light-logo { display: none; }
+  .dark-logo { 
+    display: inline; 
+    background-color: transparent !important;
+  }
+}
+
 /* Ensure the logo is properly displayed */
 
 .navbar-brand {

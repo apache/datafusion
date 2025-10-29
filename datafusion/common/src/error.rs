@@ -684,7 +684,10 @@ impl DataFusionError {
 /// let mut builder = DataFusionError::builder();
 /// builder.add_error(DataFusionError::Internal("foo".to_owned()));
 /// // ok_or returns the value if no errors have been added
-/// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+/// assert_contains!(
+///     builder.error_or(42).unwrap_err().to_string(),
+///     "Internal error: foo"
+/// );
 /// ```
 #[derive(Debug, Default)]
 pub struct DataFusionErrorBuilder(Vec<DataFusionError>);
@@ -702,7 +705,10 @@ impl DataFusionErrorBuilder {
     /// # use datafusion_common::{assert_contains, DataFusionError};
     /// let mut builder = DataFusionError::builder();
     /// builder.add_error(DataFusionError::Internal("foo".to_owned()));
-    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    /// assert_contains!(
+    ///     builder.error_or(42).unwrap_err().to_string(),
+    ///     "Internal error: foo"
+    /// );
     /// ```
     pub fn add_error(&mut self, error: DataFusionError) {
         self.0.push(error);
@@ -714,8 +720,11 @@ impl DataFusionErrorBuilder {
     /// ```
     /// # use datafusion_common::{assert_contains, DataFusionError};
     /// let builder = DataFusionError::builder()
-    ///   .with_error(DataFusionError::Internal("foo".to_owned()));
-    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    ///     .with_error(DataFusionError::Internal("foo".to_owned()));
+    /// assert_contains!(
+    ///     builder.error_or(42).unwrap_err().to_string(),
+    ///     "Internal error: foo"
+    /// );
     /// ```
     pub fn with_error(mut self, error: DataFusionError) -> Self {
         self.0.push(error);
