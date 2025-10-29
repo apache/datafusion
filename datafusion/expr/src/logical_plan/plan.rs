@@ -53,8 +53,8 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
+use datafusion_common::datatype::SerializedTypeView;
 use datafusion_common::format::ExplainFormat;
-use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -1523,12 +1523,13 @@ impl LogicalPlan {
                         let prev = param_types.get(id);
                         match (prev, field) {
                             (Some(Some(prev)), Some(field)) => {
-                                check_metadata_with_storage_equal(
-                                    (field.data_type(), Some(field.metadata())),
-                                    (prev.data_type(), Some(prev.metadata())),
-                                    "parameter",
-                                    &format!(": Conflicting types for id {id}"),
-                                )?;
+                                let actual = SerializedTypeView::from(field);
+                                let expected = SerializedTypeView::from(prev);
+                                if actual != expected {
+                                    return plan_err!(
+                                        "Conflicting types for parameter '{id}': expected {expected} but got {actual}"
+                                    );
+                                }
                             }
                             (_, Some(field)) => {
                                 param_types.insert(id.clone(), Some(Arc::clone(field)));
@@ -4810,9 +4811,9 @@ mod tests {
             )
             .unwrap();
 
-        // Attempt to bind a parameter with metadata
+        // Attempt to bind a parameter with an extension type
         let mut scalar_meta = HashMap::new();
-        scalar_meta.insert("some_key".to_string(), "some_value".to_string());
+        scalar_meta.insert("ARROW:extension:name".to_string(), "uuid".to_string());
         let param_values = ParamValues::List(vec![ScalarAndMetadata::new(
             ScalarValue::Int32(Some(42)),
             Some(scalar_meta.into()),

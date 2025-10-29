@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::datatype::SerializedTypeView;
 use crate::error::{_plan_datafusion_err, _plan_err};
-use crate::metadata::{check_metadata_with_storage_equal, ScalarAndMetadata};
+use crate::metadata::ScalarAndMetadata;
 use crate::{Result, ScalarValue};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use std::collections::HashMap;
@@ -61,15 +62,15 @@ impl ParamValues {
                 // Verify if the types of the params matches the types of the values
                 let iter = expect.iter().zip(list.iter());
                 for (i, (param_type, lit)) in iter.enumerate() {
-                    check_metadata_with_storage_equal(
-                        (
-                            &lit.value.data_type(),
-                            lit.metadata.as_ref().map(|m| m.to_hashmap()).as_ref(),
-                        ),
-                        (param_type.data_type(), Some(param_type.metadata())),
-                        "parameter",
-                        &format!(" at index {i}"),
-                    )?;
+                    let actual_storage = lit.value().data_type();
+                    let actual_type =
+                        SerializedTypeView::from((&actual_storage, lit.metadata()));
+                    let expected_type = SerializedTypeView::from(param_type);
+                    if actual_type != expected_type {
+                        return _plan_err!(
+                            "Expected parameter of type {expected_type}, got {actual_type} at index {i}"
+                        );
+                    }
                 }
                 Ok(())
             }
