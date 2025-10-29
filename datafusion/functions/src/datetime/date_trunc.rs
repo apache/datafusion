@@ -484,8 +484,9 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     if let Some(unit) = unit {
         let original_type = array.data_type();
         let input = arrow::compute::cast(array, &DataType::Int64)?;
-        // operate in place
+        // Optimize performance by doing operations in place if possible
         let array = input.as_primitive::<Int64Type>().clone();
+        drop(input); // ensure the input reference is dropped (so we can reuse the memory if possible)
         let array = try_unary_mut_or_clone(array, |i| {
             i.checked_div(unit)
                 .ok_or_else(|| exec_datafusion_err!("division overflow"))
