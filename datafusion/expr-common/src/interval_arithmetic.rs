@@ -1670,22 +1670,23 @@ fn cast_scalar_value(
 ///
 /// // [1, 2) U {NULL}
 /// let maybe_null = NullableInterval::MaybeNull {
-///    values: Interval::try_new(
-///            ScalarValue::Int32(Some(1)),
-///            ScalarValue::Int32(Some(2)),
-///        ).unwrap(),
+///     values: Interval::try_new(
+///         ScalarValue::Int32(Some(1)),
+///         ScalarValue::Int32(Some(2)),
+///     )
+///     .unwrap(),
 /// };
 ///
 /// // (0, ∞)
 /// let not_null = NullableInterval::NotNull {
-///   values: Interval::try_new(
-///            ScalarValue::Int32(Some(0)),
-///            ScalarValue::Int32(None),
-///        ).unwrap(),
+///     values: Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(None))
+///         .unwrap(),
 /// };
 ///
 /// // {NULL}
-/// let null_interval = NullableInterval::Null { datatype: DataType::Int32 };
+/// let null_interval = NullableInterval::Null {
+///     datatype: DataType::Int32,
+/// };
 ///
 /// // {4}
 /// let single_value = NullableInterval::from(ScalarValue::Int32(Some(4)));
@@ -1787,22 +1788,26 @@ impl NullableInterval {
     ///
     /// ```
     /// use datafusion_common::ScalarValue;
-    /// use datafusion_expr_common::operator::Operator;
     /// use datafusion_expr_common::interval_arithmetic::Interval;
     /// use datafusion_expr_common::interval_arithmetic::NullableInterval;
+    /// use datafusion_expr_common::operator::Operator;
     ///
     /// // 4 > 3 -> true
     /// let lhs = NullableInterval::from(ScalarValue::Int32(Some(4)));
     /// let rhs = NullableInterval::from(ScalarValue::Int32(Some(3)));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
-    /// assert_eq!(result, NullableInterval::from(ScalarValue::Boolean(Some(true))));
+    /// assert_eq!(
+    ///     result,
+    ///     NullableInterval::from(ScalarValue::Boolean(Some(true)))
+    /// );
     ///
     /// // [1, 3) > NULL -> NULL
     /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(1)),
-    ///            ScalarValue::Int32(Some(3)),
-    ///        ).unwrap(),
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(3)),
+    ///     )
+    ///     .unwrap(),
     /// };
     /// let rhs = NullableInterval::from(ScalarValue::Int32(None));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
@@ -1811,22 +1816,27 @@ impl NullableInterval {
     /// // [1, 3] > [2, 4] -> [false, true]
     /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(1)),
-    ///            ScalarValue::Int32(Some(3)),
-    ///        ).unwrap(),
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(3)),
+    ///     )
+    ///     .unwrap(),
     /// };
     /// let rhs = NullableInterval::NotNull {
-    ///    values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(2)),
-    ///            ScalarValue::Int32(Some(4)),
-    ///        ).unwrap(),
+    ///     values: Interval::try_new(
+    ///         ScalarValue::Int32(Some(2)),
+    ///         ScalarValue::Int32(Some(4)),
+    ///     )
+    ///     .unwrap(),
     /// };
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
     /// // Both inputs are valid (non-null), so result must be non-null
-    /// assert_eq!(result, NullableInterval::NotNull {
-    /// // Uncertain whether inequality is true or false
-    ///    values: Interval::UNCERTAIN,
-    /// });
+    /// assert_eq!(
+    ///     result,
+    ///     NullableInterval::NotNull {
+    ///         // Uncertain whether inequality is true or false
+    ///         values: Interval::UNCERTAIN,
+    ///     }
+    /// );
     /// ```
     pub fn apply_operator(&self, op: &Operator, rhs: &Self) -> Result<Self> {
         match op {
@@ -1924,7 +1934,8 @@ impl NullableInterval {
     ///     values: Interval::try_new(
     ///         ScalarValue::Int32(Some(1)),
     ///         ScalarValue::Int32(Some(4)),
-    ///     ).unwrap(),
+    ///     )
+    ///     .unwrap(),
     /// };
     /// assert_eq!(interval.single_value(), None);
     /// ```

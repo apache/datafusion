@@ -890,7 +890,6 @@ pub fn check_all_columns_from_schema(
 ///    all referenced column of the right side is from the right schema.
 /// 2. Or opposite. All referenced column of the left side is from the right schema,
 ///    and the right side is from the left schema.
-///
 pub fn find_valid_equijoin_key_pair(
     left_key: &Expr,
     right_key: &Expr,
@@ -1034,10 +1033,7 @@ pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
 /// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use split_conjunction_owned to split them
 /// assert_eq!(split_conjunction_owned(expr), split);
@@ -1060,10 +1056,7 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
 /// let expr = col("a").eq(lit(1)).add(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use split_binary_owned to split them
 /// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
@@ -1131,10 +1124,7 @@ fn split_binary_impl<'a>(
 /// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use conjunction to join them together with `AND`
 /// assert_eq!(conjunction(split), Some(expr));
@@ -1157,10 +1147,7 @@ pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
 /// let expr = col("a").eq(lit(1)).or(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use disjunction to join them together with `OR`
 /// assert_eq!(disjunction(split), Some(expr));

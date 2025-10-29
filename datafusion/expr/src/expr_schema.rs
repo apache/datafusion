@@ -82,15 +82,17 @@ impl ExprSchemable for Expr {
     /// # use std::collections::HashMap;
     ///
     /// fn main() {
-    ///   let expr = col("c1") + col("c2");
-    ///   let schema = DFSchema::from_unqualified_fields(
-    ///     vec![
-    ///       Field::new("c1", DataType::Int32, true),
-    ///       Field::new("c2", DataType::Float32, true),
-    ///       ].into(),
-    ///       HashMap::new(),
-    ///   ).unwrap();
-    ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
+    ///     let expr = col("c1") + col("c2");
+    ///     let schema = DFSchema::from_unqualified_fields(
+    ///         vec![
+    ///             Field::new("c1", DataType::Int32, true),
+    ///             Field::new("c2", DataType::Float32, true),
+    ///         ]
+    ///         .into(),
+    ///         HashMap::new(),
+    ///     )
+    ///     .unwrap();
+    ///     assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
     /// }
     /// ```
     ///
@@ -734,7 +736,6 @@ impl Expr {
 ///    new projection with the casted expression.
 /// 2. **Non-projection plan**: If the subquery isn't a projection, it adds a projection to the plan
 ///    with the casted first column.
-///
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
         return Ok(subquery);
