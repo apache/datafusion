@@ -188,6 +188,21 @@ SELECT generate_series(1, t1.end) FROM generate_series(3, 5) as t1(end)
 [1, 2, 3, 4]
 [1, 2, 3]
 
+# join with projection on generate_series
+query I
+select g1.value from generate_series(1, 3) g1 CROSS JOIN generate_series(1, 3) g2;
+----
+1
+1
+1
+2
+2
+2
+3
+3
+3
+
+
 # Test range table function
 query I
 SELECT * FROM range(6)

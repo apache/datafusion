@@ -19,6 +19,8 @@
 
 # DataFrame API
 
+## DataFrame overview
+
 A DataFrame represents a logical set of rows with the same named columns,
 similar to a [Pandas DataFrame] or [Spark DataFrame].
 

@@ -206,7 +206,7 @@ impl PrintOptions {
 
                         writeln!(writer, "Summaries:")?;
                         let summaries = RequestSummaries::new(&requests);
-                        writeln!(writer, "{}", summaries)?;
+                        writeln!(writer, "{summaries}")?;
                     }
                 }
             }

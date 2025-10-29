@@ -520,33 +520,35 @@ impl Statistics {
     /// # use arrow::datatypes::{Field, Schema, DataType};
     /// # use datafusion_common::stats::Precision;
     /// let stats1 = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(1))
-    ///   .with_total_byte_size(Precision::Exact(2))
-    ///   .add_column_statistics(ColumnStatistics::new_unknown()
-    ///      .with_null_count(Precision::Exact(3))
-    ///      .with_min_value(Precision::Exact(ScalarValue::from(4)))
-    ///      .with_max_value(Precision::Exact(ScalarValue::from(5)))
-    ///   );
+    ///     .with_num_rows(Precision::Exact(1))
+    ///     .with_total_byte_size(Precision::Exact(2))
+    ///     .add_column_statistics(
+    ///         ColumnStatistics::new_unknown()
+    ///             .with_null_count(Precision::Exact(3))
+    ///             .with_min_value(Precision::Exact(ScalarValue::from(4)))
+    ///             .with_max_value(Precision::Exact(ScalarValue::from(5))),
+    ///     );
     ///
     /// let stats2 = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(10))
-    ///   .with_total_byte_size(Precision::Inexact(20))
-    ///   .add_column_statistics(ColumnStatistics::new_unknown()
-    ///       // absent null count
-    ///      .with_min_value(Precision::Exact(ScalarValue::from(40)))
-    ///      .with_max_value(Precision::Exact(ScalarValue::from(50)))
-    ///   );
+    ///     .with_num_rows(Precision::Exact(10))
+    ///     .with_total_byte_size(Precision::Inexact(20))
+    ///     .add_column_statistics(
+    ///         ColumnStatistics::new_unknown()
+    ///             // absent null count
+    ///             .with_min_value(Precision::Exact(ScalarValue::from(40)))
+    ///             .with_max_value(Precision::Exact(ScalarValue::from(50))),
+    ///     );
     ///
     /// let merged_stats = stats1.try_merge(&stats2).unwrap();
     /// let expected_stats = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(11))
-    ///   .with_total_byte_size(Precision::Inexact(22)) // inexact in stats2 --> inexact
-    ///   .add_column_statistics(
-    ///     ColumnStatistics::new_unknown()
-    ///       .with_null_count(Precision::Absent) // missing from stats2 --> absent
-    ///       .with_min_value(Precision::Exact(ScalarValue::from(4)))
-    ///       .with_max_value(Precision::Exact(ScalarValue::from(50)))
-    ///   );
+    ///     .with_num_rows(Precision::Exact(11))
+    ///     .with_total_byte_size(Precision::Inexact(22)) // inexact in stats2 --> inexact
+    ///     .add_column_statistics(
+    ///         ColumnStatistics::new_unknown()
+    ///             .with_null_count(Precision::Absent) // missing from stats2 --> absent
+    ///             .with_min_value(Precision::Exact(ScalarValue::from(4)))
+    ///             .with_max_value(Precision::Exact(ScalarValue::from(50))),
+    ///     );
     ///
     /// assert_eq!(merged_stats, expected_stats)
     /// ```

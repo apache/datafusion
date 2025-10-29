@@ -95,6 +95,8 @@ pub struct DecimalAverager<T: DecimalType> {
     target_mul: T::Native,
     /// the output precision
     target_precision: u8,
+    /// the output scale
+    target_scale: i8,
 }
 
 impl<T: DecimalType> DecimalAverager<T> {
@@ -129,6 +131,7 @@ impl<T: DecimalType> DecimalAverager<T> {
                 sum_mul,
                 target_mul,
                 target_precision,
+                target_scale,
             })
         } else {
             // can't convert the lit decimal to the returned data type
@@ -147,8 +150,11 @@ impl<T: DecimalType> DecimalAverager<T> {
         if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
             let new_value = value.div_wrapping(count);
 
-            let validate =
-                T::validate_decimal_precision(new_value, self.target_precision);
+            let validate = T::validate_decimal_precision(
+                new_value,
+                self.target_precision,
+                self.target_scale,
+            );
 
             if validate.is_ok() {
                 Ok(new_value)

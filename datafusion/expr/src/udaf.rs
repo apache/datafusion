@@ -746,21 +746,52 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         true
     }
 
-    /// If this function is ordered-set aggregate function, return true
-    /// otherwise, return false
+    /// If this function is an ordered-set aggregate function, return `true`.
+    /// Otherwise, return `false` (default).
     ///
-    /// Ordered-set aggregate functions require an explicit `ORDER BY` clause
-    /// because the calculation performed by these functions is dependent on the
-    /// specific sequence of the input rows, unlike other aggregate functions
-    /// like `SUM`, `AVG`, or `COUNT`.
+    /// Ordered-set aggregate functions allow specifying a sort order that affects
+    /// how the function calculates its result, unlike other aggregate functions
+    /// like `SUM` or `COUNT`. For example, `percentile_cont` is an ordered-set
+    /// aggregate function that calculates the exact percentile value from a list
+    /// of values; the output of calculating the `0.75` percentile depends on if
+    /// you're calculating on an ascending or descending list of values.
     ///
-    /// An example of an ordered-set aggregate function is `percentile_cont`
-    /// which computes a specific percentile value from a sorted list of values, and
-    /// is only meaningful when the input data is ordered.
+    /// Setting this to return `true` affects only SQL parsing & planning; it allows
+    /// use of the `WITHIN GROUP` clause to specify this order, for example:
     ///
-    /// In SQL syntax, ordered-set aggregate functions are used with the
-    /// `WITHIN GROUP (ORDER BY ...)` clause to specify the ordering of the input
-    /// data.
+    /// ```sql
+    /// -- Ascending
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 ASC) FROM table;
+    /// -- Default ordering is ascending if not explicitly specified
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1) FROM table;
+    /// -- Descending
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 DESC) FROM table;
+    /// ```
+    ///
+    /// This calculates the `0.75` percentile of the column `c1` from `table`,
+    /// according to the specific ordering. The column specified in the `WITHIN GROUP`
+    /// ordering clause is taken as the column to calculate values on; specifying
+    /// the `WITHIN GROUP` clause is optional so these queries are equivalent:
+    ///
+    /// ```sql
+    /// -- If no WITHIN GROUP is specified then default ordering is implementation
+    /// -- dependent; in this case ascending for percentile_cont
+    /// SELECT percentile_cont(c1, 0.75) FROM table;
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 ASC) FROM table;
+    /// ```
+    ///
+    /// Aggregate UDFs can define their default ordering if the function is called
+    /// without the `WITHIN GROUP` clause, though a default of ascending is the
+    /// standard practice.
+    ///
+    /// Note that setting this to `true` does not guarantee input sort order to
+    /// the aggregate function; it expects the function to handle ordering the
+    /// input values themselves (e.g. `percentile_cont` must buffer and sort
+    /// the values internally). That is, DataFusion does not introduce any kind
+    /// of sort into the plan for these functions.
+    ///
+    /// Setting this to `false` disallows calling this function with the `WITHIN GROUP`
+    /// clause.
     fn is_ordered_set_aggregate(&self) -> bool {
         false
     }

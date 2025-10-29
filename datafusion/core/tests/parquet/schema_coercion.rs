@@ -126,7 +126,7 @@ async fn multi_parquet_coercion_projection() {
         Arc::new(ParquetSource::default()),
     )
     .with_file_group(file_group)
-    .with_projection(Some(vec![1, 0, 2]))
+    .with_projection_indices(Some(vec![1, 0, 2]))
     .build();
 
     let parquet_exec = DataSourceExec::from_data_source(config);

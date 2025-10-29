@@ -100,24 +100,24 @@ impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
 /// representing a complete projection operation and provides
 /// methods to manipulate and analyze the projection as a whole.
 #[derive(Debug, Clone)]
-pub struct Projection {
+pub struct ProjectionExprs {
     exprs: Vec<ProjectionExpr>,
 }
 
-impl std::fmt::Display for Projection {
+impl std::fmt::Display for ProjectionExprs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let exprs: Vec<String> = self.exprs.iter().map(|e| e.to_string()).collect();
         write!(f, "Projection[{}]", exprs.join(", "))
     }
 }
 
-impl From<Vec<ProjectionExpr>> for Projection {
+impl From<Vec<ProjectionExpr>> for ProjectionExprs {
     fn from(value: Vec<ProjectionExpr>) -> Self {
         Self { exprs: value }
     }
 }
 
-impl From<&[ProjectionExpr]> for Projection {
+impl From<&[ProjectionExpr]> for ProjectionExprs {
     fn from(value: &[ProjectionExpr]) -> Self {
         Self {
             exprs: value.to_vec(),
@@ -125,15 +125,83 @@ impl From<&[ProjectionExpr]> for Projection {
     }
 }
 
-impl AsRef<[ProjectionExpr]> for Projection {
+impl FromIterator<ProjectionExpr> for ProjectionExprs {
+    fn from_iter<T: IntoIterator<Item = ProjectionExpr>>(exprs: T) -> Self {
+        Self {
+            exprs: exprs.into_iter().collect::<Vec<_>>(),
+        }
+    }
+}
+
+impl AsRef<[ProjectionExpr]> for ProjectionExprs {
     fn as_ref(&self) -> &[ProjectionExpr] {
         &self.exprs
     }
 }
 
-impl Projection {
-    pub fn new(exprs: Vec<ProjectionExpr>) -> Self {
-        Self { exprs }
+impl ProjectionExprs {
+    pub fn new<I>(exprs: I) -> Self
+    where
+        I: IntoIterator<Item = ProjectionExpr>,
+    {
+        Self {
+            exprs: exprs.into_iter().collect::<Vec<_>>(),
+        }
+    }
+
+    /// Creates a [`ProjectionExpr`] from a list of column indices.
+    ///
+    /// This is a convenience method for creating simple column-only projections, where each projection expression is a reference to a column
+    /// in the input schema.
+    ///
+    /// # Behavior
+    /// - Ordering: the output projection preserves the exact order of indices provided in the input slice
+    ///   For example, `[2, 0, 1]` will produce projections for columns 2, 0, then 1 in that order
+    /// - Duplicates: Duplicate indices are allowed and will create multiple projection expressions referencing the same source column
+    ///   For example, `[0, 0]` creates 2 separate projections both referencing column 0
+    ///
+    /// # Panics
+    /// Panics if any index in `indices` is out of bounds for the provided schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use arrow::datatypes::{Schema, Field, DataType};
+    /// use datafusion_physical_expr::projection::ProjectionExprs;
+    ///
+    /// // Create a schema with three columns
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Utf8, false),
+    ///     Field::new("c", DataType::Float64, false),
+    /// ]));
+    ///
+    /// // Project columns at indices 2 and 0 (c and a) - ordering is preserved
+    /// let projection = ProjectionExprs::from_indices(&[2, 0], &schema);
+    ///
+    /// // This creates: SELECT c@2 AS c, a@0 AS a
+    /// assert_eq!(projection.as_ref().len(), 2);
+    /// assert_eq!(projection.as_ref()[0].alias, "c");
+    /// assert_eq!(projection.as_ref()[1].alias, "a");
+    ///
+    /// // Duplicate indices are allowed
+    /// let projection_with_dups = ProjectionExprs::from_indices(&[0, 0, 1], &schema);
+    /// assert_eq!(projection_with_dups.as_ref().len(), 3);
+    /// assert_eq!(projection_with_dups.as_ref()[0].alias, "a");
+    /// assert_eq!(projection_with_dups.as_ref()[1].alias, "a"); // duplicate
+    /// assert_eq!(projection_with_dups.as_ref()[2].alias, "b");
+    /// ```
+    pub fn from_indices(indices: &[usize], schema: &SchemaRef) -> Self {
+        let projection_exprs = indices.iter().map(|&i| {
+            let field = schema.field(i);
+            ProjectionExpr {
+                expr: Arc::new(Column::new(field.name(), i)),
+                alias: field.name().clone(),
+            }
+        });
+
+        Self::from_iter(projection_exprs)
     }
 
     /// Returns an iterator over the projection expressions
@@ -167,7 +235,7 @@ impl Projection {
     ///
     /// ```rust
     /// use std::sync::Arc;
-    /// use datafusion_physical_expr::projection::{Projection, ProjectionExpr};
+    /// use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionExpr};
     /// use datafusion_physical_expr::expressions::{Column, BinaryExpr, Literal};
     /// use datafusion_common::{Result, ScalarValue};
     /// use datafusion_expr::Operator;
@@ -175,7 +243,7 @@ impl Projection {
     /// fn main() -> Result<()> {
     ///     // Example from the docstring:
     ///     // Base projection: SELECT c@2 AS x, b@1 AS y, a@0 AS z
-    ///     let base = Projection::new(vec![
+    ///     let base = ProjectionExprs::new(vec![
     ///         ProjectionExpr {
     ///             expr: Arc::new(Column::new("c", 2)),
     ///             alias: "x".to_string(),
@@ -191,7 +259,7 @@ impl Projection {
     ///     ]);
     ///
     ///     // Top projection: SELECT x@0 + 1 AS c1, y@1 + z@2 AS c2
-    ///     let top = Projection::new(vec![
+    ///     let top = ProjectionExprs::new(vec![
     ///         ProjectionExpr {
     ///             expr: Arc::new(BinaryExpr::new(
     ///                 Arc::new(Column::new("x", 0)),
@@ -224,7 +292,7 @@ impl Projection {
     /// # Errors
     /// This function returns an error if any expression in the `other` projection cannot be
     /// applied on top of this projection.
-    pub fn try_merge(&self, other: &Projection) -> Result<Projection> {
+    pub fn try_merge(&self, other: &ProjectionExprs) -> Result<ProjectionExprs> {
         let mut new_exprs = Vec::with_capacity(other.exprs.len());
         for proj_expr in &other.exprs {
             let new_expr = update_expr(&proj_expr.expr, &self.exprs, true)?
@@ -240,7 +308,7 @@ impl Projection {
                 alias: proj_expr.alias.clone(),
             });
         }
-        Ok(Projection::new(new_exprs))
+        Ok(ProjectionExprs::new(new_exprs))
     }
 
     /// Extract the column indices used in this projection.
@@ -254,6 +322,46 @@ impl Projection {
             .sorted_unstable()
             .dedup()
             .collect_vec()
+    }
+
+    /// Extract the ordered column indices for a column-only projection.
+    ///
+    /// This function assumes that all expressions in the projection are simple column references.
+    /// It returns the column indices in the order they appear in the projection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any expression in the projection is not a simple column reference. This includes:
+    /// - Computed expressions (e.g., `a + 1`, `CAST(a AS INT)`)
+    /// - Function calls (e.g., `UPPER(name)`, `SUM(amount)`)
+    /// - Literals (e.g., `42`, `'hello'`)
+    /// - Complex nested expressions (e.g., `CASE WHEN ... THEN ... END`)
+    ///
+    /// # Returns
+    ///
+    /// A vector of column indices in projection order. Unlike [`column_indices()`](Self::column_indices),
+    /// this function:
+    /// - Preserves the projection order (does not sort)
+    /// - Preserves duplicates (does not deduplicate)
+    ///
+    /// # Example
+    ///
+    /// For a projection `SELECT c, a, c` where `a` is at index 0 and `c` is at index 2,
+    /// this function would return `[2, 0, 2]`.
+    ///
+    /// Use [`column_indices()`](Self::column_indices) instead if the projection may contain
+    /// non-column expressions or if you need a deduplicated sorted list.
+    pub fn ordered_column_indices(&self) -> Vec<usize> {
+        self.exprs
+            .iter()
+            .map(|e| {
+                e.expr
+                    .as_any()
+                    .downcast_ref::<Column>()
+                    .expect("Expected column reference in projection")
+                    .index()
+            })
+            .collect()
     }
 
     /// Project a schema according to this projection.
@@ -327,7 +435,7 @@ impl Projection {
     }
 }
 
-impl<'a> IntoIterator for &'a Projection {
+impl<'a> IntoIterator for &'a ProjectionExprs {
     type Item = &'a ProjectionExpr;
     type IntoIter = std::slice::Iter<'a, ProjectionExpr>;
 
@@ -336,7 +444,7 @@ impl<'a> IntoIterator for &'a Projection {
     }
 }
 
-impl IntoIterator for Projection {
+impl IntoIterator for ProjectionExprs {
     type Item = ProjectionExpr;
     type IntoIter = std::vec::IntoIter<ProjectionExpr>;
 
@@ -1570,7 +1678,7 @@ pub(crate) mod tests {
         let source = get_stats();
         let schema = get_schema();
 
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("col1", 1)),
                 alias: "col1".to_string(),
@@ -1612,7 +1720,7 @@ pub(crate) mod tests {
         let source = get_stats();
         let schema = get_schema();
 
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("col2", 2)),
                 alias: "col2".to_string(),
@@ -1663,7 +1771,7 @@ pub(crate) mod tests {
                 alias: "b".to_string(),
             },
         ];
-        let projection = Projection::new(exprs.clone());
+        let projection = ProjectionExprs::new(exprs.clone());
         assert_eq!(projection.as_ref().len(), 2);
         Ok(())
     }
@@ -1674,7 +1782,7 @@ pub(crate) mod tests {
             expr: Arc::new(Column::new("x", 0)),
             alias: "x".to_string(),
         }];
-        let projection: Projection = exprs.clone().into();
+        let projection: ProjectionExprs = exprs.clone().into();
         assert_eq!(projection.as_ref().len(), 1);
         Ok(())
     }
@@ -1691,7 +1799,7 @@ pub(crate) mod tests {
                 alias: "col2".to_string(),
             },
         ];
-        let projection = Projection::new(exprs);
+        let projection = ProjectionExprs::new(exprs);
         let as_ref: &[ProjectionExpr] = projection.as_ref();
         assert_eq!(as_ref.len(), 2);
         Ok(())
@@ -1700,7 +1808,7 @@ pub(crate) mod tests {
     #[test]
     fn test_column_indices_multiple_columns() -> Result<()> {
         // Test with reversed column order to ensure proper reordering
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("c", 5)),
                 alias: "c".to_string(),
@@ -1722,7 +1830,7 @@ pub(crate) mod tests {
     #[test]
     fn test_column_indices_duplicates() -> Result<()> {
         // Test that duplicate column indices appear only once
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("a", 1)),
                 alias: "a".to_string(),
@@ -1743,7 +1851,7 @@ pub(crate) mod tests {
     #[test]
     fn test_column_indices_unsorted() -> Result<()> {
         // Test that column indices are sorted in the output
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("c", 5)),
                 alias: "c".to_string(),
@@ -1769,7 +1877,7 @@ pub(crate) mod tests {
             Operator::Plus,
             Arc::new(Column::new("b", 4)),
         ));
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr,
                 alias: "sum".to_string(),
@@ -1786,7 +1894,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_column_indices_empty() -> Result<()> {
-        let projection = Projection::new(vec![]);
+        let projection = ProjectionExprs::new(vec![]);
         assert_eq!(projection.column_indices(), Vec::<usize>::new());
         Ok(())
     }
@@ -1794,7 +1902,7 @@ pub(crate) mod tests {
     #[test]
     fn test_merge_simple_columns() -> Result<()> {
         // First projection: SELECT c@2 AS x, b@1 AS y, a@0 AS z
-        let base_projection = Projection::new(vec![
+        let base_projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("c", 2)),
                 alias: "x".to_string(),
@@ -1810,7 +1918,7 @@ pub(crate) mod tests {
         ]);
 
         // Second projection: SELECT y@1 AS col2, x@0 AS col1
-        let top_projection = Projection::new(vec![
+        let top_projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("y", 1)),
                 alias: "col2".to_string(),
@@ -1831,7 +1939,7 @@ pub(crate) mod tests {
     #[test]
     fn test_merge_with_expressions() -> Result<()> {
         // First projection: SELECT c@2 AS x, b@1 AS y, a@0 AS z
-        let base_projection = Projection::new(vec![
+        let base_projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("c", 2)),
                 alias: "x".to_string(),
@@ -1847,7 +1955,7 @@ pub(crate) mod tests {
         ]);
 
         // Second projection: SELECT y@1 + z@2 AS c2, x@0 + 1 AS c1
-        let top_projection = Projection::new(vec![
+        let top_projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("y", 1)),
@@ -1876,7 +1984,7 @@ pub(crate) mod tests {
     #[test]
     fn try_merge_error() {
         // Create a base projection
-        let base = Projection::new(vec![
+        let base = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 alias: "x".to_string(),
@@ -1888,7 +1996,7 @@ pub(crate) mod tests {
         ]);
 
         // Create a top projection that references a non-existent column index
-        let top = Projection::new(vec![ProjectionExpr {
+        let top = ProjectionExprs::new(vec![ProjectionExpr {
             expr: Arc::new(Column::new("z", 5)), // Invalid index
             alias: "result".to_string(),
         }]);
@@ -1907,7 +2015,7 @@ pub(crate) mod tests {
         let input_schema = get_schema();
 
         // Projection: SELECT col2 AS c, col0 AS a
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("col2", 2)),
                 alias: "c".to_string(),
@@ -1940,7 +2048,7 @@ pub(crate) mod tests {
         let input_schema = get_schema();
 
         // Projection: SELECT col0 + 1 AS incremented
-        let projection = Projection::new(vec![ProjectionExpr {
+        let projection = ProjectionExprs::new(vec![ProjectionExpr {
             expr: Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("col0", 0)),
                 Operator::Plus,
@@ -1974,7 +2082,7 @@ pub(crate) mod tests {
         ]);
 
         // Projection: SELECT col0 AS renamed
-        let projection = Projection::new(vec![ProjectionExpr {
+        let projection = ProjectionExprs::new(vec![ProjectionExpr {
             expr: Arc::new(Column::new("col0", 0)),
             alias: "renamed".to_string(),
         }]);
@@ -1994,7 +2102,7 @@ pub(crate) mod tests {
     #[test]
     fn test_project_schema_empty() -> Result<()> {
         let input_schema = get_schema();
-        let projection = Projection::new(vec![]);
+        let projection = ProjectionExprs::new(vec![]);
 
         let output_schema = projection.project_schema(&input_schema)?;
 
@@ -2009,7 +2117,7 @@ pub(crate) mod tests {
         let input_schema = get_schema();
 
         // Projection: SELECT col1 AS text, col0 AS num
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("col1", 1)),
                 alias: "text".to_string(),
@@ -2057,7 +2165,7 @@ pub(crate) mod tests {
         let input_schema = get_schema();
 
         // Projection with expression: SELECT col0 + 1 AS incremented, col1 AS text
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("col0", 0)),
@@ -2105,7 +2213,7 @@ pub(crate) mod tests {
         let input_schema = get_schema();
 
         // Projection with only primitive width columns: SELECT col2 AS f, col0 AS i
-        let projection = Projection::new(vec![
+        let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
                 expr: Arc::new(Column::new("col2", 2)),
                 alias: "f".to_string(),
@@ -2136,7 +2244,7 @@ pub(crate) mod tests {
         let input_stats = get_stats();
         let input_schema = get_schema();
 
-        let projection = Projection::new(vec![]);
+        let projection = ProjectionExprs::new(vec![]);
 
         let output_stats = projection.project_statistics(input_stats, &input_schema)?;
 

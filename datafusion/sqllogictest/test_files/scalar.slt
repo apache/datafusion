@@ -309,6 +309,14 @@ select ceil(a), ceil(b), ceil(c) from small_floats;
 1 0 0
 1 0 1
 
+# ceil with scale parameter(Scale not supported)
+query error DataFusion error: This feature is not implemented: CEIL with scale is not supported
+select ceil(100.1234, 1)
+
+# ceil with datetime parameter (not supported)
+query error DataFusion error: This feature is not implemented: CEIL with datetime is not supported
+select ceil(100.1234 to year)
+
 ## degrees
 
 # degrees scalar function
@@ -447,6 +455,14 @@ select floor(a), floor(b), floor(c) from signed_integers;
 -3 10000 -978
 2 -1000 123
 4 NULL NULL
+
+# floor with scale parameter(Scale not supported)
+query error DataFusion error: This feature is not implemented: FLOOR with scale is not supported
+select floor(a, 1)
+
+# floor with datetime parameter ( not supported)
+query error DataFusion error: This feature is not implemented: FLOOR with datetime is not supported
+select floor(a to year)
 
 ## ln
 

@@ -595,3 +595,25 @@ SELECT CASE WHEN a = 'a' THEN 0 WHEN a = 'b' THEN 1 ELSE 2 END FROM (VALUES (NUL
 ----
 2
 2
+
+# The `WHEN 1/0` is not effectively reachable in this query and should never be executed
+query T
+SELECT CASE a WHEN 1 THEN 'a' WHEN 2 THEN 'b' WHEN 1 / 0 THEN 'c' ELSE 'd' END FROM (VALUES (1), (2)) t(a)
+----
+a
+b
+
+# The `WHEN 1/0` is not effectively reachable in this query and should never be executed
+query T
+SELECT CASE WHEN a = 1 THEN 'a' WHEN a = 2 THEN 'b' WHEN a = 1 / 0 THEN 'c' ELSE 'd' END FROM (VALUES (1), (2)) t(a)
+----
+a
+b
+
+# The `WHEN 1/0` is not effectively reachable in this query and should never be executed
+query T
+SELECT CASE WHEN a = 0 THEN 'a' WHEN 1 / a = 1 THEN 'b' ELSE 'c' END FROM (VALUES (0), (1), (2)) t(a)
+----
+a
+b
+c

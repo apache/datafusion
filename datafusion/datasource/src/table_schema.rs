@@ -121,6 +121,24 @@ impl TableSchema {
         }
     }
 
+    /// Create a new TableSchema from a file schema with no partition columns.
+    pub fn from_file_schema(file_schema: SchemaRef) -> Self {
+        Self::new(file_schema, vec![])
+    }
+
+    /// Set the table partition columns and rebuild the table schema.
+    pub fn with_table_partition_cols(
+        mut self,
+        table_partition_cols: Vec<FieldRef>,
+    ) -> TableSchema {
+        self.table_partition_cols = table_partition_cols;
+        // Rebuild the table schema with the new partition columns
+        let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
+        builder.extend(self.table_partition_cols.iter().cloned());
+        self.table_schema = Arc::new(builder.finish());
+        self
+    }
+
     /// Get the file schema (without partition columns).
     ///
     /// This is the schema of the actual data files on disk.

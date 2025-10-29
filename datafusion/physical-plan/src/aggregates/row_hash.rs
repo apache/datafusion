@@ -23,7 +23,7 @@ use std::vec;
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
-use crate::aggregates::group_values::{new_group_values, GroupValues};
+use crate::aggregates::group_values::{new_group_values, GroupByMetrics, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     create_schema, evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode,
@@ -49,6 +49,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use datafusion_common::instant::Instant;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -430,6 +431,9 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
+
+    /// Aggregation-specific metrics
+    group_by_metrics: GroupByMetrics,
 }
 
 impl GroupedHashAggregateStream {
@@ -447,6 +451,7 @@ impl GroupedHashAggregateStream {
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -609,6 +614,7 @@ impl GroupedHashAggregateStream {
             current_group_indices: Default::default(),
             exec_state,
             baseline_metrics,
+            group_by_metrics,
             batch_size,
             group_ordering,
             input_done: false,
@@ -830,12 +836,25 @@ impl GroupedHashAggregateStream {
             evaluate_group_by(&self.group_by, &batch)?
         };
 
+        // Only create the timer if there are actual aggregate arguments to evaluate
+        let timer = match (
+            self.spill_state.is_stream_merging,
+            self.spill_state.merging_aggregate_arguments.is_empty(),
+            self.aggregate_arguments.is_empty(),
+        ) {
+            (true, false, _) | (false, _, false) => {
+                Some(self.group_by_metrics.aggregate_arguments_time.timer())
+            }
+            _ => None,
+        };
+
         // Evaluate the aggregation expressions.
         let input_values = if self.spill_state.is_stream_merging {
             evaluate_many(&self.spill_state.merging_aggregate_arguments, &batch)?
         } else {
             evaluate_many(&self.aggregate_arguments, &batch)?
         };
+        drop(timer);
 
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = if self.spill_state.is_stream_merging {
@@ -846,6 +865,8 @@ impl GroupedHashAggregateStream {
         };
 
         for group_values in &group_by_values {
+            let groups_start_time = Instant::now();
+
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
             self.group_values
@@ -861,6 +882,12 @@ impl GroupedHashAggregateStream {
                     total_num_groups,
                 )?;
             }
+
+            // Use this instant for both measurements to save a syscall
+            let agg_start_time = Instant::now();
+            self.group_by_metrics
+                .time_calculating_group_ids
+                .add_duration(agg_start_time - groups_start_time);
 
             // Gather the inputs to call the actual accumulator
             let t = self
@@ -897,6 +924,9 @@ impl GroupedHashAggregateStream {
                         acc.merge_batch(values, group_indices, None, total_num_groups)?;
                     }
                 }
+                self.group_by_metrics
+                    .aggregation_time
+                    .add_elapsed(agg_start_time);
             }
         }
 
@@ -941,6 +971,7 @@ impl GroupedHashAggregateStream {
             return Ok(None);
         }
 
+        let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.group_values.emit(emit_to)?;
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
@@ -961,12 +992,14 @@ impl GroupedHashAggregateStream {
                 | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
             }
         }
+        drop(timer);
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
         let batch = RecordBatch::try_new(schema, output)?;
         debug_assert!(batch.num_rows() > 0);
+
         Ok(Some(batch))
     }
 
