@@ -161,6 +161,126 @@ async fn query_partitioned_csv_file() {
     - GET  (opts) path=data/a=3/b=30/c=300/file_3.csv
     "
     );
+
+    assert_snapshot!(
+        test.query("select * from csv_table_partitioned WHERE a=2").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - LIST (with delimiter) prefix=data/a=2
+    - LIST (with delimiter) prefix=data/a=2/b=20
+    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from csv_table_partitioned WHERE b=20").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 11
+    - LIST (with delimiter) prefix=data
+    - LIST (with delimiter) prefix=data/a=1
+    - LIST (with delimiter) prefix=data/a=2
+    - LIST (with delimiter) prefix=data/a=3
+    - LIST (with delimiter) prefix=data/a=1/b=10
+    - LIST (with delimiter) prefix=data/a=2/b=20
+    - LIST (with delimiter) prefix=data/a=3/b=30
+    - LIST (with delimiter) prefix=data/a=1/b=10/c=100
+    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
+    - LIST (with delimiter) prefix=data/a=3/b=30/c=300
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from csv_table_partitioned WHERE c=200").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 11
+    - LIST (with delimiter) prefix=data
+    - LIST (with delimiter) prefix=data/a=1
+    - LIST (with delimiter) prefix=data/a=2
+    - LIST (with delimiter) prefix=data/a=3
+    - LIST (with delimiter) prefix=data/a=1/b=10
+    - LIST (with delimiter) prefix=data/a=2/b=20
+    - LIST (with delimiter) prefix=data/a=3/b=30
+    - LIST (with delimiter) prefix=data/a=1/b=10/c=100
+    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
+    - LIST (with delimiter) prefix=data/a=3/b=30/c=300
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from csv_table_partitioned WHERE a=2 AND b=20").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00002 | 2e-12 | true  | 2 | 20 | 200 |
+    | 0.00003 | 5e-12 | false | 2 | 20 | 200 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - LIST (with delimiter) prefix=data/a=2/b=20
+    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
+    - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
+    "
+    );
+
+    assert_snapshot!(
+        test.query("select * from csv_table_partitioned WHERE a<2 AND b=10 AND c=100").await,
+        @r"
+    ------- Query Output (2 rows) -------
+    +---------+-------+-------+---+----+-----+
+    | d1      | d2    | d3    | a | b  | c   |
+    +---------+-------+-------+---+----+-----+
+    | 0.00001 | 1e-12 | true  | 1 | 10 | 100 |
+    | 0.00003 | 5e-12 | false | 1 | 10 | 100 |
+    +---------+-------+-------+---+----+-----+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 11
+    - LIST (with delimiter) prefix=data
+    - LIST (with delimiter) prefix=data/a=1
+    - LIST (with delimiter) prefix=data/a=2
+    - LIST (with delimiter) prefix=data/a=3
+    - LIST (with delimiter) prefix=data/a=1/b=10
+    - LIST (with delimiter) prefix=data/a=2/b=20
+    - LIST (with delimiter) prefix=data/a=3/b=30
+    - LIST (with delimiter) prefix=data/a=1/b=10/c=100
+    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
+    - LIST (with delimiter) prefix=data/a=3/b=30/c=300
+    - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
+    "
+    );
 }
 
 #[tokio::test]
@@ -403,7 +523,7 @@ impl Test {
         self
     }
 
-    /// Register a CSV file at the given path relative to the [`datafusion_test_data`] directory
+    /// Register a CSV file at the given path
     async fn register_csv(self, table_name: &str, path: &str) -> Self {
         let mut options = CsvReadOptions::new();
         options.has_header = true;
@@ -415,8 +535,7 @@ impl Test {
         self
     }
 
-    /// Register a partitioned CSV table at the given path relative to the [`datafusion_test_data`]
-    /// directory
+    /// Register a partitioned CSV table at the given path
     async fn register_partitioned_csv(self, table_name: &str, path: &str) -> Self {
         let file_format = Arc::new(CsvFormat::default().with_has_header(true));
         let options = ListingOptions::new(file_format);
@@ -439,8 +558,7 @@ impl Test {
         self
     }
 
-    /// Register a Parquet file at the given path relative to the
-    /// [`datafusion_test_data`] directory
+    /// Register a Parquet file at the given path
     async fn register_parquet(self, table_name: &str, path: &str) -> Self {
         let path = format!("mem://{path}");
         let mut options: ParquetReadOptions<'_> = ParquetReadOptions::new();
