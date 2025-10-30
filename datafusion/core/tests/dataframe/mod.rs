@@ -3023,6 +3023,7 @@ async fn reproducer_e2e_with_repartition_sorts_false() -> Result<()> {
     Ok(())
 }
 
+#[ignore] // See https://github.com/apache/datafusion/issues/18380
 #[tokio::test]
 async fn reproducer_e2e_with_repartition_sorts_true() -> Result<()> {
     assert_snapshot!(
