@@ -3056,8 +3056,34 @@ async fn reproducer_e2e_with_repartition_sorts_true() -> Result<()> {
     //         UnionExec
     //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
     //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+    //
+    //
+    // === Excerpt from the verbose explain ===
+    //
+    // Physical_plan after EnforceDistribution:
+    //
+    // OutputRequirementExec: order_by=[], dist_by=Unspecified
+    //   AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    //     SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+    //       CoalescePartitionsExec
+    //         AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    //           UnionExec
+    //             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+    //             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+    //               DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+    //
+    // Physical_plan after EnforceSorting:
+    //
+    // OutputRequirementExec: order_by=[], dist_by=Unspecified
+    //   AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    //     SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+    //       SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+    //         AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+    //           UnionExec
+    //             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+    //             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
 
-    Ok(())
+        Ok(())
 }
 
 async fn reproducer_e2e_impl(repartition_sorts: bool) -> Result<String> {
