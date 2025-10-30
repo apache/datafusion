@@ -231,7 +231,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
 ///   .with_extensions(Arc::new(access_plan));
 /// // create a FileScanConfig to scan this file
-/// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::default()))
+/// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::new(schema())))
 ///     .with_file(partitioned_file).build();
 /// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen

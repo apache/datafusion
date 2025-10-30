@@ -72,7 +72,8 @@ use tokio::io::AsyncWriteExt;
 ///     quote: b'"',
 ///     ..Default::default()
 /// };
-/// let source = Arc::new(CsvSource::new(file_schema.clone(), options)
+/// let source = Arc::new(CsvSource::new(file_schema.clone())
+///     .with_csv_options(options)
 ///     .with_terminator(Some(b'#'))
 /// );
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
