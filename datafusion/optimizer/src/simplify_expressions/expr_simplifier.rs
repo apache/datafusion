@@ -5004,7 +5004,7 @@ mod tests {
                 assert_eq!(val, 1761630189642i64);
                 assert_eq!(tz.as_deref(), Some("+00:00"));
             }
-            other => panic!("Expected TimestampNanosecond literal, got: {:?}", other),
+            other => panic!("Expected TimestampNanosecond literal, got: {other:?}"),
         }
 
         // Test CAST of invalid string to timestamp - should return an error at plan time
