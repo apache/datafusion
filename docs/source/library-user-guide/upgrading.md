@@ -182,6 +182,84 @@ let indices = projection_exprs.column_indices();
 _execution plan_ of the query. With this release, `DESCRIBE query` now outputs
 the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
 
+### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
+
+A new `TableSchema` struct has been introduced in the `datafusion-datasource` crate to better manage table schemas with partition columns. This struct helps distinguish between:
+
+- **File schema**: The schema of actual data files on disk
+- **Partition columns**: Columns derived from directory structure (e.g., Hive-style partitioning)
+- **Table schema**: The complete schema combining both file and partition columns
+
+As part of this change, the `FileSource::with_schema()` method signature has changed from accepting a `SchemaRef` to accepting a `TableSchema`.
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations will need to update their code
+- Users who only use built-in file sources (Parquet, CSV, JSON, AVRO, Arrow) are not affected
+
+**Migration guide for custom `FileSource` implementations:**
+
+```diff
+ use datafusion_datasource::file::FileSource;
+-use arrow::datatypes::SchemaRef;
++use datafusion_datasource::TableSchema;
+
+ impl FileSource for MyCustomSource {
+-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
++    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+         Arc::new(Self {
+-            schema: Some(schema),
++            // Use schema.file_schema() to get the file schema without partition columns
++            schema: Some(Arc::clone(schema.file_schema())),
+             ..self.clone()
+         })
+     }
+ }
+```
+
+For implementations that need access to partition columns:
+
+```rust,ignore
+fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+    Arc::new(Self {
+        file_schema: Arc::clone(schema.file_schema()),
+        partition_cols: schema.table_partition_cols().clone(),
+        table_schema: Arc::clone(schema.table_schema()),
+        ..self.clone()
+    })
+}
+```
+
+**Note**: Most `FileSource` implementations only need to store the file schema (without partition columns), as shown in the first example. The second pattern of storing all three schema components is typically only needed for advanced use cases where you need access to different schema representations for different operations (e.g., ParquetSource uses the file schema for building pruning predicates but needs the table schema for filter pushdown logic).
+
+**Using `TableSchema` directly:**
+
+If you're constructing a `FileScanConfig` or working with table schemas and partition columns, you can now use `TableSchema`:
+
+```rust
+use datafusion_datasource::TableSchema;
+use arrow::datatypes::{Schema, Field, DataType};
+use std::sync::Arc;
+
+// Create a TableSchema with partition columns
+let file_schema = Arc::new(Schema::new(vec![
+    Field::new("user_id", DataType::Int64, false),
+    Field::new("amount", DataType::Float64, false),
+]));
+
+let partition_cols = vec![
+    Arc::new(Field::new("date", DataType::Utf8, false)),
+    Arc::new(Field::new("region", DataType::Utf8, false)),
+];
+
+let table_schema = TableSchema::new(file_schema, partition_cols);
+
+// Access different schema representations
+let file_schema_ref = table_schema.file_schema();      // Schema without partition columns
+let full_schema = table_schema.table_schema();          // Complete schema with partition columns
+let partition_cols_ref = table_schema.table_partition_cols(); // Just the partition columns
+```
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables

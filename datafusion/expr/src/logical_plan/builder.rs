@@ -450,14 +450,13 @@ impl LogicalPlanBuilder {
     /// # ])) as _;
     /// # let table_source = Arc::new(LogicalTableSource::new(employee_schema));
     /// // VALUES (1), (2)
-    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
-    ///   .build()?;
+    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
     /// // INSERT INTO MyTable VALUES (1), (2)
     /// let insert_plan = LogicalPlanBuilder::insert_into(
-    ///   input,
-    ///   "MyTable",
-    ///   table_source,
-    ///   InsertOp::Append,
+    ///     input,
+    ///     "MyTable",
+    ///     table_source,
+    ///     InsertOp::Append,
     /// )?;
     /// # Ok(())
     /// # }
@@ -953,8 +952,8 @@ impl LogicalPlanBuilder {
     /// // Form the expression `(left.a != right.a)` AND `(left.b != right.b)`
     /// let exprs = vec![
     ///     col("left.a").eq(col("right.a")),
-    ///     col("left.b").not_eq(col("right.b"))
-    ///  ];
+    ///     col("left.b").not_eq(col("right.b")),
+    /// ];
     ///
     /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
     /// // finding all pairs of rows from `left` and `right` where
