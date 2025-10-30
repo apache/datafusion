@@ -47,6 +47,7 @@ use sqlparser::ast::{
 
 // Moved in 51.0.0 to datafusion_common
 pub use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::metadata::ScalarAndMetadata;
 
 // This mirrors sqlparser::ast::NullTreatment but we need our own variant
 // for when the sql feature is disabled.
@@ -163,11 +164,11 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// # use datafusion_expr::{lit, col, Operator, Expr};
 /// // Use the `+` operator to add two columns together
 /// let expr = col("c1") + col("c2");
-/// assert!(matches!(expr, Expr::BinaryExpr { ..} ));
+/// assert!(matches!(expr, Expr::BinaryExpr { .. }));
 /// if let Expr::BinaryExpr(binary_expr) = expr {
-///   assert_eq!(*binary_expr.left, col("c1"));
-///   assert_eq!(*binary_expr.right, col("c2"));
-///   assert_eq!(binary_expr.op, Operator::Plus);
+///     assert_eq!(*binary_expr.left, col("c1"));
+///     assert_eq!(*binary_expr.right, col("c2"));
+///     assert_eq!(binary_expr.op, Operator::Plus);
 /// }
 /// ```
 ///
@@ -178,12 +179,12 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::{lit, col, Operator, Expr};
 /// let expr = col("c1").eq(lit(42_i32));
-/// assert!(matches!(expr, Expr::BinaryExpr { .. } ));
+/// assert!(matches!(expr, Expr::BinaryExpr { .. }));
 /// if let Expr::BinaryExpr(binary_expr) = expr {
-///   assert_eq!(*binary_expr.left, col("c1"));
-///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*binary_expr.right, Expr::Literal(scalar, None));
-///   assert_eq!(binary_expr.op, Operator::Eq);
+///     assert_eq!(*binary_expr.left, col("c1"));
+///     let scalar = ScalarValue::Int32(Some(42));
+///     assert_eq!(*binary_expr.right, Expr::Literal(scalar, None));
+///     assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
 ///
@@ -196,22 +197,22 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// # use datafusion_expr::Expr;
 /// // Create a schema c1(int, c2 float)
 /// let arrow_schema = Schema::new(vec![
-///    Field::new("c1", DataType::Int32, false),
-///    Field::new("c2", DataType::Float64, false),
+///     Field::new("c1", DataType::Int32, false),
+///     Field::new("c2", DataType::Float64, false),
 /// ]);
 /// // DFSchema is a an Arrow schema with optional relation name
-/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema)
-///   .unwrap();
+/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
 ///
 /// // Form Vec<Expr> with an expression for each column in the schema
-/// let exprs: Vec<_> = df_schema.iter()
-///   .map(Expr::from)
-///   .collect();
+/// let exprs: Vec<_> = df_schema.iter().map(Expr::from).collect();
 ///
-/// assert_eq!(exprs, vec![
-///   Expr::from(Column::from_qualified_name("t1.c1")),
-///   Expr::from(Column::from_qualified_name("t1.c2")),
-/// ]);
+/// assert_eq!(
+///     exprs,
+///     vec![
+///         Expr::from(Column::from_qualified_name("t1.c1")),
+///         Expr::from(Column::from_qualified_name("t1.c2")),
+///     ]
+/// );
 /// ```
 ///
 /// # Examples: Displaying `Exprs`
@@ -272,12 +273,13 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// let mut scalars = HashSet::new();
 /// // apply recursively visits all nodes in the expression tree
 /// expr.apply(|e| {
-///    if let Expr::Literal(scalar, _) = e {
-///       scalars.insert(scalar);
-///    }
-///    // The return value controls whether to continue visiting the tree
-///    Ok(TreeNodeRecursion::Continue)
-/// }).unwrap();
+///     if let Expr::Literal(scalar, _) = e {
+///         scalars.insert(scalar);
+///     }
+///     // The return value controls whether to continue visiting the tree
+///     Ok(TreeNodeRecursion::Continue)
+/// })
+/// .unwrap();
 /// // All subtrees have been visited and literals found
 /// assert_eq!(scalars.len(), 2);
 /// assert!(scalars.contains(&ScalarValue::Int32(Some(5))));
@@ -421,6 +423,14 @@ impl From<Column> for Expr {
 impl From<WindowFunction> for Expr {
     fn from(value: WindowFunction) -> Self {
         Expr::WindowFunction(Box::new(value))
+    }
+}
+
+/// Create an [`Expr`] from an [`ScalarAndMetadata`]
+impl From<ScalarAndMetadata> for Expr {
+    fn from(value: ScalarAndMetadata) -> Self {
+        let (value, metadata) = value.into_inner();
+        Expr::Literal(value, metadata)
     }
 }
 
@@ -1631,7 +1641,6 @@ impl Expr {
     /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
     /// ```
-    ///
     pub fn alias_with_metadata(
         self,
         name: impl Into<String>,
@@ -1661,9 +1670,9 @@ impl Expr {
     /// # use datafusion_common::metadata::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
     /// let metadata = FieldMetadata::from(metadata);
-    /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
+    /// let expr =
+    ///     col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
     /// ```
-    ///
     pub fn alias_qualified_with_metadata(
         self,
         relation: Option<impl Into<TableReference>>,

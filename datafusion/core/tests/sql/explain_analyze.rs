@@ -65,8 +65,18 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
+        "AggregateExec: mode=Partial, gby=[]",
+        "output_bytes="
+    );
+    assert_metrics!(
+        &formatted,
         "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
         "metrics=[output_rows=5, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+        "output_bytes="
     );
     assert_metrics!(
         &formatted,
@@ -75,9 +85,15 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
+        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
+        "output_bytes="
+    );
+    assert_metrics!(
+        &formatted,
         "ProjectionExec: expr=[]",
         "metrics=[output_rows=5, elapsed_compute="
     );
+    assert_metrics!(&formatted, "ProjectionExec: expr=[]", "output_bytes=");
     assert_metrics!(
         &formatted,
         "CoalesceBatchesExec: target_batch_size=4096",
@@ -85,14 +101,21 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
+        "CoalesceBatchesExec: target_batch_size=4096",
+        "output_bytes="
+    );
+    assert_metrics!(
+        &formatted,
         "UnionExec",
         "metrics=[output_rows=3, elapsed_compute="
     );
+    assert_metrics!(&formatted, "UnionExec", "output_bytes=");
     assert_metrics!(
         &formatted,
         "WindowAggExec",
         "metrics=[output_rows=1, elapsed_compute="
     );
+    assert_metrics!(&formatted, "WindowAggExec", "output_bytes=");
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
@@ -231,6 +254,37 @@ async fn explain_analyze_level_datasource_parquet() {
             should_contain,
             "plan for level {level:?} unexpected content: {plan}"
         );
+    }
+}
+
+#[tokio::test]
+async fn explain_analyze_parquet_pruning_metrics() {
+    let table_name = "tpch_lineitem_small";
+    let parquet_path = "tests/data/tpch_lineitem_small.parquet";
+    let ctx = SessionContext::new();
+    ctx.register_parquet(table_name, parquet_path, ParquetReadOptions::default())
+        .await
+        .expect("register parquet table for explain analyze test");
+
+    // Test scenario:
+    // This table's l_orderkey has range [1, 7]
+    // So the following query can't prune the file:
+    //  select * from tpch_lineitem_small where l_orderkey = 5;
+    // If change filter to `l_orderkey=10`, the whole file can be pruned using stat.
+    for (l_orderkey, expected_pruning_metrics) in
+        [(5, "1 total → 1 matched"), (10, "1 total → 0 matched")]
+    {
+        let sql = format!(
+            "explain analyze select * from {table_name} where l_orderkey = {l_orderkey};"
+        );
+
+        let plan =
+            collect_plan_with_context(&sql, &ctx, ExplainAnalyzeLevel::Summary).await;
+
+        let expected_metrics =
+            format!("files_ranges_pruned_statistics={expected_pruning_metrics}");
+
+        assert_metrics!(&plan, "DataSourceExec", &expected_metrics);
     }
 }
 
@@ -798,10 +852,14 @@ async fn parquet_explain_analyze() {
 
     // should contain aggregated stats
     assert_contains!(&formatted, "output_rows=8");
-    assert_contains!(&formatted, "row_groups_matched_bloom_filter=0");
-    assert_contains!(&formatted, "row_groups_pruned_bloom_filter=0");
-    assert_contains!(&formatted, "row_groups_matched_statistics=1");
-    assert_contains!(&formatted, "row_groups_pruned_statistics=0");
+    assert_contains!(
+        &formatted,
+        "row_groups_pruned_bloom_filter=1 total \u{2192} 1 matched"
+    );
+    assert_contains!(
+        &formatted,
+        "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+    );
 }
 
 // This test reproduces the behavior described in
@@ -941,9 +999,7 @@ async fn parquet_explain_analyze_verbose() {
         .to_string();
 
     // should contain the raw per file stats (with the label)
-    assert_contains!(&formatted, "row_groups_matched_bloom_filter{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter{partition=0");
-    assert_contains!(&formatted, "row_groups_matched_statistics{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_statistics{partition=0");
 }
 

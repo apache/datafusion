@@ -55,7 +55,7 @@ pub fn format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowErro
 /// # use arrow::array::{ArrayRef, Int32Array};
 /// # use datafusion_common::assert_batches_eq;
 /// let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-///  let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
+/// let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
 /// // Expected output is a vec of strings
 /// let expected = vec![
 ///     "+--------+",
