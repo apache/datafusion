@@ -62,7 +62,7 @@ Notes:
 | Oleksandr Voievodin     | comphead         | [comphead](https://github.com/comphead)                 | Apple          | PMC       |
 | Daniël Heres            | dheres           | [Dandandan](https://github.com/Dandandan)               |                | PMC       |
 | QP Hou                  | houqp            | [houqp](https://github.com/houqp)                       |                | PMC       |
-| Jie Wen                 | jackwener        | [jakevin](https://github.com/jackwener)                 |                | PMC       |
+| Jie Wen                 | jakevin          | [jackwener](https://github.com/jackwener)               |                | PMC       |
 | Jay Zhan                | jayzhan          | [jayzhan211](https://github.com/jayzhan211)             |                | PMC       |
 | Jonah Gao               | jonah            | [jonahgao](https://github.com/jonahgao)                 |                | PMC       |
 | Kun Liu                 | liukun           | [liukun4515](https://github.com/liukun4515)             |                | PMC       |
@@ -97,11 +97,14 @@ Notes:
 | Paddy Horan             | paddyhoran       | [paddyhoran](https://github.com/paddyhoran)             | Assured Allies | Committer |
 | Parth Chandra           | parthc           | [parthchandra](https://github.com/parthchandra)         | Apple          | Committer |
 | Rémi Dettai             | rdettai          | [rdettai](https://github.com/rdettai)                   |                | Committer |
+| Raz Luvaton             | rluvaton         | [rluvaton](https://github.com/rluvaton)                 |                | Committer |
 | Chao Sun                | sunchao          | [sunchao](https://github.com/sunchao)                   | OpenAI         | Committer |
 | Daniel Harris           | thinkharderdev   | [thinkharderdev](https://github.com/thinkharderdev)     | Coralogix      | Committer |
 | Raphael Taylor-Davies   | tustvold         | [tustvold](https://github.com/tustvold)                 |                | Committer |
+| Zhen Wang               | wangzhen         | [wForget](https://github.com/wForget)                   |                | Committer |
 | Weijun Huang            | weijun           | [Weijun-H](https://github.com/Weijun-H)                 | OrbDB          | Committer |
 | Yang Jiang              | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               | Ebay           | Committer |
+| Yoav Cohen              | ycohen           | [yoavcloud](https://github.com/yoavcloud)               |                | Committer |
 | Yijie Shen              | yjshen           | [yjshen](https://github.com/yjshen)                     | DataPelago     | Committer |
 | Yongting You            | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             | Independent    | Committer |
 | Qi Zhu                  | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           | Polygon.io     | Committer |

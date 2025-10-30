@@ -25,7 +25,7 @@ use datafusion::common::not_impl_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::datasource::listing::{
-    ListingTable, ListingTableConfig, ListingTableUrl,
+    ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;

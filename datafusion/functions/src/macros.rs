@@ -40,6 +40,7 @@
 /// Exported functions accept:
 /// - `Vec<Expr>` argument (single argument followed by a comma)
 /// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
+/// - Functions that require config (marked with `@config` prefix)
 #[macro_export]
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
@@ -47,6 +48,15 @@ macro_rules! export_functions {
             // switch to single-function cases below
             $crate::export_functions!(single $FUNC, $DOC, $($arg)*);
         )*
+    };
+
+    // function that requires config (marked with @config)
+    (single $FUNC:ident, $DOC:expr, @config) => {
+        #[doc = $DOC]
+        pub fn $FUNC() -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call(vec![])
+        }
     };
 
     // single vector argument (a single argument followed by a comma)
@@ -85,6 +95,22 @@ macro_rules! make_udf_function {
                 ))
             });
             std::sync::Arc::clone(&INSTANCE)
+        }
+    };
+}
+
+/// Creates a singleton `ScalarUDF` of the `$UDF` function and a function
+/// named `$NAME` which returns that singleton. The function takes a
+/// configuration argument of type `$CONFIG_TYPE` to create the UDF.
+#[macro_export]
+macro_rules! make_udf_function_with_config {
+    ($UDF:ty, $NAME:ident) => {
+        #[allow(rustdoc::redundant_explicit_links)]
+        #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
+        pub fn $NAME(config: &datafusion_common::config::ConfigOptions) -> std::sync::Arc<datafusion_expr::ScalarUDF> {
+            std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
+                <$UDF>::new_with_config(&config),
+            ))
         }
     };
 }
