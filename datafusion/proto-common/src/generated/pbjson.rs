@@ -5602,6 +5602,9 @@ impl serde::Serialize for ParquetOptions {
         if !self.created_by.is_empty() {
             len += 1;
         }
+        if self.prefetch_row_groups != 0 {
+            len += 1;
+        }
         if self.metadata_size_hint_opt.is_some() {
             len += 1;
         }
@@ -5709,6 +5712,11 @@ impl serde::Serialize for ParquetOptions {
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
+        }
+        if self.prefetch_row_groups != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("prefetchRowGroups", ToString::to_string(&self.prefetch_row_groups).as_str())?;
         }
         if let Some(v) = self.metadata_size_hint_opt.as_ref() {
             match v {
@@ -5846,6 +5854,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxRowGroupSize",
             "created_by",
             "createdBy",
+            "prefetch_row_groups",
+            "prefetchRowGroups",
             "metadata_size_hint",
             "metadataSizeHint",
             "compression",
@@ -5890,6 +5900,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPageRowCountLimit,
             MaxRowGroupSize,
             CreatedBy,
+            PrefetchRowGroups,
             MetadataSizeHint,
             Compression,
             DictionaryEnabled,
@@ -5942,6 +5953,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
+                            "prefetchRowGroups" | "prefetch_row_groups" => Ok(GeneratedField::PrefetchRowGroups),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
                             "compression" => Ok(GeneratedField::Compression),
                             "dictionaryEnabled" | "dictionary_enabled" => Ok(GeneratedField::DictionaryEnabled),
@@ -5992,6 +6004,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
                 let mut created_by__ = None;
+                let mut prefetch_row_groups__ = None;
                 let mut metadata_size_hint_opt__ = None;
                 let mut compression_opt__ = None;
                 let mut dictionary_enabled_opt__ = None;
@@ -6139,6 +6152,14 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             created_by__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PrefetchRowGroups => {
+                            if prefetch_row_groups__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("prefetchRowGroups"));
+                            }
+                            prefetch_row_groups__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::MetadataSizeHint => {
                             if metadata_size_hint_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("metadataSizeHint"));
@@ -6228,6 +6249,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
+                    prefetch_row_groups: prefetch_row_groups__.unwrap_or_default(),
                     metadata_size_hint_opt: metadata_size_hint_opt__,
                     compression_opt: compression_opt__,
                     dictionary_enabled_opt: dictionary_enabled_opt__,
