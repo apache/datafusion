@@ -31,14 +31,14 @@ use std::ops::Rem;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-/// This benchmark suite is designed to test the performance of
-/// logical planning with a large plan containing unions, many columns
-/// with a variety of operations in it.
-///
-/// Since it is (currently) very slow to execute it has been separated
-/// out from the sql_planner benchmark suite to this file.
-///
-/// See https://github.com/apache/datafusion/issues/17261 for details.
+// This benchmark suite is designed to test the performance of
+// logical planning with a large plan containing unions, many columns
+// with a variety of operations in it.
+//
+// Since it is (currently) very slow to execute it has been separated
+// out from the sql_planner benchmark suite to this file.
+//
+// See https://github.com/apache/datafusion/issues/17261 for details.
 
 /// Registers a table like this:
 /// c0,c1,c2...,c99
