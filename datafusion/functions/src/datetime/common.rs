@@ -297,37 +297,92 @@ fn has_explicit_timezone(value: &str) -> bool {
         }
     }
 
-    let mut end = len;
-    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-
-    let mut start = end;
-    let mut has_alpha = false;
-    while start > 0 {
-        match bytes[start - 1] {
-            b'A'..=b'Z' | b'a'..=b'z' => {
-                has_alpha = true;
-                start -= 1;
-            }
-            b'/' | b'_' | b'-' => {
-                start -= 1;
-            }
-            _ => break,
+    fn matches_timezone(token: &str) -> bool {
+        if token.is_empty() {
+            return false;
         }
-    }
 
-    if has_alpha && start < end {
-        let tz = &value[start..end];
-        if tz.eq_ignore_ascii_case("utc")
-            || tz.eq_ignore_ascii_case("gmt")
-            || Tz::from_str(tz).is_ok()
+        if token.eq_ignore_ascii_case("utc") || token.eq_ignore_ascii_case("gmt") {
+            return true;
+        }
+
+        if Tz::from_str(token).is_ok() {
+            return true;
+        }
+
+        let trimmed =
+            token.trim_end_matches(|c: char| c == '+' || c == '-' || c.is_ascii_digit());
+        if trimmed.len() != token.len()
+            && trimmed.chars().any(|c| c.is_ascii_alphabetic())
+            && matches_timezone(trimmed)
         {
             return true;
         }
+
+        false
+    }
+
+    let mut start = 0;
+    while start < len {
+        while start < len
+            && !matches!(
+                bytes[start],
+                b'A'..=b'Z' | b'a'..=b'z' | b'/' | b'_' | b'-' | b'+' | b'0'..=b'9'
+            )
+        {
+            start += 1;
+        }
+
+        if start == len {
+            break;
+        }
+
+        let mut end = start;
+        let mut has_alpha = false;
+        while end < len
+            && matches!(
+                bytes[end],
+                b'A'..=b'Z' | b'a'..=b'z' | b'/' | b'_' | b'-' | b'+' | b'0'..=b'9'
+            )
+        {
+            if bytes[end].is_ascii_alphabetic() {
+                has_alpha = true;
+            }
+            end += 1;
+        }
+
+        if has_alpha {
+            let token = &value[start..end];
+            if matches_timezone(token) {
+                return true;
+            }
+
+            for (offset, ch) in token.char_indices().skip(1) {
+                if ch.is_ascii_alphabetic() {
+                    let candidate = &token[offset..];
+                    if matches_timezone(candidate) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        start = end;
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_explicit_timezone;
+
+    #[test]
+    fn detects_timezone_token_outside_tail() {
+        assert!(has_explicit_timezone("UTC 2024-01-01 12:00:00"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29UTC"));
+        assert!(has_explicit_timezone("America/New_York 2020-09-08"));
+    }
 }
 
 pub(crate) fn string_to_timestamp_nanos_with_timezone(
