@@ -33,11 +33,11 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::AggregateExec;
 use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Stream, StreamExt};
-
-use super::AggregateExec;
 
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
@@ -219,13 +219,8 @@ fn aggregate_batch(
                 None => Cow::Borrowed(&batch),
             };
 
-            let n_rows = batch.num_rows();
-
             // 1.3
-            let values = expr
-                .iter()
-                .map(|e| e.evaluate(&batch).and_then(|v| v.into_array(n_rows)))
-                .collect::<Result<Vec<_>>>()?;
+            let values = evaluate_expressions_to_arrays(expr, &batch)?;
 
             // 1.4
             let size_pre = accum.size();

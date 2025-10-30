@@ -22,6 +22,7 @@ use crate::tree_node::ExprContext;
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
@@ -89,6 +90,19 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
     let data = mutable.freeze();
     Ok(make_array(data))
+}
+
+/// Evaluates expressions against a record batch.
+#[inline]
+pub fn evaluate_expressions_to_arrays(
+    exprs: &[Arc<dyn PhysicalExpr>],
+    batch: &RecordBatch,
+) -> Result<Vec<ArrayRef>> {
+    let num_rows = batch.num_rows();
+    exprs
+        .iter()
+        .map(|e| e.evaluate(batch).and_then(|col| col.into_array(num_rows)))
+        .collect::<Result<Vec<ArrayRef>>>()
 }
 
 #[cfg(test)]
