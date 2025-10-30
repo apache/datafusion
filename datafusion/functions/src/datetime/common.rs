@@ -351,6 +351,10 @@ pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
+    if has_explicit_timezone(s) {
+        return string_to_timestamp_nanos_formatted(s, format);
+    }
+
     let timezone = timezone.resolve()?;
     let datetime = timezone.datetime_from_formatted(s, format)?;
     datetime_to_timestamp(datetime)

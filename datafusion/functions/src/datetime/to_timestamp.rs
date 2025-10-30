@@ -910,6 +910,69 @@ mod tests {
     }
 
     #[test]
+    fn to_timestamp_formats_invalid_execution_timezone_behavior() -> Result<()> {
+        let udf = ToTimestampFunc::new();
+        let expr_field: Arc<Field> = Field::new("arg", Utf8, true).into();
+        let format_field: Arc<Field> = Field::new("fmt", Utf8, true).into();
+        let return_field: Arc<Field> =
+            Field::new("f", Timestamp(Nanosecond, None), true).into();
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = "Invalid/Timezone".into();
+        let options = Arc::new(options);
+
+        let make_args = |value: &str, format: &str| datafusion_expr::ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(value.to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(format.to_string()))),
+            ],
+            arg_fields: vec![Arc::clone(&expr_field), Arc::clone(&format_field)],
+            number_rows: 1,
+            return_field: Arc::clone(&return_field),
+            config_options: Arc::clone(&options),
+        };
+
+        for (value, format, expected_str) in [
+            ("2020-09-08T13:42:29Z", "%+", "2020-09-08T13:42:29Z"),
+            (
+                "2020-09-08 13:42:29 +0000",
+                "%Y-%m-%d %H:%M:%S %z",
+                "2020-09-08T13:42:29+00:00",
+            ),
+        ] {
+            let result = udf.invoke_with_args(make_args(value, format))?;
+            let ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(actual), None)) =
+                result
+            else {
+                panic!("expected scalar timestamp");
+            };
+            let expected = string_to_timestamp_nanos_shim(expected_str)?;
+            assert_eq!(actual, expected);
+        }
+
+        let naive_args = datafusion_expr::ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                    "2020-09-08T13:42:29".to_string(),
+                ))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                    "%Y-%m-%dT%H:%M:%S".to_string(),
+                ))),
+            ],
+            arg_fields: vec![Arc::clone(&expr_field), Arc::clone(&format_field)],
+            number_rows: 1,
+            return_field: Arc::clone(&return_field),
+            config_options: Arc::clone(&options),
+        };
+
+        let err = udf
+            .invoke_with_args(naive_args)
+            .expect_err("expected timezone configuration error");
+        assert_contains!(err.to_string(), "Invalid execution timezone");
+        Ok(())
+    }
+
+    #[test]
     fn to_timestamp_formats_respect_timezone() -> Result<()> {
         let timezone =
             TimezoneResolver::from_timezone(ConfiguredTimeZone::parse("Asia/Tokyo")?);
