@@ -21,4 +21,5 @@ pub use exec::PiecewiseMergeJoinExec;
 
 mod classic_join;
 mod exec;
+mod existence_join;
 mod utils;

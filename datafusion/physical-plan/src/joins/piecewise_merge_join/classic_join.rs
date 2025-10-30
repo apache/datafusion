@@ -40,7 +40,7 @@ use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
 use crate::joins::utils::{compare_join_arrays, get_final_indices_from_shared_bitmap};
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
 
-pub(super) enum PiecewiseMergeJoinStreamState {
+pub(super) enum ClassicPWMJStreamState {
     WaitBufferedSide,
     FetchStreamBatch,
     ProcessStreamBatch(SortedStreamBatch),
@@ -48,11 +48,11 @@ pub(super) enum PiecewiseMergeJoinStreamState {
     Completed,
 }
 
-impl PiecewiseMergeJoinStreamState {
+impl ClassicPWMJStreamState {
     // Grab mutable reference to the current stream batch
     fn try_as_process_stream_batch_mut(&mut self) -> Result<&mut SortedStreamBatch> {
         match self {
-            PiecewiseMergeJoinStreamState::ProcessStreamBatch(state) => Ok(state),
+            ClassicPWMJStreamState::ProcessStreamBatch(state) => Ok(state),
             _ => internal_err!("Expected streamed batch in StreamBatch"),
         }
     }
@@ -103,7 +103,7 @@ pub(super) struct ClassicPWMJStream {
     // Buffered side data
     buffered_side: BufferedSide,
     // Tracks the state of the `PiecewiseMergeJoin`
-    state: PiecewiseMergeJoinStreamState,
+    state: ClassicPWMJStreamState,
     // Sort option for streamed side (specifies whether
     // the sort is ascending or descending)
     sort_option: SortOptions,
@@ -119,7 +119,7 @@ impl RecordBatchStream for ClassicPWMJStream {
     }
 }
 
-// `PiecewiseMergeJoinStreamState` is separated into `WaitBufferedSide`, `FetchStreamBatch`,
+// `ClassicPWMJStreamState` is separated into `WaitBufferedSide`, `FetchStreamBatch`,
 // `ProcessStreamBatch`, `ProcessUnmatched` and `Completed`.
 //
 // Classic Joins
@@ -140,7 +140,7 @@ impl ClassicPWMJStream {
         operator: Operator,
         streamed: SendableRecordBatchStream,
         buffered_side: BufferedSide,
-        state: PiecewiseMergeJoinStreamState,
+        state: ClassicPWMJStreamState,
         sort_option: SortOptions,
         join_metrics: BuildProbeJoinMetrics,
         batch_size: usize,
@@ -166,19 +166,19 @@ impl ClassicPWMJStream {
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             return match self.state {
-                PiecewiseMergeJoinStreamState::WaitBufferedSide => {
+                ClassicPWMJStreamState::WaitBufferedSide => {
                     handle_state!(ready!(self.collect_buffered_side(cx)))
                 }
-                PiecewiseMergeJoinStreamState::FetchStreamBatch => {
+                ClassicPWMJStreamState::FetchStreamBatch => {
                     handle_state!(ready!(self.fetch_stream_batch(cx)))
                 }
-                PiecewiseMergeJoinStreamState::ProcessStreamBatch(_) => {
+                ClassicPWMJStreamState::ProcessStreamBatch(_) => {
                     handle_state!(self.process_stream_batch())
                 }
-                PiecewiseMergeJoinStreamState::ProcessUnmatched => {
+                ClassicPWMJStreamState::ProcessUnmatched => {
                     handle_state!(self.process_unmatched_buffered_batch())
                 }
-                PiecewiseMergeJoinStreamState::Completed => Poll::Ready(None),
+                ClassicPWMJStreamState::Completed => Poll::Ready(None),
             };
         }
     }
@@ -197,7 +197,7 @@ impl ClassicPWMJStream {
         build_timer.done();
 
         // We will start fetching stream batches for classic joins
-        self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+        self.state = ClassicPWMJStreamState::FetchStreamBatch;
 
         self.buffered_side =
             BufferedSide::Ready(BufferedSideReadyState { buffered_data });
@@ -221,9 +221,9 @@ impl ClassicPWMJStream {
                     == 1
                 {
                     self.batch_process_state.reset();
-                    self.state = PiecewiseMergeJoinStreamState::ProcessUnmatched;
+                    self.state = ClassicPWMJStreamState::ProcessUnmatched;
                 } else {
-                    self.state = PiecewiseMergeJoinStreamState::Completed;
+                    self.state = ClassicPWMJStreamState::Completed;
                 }
             }
             Some(Ok(batch)) => {
@@ -247,12 +247,11 @@ impl ClassicPWMJStream {
 
                 // Reset BatchProcessState before processing a new stream batch
                 self.batch_process_state.reset();
-                self.state = PiecewiseMergeJoinStreamState::ProcessStreamBatch(
-                    SortedStreamBatch {
+                self.state =
+                    ClassicPWMJStreamState::ProcessStreamBatch(SortedStreamBatch {
                         batch: stream_batch,
                         compare_key_values: vec![stream_values],
-                    },
-                );
+                    });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
         };
@@ -297,13 +296,13 @@ impl ClassicPWMJStream {
                 .output_batches
                 .next_completed_batch()
             {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+                self.state = ClassicPWMJStreamState::FetchStreamBatch;
                 return Ok(StatefulStreamResult::Ready(Some(b)));
             }
 
             // Nothing pending; hand back whatever `resolve` returned (often empty) and move on.
             if self.batch_process_state.output_batches.is_empty() {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+                self.state = ClassicPWMJStreamState::FetchStreamBatch;
 
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
@@ -318,7 +317,7 @@ impl ClassicPWMJStream {
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         // Return early for `JoinType::Right` and `JoinType::Inner`
         if matches!(self.join_type, JoinType::Right | JoinType::Inner) {
-            self.state = PiecewiseMergeJoinStreamState::Completed;
+            self.state = ClassicPWMJStreamState::Completed;
             return Ok(StatefulStreamResult::Ready(None));
         }
 
@@ -339,7 +338,7 @@ impl ClassicPWMJStream {
                 .output_batches
                 .next_completed_batch()
             {
-                self.state = PiecewiseMergeJoinStreamState::Completed;
+                self.state = ClassicPWMJStreamState::Completed;
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
         }
@@ -387,11 +386,11 @@ impl ClassicPWMJStream {
             .output_batches
             .next_completed_batch()
         {
-            self.state = PiecewiseMergeJoinStreamState::Completed;
+            self.state = ClassicPWMJStreamState::Completed;
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
-        self.state = PiecewiseMergeJoinStreamState::Completed;
+        self.state = ClassicPWMJStreamState::Completed;
         self.batch_process_state.reset();
         Ok(StatefulStreamResult::Ready(None))
     }
@@ -743,7 +742,7 @@ mod tests {
         operator: Operator,
         join_type: JoinType,
     ) -> Result<PiecewiseMergeJoinExec> {
-        PiecewiseMergeJoinExec::try_new(left, right, on, operator, join_type, 1)
+        PiecewiseMergeJoinExec::try_new(left, right, on, operator, join_type)
     }
 
     async fn join_collect(
