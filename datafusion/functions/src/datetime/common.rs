@@ -212,13 +212,92 @@ fn has_explicit_timezone(value: &str) -> bool {
 
     if let Some(pos) = value.rfind(|c| ['T', ' '].contains(&c)) {
         let tail = &value[pos + 1..];
-        tail.contains('Z')
+        if tail.contains('Z')
             || tail.contains('z')
             || tail.contains('+')
             || tail.contains('-')
-    } else {
-        false
+        {
+            return true;
+        }
     }
+
+    let bytes = value.as_bytes();
+    let len = bytes.len();
+
+    let mut i = 0;
+    while i < len {
+        match bytes[i] as char {
+            'Z' | 'z' => {
+                if i > 0 && bytes[i - 1].is_ascii_digit() {
+                    let next = i + 1;
+                    if next == len || !bytes[next].is_ascii_alphabetic() {
+                        return true;
+                    }
+                }
+                i += 1;
+            }
+            '+' | '-' => {
+                if i > 0 {
+                    let prev = bytes[i - 1] as char;
+                    if prev == 'e' || prev == 'E' {
+                        i += 1;
+                        continue;
+                    }
+                }
+
+                let mut j = i + 1;
+                let mut digit_count = 0;
+                while j < len && bytes[j].is_ascii_digit() {
+                    digit_count += 1;
+                    j += 1;
+                }
+
+                let mut valid = false;
+                if j < len && bytes[j] == b':' {
+                    let mut sections = 0;
+                    while j < len && bytes[j] == b':' {
+                        j += 1;
+                        let mut digits = 0;
+                        while j < len && bytes[j].is_ascii_digit() {
+                            digits += 1;
+                            j += 1;
+                        }
+                        if digits != 2 {
+                            sections = 0;
+                            break;
+                        }
+                        sections += 1;
+                    }
+                    if sections > 0 {
+                        valid = true;
+                    }
+                } else if digit_count == 4 || digit_count == 6 {
+                    valid = true;
+                } else if digit_count == 2 {
+                    if i > 0 {
+                        let prev = bytes[i - 1];
+                        if matches!(prev, b'T' | b't' | b' ' | b'\t') {
+                            valid = true;
+                        }
+                    }
+                }
+
+                if valid {
+                    if j == len
+                        || bytes[j].is_ascii_whitespace()
+                        || matches!(bytes[j], b',' | b'.' | b':' | b';')
+                    {
+                        return true;
+                    }
+                }
+
+                i = j;
+            }
+            _ => i += 1,
+        }
+    }
+
+    false
 }
 
 pub(crate) fn string_to_timestamp_nanos_with_timezone(

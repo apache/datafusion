@@ -707,7 +707,9 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
 mod tests {
     use std::sync::Arc;
 
-    use crate::datetime::common::{ConfiguredTimeZone, TimezoneResolver};
+    use crate::datetime::common::{
+        string_to_timestamp_nanos_formatted, ConfiguredTimeZone, TimezoneResolver,
+    };
     use arrow::array::types::Int64Type;
     use arrow::array::{
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
@@ -933,20 +935,27 @@ mod tests {
         };
 
         for (value, format, expected_str) in [
-            ("2020-09-08T13:42:29Z", "%+", "2020-09-08T13:42:29Z"),
+            ("2020-09-08T13:42:29Z", "%+", Some("2020-09-08T13:42:29Z")),
             (
                 "2020-09-08 13:42:29 +0000",
                 "%Y-%m-%d %H:%M:%S %z",
-                "2020-09-08T13:42:29+00:00",
+                Some("2020-09-08T13:42:29+00:00"),
             ),
+            ("20200908134229+0100", "%Y%m%d%H%M%S%z", None),
+            ("2020-09-08+0230 13:42", "%Y-%m-%d%z %H:%M", None),
         ] {
             let result = udf.invoke_with_args(make_args(value, format))?;
-            let ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(actual), None)) =
-                result
+            let ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(actual),
+                None,
+            )) = result
             else {
                 panic!("expected scalar timestamp");
             };
-            let expected = string_to_timestamp_nanos_shim(expected_str)?;
+            let expected = match expected_str {
+                Some(expected_str) => string_to_timestamp_nanos_shim(expected_str)?,
+                None => string_to_timestamp_nanos_formatted(value, format)?,
+            };
             assert_eq!(actual, expected);
         }
 
