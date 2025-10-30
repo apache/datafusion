@@ -33,6 +33,7 @@ use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::metrics::MetricType;
+use datafusion_datasource::TableSchema;
 use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -918,19 +919,23 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let file_source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
+    let table_schema = TableSchema::new(
+        schema.clone(),
+        vec![Arc::new(Field::new(
+            "part".to_string(),
+            wrap_partition_type_in_dict(DataType::Int16),
+            false,
+        ))],
+    );
+
+    let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
-        schema,
+        table_schema,
         file_source,
     )
     .with_projection_indices(Some(vec![0, 1]))
     .with_file_group(FileGroup::new(vec![file_group]))
-    .with_table_partition_cols(vec![Field::new(
-        "part".to_string(),
-        wrap_partition_type_in_dict(DataType::Int16),
-        false,
-    )])
     .with_newlines_in_values(false)
     .build();
 

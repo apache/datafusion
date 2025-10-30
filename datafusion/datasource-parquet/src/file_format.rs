@@ -460,7 +460,7 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint = Some(metadata);
         }
 
-        let mut source = ParquetSource::new(Arc::clone(conf.file_schema()))
+        let mut source = ParquetSource::new(conf.table_schema.clone())
             .with_table_parquet_options(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory

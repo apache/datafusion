@@ -33,7 +33,7 @@ use arrow::{
         RecordBatchOptions,
     },
     buffer::Buffer,
-    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
+    datatypes::{ArrowNativeType, DataType, Schema, SchemaRef, UInt16Type},
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -287,12 +287,12 @@ impl FileScanConfigBuilder {
     /// * `file_source`: See [`FileScanConfig::file_source`]
     pub fn new(
         object_store_url: ObjectStoreUrl,
-        file_schema: SchemaRef,
+        schema: impl Into<TableSchema>,
         file_source: Arc<dyn FileSource>,
     ) -> Self {
         Self {
             object_store_url,
-            table_schema: TableSchema::from_file_schema(file_schema),
+            table_schema: schema.into(),
             file_source,
             file_groups: vec![],
             statistics: None,
@@ -342,18 +342,6 @@ impl FileScanConfigBuilder {
     /// Indexes that are higher than the number of columns of `file_schema` refer to `table_partition_cols`.
     pub fn with_projection_indices(mut self, indices: Option<Vec<usize>>) -> Self {
         self.projection_indices = indices;
-        self
-    }
-
-    /// Set the partitioning columns
-    pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
-        let table_partition_cols: Vec<FieldRef> = table_partition_cols
-            .into_iter()
-            .map(|f| Arc::new(f) as FieldRef)
-            .collect();
-        self.table_schema = self
-            .table_schema
-            .with_table_partition_cols(table_partition_cols);
         self
     }
 
@@ -1513,6 +1501,7 @@ mod tests {
     };
 
     use arrow::array::{Int32Array, RecordBatch};
+    use arrow::datatypes::Field;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_batches_eq, internal_err};
     use datafusion_expr::{Operator, SortExpr};
@@ -2176,14 +2165,17 @@ mod tests {
         statistics: Statistics,
         table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
+        let table_schema = TableSchema::new(
+            file_schema,
+            table_partition_cols.into_iter().map(Arc::new).collect(),
+        );
         FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema,
+            table_schema,
             Arc::new(MockSource::default()),
         )
         .with_projection_indices(projection)
         .with_statistics(statistics)
-        .with_table_partition_cols(table_partition_cols)
         .build()
     }
 
@@ -2224,10 +2216,19 @@ mod tests {
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
         let file_source: Arc<dyn FileSource> = Arc::new(MockSource::default());
 
+        let table_schema = TableSchema::new(
+            Arc::clone(&file_schema),
+            vec![Arc::new(Field::new(
+                "date",
+                wrap_partition_type_in_dict(DataType::Utf8),
+                false,
+            ))],
+        );
+
         // Create a builder with required parameters
         let builder = FileScanConfigBuilder::new(
             object_store_url.clone(),
-            Arc::clone(&file_schema),
+            table_schema,
             Arc::clone(&file_source),
         );
 
@@ -2235,11 +2236,6 @@ mod tests {
         let config = builder
             .with_limit(Some(1000))
             .with_projection_indices(Some(vec![0, 1]))
-            .with_table_partition_cols(vec![Field::new(
-                "date",
-                wrap_partition_type_in_dict(DataType::Utf8),
-                false,
-            )])
             .with_statistics(Statistics::new_unknown(&file_schema))
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "test.parquet".to_string(),
@@ -2395,15 +2391,19 @@ mod tests {
         )];
         let file = PartitionedFile::new("test_file.parquet", 100);
 
+        let table_schema = TableSchema::new(
+            Arc::clone(&schema),
+            partition_cols.iter().map(|f| Arc::new(f.clone())).collect(),
+        );
+
         // Create a config with non-default values
         let original_config = FileScanConfigBuilder::new(
             object_store_url.clone(),
-            Arc::clone(&schema),
+            table_schema,
             Arc::clone(&file_source),
         )
         .with_projection_indices(Some(vec![0, 2]))
         .with_limit(Some(10))
-        .with_table_partition_cols(partition_cols.clone())
         .with_file(file.clone())
         .with_constraints(Constraints::default())
         .with_newlines_in_values(true)

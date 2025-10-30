@@ -54,7 +54,7 @@ mod tests {
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
-    use datafusion_datasource::{FileRange, PartitionedFile};
+    use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
@@ -1654,23 +1654,27 @@ mod tests {
         ]);
 
         let source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
-        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
-            .with_file(partitioned_file)
-            // file has 10 cols so index 12 should be month and 13 should be day
-            .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
-            .with_table_partition_cols(vec![
-                Field::new("year", DataType::Utf8, false),
-                Field::new("month", DataType::UInt8, false),
-                Field::new(
+        let table_schema = TableSchema::new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Field::new("year", DataType::Utf8, false)),
+                Arc::new(Field::new("month", DataType::UInt8, false)),
+                Arc::new(Field::new(
                     "day",
                     DataType::Dictionary(
                         Box::new(DataType::UInt16),
                         Box::new(DataType::Utf8),
                     ),
                     false,
-                ),
-            ])
-            .build();
+                )),
+            ],
+        );
+        let config =
+            FileScanConfigBuilder::new(object_store_url, table_schema.clone(), source)
+                .with_file(partitioned_file)
+                // file has 10 cols so index 12 should be month and 13 should be day
+                .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
+                .build();
 
         let parquet_exec = DataSourceExec::from_data_source(config);
         let partition_count = parquet_exec

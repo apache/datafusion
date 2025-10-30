@@ -29,6 +29,7 @@ mod tests {
     use std::io::Write;
     use std::sync::Arc;
 
+    use datafusion_datasource::TableSchema;
     use datafusion_datasource_csv::CsvFormat;
     use object_store::ObjectStore;
 
@@ -95,6 +96,8 @@ mod tests {
     async fn csv_exec_with_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_datasource::TableSchema;
+
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let file_schema = aggr_test_schema();
@@ -117,10 +120,11 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
         let source =
-            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
+            table_schema,
             file_groups,
             source,
         ))
@@ -166,6 +170,8 @@ mod tests {
     async fn csv_exec_with_mixed_order_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_datasource::TableSchema;
+
         let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
         let session_ctx = SessionContext::new_with_config(cfg);
         let task_ctx = session_ctx.task_ctx();
@@ -189,10 +195,11 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
         let source =
-            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
+            table_schema,
             file_groups,
             source,
         ))
@@ -236,6 +243,7 @@ mod tests {
     async fn csv_exec_with_limit(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_datasource::TableSchema;
         use futures::StreamExt;
 
         let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
@@ -261,10 +269,11 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
         let source =
-            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
+            table_schema,
             file_groups,
             source,
         ))
@@ -309,6 +318,8 @@ mod tests {
     async fn csv_exec_with_missing_column(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_datasource::TableSchema;
+
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let file_schema = aggr_test_schema_with_missing_col();
@@ -331,10 +342,11 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
         let source =
-            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
+            table_schema,
             file_groups,
             source,
         ))
@@ -370,6 +382,7 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         use datafusion_common::ScalarValue;
+        use datafusion_datasource::TableSchema;
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -399,14 +412,17 @@ mod tests {
         };
         let source =
             Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
+        let table_schema = TableSchema::new(
+            Arc::clone(&file_schema),
+            vec![Arc::new(Field::new("date", DataType::Utf8, false))],
+        );
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
+            table_schema,
             file_groups,
             source,
         ))
         .with_newlines_in_values(false)
         .with_file_compression_type(file_compression_type.to_owned())
-        .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
         // We should be able to project on the partition column
         // Which is supposed to be after the file fields
         .with_projection_indices(Some(vec![0, num_file_schema_fields]))
@@ -505,10 +521,11 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
         let source =
-            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
+            table_schema,
             file_groups,
             source,
         ))

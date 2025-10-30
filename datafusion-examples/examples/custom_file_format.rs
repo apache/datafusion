@@ -30,6 +30,7 @@ use datafusion::{
             FileFormat, FileFormatFactory,
         },
         physical_plan::{FileScanConfig, FileSinkConfig, FileSource},
+        table_schema::TableSchema,
         MemTable,
     },
     error::Result,
@@ -128,10 +129,7 @@ impl FileFormat for TSVFileFormat {
             .await
     }
 
-    fn file_source(
-        &self,
-        table_schema: datafusion_datasource::TableSchema,
-    ) -> Arc<dyn FileSource> {
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
         self.csv_file_format.file_source(table_schema)
     }
 }
