@@ -360,6 +360,7 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 }
 
 #[tokio::test]
+// Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
 async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true() -> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
@@ -384,6 +385,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
 }
 
 #[tokio::test]
+// Test with `repartition_sorts` disabled, causing a full resort of the data
 async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false() -> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
