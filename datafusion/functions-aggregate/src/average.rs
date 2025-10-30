@@ -184,12 +184,12 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
+        let data_type = acc_args.expr_fields[0].data_type();
         use DataType::*;
 
         // instantiate specialized accumulator based for the type
         if acc_args.is_distinct {
-            match (&data_type, acc_args.return_type()) {
+            match (data_type, acc_args.return_type()) {
                 // Numeric types are converted to Float64 via `coerce_avg_type` during logical plan creation
                 (Float64, _) => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
 
@@ -362,12 +362,13 @@ impl AggregateUDFImpl for Avg {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
 
-        let data_type = args.exprs[0].data_type(args.schema)?;
+        let data_type = args.expr_fields[0].data_type();
+
         // instantiate specialized accumulator based for the type
-        match (&data_type, args.return_field.data_type()) {
+        match (data_type, args.return_field.data_type()) {
             (Float64, Float64) => {
                 Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
-                    &data_type,
+                    data_type,
                     args.return_field.data_type(),
                     |sum: f64, count: u64| Ok(sum / count as f64),
                 )))
@@ -386,7 +387,7 @@ impl AggregateUDFImpl for Avg {
                     move |sum: i32, count: u64| decimal_averager.avg(sum, count as i32);
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal32Type, _>::new(
-                    &data_type,
+                    data_type,
                     args.return_field.data_type(),
                     avg_fn,
                 )))
@@ -405,7 +406,7 @@ impl AggregateUDFImpl for Avg {
                     move |sum: i64, count: u64| decimal_averager.avg(sum, count as i64);
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal64Type, _>::new(
-                    &data_type,
+                    data_type,
                     args.return_field.data_type(),
                     avg_fn,
                 )))
@@ -424,7 +425,7 @@ impl AggregateUDFImpl for Avg {
                     move |sum: i128, count: u64| decimal_averager.avg(sum, count as i128);
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal128Type, _>::new(
-                    &data_type,
+                    data_type,
                     args.return_field.data_type(),
                     avg_fn,
                 )))
@@ -445,7 +446,7 @@ impl AggregateUDFImpl for Avg {
                 };
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal256Type, _>::new(
-                    &data_type,
+                    data_type,
                     args.return_field.data_type(),
                     avg_fn,
                 )))
@@ -459,7 +460,7 @@ impl AggregateUDFImpl for Avg {
                         DurationSecondType,
                         _,
                     >::new(
-                        &data_type,
+                        data_type,
                         args.return_type(),
                         avg_fn,
                     ))),
@@ -467,7 +468,7 @@ impl AggregateUDFImpl for Avg {
                         DurationMillisecondType,
                         _,
                     >::new(
-                        &data_type,
+                        data_type,
                         args.return_type(),
                         avg_fn,
                     ))),
@@ -475,7 +476,7 @@ impl AggregateUDFImpl for Avg {
                         DurationMicrosecondType,
                         _,
                     >::new(
-                        &data_type,
+                        data_type,
                         args.return_type(),
                         avg_fn,
                     ))),
@@ -483,7 +484,7 @@ impl AggregateUDFImpl for Avg {
                         DurationNanosecondType,
                         _,
                     >::new(
-                        &data_type,
+                        data_type,
                         args.return_type(),
                         avg_fn,
                     ))),

@@ -362,6 +362,74 @@ impl Drop for ScopedTimerGuard<'_> {
     }
 }
 
+/// Counters tracking pruning metrics
+///
+/// For example, a file scanner initially is planned to scan 10 files, but skipped
+/// 8 of them using statistics, the pruning metrics would look like: 10 total -> 2 matched
+///
+/// Note `clone`ing update the same underlying metrics
+#[derive(Debug, Clone)]
+pub struct PruningMetrics {
+    pruned: Arc<AtomicUsize>,
+    matched: Arc<AtomicUsize>,
+}
+
+impl Display for PruningMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let matched = self.matched.load(Ordering::Relaxed);
+        let total = self.pruned.load(Ordering::Relaxed) + matched;
+
+        write!(f, "{total} total → {matched} matched")
+    }
+}
+
+impl Default for PruningMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PruningMetrics {
+    /// create a new PruningMetrics
+    pub fn new() -> Self {
+        Self {
+            pruned: Arc::new(AtomicUsize::new(0)),
+            matched: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Add `n` to the metric's pruned value
+    pub fn add_pruned(&self, n: usize) {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.pruned.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Add `n` to the metric's matched value
+    pub fn add_matched(&self, n: usize) {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.matched.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Subtract `n` to the metric's matched value.
+    pub fn subtract_matched(&self, n: usize) {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.matched.fetch_sub(n, Ordering::Relaxed);
+    }
+
+    /// Number of items pruned
+    pub fn pruned(&self) -> usize {
+        self.pruned.load(Ordering::Relaxed)
+    }
+
+    /// Number of items matched (not pruned)
+    pub fn matched(&self) -> usize {
+        self.matched.load(Ordering::Relaxed)
+    }
+}
+
 /// Possible values for a [super::Metric].
 ///
 /// Among other differences, the metric types have different ways to
@@ -426,6 +494,11 @@ pub enum MetricValue {
     StartTimestamp(Timestamp),
     /// The time at which execution ended
     EndTimestamp(Timestamp),
+    /// Metrics related to scan pruning
+    PruningMetrics {
+        name: Cow<'static, str>,
+        pruning_metrics: PruningMetrics,
+    },
     Custom {
         /// The provided name of this metric
         name: Cow<'static, str>,
@@ -519,11 +592,13 @@ impl MetricValue {
             Self::Time { name, .. } => name.borrow(),
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
+            Self::PruningMetrics { name, .. } => name.borrow(),
             Self::Custom { name, .. } => name.borrow(),
         }
     }
 
-    /// Return the value of the metric as a usize value
+    /// Return the value of the metric as a usize value, used to aggregate metric
+    /// value across partitions.
     pub fn as_usize(&self) -> usize {
         match self {
             Self::OutputRows(count) => count.value(),
@@ -546,6 +621,10 @@ impl MetricValue {
                 .and_then(|ts| ts.timestamp_nanos_opt())
                 .map(|nanos| nanos as usize)
                 .unwrap_or(0),
+            // This function is a utility for aggregating metrics, for complex metric
+            // like `PruningMetrics`, this function is not supposed to get called.
+            // Metrics aggregation for them are implemented inside `MetricsSet` directly.
+            Self::PruningMetrics { .. } => 0,
             Self::Custom { value, .. } => value.as_usize(),
         }
     }
@@ -575,6 +654,10 @@ impl MetricValue {
             },
             Self::StartTimestamp(_) => Self::StartTimestamp(Timestamp::new()),
             Self::EndTimestamp(_) => Self::EndTimestamp(Timestamp::new()),
+            Self::PruningMetrics { name, .. } => Self::PruningMetrics {
+                name: name.clone(),
+                pruning_metrics: PruningMetrics::new(),
+            },
             Self::Custom { name, value } => Self::Custom {
                 name: name.clone(),
                 value: value.new_empty(),
@@ -627,6 +710,20 @@ impl MetricValue {
                 timestamp.update_to_max(other_timestamp);
             }
             (
+                Self::PruningMetrics {
+                    pruning_metrics, ..
+                },
+                Self::PruningMetrics {
+                    pruning_metrics: other_pruning_metrics,
+                    ..
+                },
+            ) => {
+                let pruned = other_pruning_metrics.pruned.load(Ordering::Relaxed);
+                let matched = other_pruning_metrics.matched.load(Ordering::Relaxed);
+                pruning_metrics.add_pruned(pruned);
+                pruning_metrics.add_matched(matched);
+            }
+            (
                 Self::Custom { value, .. },
                 Self::Custom {
                     value: other_value, ..
@@ -652,16 +749,17 @@ impl MetricValue {
             Self::ElapsedCompute(_) => 1,
             Self::OutputBytes(_) => 2,
             // Other metrics
-            Self::SpillCount(_) => 3,
-            Self::SpilledBytes(_) => 4,
-            Self::SpilledRows(_) => 5,
-            Self::CurrentMemoryUsage(_) => 6,
-            Self::Count { .. } => 7,
-            Self::Gauge { .. } => 8,
-            Self::Time { .. } => 9,
-            Self::StartTimestamp(_) => 10, // show timestamps last
-            Self::EndTimestamp(_) => 11,
-            Self::Custom { .. } => 12,
+            Self::PruningMetrics { .. } => 3,
+            Self::SpillCount(_) => 4,
+            Self::SpilledBytes(_) => 5,
+            Self::SpilledRows(_) => 6,
+            Self::CurrentMemoryUsage(_) => 7,
+            Self::Count { .. } => 8,
+            Self::Gauge { .. } => 9,
+            Self::Time { .. } => 10,
+            Self::StartTimestamp(_) => 11, // show timestamps last
+            Self::EndTimestamp(_) => 12,
+            Self::Custom { .. } => 13,
         }
     }
 
@@ -699,6 +797,11 @@ impl Display for MetricValue {
             }
             Self::StartTimestamp(timestamp) | Self::EndTimestamp(timestamp) => {
                 write!(f, "{timestamp}")
+            }
+            Self::PruningMetrics {
+                pruning_metrics, ..
+            } => {
+                write!(f, "{pruning_metrics}")
             }
             Self::Custom { name, value } => {
                 write!(f, "name:{name} {value}")

@@ -77,7 +77,7 @@ use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
     scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
-    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, WindowFrame,
+    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -405,6 +405,55 @@ async fn select_with_periods() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_columns_duplicated_names_from_different_qualifiers() -> Result<()> {
+    let t1 = test_table_with_name("t1")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(0, Some(3))?;
+    let t2 = test_table_with_name("t2")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(3, Some(3))?;
+    let t3 = test_table_with_name("t3")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(6, Some(3))?;
+
+    let join_res = t1
+        .join(t2, JoinType::Left, &["t1.c1"], &["t2.c1"], None)?
+        .join(t3, JoinType::Left, &["t1.c1"], &["t3.c1"], None)?;
+    assert_snapshot!(
+        batches_to_sort_string(&join_res.clone().collect().await.unwrap()),
+        @r"
+    +----+----+----+
+    | c1 | c1 | c1 |
+    +----+----+----+
+    | b  | b  |    |
+    | b  | b  |    |
+    | c  |    |    |
+    | d  |    | d  |
+    +----+----+----+
+    "
+    );
+
+    let select_res = join_res.select_columns(&["c1"])?;
+    assert_snapshot!(
+        batches_to_sort_string(&select_res.clone().collect().await.unwrap()),
+        @r"
+    +----+----+----+
+    | c1 | c1 | c1 |
+    +----+----+----+
+    | b  | b  |    |
+    | b  | b  |    |
+    | c  |    |    |
+    | d  |    | d  |
+    +----+----+----+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn drop_columns() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
@@ -537,6 +586,54 @@ async fn drop_with_periods() -> Result<()> {
     | 2    |
     +------+
     "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn drop_columns_duplicated_names_from_different_qualifiers() -> Result<()> {
+    let t1 = test_table_with_name("t1")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(0, Some(3))?;
+    let t2 = test_table_with_name("t2")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(3, Some(3))?;
+    let t3 = test_table_with_name("t3")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(6, Some(3))?;
+
+    let join_res = t1
+        .join(t2, JoinType::LeftMark, &["c1"], &["c1"], None)?
+        .join(t3, JoinType::LeftMark, &["c1"], &["c1"], None)?;
+    assert_snapshot!(
+        batches_to_sort_string(&join_res.clone().collect().await.unwrap()),
+        @r"
+    +----+-------+-------+
+    | c1 | mark  | mark  |
+    +----+-------+-------+
+    | b  | true  | false |
+    | c  | false | false |
+    | d  | false | true  |
+    +----+-------+-------+
+    "
+    );
+
+    let drop_res = join_res.drop_columns(&["mark"])?;
+    assert_snapshot!(
+        batches_to_sort_string(&drop_res.clone().collect().await.unwrap()),
+        @r"
+    +----+
+    | c1 |
+    +----+
+    | b  |
+    | c  |
+    | d  |
+    +----+
+    "
     );
 
     Ok(())
@@ -1574,6 +1671,23 @@ async fn register_table() -> Result<()> {
     +----+---------------------+
     "###
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn register_temporary_table() -> Result<()> {
+    let df = test_table().await?.select_columns(&["c1", "c12"])?;
+    let ctx = SessionContext::new();
+    let df_impl = DataFrame::new(ctx.state(), df.logical_plan().clone());
+
+    let df_table_provider = df_impl.clone().into_temporary_view();
+
+    // check that we set the correct table_type
+    assert_eq!(df_table_provider.table_type(), TableType::Temporary);
+
+    // check that we can register a dataframe as a temporary table
+    ctx.register_table("test_table", df_table_provider)?;
+
     Ok(())
 }
 
@@ -6311,7 +6425,7 @@ async fn test_copy_schema() -> Result<()> {
     let target_path = tmp_dir.path().join("target.csv");
 
     let query = format!(
-        "COPY source_table TO '{:?}' STORED AS csv",
+        "COPY source_table TO '{}' STORED AS csv",
         target_path.to_str().unwrap()
     );
 
@@ -6459,10 +6573,10 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
         "ticker",
         "first_value(value)[first_value]",
         "timestamp@0",
-        "is_set",
+        "first_value(value)[first_value_is_set]",
         "last_value(value)[last_value]",
         "timestamp@0",
-        "is_set",
+        "last_value(value)[last_value_is_set]",
     ];
 
     let binding = partial_agg.schema();

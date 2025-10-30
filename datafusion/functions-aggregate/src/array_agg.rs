@@ -162,9 +162,9 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
-        let ignore_nulls =
-            acc_args.ignore_nulls && acc_args.exprs[0].nullable(acc_args.schema)?;
+        let field = &acc_args.expr_fields[0];
+        let data_type = field.data_type();
+        let ignore_nulls = acc_args.ignore_nulls && field.is_nullable();
 
         if acc_args.is_distinct {
             // Limitation similar to Postgres. The aggregation function can only mix
@@ -191,7 +191,7 @@ impl AggregateUDFImpl for ArrayAgg {
                 }
             };
             return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
-                &data_type,
+                data_type,
                 sort_option,
                 ignore_nulls,
             )?));
@@ -199,7 +199,7 @@ impl AggregateUDFImpl for ArrayAgg {
 
         let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
             return Ok(Box::new(ArrayAggAccumulator::try_new(
-                &data_type,
+                data_type,
                 ignore_nulls,
             )?));
         };
@@ -210,7 +210,7 @@ impl AggregateUDFImpl for ArrayAgg {
             .collect::<Result<Vec<_>>>()?;
 
         OrderSensitiveArrayAggAccumulator::try_new(
-            &data_type,
+            data_type,
             &ordering_dtypes,
             ordering,
             self.is_input_pre_ordered,
@@ -802,6 +802,7 @@ mod tests {
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use std::sync::Arc;
 
@@ -1159,15 +1160,18 @@ mod tests {
         }
 
         fn build(&self) -> Result<Box<dyn Accumulator>> {
+            let expr = Arc::new(Column::new("col", 0));
+            let expr_field = expr.return_field(&self.schema)?;
             ArrayAgg::default().accumulator(AccumulatorArgs {
                 return_field: Arc::clone(&self.return_field),
                 schema: &self.schema,
+                expr_fields: &[expr_field],
                 ignore_nulls: false,
                 order_bys: &self.order_bys,
                 is_reversed: false,
                 name: "",
                 is_distinct: self.distinct,
-                exprs: &[Arc::new(Column::new("col", 0))],
+                exprs: &[expr],
             })
         }
 
