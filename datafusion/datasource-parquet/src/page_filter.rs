@@ -269,8 +269,10 @@ impl PagePruningAccessPlanFilter {
             }
         }
 
-        file_metrics.page_index_rows_pruned.add(total_skip);
-        file_metrics.page_index_rows_matched.add(total_select);
+        file_metrics.page_index_rows_pruned.add_pruned(total_skip);
+        file_metrics
+            .page_index_rows_pruned
+            .add_matched(total_select);
         access_plan
     }
 
