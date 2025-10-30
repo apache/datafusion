@@ -361,27 +361,53 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 
 #[tokio::test]
 async fn reproducer_with_repartition_sorts_true() -> Result<()> {
-    reproducer_impl(true).await?; // ✅ Passes
+    assert_snapshot!(
+        reproducer_impl(true).await?,
+        @r"
+    Input Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      CoalescePartitionsExec
+        UnionExec
+          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+
+    Optimized Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [nullable_col@0 ASC]
+        UnionExec
+          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+    ");
     Ok(())
 }
 
 #[tokio::test]
 async fn reproducer_with_repartition_sorts_false() -> Result<()> {
-    reproducer_impl(false).await?;
+    assert_snapshot!(
+        reproducer_impl(false).await?,
+        @r"
+    Input Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      CoalescePartitionsExec
+        UnionExec
+          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
 
-    // 💥 Doesn't pass, and generates this plan:
-    //
-    // OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
-    //   SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-    //     CoalescePartitionsExec
-    //       UnionExec
-    //         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-    //         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
-
+    Optimized Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+        CoalescePartitionsExec
+          UnionExec
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+    ");
     Ok(())
 }
 
-async fn reproducer_impl(repartition_sorts: bool) -> Result<()> {
+async fn reproducer_impl(repartition_sorts: bool) -> Result<String> {
     let schema = create_test_schema()?;
 
     // Source 1, will be sorted explicitly (on `nullable_col`)
@@ -411,25 +437,7 @@ async fn reproducer_impl(repartition_sorts: bool) -> Result<()> {
     ));
 
     let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(repartition_sorts);
-
-    assert_snapshot!(test.run(), @r"
-    Input Plan:
-    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
-      CoalescePartitionsExec
-        UnionExec
-          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
-
-    Optimized Plan:
-    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
-      SortPreservingMergeExec: [nullable_col@0 ASC]
-        UnionExec
-          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
-    ");
-    Ok(())
+    Ok(test.run())
 }
 
 #[tokio::test]

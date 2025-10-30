@@ -2999,24 +2999,53 @@ async fn test_count_wildcard_on_window() -> Result<()> {
 
 #[tokio::test]
 async fn reproducer_e2e_with_repartition_sorts_false() -> Result<()> {
-    reproducer_e2e_impl(false).await?;
-
-    // 💥 Doesn't pass, and generates this plan:
-    //
-    // AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
-    //   SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-    //     CoalescePartitionsExec
-    //       AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
-    //         UnionExec
-    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
-    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
-
+    assert_snapshot!(
+        reproducer_e2e_impl(false).await?,
+        @r#"
+    +---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                                                                                                              |
+    +---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Aggregate: groupBy=[[id]], aggr=[[]]                                                                                                                                                                              |
+    |               |   Union                                                                                                                                                                                                           |
+    |               |     TableScan: sorted projection=[id]                                                                                                                                                                             |
+    |               |     Sort: unsorted.id ASC NULLS LAST                                                                                                                                                                              |
+    |               |       TableScan: unsorted projection=[id]                                                                                                                                                                         |
+    | physical_plan | AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                        |
+    |               |   SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                             |
+    |               |     CoalescePartitionsExec                                                                                                                                                                                        |
+    |               |       AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]                                                                                                                                                      |
+    |               |         UnionExec                                                                                                                                                                                                 |
+    |               |           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet |
+    |               |           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                        |
+    |               |                                                                                                                                                                                                                   |
+    +---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    "#);
     Ok(())
 }
 
 #[tokio::test]
 async fn reproducer_e2e_with_repartition_sorts_true() -> Result<()> {
-    reproducer_e2e_impl(true).await?;
+    assert_snapshot!(
+        reproducer_e2e_impl(true).await?,
+        @r#"
+    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                                                                                                            |
+    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Aggregate: groupBy=[[id]], aggr=[[]]                                                                                                                                                                            |
+    |               |   Union                                                                                                                                                                                                         |
+    |               |     TableScan: sorted projection=[id]                                                                                                                                                                           |
+    |               |     Sort: unsorted.id ASC NULLS LAST                                                                                                                                                                            |
+    |               |       TableScan: unsorted projection=[id]                                                                                                                                                                       |
+    | physical_plan | AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                      |
+    |               |   SortPreservingMergeExec: [id@0 ASC NULLS LAST]                                                                                                                                                                |
+    |               |     AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                |
+    |               |       UnionExec                                                                                                                                                                                                 |
+    |               |         DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet |
+    |               |         SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                     |
+    |               |           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                      |
+    |               |                                                                                                                                                                                                                 |
+    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    "#);
 
     // 💥 Doesn't pass, and generates this plan:
     //
@@ -3031,7 +3060,7 @@ async fn reproducer_e2e_with_repartition_sorts_true() -> Result<()> {
     Ok(())
 }
 
-async fn reproducer_e2e_impl(repartition_sorts: bool) -> Result<()> {
+async fn reproducer_e2e_impl(repartition_sorts: bool) -> Result<String> {
     let config = SessionConfig::default()
         .with_target_partitions(1)
         .with_repartition_sorts(repartition_sorts);
@@ -3084,30 +3113,7 @@ async fn reproducer_e2e_impl(repartition_sorts: bool) -> Result<()> {
     let testdata_clean = testdata_clean.strip_prefix("/").unwrap_or(&testdata_clean);
 
     let plan = df.explain(false, false)?.collect().await?;
-    assert_snapshot!(
-        pretty_format_batches(&plan)?.to_string().replace(&testdata_clean, "{testdata}"),
-        @r#"
-    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                                                                                                            |
-    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Aggregate: groupBy=[[id]], aggr=[[]]                                                                                                                                                                            |
-    |               |   Union                                                                                                                                                                                                         |
-    |               |     TableScan: sorted projection=[id]                                                                                                                                                                           |
-    |               |     Sort: unsorted.id ASC NULLS LAST                                                                                                                                                                            |
-    |               |       TableScan: unsorted projection=[id]                                                                                                                                                                       |
-    | physical_plan | AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                      |
-    |               |   SortPreservingMergeExec: [id@0 ASC NULLS LAST]                                                                                                                                                                |
-    |               |     AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                |
-    |               |       UnionExec                                                                                                                                                                                                 |
-    |               |         DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet |
-    |               |         SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                     |
-    |               |           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                      |
-    |               |                                                                                                                                                                                                                 |
-    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    "#
-    );
-
-    Ok(())
+    Ok(pretty_format_batches(&plan)?.to_string().replace(&testdata_clean, "{testdata}"))
 }
 
 #[tokio::test]
