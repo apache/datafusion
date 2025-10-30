@@ -26,6 +26,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBuildAccumulator};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -64,6 +65,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality, Result,
+    ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -105,6 +107,9 @@ pub(super) struct JoinLeftData {
     _reservation: MemoryReservation,
     /// Bounds computed from the build side for dynamic filter pushdown
     pub(super) bounds: Option<Vec<ColumnBounds>>,
+    /// InList values for small build sides (alternative to hash map pushdown)
+    /// Contains unique values from build side for filter pushdown as InList expressions
+    pub(super) inlist_values: Option<Vec<ScalarValue>>,
 }
 
 impl JoinLeftData {
@@ -117,6 +122,7 @@ impl JoinLeftData {
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
         bounds: Option<Vec<ColumnBounds>>,
+        inlist_values: Option<Vec<ScalarValue>>,
     ) -> Self {
         Self {
             hash_map,
@@ -126,6 +132,7 @@ impl JoinLeftData {
             probe_threads_counter,
             _reservation: reservation,
             bounds,
+            inlist_values,
         }
     }
 
@@ -152,6 +159,11 @@ impl JoinLeftData {
     /// returns a reference to the visited indices bitmap
     pub(super) fn visited_indices_bitmap(&self) -> &SharedBitmapBuilder {
         &self.visited_indices_bitmap
+    }
+
+    /// returns a reference to the InList values for filter pushdown
+    pub(super) fn inlist_values(&self) -> Option<&Vec<ScalarValue>> {
+        self.inlist_values.as_ref()
     }
 
     /// Decrements the counter of running threads, and returns `true`
@@ -1497,6 +1509,15 @@ async fn collect_left_input(
         _ => None,
     };
 
+    // Try to build InList values for small build sides
+    // Default to 128MB limit (can be made configurable later)
+    const MAX_INLIST_PUSHDOWN_BYTES: usize = 128 * 1024 * 1024;
+    let inlist_values = if num_rows > 0 {
+        build_struct_inlist_values(&left_values, MAX_INLIST_PUSHDOWN_BYTES)?
+    } else {
+        None
+    };
+
     // Convert Box to Arc for sharing with SharedBuildAccumulator
     let hashmap_arc: Arc<dyn JoinHashMapType> = hashmap.into();
 
@@ -1508,6 +1529,7 @@ async fn collect_left_input(
         AtomicUsize::new(probe_threads_count),
         reservation,
         bounds,
+        inlist_values,
     );
 
     Ok(data)

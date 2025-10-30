@@ -28,12 +28,15 @@ use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 
 use ahash::RandomState;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
+use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    lit, BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr,
+    lit, BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 use parking_lot::Mutex;
 use tokio::sync::Barrier;
@@ -82,6 +85,77 @@ impl PartitionBounds {
     }
 }
 
+/// Creates a membership predicate for filter pushdown.
+///
+/// If `inlist_values` is provided (for small build sides), creates an InList expression.
+/// Otherwise, creates a HashTableLookup expression (for large build sides).
+///
+/// Supports both single-column and multi-column joins using struct expressions.
+fn create_membership_predicate(
+    on_right: &[PhysicalExprRef],
+    hash_map: &Arc<dyn JoinHashMapType>,
+    inlist_values: Option<&Vec<ScalarValue>>,
+    random_state: &RandomState,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    // Use InList expression for small build sides
+    if let Some(values) = inlist_values {
+        // Convert ScalarValues to literal expressions
+        let list_exprs: Vec<Arc<dyn PhysicalExpr>> = values
+            .iter()
+            .map(|v| lit(v.clone()) as Arc<dyn PhysicalExpr>)
+            .collect();
+
+        // Build the expression to compare against
+        let expr = if on_right.len() == 1 {
+            // Single column: col IN (val1, val2, ...)
+            Arc::clone(&on_right[0])
+        } else {
+            // Multi-column: struct(col1, col2, ...) IN (struct_val1, struct_val2, ...)
+            // Create struct expression from columns
+            let struct_udf = struct_func();
+
+            // Build return field for the struct
+            let fields: Vec<Field> = on_right
+                .iter()
+                .enumerate()
+                .map(|(i, _expr)| {
+                    // Use generic field types - will be inferred during evaluation
+                    Field::new(format!("c{}", i), DataType::Null, true)
+                })
+                .collect();
+
+            let return_field =
+                Arc::new(Field::new("struct", DataType::Struct(fields.into()), true));
+
+            Arc::new(ScalarFunctionExpr::new(
+                "struct",
+                struct_udf,
+                on_right.to_vec(),
+                return_field,
+                Arc::new(ConfigOptions::default()),
+            )) as Arc<dyn PhysicalExpr>
+        };
+
+        return Ok(Arc::new(InListExpr::new(
+            expr, list_exprs, false, // not negated
+            None,  // no static filter optimization
+        )));
+    }
+
+    // Use hash table lookup for large build sides
+    let lookup_hash_expr = Arc::new(HashExpr::new(
+        on_right.to_vec(),
+        random_state.clone(),
+        "hash_join".to_string(),
+    )) as Arc<dyn PhysicalExpr>;
+
+    Ok(Arc::new(HashTableLookupExpr::new(
+        lookup_hash_expr,
+        Arc::clone(hash_map),
+        "hash_lookup".to_string(),
+    )) as Arc<dyn PhysicalExpr>)
+}
+
 /// Coordinates build-side information collection across multiple partitions
 ///
 /// This structure collects information from the build side (hash tables and/or bounds) and
@@ -125,16 +199,53 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: RandomState,
 }
 
+/// Strategy for filter pushdown (decided at collection time)
+#[derive(Debug, Clone)]
+pub(crate) enum PushdownStrategy {
+    /// Use InList for small build sides (< 128MB)
+    InList(Vec<ScalarValue>),
+    /// Use hash table lookup for large build sides
+    UseHashTable,
+}
+
+/// Build-side data reported by a single partition
+pub(crate) enum PartitionBuildData {
+    Partitioned {
+        partition_id: usize,
+        hash_map: Arc<dyn JoinHashMapType>,
+        pushdown: PushdownStrategy,
+    },
+    CollectLeft {
+        hash_map: Arc<dyn JoinHashMapType>,
+        pushdown: PushdownStrategy,
+    },
+}
+
+/// Per-partition accumulated data (Partitioned mode)
+#[derive(Clone)]
+struct PartitionData {
+    hash_map: Arc<dyn JoinHashMapType>,
+    pushdown: PushdownStrategy,
+}
+
+/// Build-side data organized by partition mode
+enum AccumulatedBuildData {
+    Partitioned {
+        partitions: Vec<Option<PartitionData>>,
+    },
+    CollectLeft {
+        hash_map: Option<Arc<dyn JoinHashMapType>>,
+        pushdown: Option<PushdownStrategy>,
+    },
+}
+
 /// State protected by SharedBuildAccumulator's mutex
 struct SharedBuildState {
-    /// Bounds from completed partitions (used in CollectLeft mode)
+    /// Bounds from completed partitions
     /// Each element represents the column bounds computed by one partition.
     bounds: Vec<PartitionBounds>,
-    /// Hash maps from completed partitions (used in Partitioned mode)
-    /// Index corresponds to partition number
-    hash_maps: Vec<Option<Arc<dyn JoinHashMapType>>>,
-    /// Single hash map for CollectLeft mode (shared across all partitions)
-    single_hash_map: Option<Arc<dyn JoinHashMapType>>,
+    /// Build-side data organized by partition mode
+    mode_data: AccumulatedBuildData,
 }
 
 impl SharedBuildAccumulator {
@@ -193,11 +304,21 @@ impl SharedBuildAccumulator {
             _ => 0, // Not used for CollectLeft
         };
 
+        let mode_data = match partition_mode {
+            PartitionMode::Partitioned => AccumulatedBuildData::Partitioned {
+                partitions: vec![None; num_partitions],
+            },
+            PartitionMode::CollectLeft => AccumulatedBuildData::CollectLeft {
+                hash_map: None,
+                pushdown: None,
+            },
+            PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
+        };
+
         Self {
             inner: Mutex::new(SharedBuildState {
                 bounds: Vec::with_capacity(expected_calls),
-                hash_maps: vec![None; num_partitions],
-                single_hash_map: None,
+                mode_data,
             }),
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
@@ -206,156 +327,77 @@ impl SharedBuildAccumulator {
         }
     }
 
-    /// Report hash map and bounds from CollectLeft mode (single hash table shared by all partitions)
+    /// Report build-side data from a partition
     ///
-    /// This method is used for `PartitionMode::CollectLeft` to collect the single shared hash map
-    /// and bounds. When all partitions have reported (waited at barrier), it creates a simple filter
-    /// expression that combines min/max range checks with hash table lookups.
-    ///
-    /// Unlike Partitioned mode, this creates a simpler filter without CASE expression or partition routing:
-    /// `(col >= min AND col <= max AND ...) AND hash_lookup(hash_table, hash_join(join_keys))`
+    /// This unified method handles both CollectLeft and Partitioned modes. When all partitions
+    /// have reported (barrier wait), the leader builds the appropriate filter expression:
+    /// - CollectLeft: Simple conjunction of bounds and membership check
+    /// - Partitioned: CASE expression routing to per-partition filters
     ///
     /// # Arguments
-    /// * `hash_map` - Arc reference to the single shared hash table
-    /// * `partition_bounds` - Min/max bounds for the build side
+    /// * `data` - Build data including hash map and pushdown strategy
+    /// * `bounds` - Min/max bounds for this partition
     ///
     /// # Returns
-    /// * `Result<()>` - Ok if successful, Err if filter update failed
-    pub(crate) async fn report_single_hash_map_and_bounds(
+    /// * `Result<()>` - Ok if successful, Err if filter update failed or mode mismatch
+    pub(crate) async fn report_build_data(
         &self,
-        hash_map: Arc<dyn JoinHashMapType>,
-        partition_bounds: Option<Vec<ColumnBounds>>,
+        data: PartitionBuildData,
+        bounds: Option<Vec<ColumnBounds>>,
     ) -> Result<()> {
-        // Store hash map and bounds in the accumulator
+        // Store data in the accumulator
         {
             let mut guard = self.inner.lock();
 
-            // Store the single hash map (only once, even though multiple partitions call this)
-            if guard.single_hash_map.is_none() {
-                guard.single_hash_map = Some(hash_map);
-            }
+            match (data, &mut guard.mode_data) {
+                // Partitioned mode
+                (
+                    PartitionBuildData::Partitioned {
+                        partition_id,
+                        hash_map,
+                        pushdown,
+                    },
+                    AccumulatedBuildData::Partitioned { partitions },
+                ) => {
+                    partitions[partition_id] = Some(PartitionData { hash_map, pushdown });
 
-            if let Some(bounds) = partition_bounds {
-                // Use partition 0 for the single hash table
-                let should_push = if let Some(last_bound) = guard.bounds.last() {
-                    // Deduplicate - all partitions report the same data in CollectLeft
-                    last_bound.partition != 0
-                } else {
-                    true
-                };
-
-                if should_push {
-                    guard.bounds.push(PartitionBounds::new(0, bounds));
+                    if let Some(b) = bounds {
+                        guard.bounds.push(PartitionBounds::new(partition_id, b));
+                    }
                 }
-            }
-        }
+                // CollectLeft mode (store once, deduplicate across partitions)
+                (
+                    PartitionBuildData::CollectLeft { hash_map, pushdown },
+                    AccumulatedBuildData::CollectLeft {
+                        hash_map: ref mut stored_map,
+                        pushdown: ref mut stored_pushdown,
+                    },
+                ) => {
+                    if stored_map.is_none() {
+                        *stored_map = Some(hash_map);
+                        *stored_pushdown = Some(pushdown);
+                    }
 
-        // Wait for all partitions to report
-        if self.barrier.wait().await.is_leader() {
-            // All partitions have reported, so we can create and update the filter
-            let inner = self.inner.lock();
+                    if let Some(b) = bounds {
+                        // Use partition 0 for the single hash table
+                        let should_push = if let Some(last_bound) = guard.bounds.last() {
+                            // Deduplicate - all partitions report the same data in CollectLeft
+                            last_bound.partition != 0
+                        } else {
+                            true
+                        };
 
-            if let Some(ref hash_map) = inner.single_hash_map {
-                // Create hash lookup expression
-                let lookup_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    HASH_JOIN_SEED,
-                    "hash_join".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let hash_lookup_expr = Arc::new(HashTableLookupExpr::new(
-                    lookup_hash_expr,
-                    Arc::clone(hash_map),
-                    "hash_lookup".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                // Create bounds check expression (if bounds available)
-                let mut filter_expr = hash_lookup_expr;
-
-                if let Some(partition_bounds) = inner.bounds.first() {
-                    let mut column_predicates = Vec::new();
-
-                    for (col_idx, right_expr) in self.on_right.iter().enumerate() {
-                        if let Some(column_bounds) =
-                            partition_bounds.get_column_bounds(col_idx)
-                        {
-                            // Create predicate: col >= min AND col <= max
-                            let min_expr = Arc::new(BinaryExpr::new(
-                                Arc::clone(right_expr),
-                                Operator::GtEq,
-                                lit(column_bounds.min.clone()),
-                            ))
-                                as Arc<dyn PhysicalExpr>;
-                            let max_expr = Arc::new(BinaryExpr::new(
-                                Arc::clone(right_expr),
-                                Operator::LtEq,
-                                lit(column_bounds.max.clone()),
-                            ))
-                                as Arc<dyn PhysicalExpr>;
-                            let range_expr = Arc::new(BinaryExpr::new(
-                                min_expr,
-                                Operator::And,
-                                max_expr,
-                            ))
-                                as Arc<dyn PhysicalExpr>;
-                            column_predicates.push(range_expr);
+                        if should_push {
+                            guard.bounds.push(PartitionBounds::new(0, b));
                         }
                     }
-
-                    // Combine all column range predicates with AND
-                    if !column_predicates.is_empty() {
-                        let bounds_expr = column_predicates
-                            .into_iter()
-                            .reduce(|acc, pred| {
-                                Arc::new(BinaryExpr::new(acc, Operator::And, pred))
-                                    as Arc<dyn PhysicalExpr>
-                            })
-                            .unwrap();
-
-                        // Combine bounds_expr AND hash_lookup_expr
-                        filter_expr = Arc::new(BinaryExpr::new(
-                            bounds_expr,
-                            Operator::And,
-                            filter_expr,
-                        )) as Arc<dyn PhysicalExpr>;
-                    }
                 }
-
-                self.dynamic_filter.update(filter_expr)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Report both hash map AND bounds from a completed partition
-    ///
-    /// This method is used for `PartitionMode::Partitioned` to collect both hash maps and bounds
-    /// from each partition. When all partitions have reported, it creates a CASE expression that
-    /// combines min/max range checks with hash table lookups for maximum filtering efficiency.
-    ///
-    /// # Arguments
-    /// * `partition_id` - The partition number reporting
-    /// * `hash_map` - Arc reference to the partition's hash table
-    /// * `partition_bounds` - Min/max bounds for this partition
-    ///
-    /// # Returns
-    /// * `Result<()>` - Ok if successful, Err if filter update failed
-    pub(crate) async fn report_partition_hash_map_and_bounds(
-        &self,
-        partition_id: usize,
-        hash_map: Arc<dyn JoinHashMapType>,
-        partition_bounds: Option<Vec<ColumnBounds>>,
-    ) -> Result<()> {
-        // Store both hash map and bounds in the accumulator
-        {
-            let mut guard = self.inner.lock();
-            guard.hash_maps[partition_id] = Some(hash_map);
-
-            if let Some(bounds) = partition_bounds {
-                guard
-                    .bounds
-                    .push(PartitionBounds::new(partition_id, bounds));
+                // Mismatched modes - should never happen
+                _ => {
+                    return datafusion_common::internal_err!(
+                        "Build data mode mismatch in report_build_data"
+                    );
+                }
             }
         }
 
@@ -364,69 +406,27 @@ impl SharedBuildAccumulator {
             // All partitions have reported, so we can create and update the filter
             let inner = self.inner.lock();
 
-            // Collect all hash maps (they should all be Some at this point)
-            let hash_maps: Vec<Arc<dyn JoinHashMapType>> =
-                inner.hash_maps.iter().filter_map(|hm| hm.clone()).collect();
+            match &inner.mode_data {
+                // CollectLeft: Simple conjunction of bounds and membership check
+                AccumulatedBuildData::CollectLeft { hash_map, pushdown } => {
+                    if let Some(ref hash_map) = hash_map {
+                        // Create membership predicate (InList for small build sides, hash lookup otherwise)
+                        let inlist_values = match pushdown.as_ref().unwrap() {
+                            PushdownStrategy::InList(values) => Some(values),
+                            PushdownStrategy::UseHashTable => None,
+                        };
 
-            if !hash_maps.is_empty() {
-                // Build a CASE expression that combines range checks AND hash lookups
-                // CASE (hash_repartition(join_keys) % num_partitions)
-                //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...) AND hash_lookup(table_0, hash_join(join_keys))
-                //   WHEN 1 THEN (col >= min_1 AND col <= max_1 AND ...) AND hash_lookup(table_1, hash_join(join_keys))
-                //   ...
-                //   ELSE false
-                // END
-
-                let num_partitions = hash_maps.len();
-
-                // Create base expression: hash_repartition(join_keys) % num_partitions
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let modulo_expr = Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                )) as Arc<dyn PhysicalExpr>;
-
-                // Create WHEN branches for each partition
-                let when_then_branches: Vec<(
-                    Arc<dyn PhysicalExpr>,
-                    Arc<dyn PhysicalExpr>,
-                )> = hash_maps
-                    .into_iter()
-                    .enumerate()
-                    .map(|(partition_id, hash_map)| {
-                        // WHEN partition_id
-                        let when_expr =
-                            lit(ScalarValue::UInt64(Some(partition_id as u64)));
-
-                        // THEN: Combine bounds check AND hash lookup
-
-                        // 1. Create hash lookup expression
-                        let lookup_hash_expr = Arc::new(HashExpr::new(
-                            self.on_right.clone(),
-                            HASH_JOIN_SEED,
-                            format!("hash_join_p{partition_id}"),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
-
-                        let hash_lookup_expr = Arc::new(HashTableLookupExpr::new(
-                            lookup_hash_expr,
+                        let membership_expr = create_membership_predicate(
+                            &self.on_right,
                             hash_map,
-                            format!("lookup_p{partition_id}"),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
+                            inlist_values,
+                            &HASH_JOIN_SEED,
+                        )?;
 
-                        // 2. Create bounds check expression for this partition (if bounds available)
-                        let mut then_expr = hash_lookup_expr;
+                        // Create bounds check expression (if bounds available)
+                        let mut filter_expr = membership_expr;
 
-                        if let Some(partition_bounds) =
-                            inner.bounds.iter().find(|pb| pb.partition == partition_id)
-                        {
+                        if let Some(partition_bounds) = inner.bounds.first() {
                             let mut column_predicates = Vec::new();
 
                             for (col_idx, right_expr) in self.on_right.iter().enumerate()
@@ -471,28 +471,161 @@ impl SharedBuildAccumulator {
                                     })
                                     .unwrap();
 
-                                // Combine bounds_expr AND hash_lookup_expr
-                                then_expr = Arc::new(BinaryExpr::new(
+                                // Combine bounds_expr AND membership_expr
+                                filter_expr = Arc::new(BinaryExpr::new(
                                     bounds_expr,
                                     Operator::And,
-                                    then_expr,
+                                    filter_expr,
                                 ))
                                     as Arc<dyn PhysicalExpr>;
                             }
                         }
 
-                        (when_expr, then_expr)
-                    })
-                    .collect();
+                        self.dynamic_filter.update(filter_expr)?;
+                    }
+                }
+                // Partitioned: CASE expression routing to per-partition filters
+                AccumulatedBuildData::Partitioned { partitions } => {
+                    // Collect all partition data (should all be Some at this point)
+                    let partition_data: Vec<_> =
+                        partitions.iter().filter_map(|p| p.as_ref()).collect();
 
-                // Create CASE expression
-                let filter_expr = Arc::new(CaseExpr::try_new(
-                    Some(modulo_expr),
-                    when_then_branches,
-                    Some(lit(false)), // ELSE false
-                )?) as Arc<dyn PhysicalExpr>;
+                    if !partition_data.is_empty() {
+                        // Build a CASE expression that combines range checks AND membership checks
+                        // CASE (hash_repartition(join_keys) % num_partitions)
+                        //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...) AND membership_check_0
+                        //   WHEN 1 THEN (col >= min_1 AND col <= max_1 AND ...) AND membership_check_1
+                        //   ...
+                        //   ELSE false
+                        // END
 
-                self.dynamic_filter.update(filter_expr)?;
+                        let num_partitions = partition_data.len();
+
+                        // Create base expression: hash_repartition(join_keys) % num_partitions
+                        let routing_hash_expr = Arc::new(HashExpr::new(
+                            self.on_right.clone(),
+                            self.repartition_random_state.clone(),
+                            "hash_repartition".to_string(),
+                        ))
+                            as Arc<dyn PhysicalExpr>;
+
+                        let modulo_expr = Arc::new(BinaryExpr::new(
+                            routing_hash_expr,
+                            Operator::Modulo,
+                            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+                        ))
+                            as Arc<dyn PhysicalExpr>;
+
+                        // Create WHEN branches for each partition
+                        let when_then_branches: Vec<(
+                            Arc<dyn PhysicalExpr>,
+                            Arc<dyn PhysicalExpr>,
+                        )> = partitions
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(partition_id, partition_opt)| {
+                                partition_opt
+                                    .as_ref()
+                                    .map(|partition| (partition_id, partition))
+                            })
+                            .map(|(partition_id, partition)| -> Result<_> {
+                                // WHEN partition_id
+                                let when_expr =
+                                    lit(ScalarValue::UInt64(Some(partition_id as u64)));
+
+                                // THEN: Combine bounds check AND membership predicate
+
+                                // 1. Create membership predicate (InList for small build sides, hash lookup otherwise)
+                                let inlist_values = match &partition.pushdown {
+                                    PushdownStrategy::InList(values) => Some(values),
+                                    PushdownStrategy::UseHashTable => None,
+                                };
+
+                                let membership_expr = create_membership_predicate(
+                                    &self.on_right,
+                                    &partition.hash_map,
+                                    inlist_values,
+                                    &HASH_JOIN_SEED,
+                                )?;
+
+                                // 2. Create bounds check expression for this partition (if bounds available)
+                                let mut then_expr = membership_expr;
+
+                                if let Some(partition_bounds) = inner
+                                    .bounds
+                                    .iter()
+                                    .find(|pb| pb.partition == partition_id)
+                                {
+                                    let mut column_predicates = Vec::new();
+
+                                    for (col_idx, right_expr) in
+                                        self.on_right.iter().enumerate()
+                                    {
+                                        if let Some(column_bounds) =
+                                            partition_bounds.get_column_bounds(col_idx)
+                                        {
+                                            // Create predicate: col >= min AND col <= max
+                                            let min_expr = Arc::new(BinaryExpr::new(
+                                                Arc::clone(right_expr),
+                                                Operator::GtEq,
+                                                lit(column_bounds.min.clone()),
+                                            ))
+                                                as Arc<dyn PhysicalExpr>;
+                                            let max_expr = Arc::new(BinaryExpr::new(
+                                                Arc::clone(right_expr),
+                                                Operator::LtEq,
+                                                lit(column_bounds.max.clone()),
+                                            ))
+                                                as Arc<dyn PhysicalExpr>;
+                                            let range_expr = Arc::new(BinaryExpr::new(
+                                                min_expr,
+                                                Operator::And,
+                                                max_expr,
+                                            ))
+                                                as Arc<dyn PhysicalExpr>;
+                                            column_predicates.push(range_expr);
+                                        }
+                                    }
+
+                                    // Combine all column range predicates with AND
+                                    if !column_predicates.is_empty() {
+                                        let bounds_expr = column_predicates
+                                            .into_iter()
+                                            .reduce(|acc, pred| {
+                                                Arc::new(BinaryExpr::new(
+                                                    acc,
+                                                    Operator::And,
+                                                    pred,
+                                                ))
+                                                    as Arc<dyn PhysicalExpr>
+                                            })
+                                            .unwrap();
+
+                                        // Combine bounds_expr AND membership_expr
+                                        then_expr = Arc::new(BinaryExpr::new(
+                                            bounds_expr,
+                                            Operator::And,
+                                            then_expr,
+                                        ))
+                                            as Arc<dyn PhysicalExpr>;
+                                    }
+                                }
+
+                                Ok((when_expr, then_expr))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+
+                        // Create CASE expression
+                        let filter_expr = Arc::new(CaseExpr::try_new(
+                            Some(modulo_expr),
+                            when_then_branches,
+                            Some(lit(false)), // ELSE false
+                        )?)
+                            as Arc<dyn PhysicalExpr>;
+
+                        self.dynamic_filter.update(filter_expr)?;
+                    }
+                }
             }
         }
 
