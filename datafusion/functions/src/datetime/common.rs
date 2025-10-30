@@ -56,6 +56,12 @@ pub(crate) struct ConfiguredTimeZone {
     zone: ConfiguredZone,
 }
 
+#[derive(Clone)]
+pub(crate) enum TimezoneResolver {
+    Ready(ConfiguredTimeZone),
+    Deferred { repr: Arc<str> },
+}
+
 impl ConfiguredTimeZone {
     pub(crate) fn utc() -> Self {
         Self {
@@ -109,6 +115,29 @@ impl ConfiguredTimeZone {
             }
         };
         Ok(datetime)
+    }
+}
+
+impl TimezoneResolver {
+    pub(crate) fn utc() -> Self {
+        Self::from_timezone(ConfiguredTimeZone::utc())
+    }
+
+    pub(crate) fn from_timezone(timezone: ConfiguredTimeZone) -> Self {
+        Self::Ready(timezone)
+    }
+
+    pub(crate) fn from_config(config: &str) -> Self {
+        Self::Deferred {
+            repr: Arc::from(config),
+        }
+    }
+
+    pub(crate) fn resolve(&self) -> Result<ConfiguredTimeZone> {
+        match self {
+            Self::Ready(timezone) => Ok(timezone.clone()),
+            Self::Deferred { repr } => ConfiguredTimeZone::parse(repr.as_ref()),
+        }
     }
 }
 
@@ -193,7 +222,7 @@ fn has_explicit_timezone(value: &str) -> bool {
 }
 
 pub(crate) fn string_to_timestamp_nanos_with_timezone(
-    timezone: &ConfiguredTimeZone,
+    timezone: &TimezoneResolver,
     s: &str,
 ) -> Result<i64> {
     let ts = string_to_timestamp_nanos_shim(s)?;
@@ -201,7 +230,7 @@ pub(crate) fn string_to_timestamp_nanos_with_timezone(
         Ok(ts)
     } else {
         let naive = timestamp_to_naive(ts)?;
-        timezone.timestamp_from_naive(&naive)
+        timezone.resolve()?.timestamp_from_naive(&naive)
     }
 }
 
@@ -318,10 +347,11 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
 }
 
 pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
-    timezone: &ConfiguredTimeZone,
+    timezone: &TimezoneResolver,
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
+    let timezone = timezone.resolve()?;
     let datetime = timezone.datetime_from_formatted(s, format)?;
     datetime_to_timestamp(datetime)
 }
