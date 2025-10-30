@@ -26,7 +26,7 @@ use crate::{
 use arrow::array::RecordBatch;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -47,14 +47,17 @@ use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
+use datafusion_common_runtime::SpawnedTask;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
+};
+use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStream};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
@@ -449,6 +452,9 @@ impl FileOpener for ParquetOpener {
                 .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
+            // eagerly prefetch row groups
+            let stream = EagerRowGroupPrefetchStream::new(stream);
+
             let files_ranges_pruned_statistics =
                 file_metrics.files_ranges_pruned_statistics.clone();
             let predicate_cache_inner_records =
@@ -493,6 +499,116 @@ fn copy_arrow_reader_metrics(
 
     if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
         predicate_cache_records.add(v);
+    }
+}
+
+/// Eagerly prefetches the next RowGroup from the underlying stream
+struct EagerRowGroupPrefetchStream<T> {
+    /// Outstanding prefetch state
+    state: EagerPrefetchState<T>,
+    /// Active reader, if any
+    parquet_record_batch_reader: Option<ParquetRecordBatchReader>,
+}
+
+struct PrefetchResult<T> {
+    stream: ParquetRecordBatchStream<T>,
+    reader: Option<ParquetRecordBatchReader>,
+}
+
+enum EagerPrefetchState<T> {
+    /// Trying to open the next RowGroup in a new task
+    Prefetching(SpawnedTask<Result<PrefetchResult<T>>>),
+    Done,
+}
+
+impl<T> EagerPrefetchState<T>
+where
+    T: AsyncFileReader + Unpin + Send + 'static,
+{
+    /// Begin fetching the next row group, if any
+    fn next_row_group(mut stream: ParquetRecordBatchStream<T>) -> Self {
+        let task = SpawnedTask::spawn(async move {
+            let reader = stream.next_row_group().await?;
+            let result = PrefetchResult { stream, reader };
+            Ok(result)
+        });
+        Self::Prefetching(task)
+    }
+}
+
+impl<T> EagerRowGroupPrefetchStream<T>
+where
+    T: AsyncFileReader + Unpin + Send + 'static,
+{
+    pub fn new(stream: ParquetRecordBatchStream<T>) -> Self {
+        Self {
+            state: EagerPrefetchState::next_row_group(stream),
+            parquet_record_batch_reader: None,
+        }
+    }
+}
+
+impl<T> Stream for EagerRowGroupPrefetchStream<T>
+where
+    T: AsyncFileReader + Unpin + Send + 'static,
+{
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        loop {
+            // If we have an active reader, try to read from it first
+            if let Some(mut reader) = self.parquet_record_batch_reader.take() {
+                match reader.next() {
+                    Some(result) => {
+                        // Return the batch
+                        self.parquet_record_batch_reader = Some(reader);
+                        let result = result.map_err(DataFusionError::from);
+                        return Poll::Ready(Some(result));
+                    }
+                    None => {
+                        // Reader is exhausted, continue to prefetching the next row group
+                    }
+                }
+            }
+
+            use futures::Future;
+
+            match &mut self.state {
+                EagerPrefetchState::Prefetching(handle) => {
+                    // check if the inner is ready
+                    let handle = pin!(handle);
+                    match ready!(handle.poll(cx)) {
+                        Ok(Ok(result)) => {
+                            let PrefetchResult { stream, reader } = result;
+                            // no reader means end of stream
+                            if reader.is_none() {
+                                self.state = EagerPrefetchState::Done;
+                            } else {
+                                // immediately start reading the next row group
+                                self.state = EagerPrefetchState::next_row_group(stream);
+                            }
+                            self.parquet_record_batch_reader = reader;
+                        }
+                        Ok(Err(err)) => {
+                            // error during prefetch, return it to the caller
+                            return Poll::Ready(Some(Err(err)));
+                        }
+                        Err(e) => {
+                            return Poll::Ready(Some(exec_err!(
+                                "Eager prefetch task panicked: {e}"
+                            )));
+                        }
+                    }
+                }
+                EagerPrefetchState::Done => {
+                    // stream is exhausted
+                    return Poll::Ready(None);
+                }
+            }
+        }
     }
 }
 
