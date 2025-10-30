@@ -446,6 +446,10 @@ impl PiecewiseMergeJoinExec {
         }
     }
 
+    // Inner, Outer, Left, Right joins are swapped so that left side is larger than right
+    // Left Semi/Anti joins are not swapped while Right Semi/Anti joins are always swapped. This
+    // is so that the algorithm of finding the streamed side min/max value, then probing the buffered
+    // side works properly.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.buffered();
         let right = self.streamed();

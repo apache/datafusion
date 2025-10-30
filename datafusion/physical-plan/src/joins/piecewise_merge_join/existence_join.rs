@@ -409,7 +409,8 @@ impl BatchProcessState {
     }
 }
 
-// Tests for Exitence Joins can only properly handle
+// Tests for Existence Joins can only properly handle Left Semi/Anti joins because 
+// Right Semi/Anti are swapped
 #[cfg(test)]
 mod tests {
     use super::*;
