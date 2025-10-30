@@ -1954,4 +1954,35 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_merge() {
+        let a1 = StringArray::from(vec![Some("A")]).to_data();
+        let a2 = StringArray::from(vec![Some("B")]).to_data();
+        let a3 = StringArray::from(vec![Some("C"), Some("D")]).to_data();
+
+        let indices = vec![
+            PartialResultIndex::none(),
+            PartialResultIndex::try_new(1).unwrap(),
+            PartialResultIndex::try_new(0).unwrap(),
+            PartialResultIndex::none(),
+            PartialResultIndex::try_new(2).unwrap(),
+            PartialResultIndex::try_new(2).unwrap(),
+        ];
+
+        let merged = merge(&vec![a1, a2, a3], &indices).unwrap();
+        let merged = merged.as_string::<i32>();
+
+        assert_eq!(merged.len(), indices.len());
+        assert!(!merged.is_valid(0));
+        assert!(merged.is_valid(1));
+        assert_eq!(merged.value(1), "B");
+        assert!(merged.is_valid(2));
+        assert_eq!(merged.value(2), "A");
+        assert!(!merged.is_valid(3));
+        assert!(merged.is_valid(4));
+        assert_eq!(merged.value(4), "C");
+        assert!(merged.is_valid(5));
+        assert_eq!(merged.value(5), "D");
+    }
 }
