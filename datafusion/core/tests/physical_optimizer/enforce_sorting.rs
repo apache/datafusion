@@ -360,9 +360,9 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn reproducer_with_repartition_sorts_true() -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true() -> Result<()> {
     assert_snapshot!(
-        reproducer_impl(true).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r"
     Input Plan:
     OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
@@ -384,9 +384,9 @@ async fn reproducer_with_repartition_sorts_true() -> Result<()> {
 }
 
 #[tokio::test]
-async fn reproducer_with_repartition_sorts_false() -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false() -> Result<()> {
     assert_snapshot!(
-        reproducer_impl(false).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
     Input Plan:
     OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
@@ -407,7 +407,7 @@ async fn reproducer_with_repartition_sorts_false() -> Result<()> {
     Ok(())
 }
 
-async fn reproducer_impl(repartition_sorts: bool) -> Result<String> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(repartition_sorts: bool) -> Result<String> {
     let schema = create_test_schema()?;
 
     // Source 1, will be sorted explicitly (on `nullable_col`)

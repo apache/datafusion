@@ -2998,9 +2998,9 @@ async fn test_count_wildcard_on_window() -> Result<()> {
 }
 
 #[tokio::test]
-async fn reproducer_e2e_with_repartition_sorts_false() -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false() -> Result<()> {
     assert_snapshot!(
-        reproducer_e2e_impl(false).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r#"
     +---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                                                                                                              |
@@ -3025,9 +3025,9 @@ async fn reproducer_e2e_with_repartition_sorts_false() -> Result<()> {
 
 #[ignore] // See https://github.com/apache/datafusion/issues/18380
 #[tokio::test]
-async fn reproducer_e2e_with_repartition_sorts_true() -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true() -> Result<()> {
     assert_snapshot!(
-        reproducer_e2e_impl(true).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r#"
     +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                                                                                                            |
@@ -3087,7 +3087,7 @@ async fn reproducer_e2e_with_repartition_sorts_true() -> Result<()> {
         Ok(())
 }
 
-async fn reproducer_e2e_impl(repartition_sorts: bool) -> Result<String> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(repartition_sorts: bool) -> Result<String> {
     let config = SessionConfig::default()
         .with_target_partitions(1)
         .with_repartition_sorts(repartition_sorts);
