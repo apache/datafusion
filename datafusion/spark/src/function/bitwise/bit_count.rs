@@ -23,6 +23,7 @@ use arrow::datatypes::{
     DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -46,6 +47,7 @@ impl SparkBitCount {
         Self {
             signature: Signature::one_of(
                 vec![
+                    TypeSignature::Exact(vec![DataType::Boolean]),
                     TypeSignature::Exact(vec![DataType::Int8]),
                     TypeSignature::Exact(vec![DataType::Int16]),
                     TypeSignature::Exact(vec![DataType::Int32]),
@@ -90,7 +92,14 @@ impl ScalarUDFImpl for SparkBitCount {
 fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
     let value_array = value_array[0].as_ref();
     match value_array.data_type() {
-        DataType::Int8 | DataType::Boolean => {
+        DataType::Boolean => {
+            let result: Int32Array = as_boolean_array(value_array)?
+                .iter()
+                .map(|x| x.map(|y| bit_count(y.into())))
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Int8 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int8Type>()
                 .unary(|v| bit_count(v.into()));
@@ -147,6 +156,7 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 // Here’s the equivalent Rust implementation of the bitCount function (similar to Apache Spark's bitCount for LongType)
+// https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/bitwiseExpressions.scala#L243
 fn bit_count(i: i64) -> i32 {
     let mut u = i as u64;
     u = u - ((u >> 1) & 0x5555555555555555);
@@ -162,8 +172,8 @@ fn bit_count(i: i64) -> i32 {
 mod tests {
     use super::*;
     use arrow::array::{
-        Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        Array, BooleanArray, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::datatypes::Int32Type;
 
@@ -204,6 +214,17 @@ mod tests {
         assert_eq!(arr.value(3), 3);
         assert_eq!(arr.value(4), 4);
         assert_eq!(arr.value(5), 64);
+    }
+
+    #[test]
+    fn test_bit_count_boolean() {
+        // Test bit_count on BooleanArray
+        let result =
+            spark_bit_count(&[Arc::new(BooleanArray::from(vec![true, false]))]).unwrap();
+
+        let arr = result.as_primitive::<Int32Type>();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), 0);
     }
 
     #[test]
