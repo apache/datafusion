@@ -1687,6 +1687,13 @@ SELECT DATE_TRUNC('second', '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
 
+# DATE_TRUNC handling of times before the unix epoch (issue 18334)
+query PPP
+SELECT d, DATE_TRUNC('hour', d), DATE_TRUNC('hour', TIMESTAMP '1900-06-15 07:09:00')
+FROM (VALUES (TIMESTAMP '1900-06-15 07:09:00')) AS t(d);
+----
+1900-06-15T07:09:00 1900-06-15T07:00:00 1900-06-15T07:00:00
+
 # Test that interval can add a timestamp
 query P
 SELECT timestamp '2013-07-01 12:00:00' + INTERVAL '8' DAY;
