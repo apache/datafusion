@@ -64,13 +64,9 @@ impl ReaderBuilder {
     ///     let file = File::open("test/data/basic.avro").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = ReaderBuilder::new()
-    ///       .read_schema()
-    ///       .with_batch_size(100);
+    ///     let builder = ReaderBuilder::new().read_schema().with_batch_size(100);
     ///
-    ///     let reader = builder
-    ///       .build::<File>(file)
-    ///       .unwrap();
+    ///     let reader = builder.build::<File>(file).unwrap();
     ///
     ///     reader
     /// }
