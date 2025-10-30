@@ -25,7 +25,7 @@ use crate::type_coercion::functions::fields_with_udf;
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
@@ -458,7 +458,7 @@ impl ExprSchemable for Expr {
     ///   with the default implementation returning empty field metadata
     /// - **Aggregate functions**: Generate metadata via function's [`return_field`] method,
     ///   with the default implementation returning empty field metadata
-    /// - **Window functions**: field metadata is empty
+    /// - **Window functions**: field metadata follows the function's return field
     ///
     /// ## Table Reference Scoping
     /// - Establishes proper qualified field references when columns belong to specific tables
@@ -534,11 +534,7 @@ impl ExprSchemable for Expr {
                 )))
             }
             Expr::WindowFunction(window_function) => {
-                let (dt, nullable) = self.data_type_and_nullable_with_window_function(
-                    schema,
-                    window_function,
-                )?;
-                Ok(Arc::new(Field::new(&schema_name, dt, nullable)))
+                self.window_function_field(schema, window_function)
             }
             Expr::AggregateFunction(aggregate_function) => {
                 let AggregateFunction {
@@ -703,6 +699,15 @@ impl Expr {
         schema: &dyn ExprSchema,
         window_function: &WindowFunction,
     ) -> Result<(DataType, bool)> {
+        let return_field = self.window_function_field(schema, window_function)?;
+        Ok((return_field.data_type().clone(), return_field.is_nullable()))
+    }
+
+    fn window_function_field(
+        &self,
+        schema: &dyn ExprSchema,
+        window_function: &WindowFunction,
+    ) -> Result<FieldRef> {
         let WindowFunction {
             fun,
             params: WindowFunctionParams { args, .. },
@@ -738,9 +743,7 @@ impl Expr {
                     .into_iter()
                     .collect::<Vec<_>>();
 
-                let return_field = udaf.return_field(&new_fields)?;
-
-                Ok((return_field.data_type().clone(), return_field.is_nullable()))
+                udaf.return_field(&new_fields)
             }
             WindowFunctionDefinition::WindowUDF(udwf) => {
                 let data_types = fields
@@ -769,7 +772,6 @@ impl Expr {
                 let field_args = WindowUDFFieldArgs::new(&new_fields, &function_name);
 
                 udwf.field(field_args)
-                    .map(|field| (field.data_type().clone(), field.is_nullable()))
             }
         }
     }
