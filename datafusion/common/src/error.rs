@@ -305,7 +305,6 @@ impl From<ParquetError> for DataFusionError {
     }
 }
 
-
 #[cfg(feature = "object_store")]
 impl From<object_store::Error> for DataFusionError {
     fn from(e: object_store::Error) -> Self {

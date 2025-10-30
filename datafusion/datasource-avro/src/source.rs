@@ -39,7 +39,7 @@ use object_store::ObjectStore;
 pub struct AvroSource {
     schema: Option<SchemaRef>,
     batch_size: Option<usize>,
-    projection: Option<Vec<String>>,
+    file_projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
@@ -52,16 +52,24 @@ impl AvroSource {
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
-        let avro_schema = AvroSchema::try_from(
-            self.schema
-                .as_ref()
-                .expect("Schema must set before open")
-                .as_ref(),
-        )?;
+        let schema = self
+            .schema
+            .as_ref()
+            .expect("Schema must set before open")
+            .as_ref();
+
+        let projected_schema = if let Some(projection) = &self.file_projection {
+            &schema.project(projection)?
+        } else {
+            schema
+        };
+
+        let avro_schema = AvroSchema::try_from(projected_schema)?;
+
         ReaderBuilder::new()
             .with_reader_schema(avro_schema) // Used for projection on read.
             .with_batch_size(self.batch_size.expect("Batch size must set before open"))
-            .build(reader) // TODO - A File (which doesn't implement BufRead) is being passed; confirm whether this is safe.
+            .build(reader)
             .map_err(Into::into)
     }
 }
@@ -102,7 +110,7 @@ impl FileSource for AvroSource {
 
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.projection = config.projected_file_column_names();
+        conf.file_projection = config.file_column_projection_indices();
         Arc::new(conf)
     }
 
