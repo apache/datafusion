@@ -210,17 +210,6 @@ fn has_explicit_timezone(value: &str) -> bool {
         return true;
     }
 
-    if let Some(pos) = value.rfind(|c| ['T', ' '].contains(&c)) {
-        let tail = &value[pos + 1..];
-        if tail.contains('Z')
-            || tail.contains('z')
-            || tail.contains('+')
-            || tail.contains('-')
-        {
-            return true;
-        }
-    }
-
     let bytes = value.as_bytes();
     let len = bytes.len();
 

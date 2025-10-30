@@ -1027,6 +1027,58 @@ mod tests {
     }
 
     #[test]
+    fn to_timestamp_session_timezone_applied() -> Result<()> {
+        let timezone =
+            TimezoneResolver::from_timezone(ConfiguredTimeZone::parse("America/New_York")?);
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "2020-09-08 13-42-29".to_string(),
+            ))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "%Y-%m-%d %H-%M-%S".to_string(),
+            ))),
+        ];
+
+        let result = to_timestamp_impl::<TimestampNanosecondType>(
+            &args,
+            "to_timestamp",
+            &timezone,
+        )?;
+
+        let ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(value), None)) =
+            result
+        else {
+            panic!("expected scalar timestamp");
+        };
+
+        let expected = string_to_timestamp_nanos_shim("2020-09-08T17:42:29Z")?;
+        assert_eq!(value, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn to_timestamp_invalid_session_timezone_errors() {
+        let timezone = TimezoneResolver::from_config("Not/A_Zone");
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "2020-09-08 13-42-29".to_string(),
+            ))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "%Y-%m-%d %H-%M-%S".to_string(),
+            ))),
+        ];
+
+        let err = to_timestamp_impl::<TimestampNanosecondType>(
+            &args,
+            "to_timestamp",
+            &timezone,
+        )
+        .expect_err("expected timezone configuration error");
+
+        assert_contains!(err.to_string(), "Invalid execution timezone");
+    }
+
+    #[test]
     fn to_timestamp_invalid_input_type() -> Result<()> {
         // pass the wrong type of input array to to_timestamp and test
         // that we get an error.
