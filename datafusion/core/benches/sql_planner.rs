@@ -401,8 +401,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     // -- Sorted Queries --
-    // 300 is taking too long - https://github.com/apache/datafusion/issues/18366
-    for column_count in [10, 50, 100, 200 /*, 300 */] {
+    // 100, 200 && 300 is taking too long - https://github.com/apache/datafusion/issues/18366
+    for column_count in [10, 50 /* 100, 200, 300 */] {
         register_union_order_table(&ctx, column_count, 1000);
 
         // this query has many expressions in its sort order so stresses
