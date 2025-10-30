@@ -313,7 +313,7 @@ pub fn update_from_iter<'a, T>(
         |&(hash, _)| hash,
     );
 
-    for &(row, hash_value) in items[1..].iter() {
+    for &(hash_value, row) in items[1..].iter() {
         let is_same_as_prev = hash_value == prev_hash;
 
         if is_same_as_prev {
