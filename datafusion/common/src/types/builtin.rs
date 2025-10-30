@@ -23,7 +23,7 @@ use std::sync::{Arc, LazyLock};
 /// Create a singleton and accompanying static variable for a [`LogicalTypeRef`]
 /// of a [`NativeType`].
 /// * `name`: name of the static variable, must be unique.
-/// * `getter`: name of the public function that will retrun the singleton instance
+/// * `getter`: name of the public function that will return the singleton instance
 ///   of the static variable.
 /// * `ty`: the [`NativeType`].
 macro_rules! singleton {
@@ -42,7 +42,7 @@ macro_rules! singleton {
 /// Similar to [`singleton`], but for native types that have variants, such as
 /// `NativeType::Interval(MonthDayNano)`.
 /// * `name`: name of the static variable, must be unique.
-/// * `getter`: name of the public function that will retrun the singleton instance
+/// * `getter`: name of the public function that will return the singleton instance
 ///   of the static variable.
 /// * `ty`: the [`NativeType`].
 /// * `variant`: specific variant of the `ty`.
