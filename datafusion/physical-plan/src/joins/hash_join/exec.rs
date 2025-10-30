@@ -1432,27 +1432,23 @@ async fn collect_left_input(
     };
 
     let mut hashes_buffer = Vec::new();
-    let mut offset = 0;
 
     // Updating hashmap starting from the last batch
+    // Merge all batches into a single batch, so we can directly index into the arrays
     let batches_iter = batches.iter().rev();
-    for batch in batches_iter.clone() {
-        hashes_buffer.clear();
-        hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash(
+    let single_batch = concat_batches(&schema, batches_iter)?;
+
+    hashes_buffer.resize(single_batch.num_rows(), 0);
+    update_hash(
             &on_left,
-            batch,
+            &single_batch,
             &mut *hashmap,
-            offset,
+            0,
             &random_state,
             &mut hashes_buffer,
             0,
             true,
         )?;
-        offset += batch.num_rows();
-    }
-    // Merge all batches into a single batch, so we can directly index into the arrays
-    let single_batch = concat_batches(&schema, batches_iter)?;
 
     // Reserve additional memory for visited indices bitmap and create shared builder
     let visited_indices_bitmap = if with_visited_indices_bitmap {
