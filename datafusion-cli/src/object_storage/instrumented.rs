@@ -58,7 +58,7 @@ pub enum InstrumentedObjectStoreMode {
 
 impl fmt::Display for InstrumentedObjectStoreMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -121,6 +121,54 @@ impl InstrumentedObjectStore {
             != InstrumentedObjectStoreMode::Disabled as u8
     }
 
+    async fn instrumented_put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        let size = payload.content_length();
+        let ret = self.inner.put_opts(location, payload, opts).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Put,
+            path: location.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: Some(size),
+            range: None,
+            extra_display: None,
+        });
+
+        Ok(ret)
+    }
+
+    async fn instrumented_put_multipart(
+        &self,
+        location: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        let ret = self.inner.put_multipart_opts(location, opts).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Put,
+            path: location.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: None,
+        });
+
+        Ok(ret)
+    }
+
     async fn instrumented_get_opts(
         &self,
         location: &Path,
@@ -144,6 +192,25 @@ impl InstrumentedObjectStore {
         });
 
         Ok(ret)
+    }
+
+    async fn instrumented_delete(&self, location: &Path) -> Result<()> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        self.inner.delete(location).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Delete,
+            path: location.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: None,
+        });
+
+        Ok(())
     }
 
     fn instrumented_list(
@@ -187,6 +254,67 @@ impl InstrumentedObjectStore {
 
         Ok(ret)
     }
+
+    async fn instrumented_copy(&self, from: &Path, to: &Path) -> Result<()> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        self.inner.copy(from, to).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Copy,
+            path: from.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: Some(format!("copy_to: {to}")),
+        });
+
+        Ok(())
+    }
+
+    async fn instrumented_copy_if_not_exists(
+        &self,
+        from: &Path,
+        to: &Path,
+    ) -> Result<()> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        self.inner.copy_if_not_exists(from, to).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Copy,
+            path: from.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: Some(format!("copy_to: {to}")),
+        });
+
+        Ok(())
+    }
+
+    async fn instrumented_head(&self, location: &Path) -> Result<ObjectMeta> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        let ret = self.inner.head(location).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Head,
+            path: location.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: None,
+        });
+
+        Ok(ret)
+    }
 }
 
 impl fmt::Display for InstrumentedObjectStore {
@@ -209,6 +337,10 @@ impl ObjectStore for InstrumentedObjectStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        if self.enabled() {
+            return self.instrumented_put_opts(location, payload, opts).await;
+        }
+
         self.inner.put_opts(location, payload, opts).await
     }
 
@@ -217,6 +349,10 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if self.enabled() {
+            return self.instrumented_put_multipart(location, opts).await;
+        }
+
         self.inner.put_multipart_opts(location, opts).await
     }
 
@@ -229,6 +365,10 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
+        if self.enabled() {
+            return self.instrumented_delete(location).await;
+        }
+
         self.inner.delete(location).await
     }
 
@@ -249,14 +389,26 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+        if self.enabled() {
+            return self.instrumented_copy(from, to).await;
+        }
+
         self.inner.copy(from, to).await
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        if self.enabled() {
+            return self.instrumented_copy_if_not_exists(from, to).await;
+        }
+
         self.inner.copy_if_not_exists(from, to).await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+        if self.enabled() {
+            return self.instrumented_head(location).await;
+        }
+
         self.inner.head(location).await
     }
 }
@@ -264,17 +416,17 @@ impl ObjectStore for InstrumentedObjectStore {
 /// Object store operation types tracked by [`InstrumentedObjectStore`]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Operation {
-    _Copy,
-    _Delete,
+    Copy,
+    Delete,
     Get,
-    _Head,
+    Head,
     List,
-    _Put,
+    Put,
 }
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -404,11 +556,11 @@ impl RequestSummaries {
                 let size_stats = s.size_stats.as_ref();
                 let dur_avg = duration_stats.map(|d| {
                     let avg = d.sum.as_secs_f32() / count;
-                    format!("{:.6}s", avg)
+                    format!("{avg:.6}s")
                 });
                 let size_avg = size_stats.map(|s| {
                     let avg = s.sum as f32 / count;
-                    format!("{} B", avg)
+                    format!("{avg} B")
                 });
                 [dur_avg, size_avg]
             })
@@ -592,6 +744,13 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
         self.inner.register_store(url, instrumented)
     }
 
+    fn deregister_store(
+        &self,
+        url: &Url,
+    ) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
+        self.inner.deregister_store(url)
+    }
+
     fn get_store(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
         self.inner.get_store(url)
     }
@@ -599,6 +758,8 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
 
 #[cfg(test)]
 mod tests {
+    use object_store::WriteMultipart;
+
     use super::*;
     use insta::assert_snapshot;
 
@@ -696,6 +857,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn instrumented_store_delete() {
+        let (instrumented, path) = setup_test_store().await;
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.delete(&path).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        // We need a new store so we have data to delete again
+        let (instrumented, path) = setup_test_store().await;
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.delete(&path).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Delete);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
     async fn instrumented_store_list() {
         let (instrumented, path) = setup_test_store().await;
 
@@ -734,6 +924,169 @@ mod tests {
 
         let request = instrumented.take_requests().pop().unwrap();
         assert_eq!(request.op, Operation::List);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_put_opts() {
+        // The `setup_test_store()` method comes with data already `put` into it, so we'll setup
+        // manually for this test
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let mode = AtomicU8::new(InstrumentedObjectStoreMode::default() as u8);
+        let instrumented = InstrumentedObjectStore::new(store, mode);
+
+        let path = Path::from("test/data");
+        let payload = PutPayload::from_static(b"test_data");
+        let size = payload.content_length();
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.put(&path, payload.clone()).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.put(&path, payload).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let request = instrumented.take_requests().pop().unwrap();
+        assert_eq!(request.op, Operation::Put);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert_eq!(request.size.unwrap(), size);
+        assert!(request.range.is_none());
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_put_multipart() {
+        // The `setup_test_store()` method comes with data already `put` into it, so we'll setup
+        // manually for this test
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let mode = AtomicU8::new(InstrumentedObjectStoreMode::default() as u8);
+        let instrumented = InstrumentedObjectStore::new(store, mode);
+
+        let path = Path::from("test/data");
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        let mp = instrumented.put_multipart(&path).await.unwrap();
+        let mut write = WriteMultipart::new(mp);
+        write.write(b"test_data");
+        write.finish().await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        let mp = instrumented.put_multipart(&path).await.unwrap();
+        let mut write = WriteMultipart::new(mp);
+        write.write(b"test_data");
+        write.finish().await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let request = instrumented.take_requests().pop().unwrap();
+        assert_eq!(request.op, Operation::Put);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_copy() {
+        let (instrumented, path) = setup_test_store().await;
+        let copy_to = Path::from("test/copied");
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.copy(&path, &copy_to).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented.copy(&path, &copy_to).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Copy);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert_eq!(
+            request.extra_display.unwrap(),
+            format!("copy_to: {copy_to}")
+        );
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_copy_if_not_exists() {
+        let (instrumented, path) = setup_test_store().await;
+        let mut copy_to = Path::from("test/copied");
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented
+            .copy_if_not_exists(&path, &copy_to)
+            .await
+            .unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        // Use a new destination since the previous one already exists
+        copy_to = Path::from("test/copied_again");
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        instrumented
+            .copy_if_not_exists(&path, &copy_to)
+            .await
+            .unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Copy);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert_eq!(
+            request.extra_display.unwrap(),
+            format!("copy_to: {copy_to}")
+        );
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_head() {
+        let (instrumented, path) = setup_test_store().await;
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.head(&path).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.head(&path).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Head);
         assert_eq!(request.path, path);
         assert!(request.duration.is_some());
         assert!(request.size.is_none());
@@ -819,7 +1172,7 @@ mod tests {
 
         // Add Put requests to test grouping
         requests.push(RequestDetails {
-            op: Operation::_Put,
+            op: Operation::Put,
             path: Path::from("test4"),
             timestamp: chrono::DateTime::from_timestamp(3, 0).unwrap(),
             duration: Some(Duration::from_millis(200)),
@@ -834,8 +1187,8 @@ mod tests {
         +-----------+----------+-----------+-----------+-----------+------------+-------+
         | Get       | duration | 2.000000s | 8.000000s | 5.000000s | 15.000000s | 3     |
         | Get       | size     | 50 B      | 150 B     | 100 B     | 300 B      | 3     |
-        | _Put      | duration | 0.200000s | 0.200000s | 0.200000s | 0.200000s  | 1     |
-        | _Put      | size     | 75 B      | 75 B      | 75 B      | 75 B       | 1     |
+        | Put       | duration | 0.200000s | 0.200000s | 0.200000s | 0.200000s  | 1     |
+        | Put       | size     | 75 B      | 75 B      | 75 B      | 75 B       | 1     |
         +-----------+----------+-----------+-----------+-----------+------------+-------+
         ");
     }

@@ -45,7 +45,6 @@ make_udf_function!(date_part::DatePartFunc, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, date_trunc);
 make_udf_function!(make_date::MakeDateFunc, make_date);
 make_udf_function!(from_unixtime::FromUnixtimeFunc, from_unixtime);
-make_udf_function!(now::NowFunc, now);
 make_udf_function!(to_char::ToCharFunc, to_char);
 make_udf_function!(to_date::ToDateFunc, to_date);
 make_udf_function!(to_local_time::ToLocalTimeFunc, to_local_time);
@@ -55,6 +54,9 @@ make_udf_function!(to_timestamp::ToTimestampSecondsFunc, to_timestamp_seconds);
 make_udf_function!(to_timestamp::ToTimestampMillisFunc, to_timestamp_millis);
 make_udf_function!(to_timestamp::ToTimestampMicrosFunc, to_timestamp_micros);
 make_udf_function!(to_timestamp::ToTimestampNanosFunc, to_timestamp_nanos);
+
+// create UDF with config
+make_udf_function_with_config!(now::NowFunc, now);
 
 // we cannot currently use the export_functions macro since it doesn't handle
 // functions with varargs currently
@@ -91,6 +93,7 @@ pub mod expr_fn {
     ),(
         now,
         "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement",
+        @config
     ),
     (
         to_local_time,
@@ -255,6 +258,7 @@ pub mod expr_fn {
 
 /// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
+    use datafusion_common::config::ConfigOptions;
     vec![
         current_date(),
         current_time(),
@@ -263,7 +267,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_trunc(),
         from_unixtime(),
         make_date(),
-        now(),
+        now(&ConfigOptions::default()),
         to_char(),
         to_date(),
         to_local_time(),

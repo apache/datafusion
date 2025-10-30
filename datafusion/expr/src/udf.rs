@@ -546,6 +546,32 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
+    /// Create a new instance of this function with updated configuration.
+    ///
+    /// This method is called when configuration options change at runtime
+    /// (e.g., via `SET` statements) to allow functions that depend on
+    /// configuration to update themselves accordingly.
+    ///
+    /// Note the current [`ConfigOptions`] are also passed to [`Self::invoke_with_args`] so
+    /// this API is not needed for functions where the values may
+    /// depend on the current options.
+    ///
+    /// This API is useful for functions where the return
+    /// **type** depends on the configuration options, such as the `now()` function
+    /// which depends on the current timezone.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The updated configuration options
+    ///
+    /// # Returns
+    ///
+    /// * `Some(ScalarUDF)` - A new instance of this function configured with the new settings
+    /// * `None` - If this function does not change with new configuration settings (the default)
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+        None
+    }
+
     /// What type will be returned by this function, given the arguments?
     ///
     /// By default, this function calls [`Self::return_type`] with the
@@ -577,10 +603,10 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// # struct Example{}
     /// # impl Example {
     /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-    ///   // report output is only nullable if any one of the arguments are nullable
-    ///   let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-    ///   let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
-    ///   Ok(field)
+    ///     // report output is only nullable if any one of the arguments are nullable
+    ///     let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
+    ///     Ok(field)
     /// }
     /// # }
     /// ```
@@ -877,6 +903,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         self.inner.invoke_with_args(args)
+    }
+
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+        None
     }
 
     fn aliases(&self) -> &[String] {

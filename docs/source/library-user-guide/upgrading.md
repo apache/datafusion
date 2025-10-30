@@ -25,6 +25,15 @@
 
 You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
 
+### `arrow` / `parquet` updated to 57.0.0
+
+### Upgrade to arrow `57.0.0` and parquet `57.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `57.0.0`, including several dependent crates such as `prost`,
+`tonic`, `pyo3`, and `substrait`. . See the [release
+notes](https://github.com/apache/arrow-rs/releases/tag/57.0.0) for more details.
+
 ### `MSRV` updated to 1.87.0
 
 The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
@@ -93,6 +102,163 @@ has changed from `&str` to `&Dialect`.
 `Dialect` is an enum defined in the `datafusion-common`
 crate under the `config` module that provides type safety
 and better validation for SQL dialect selection
+
+### Reorganization of `ListingTable` into `datafusion-catalog-listing` crate
+
+There has been a long standing request to remove features such as `ListingTable`
+from the `datafusion` crate to support faster build times. The structs
+`ListingOptions`, `ListingTable`, and `ListingTableConfig` are now available
+within the `datafusion-catalog-listing` crate. These are re-exported in
+the `datafusion` crate, so this should be a minimal impact to existing users.
+
+See [issue #14462] and [issue #17713] for more details.
+
+[issue #14462]: https://github.com/apache/datafusion/issues/14462
+[issue #17713]: https://github.com/apache/datafusion/issues/17713
+
+### Reorganization of `ArrowSource` into `datafusion-datasource-arrow` crate
+
+To support [issue #17713] the `ArrowSource` code has been removed from
+the `datafusion` core crate into it's own crate, `datafusion-datasource-arrow`.
+This follows the pattern for the AVRO, CSV, JSON, and Parquet data sources.
+Users may need to update their paths to account for these changes.
+
+See [issue #17713] for more details.
+
+### `FileScanConfig::projection` renamed to `FileScanConfig::projection_exprs`
+
+The `projection` field in `FileScanConfig` has been renamed to `projection_exprs` and its type has changed from `Option<Vec<usize>>` to `Option<ProjectionExprs>`. This change enables more powerful projection pushdown capabilities by supporting arbitrary physical expressions rather than just column indices.
+
+**Impact on direct field access:**
+
+If you directly access the `projection` field:
+
+```rust
+# /* comment to avoid running
+let config: FileScanConfig = ...;
+let projection = config.projection;
+# */
+```
+
+You should update to:
+
+```rust
+# /* comment to avoid running
+let config: FileScanConfig = ...;
+let projection_exprs = config.projection_exprs;
+# */
+```
+
+**Impact on builders:**
+
+The `FileScanConfigBuilder::with_projection()` method has been deprecated in favor of `with_projection_indices()`:
+
+```diff
+let config = FileScanConfigBuilder::new(url, schema, file_source)
+-   .with_projection(Some(vec![0, 2, 3]))
++   .with_projection_indices(Some(vec![0, 2, 3]))
+    .build();
+```
+
+Note: `with_projection()` still works but is deprecated and will be removed in a future release.
+
+**What is `ProjectionExprs`?**
+
+`ProjectionExprs` is a new type that represents a list of physical expressions for projection. While it can be constructed from column indices (which is what `with_projection_indices` does internally), it also supports arbitrary physical expressions, enabling advanced features like expression evaluation during scanning.
+
+You can access column indices from `ProjectionExprs` using its methods if needed:
+
+```rust
+# /* comment to avoid running
+let projection_exprs: ProjectionExprs = ...;
+// Get the column indices if the projection only contains simple column references
+let indices = projection_exprs.column_indices();
+# */
+```
+
+### `DESCRIBE query` support
+
+`DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the
+_execution plan_ of the query. With this release, `DESCRIBE query` now outputs
+the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
+
+### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
+
+A new `TableSchema` struct has been introduced in the `datafusion-datasource` crate to better manage table schemas with partition columns. This struct helps distinguish between:
+
+- **File schema**: The schema of actual data files on disk
+- **Partition columns**: Columns derived from directory structure (e.g., Hive-style partitioning)
+- **Table schema**: The complete schema combining both file and partition columns
+
+As part of this change, the `FileSource::with_schema()` method signature has changed from accepting a `SchemaRef` to accepting a `TableSchema`.
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations will need to update their code
+- Users who only use built-in file sources (Parquet, CSV, JSON, AVRO, Arrow) are not affected
+
+**Migration guide for custom `FileSource` implementations:**
+
+```diff
+ use datafusion_datasource::file::FileSource;
+-use arrow::datatypes::SchemaRef;
++use datafusion_datasource::TableSchema;
+
+ impl FileSource for MyCustomSource {
+-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
++    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+         Arc::new(Self {
+-            schema: Some(schema),
++            // Use schema.file_schema() to get the file schema without partition columns
++            schema: Some(Arc::clone(schema.file_schema())),
+             ..self.clone()
+         })
+     }
+ }
+```
+
+For implementations that need access to partition columns:
+
+```rust,ignore
+fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+    Arc::new(Self {
+        file_schema: Arc::clone(schema.file_schema()),
+        partition_cols: schema.table_partition_cols().clone(),
+        table_schema: Arc::clone(schema.table_schema()),
+        ..self.clone()
+    })
+}
+```
+
+**Note**: Most `FileSource` implementations only need to store the file schema (without partition columns), as shown in the first example. The second pattern of storing all three schema components is typically only needed for advanced use cases where you need access to different schema representations for different operations (e.g., ParquetSource uses the file schema for building pruning predicates but needs the table schema for filter pushdown logic).
+
+**Using `TableSchema` directly:**
+
+If you're constructing a `FileScanConfig` or working with table schemas and partition columns, you can now use `TableSchema`:
+
+```rust
+use datafusion_datasource::TableSchema;
+use arrow::datatypes::{Schema, Field, DataType};
+use std::sync::Arc;
+
+// Create a TableSchema with partition columns
+let file_schema = Arc::new(Schema::new(vec![
+    Field::new("user_id", DataType::Int64, false),
+    Field::new("amount", DataType::Float64, false),
+]));
+
+let partition_cols = vec![
+    Arc::new(Field::new("date", DataType::Utf8, false)),
+    Arc::new(Field::new("region", DataType::Utf8, false)),
+];
+
+let table_schema = TableSchema::new(file_schema, partition_cols);
+
+// Access different schema representations
+let file_schema_ref = table_schema.file_schema();      // Schema without partition columns
+let full_schema = table_schema.table_schema();          // Complete schema with partition columns
+let partition_cols_ref = table_schema.table_partition_cols(); // Just the partition columns
+```
 
 ## DataFusion `50.0.0`
 
