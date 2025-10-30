@@ -81,7 +81,6 @@ pub trait FieldExt {
     /// assert_eq!(list_field.data_type(), &DataType::List(Arc::new(
     ///     Field::new("item", DataType::Int32, true)
     /// )));
-    ///
     fn into_list(self) -> Self;
 
     /// Return a new Field representing this Field as the item type of a
@@ -107,7 +106,6 @@ pub trait FieldExt {
     ///    Field::new("item", DataType::Int32, true)),
     ///    3
     /// ));
-    ///
     fn into_fixed_size_list(self, list_size: i32) -> Self;
 
     /// Update the field to have the default list field name ("item")

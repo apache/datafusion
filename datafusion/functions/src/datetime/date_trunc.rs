@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use arrow::array::types::{
     ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::array::{Array, ArrayRef, Int64Array, PrimitiveArray};
+use arrow::array::{Array, ArrayRef, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
@@ -456,37 +457,40 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     granularity: &str,
 ) -> Result<ArrayRef> {
     let unit = match (tu, granularity) {
-        (Second, "minute") => Some(Int64Array::new_scalar(60)),
-        (Second, "hour") => Some(Int64Array::new_scalar(3600)),
-        (Second, "day") => Some(Int64Array::new_scalar(86400)),
+        (Second, "minute") => NonZeroI64::new(60),
+        (Second, "hour") => NonZeroI64::new(3600),
+        (Second, "day") => NonZeroI64::new(86400),
 
-        (Millisecond, "second") => Some(Int64Array::new_scalar(1_000)),
-        (Millisecond, "minute") => Some(Int64Array::new_scalar(60_000)),
-        (Millisecond, "hour") => Some(Int64Array::new_scalar(3_600_000)),
-        (Millisecond, "day") => Some(Int64Array::new_scalar(86_400_000)),
+        (Millisecond, "second") => NonZeroI64::new(1_000),
+        (Millisecond, "minute") => NonZeroI64::new(60_000),
+        (Millisecond, "hour") => NonZeroI64::new(3_600_000),
+        (Millisecond, "day") => NonZeroI64::new(86_400_000),
 
-        (Microsecond, "millisecond") => Some(Int64Array::new_scalar(1_000)),
-        (Microsecond, "second") => Some(Int64Array::new_scalar(1_000_000)),
-        (Microsecond, "minute") => Some(Int64Array::new_scalar(60_000_000)),
-        (Microsecond, "hour") => Some(Int64Array::new_scalar(3_600_000_000)),
-        (Microsecond, "day") => Some(Int64Array::new_scalar(86_400_000_000)),
+        (Microsecond, "millisecond") => NonZeroI64::new(1_000),
+        (Microsecond, "second") => NonZeroI64::new(1_000_000),
+        (Microsecond, "minute") => NonZeroI64::new(60_000_000),
+        (Microsecond, "hour") => NonZeroI64::new(3_600_000_000),
+        (Microsecond, "day") => NonZeroI64::new(86_400_000_000),
 
-        (Nanosecond, "microsecond") => Some(Int64Array::new_scalar(1_000)),
-        (Nanosecond, "millisecond") => Some(Int64Array::new_scalar(1_000_000)),
-        (Nanosecond, "second") => Some(Int64Array::new_scalar(1_000_000_000)),
-        (Nanosecond, "minute") => Some(Int64Array::new_scalar(60_000_000_000)),
-        (Nanosecond, "hour") => Some(Int64Array::new_scalar(3_600_000_000_000)),
-        (Nanosecond, "day") => Some(Int64Array::new_scalar(86_400_000_000_000)),
+        (Nanosecond, "microsecond") => NonZeroI64::new(1_000),
+        (Nanosecond, "millisecond") => NonZeroI64::new(1_000_000),
+        (Nanosecond, "second") => NonZeroI64::new(1_000_000_000),
+        (Nanosecond, "minute") => NonZeroI64::new(60_000_000_000),
+        (Nanosecond, "hour") => NonZeroI64::new(3_600_000_000_000),
+        (Nanosecond, "day") => NonZeroI64::new(86_400_000_000_000),
         _ => None,
     };
 
     if let Some(unit) = unit {
-        let original_type = array.data_type();
-        let array = arrow::compute::cast(array, &DataType::Int64)?;
-        let array = arrow::compute::kernels::numeric::div(&array, &unit)?;
-        let array = arrow::compute::kernels::numeric::mul(&array, &unit)?;
-        let array = arrow::compute::cast(&array, original_type)?;
-        Ok(array)
+        let unit = unit.get();
+        let array = PrimitiveArray::<T>::from_iter_values_with_nulls(
+            array
+                .values()
+                .iter()
+                .map(|v| *v - i64::rem_euclid(*v, unit)),
+            array.nulls().cloned(),
+        );
+        Ok(Arc::new(array))
     } else {
         // truncate to the same or smaller unit
         Ok(Arc::new(array.clone()))
