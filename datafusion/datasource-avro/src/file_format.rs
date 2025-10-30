@@ -165,6 +165,6 @@ impl FileFormat for AvroFormat {
     }
 
     fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(AvroSource::new(schema.into()))
+        Arc::new(AvroSource::new(schema))
     }
 }

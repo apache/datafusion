@@ -507,8 +507,7 @@ impl FileFormat for ParquetFormat {
 
     fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
         Arc::new(
-            ParquetSource::new(schema.into())
-                .with_table_parquet_options(self.options.clone()),
+            ParquetSource::new(schema).with_table_parquet_options(self.options.clone()),
         )
     }
 }

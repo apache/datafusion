@@ -22,7 +22,6 @@ use std::sync::Arc;
 
 use crate::avro_to_arrow::Reader as AvroReader;
 
-use arrow::datatypes::SchemaRef;
 use datafusion_common::error::Result;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
@@ -48,9 +47,9 @@ pub struct AvroSource {
 
 impl AvroSource {
     /// Initialize an AvroSource with the provided schema
-    pub fn new(table_schema: TableSchema) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         Self {
-            table_schema,
+            table_schema: table_schema.into(),
             batch_size: None,
             projection: None,
             metrics: ExecutionPlanMetricsSet::new(),

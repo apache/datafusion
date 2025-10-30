@@ -117,7 +117,8 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
+        let source =
+            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -188,7 +189,8 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
+        let source =
+            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -259,7 +261,8 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
+        let source =
+            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -328,7 +331,8 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
+        let source =
+            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -393,7 +397,8 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
+        let source =
+            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
@@ -500,7 +505,8 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let source = Arc::new(CsvSource::new(Arc::clone(&file_schema), options));
+        let source =
+            Arc::new(CsvSource::new(Arc::clone(&file_schema)).with_csv_options(options));
         let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,

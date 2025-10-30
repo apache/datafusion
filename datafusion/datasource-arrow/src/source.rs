@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::TableSchema;
 
 use arrow::buffer::Buffer;
 use arrow_ipc::reader::FileDecoder;

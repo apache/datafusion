@@ -334,7 +334,7 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
             quote: b'"',
             ..Default::default()
         };
-        let source = CsvSource::new(schema, options);
+        let source = CsvSource::new(schema).with_csv_options(options);
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())

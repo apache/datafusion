@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::config::CsvOptions;
 use datafusion::{
     assert_batches_eq,
     datasource::{
@@ -30,11 +31,8 @@ use datafusion::{
     physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
-use datafusion_common::config::CsvOptions;
 
-use datafusion::datasource::{
-    physical_plan::FileScanConfigBuilder, table_schema::TableSchema,
-};
+use datafusion::datasource::physical_plan::FileScanConfigBuilder;
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
@@ -68,14 +66,15 @@ async fn csv_opener() -> Result<()> {
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         Arc::clone(&schema),
-        Arc::new(CsvSource::new((&schema).into(), options.clone())),
+        Arc::new(CsvSource::new(Arc::clone(&schema)).with_csv_options(options.clone())),
     )
     .with_projection_indices(Some(vec![12, 0]))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.display().to_string(), 10))
     .build();
 
-    let config = CsvSource::new((&schema).into(), options)
+    let config = CsvSource::new(Arc::clone(&schema))
+        .with_csv_options(options)
         .with_comment(Some(b'#'))
         .with_batch_size(8192)
         .with_projection(&scan_config);

@@ -32,7 +32,6 @@ use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     as_file_source, calculate_range, ListingTableUrl, PartitionedFile, RangeCalculation,
-    TableSchema,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 

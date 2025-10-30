@@ -297,9 +297,9 @@ impl ParquetSource {
     ///
     /// Uses default `TableParquetOptions`.
     /// To set custom options, use [ParquetSource::with_table_parquet_options`].
-    pub fn new(table_schema: TableSchema) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         Self {
-            table_schema,
+            table_schema: table_schema.into(),
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,

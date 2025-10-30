@@ -625,7 +625,8 @@ impl protobuf::PhysicalPlanNode {
             ..Default::default()
         };
         let source = Arc::new(
-            CsvSource::new(TableSchema::from_file_schema(schema), csv_options)
+            CsvSource::new(TableSchema::from_file_schema(schema))
+                .with_csv_options(csv_options)
                 .with_escape(escape)
                 .with_comment(comment),
         );

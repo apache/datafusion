@@ -36,7 +36,6 @@ use crate::logical_expr::LogicalPlan;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
 
 use datafusion_common::config::CsvOptions;
-use datafusion_datasource::TableSchema;
 
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -101,7 +100,7 @@ pub fn scan_partitioned_csv(
         quote: b'"',
         ..Default::default()
     };
-    let source = Arc::new(CsvSource::new((&schema).into(), options));
+    let source = Arc::new(CsvSource::new(Arc::clone(&schema)).with_csv_options(options));
     let config =
         FileScanConfigBuilder::from(partitioned_csv_config(schema, file_groups, source))
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)

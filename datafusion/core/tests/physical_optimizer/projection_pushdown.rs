@@ -394,7 +394,7 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
                 quote: 0,
                 ..Default::default()
             };
-            Arc::new(CsvSource::new(schema.clone(), options))
+            Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
         },
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
@@ -421,7 +421,7 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
                 quote: 0,
                 ..Default::default()
             };
-            Arc::new(CsvSource::new(schema.clone(), options))
+            Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
         },
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
@@ -1614,7 +1614,7 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         file_schema.clone(),
-        Arc::new(CsvSource::new(file_schema, options)),
+        Arc::new(CsvSource::new(file_schema).with_csv_options(options)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_table_partition_cols(vec![Field::new("partition_col", DataType::Utf8, true)])

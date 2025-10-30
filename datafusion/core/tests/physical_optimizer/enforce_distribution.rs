@@ -258,7 +258,7 @@ fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> 
                 quote: b'"',
                 ..Default::default()
             };
-            Arc::new(CsvSource::new(schema(), options))
+            Arc::new(CsvSource::new(schema()).with_csv_options(options))
         },
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
@@ -284,7 +284,7 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
                 quote: b'"',
                 ..Default::default()
             };
-            Arc::new(CsvSource::new(schema(), options))
+            Arc::new(CsvSource::new(schema()).with_csv_options(options))
         },
     )
     .with_file_groups(vec![
@@ -2718,7 +2718,7 @@ fn parallelization_compressed_csv() -> Result<()> {
                             quote: b'"',
                             ..Default::default()
                         };
-                        Arc::new(CsvSource::new(schema(), options))
+                        Arc::new(CsvSource::new(schema()).with_csv_options(options))
                     },
                 )
                 .with_file(PartitionedFile::new("x".to_string(), 100))

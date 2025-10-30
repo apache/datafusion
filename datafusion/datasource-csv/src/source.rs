@@ -33,7 +33,6 @@ use datafusion_datasource::{
 };
 
 use arrow::csv;
-use arrow::datatypes::SchemaRef;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_common_runtime::JoinSet;
@@ -96,16 +95,22 @@ pub struct CsvSource {
 
 impl CsvSource {
     /// Returns a [`CsvSource`]
-    pub fn new(table_schema: TableSchema, options: CsvOptions) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         Self {
-            options,
-            table_schema,
+            options: CsvOptions::default(),
+            table_schema: table_schema.into(),
             batch_size: None,
             file_projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
             projected_statistics: None,
             schema_adapter_factory: None,
         }
+    }
+
+    /// Sets the CSV options
+    pub fn with_csv_options(mut self, options: CsvOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// true if the first line of each file is a header

@@ -443,10 +443,10 @@ impl FileFormat for CsvFormat {
 
         let mut csv_options = self.options.clone();
         csv_options.has_header = Some(has_header);
-        let source = Arc::new(CsvSource::new(
-            TableSchema::from_file_schema(file_schema),
-            csv_options,
-        ));
+        let source = Arc::new(
+            CsvSource::new(TableSchema::from_file_schema(file_schema))
+                .with_csv_options(csv_options),
+        );
 
         let config = conf_builder.with_source(source).build();
 
@@ -495,7 +495,7 @@ impl FileFormat for CsvFormat {
         if csv_options.has_header.is_none() {
             csv_options.has_header = Some(true);
         }
-        Arc::new(CsvSource::new(schema.into(), csv_options))
+        Arc::new(CsvSource::new(schema).with_csv_options(csv_options))
     }
 }
 
