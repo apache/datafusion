@@ -297,14 +297,15 @@ pub fn update_from_iter<'a, T>(
     T: Copy + TryFrom<usize> + PartialOrd,
     <T as TryFrom<usize>>::Error: Debug,
 {
-    let mut items: Vec<(usize, u64)> =
-        iter.map(|(row, &hash_value)| (row, hash_value)).collect();
-    let mut prev_hash = if let Some((_, first_hash)) = items.first() {
+    let mut items: Vec<(u64, usize)> =
+        iter.map(|(row, &hash_value)| (hash_value, row)).collect();
+    // Sort by hash value to group same hash values together, then by row index to maintain order
+    items.sort_unstable();
+    let mut prev_hash = if let Some((first_hash, _)) = items.first() {
         *first_hash
     } else {
         return;
     };
-    items.sort_unstable_by_key(|&(_, hash_value)| hash_value);
 
     let mut prev_entry = map.insert_unique(
         prev_hash,
