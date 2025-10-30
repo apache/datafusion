@@ -48,6 +48,7 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
 use datafusion_datasource::write::BatchSerializer;
+use datafusion_datasource::TableSchema;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -486,12 +487,12 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
         let mut csv_options = self.options.clone();
         if csv_options.has_header.is_none() {
             csv_options.has_header = Some(true);
         }
-        Arc::new(CsvSource::new(schema).with_csv_options(csv_options))
+        Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options))
     }
 }
 

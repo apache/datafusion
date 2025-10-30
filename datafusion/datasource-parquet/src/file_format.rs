@@ -32,6 +32,7 @@ use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::{
     get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
+use datafusion_datasource::TableSchema;
 
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
@@ -502,9 +503,10 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
         Arc::new(
-            ParquetSource::new(schema).with_table_parquet_options(self.options.clone()),
+            ParquetSource::new(table_schema)
+                .with_table_parquet_options(self.options.clone()),
         )
     }
 }

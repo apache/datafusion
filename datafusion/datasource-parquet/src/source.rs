@@ -298,8 +298,10 @@ impl ParquetSource {
     /// Uses default `TableParquetOptions`.
     /// To set custom options, use [ParquetSource::with_table_parquet_options`].
     pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
+        println!("new table_schema: {:?}", table_schema);
         Self {
-            table_schema: table_schema.into(),
+            table_schema,
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,
@@ -677,7 +679,7 @@ impl FileSource for ParquetSource {
                     let predicate_creation_errors = Count::new();
                     if let (Some(pruning_predicate), _) = build_pruning_predicates(
                         Some(predicate),
-                        self.table_schema.file_schema(),
+                        self.table_schema.table_schema(),
                         &predicate_creation_errors,
                     ) {
                         let mut guarantees = pruning_predicate
@@ -721,6 +723,8 @@ impl FileSource for ParquetSource {
         let config_pushdown_enabled = config.execution.parquet.pushdown_filters;
         let table_pushdown_enabled = self.pushdown_filters();
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
+
+        println!("try_pushdown_filters table_schema: {:?}", table_schema);
 
         let mut source = self.clone();
         let filters: Vec<PushedDownPredicate> = filters

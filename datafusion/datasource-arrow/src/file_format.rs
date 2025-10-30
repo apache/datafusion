@@ -45,6 +45,7 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::{
     get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
+use datafusion_datasource::TableSchema;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -202,7 +203,7 @@ impl FileFormat for ArrowFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn file_source(&self, _table_schema: TableSchema) -> Arc<dyn FileSource> {
         // ArrowSource doesn't store schema, but signature must match trait
         Arc::new(ArrowSource::default())
     }

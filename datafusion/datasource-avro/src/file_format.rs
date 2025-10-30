@@ -161,7 +161,10 @@ impl FileFormat for AvroFormat {
         Ok(DataSourceExec::from_data_source(config))
     }
 
-    fn file_source(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(AvroSource::new(schema))
+    fn file_source(
+        &self,
+        table_schema: datafusion_datasource::TableSchema,
+    ) -> Arc<dyn FileSource> {
+        Arc::new(AvroSource::new(table_schema))
     }
 }

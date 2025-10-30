@@ -34,7 +34,7 @@ use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
 };
 use datafusion_datasource::{
-    compute_all_files_statistics, ListingTableUrl, PartitionedFile,
+    compute_all_files_statistics, ListingTableUrl, PartitionedFile, TableSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -338,10 +338,16 @@ impl ListingTable {
     fn create_file_source_with_schema_adapter(
         &self,
     ) -> datafusion_common::Result<Arc<dyn FileSource>> {
-        let mut source = self
-            .options
-            .format
-            .file_source(Arc::clone(&self.file_schema));
+        let table_schema = TableSchema::new(
+            Arc::clone(&self.file_schema),
+            self.options
+                .table_partition_cols
+                .iter()
+                .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
+                .collect(),
+        );
+
+        let mut source = self.options.format.file_source(table_schema);
         // Apply schema adapter to source if available
         //
         // The source will use this SchemaAdapter to adapt data batches as they flow up the plan.
