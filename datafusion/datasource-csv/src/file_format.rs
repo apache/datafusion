@@ -48,7 +48,6 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
 use datafusion_datasource::write::BatchSerializer;
-use datafusion_datasource::TableSchema;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -443,10 +442,7 @@ impl FileFormat for CsvFormat {
 
         let mut csv_options = self.options.clone();
         csv_options.has_header = Some(has_header);
-        let source = Arc::new(
-            CsvSource::new(TableSchema::from_file_schema(file_schema))
-                .with_csv_options(csv_options),
-        );
+        let source = Arc::new(CsvSource::new(file_schema).with_csv_options(csv_options));
 
         let config = conf_builder.with_source(source).build();
 

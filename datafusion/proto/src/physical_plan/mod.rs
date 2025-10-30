@@ -53,7 +53,6 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
-use datafusion_datasource::TableSchema;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
 use datafusion_datasource_csv::file_format::CsvSink;
@@ -625,7 +624,7 @@ impl protobuf::PhysicalPlanNode {
             ..Default::default()
         };
         let source = Arc::new(
-            CsvSource::new(TableSchema::from_file_schema(schema))
+            CsvSource::new(schema)
                 .with_csv_options(csv_options)
                 .with_escape(escape)
                 .with_comment(comment),
@@ -708,8 +707,8 @@ impl protobuf::PhysicalPlanNode {
             // Parse schema first so we can use it to create ParquetSource
             let schema = parse_protobuf_file_scan_schema(base_conf)?;
 
-            let mut source = ParquetSource::new(TableSchema::from_file_schema(schema))
-                .with_table_parquet_options(options);
+            let mut source =
+                ParquetSource::new(schema).with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
@@ -731,16 +730,18 @@ impl protobuf::PhysicalPlanNode {
         &self,
         scan: &protobuf::AvroScanExecNode,
         ctx: &TaskContext,
-
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "avro")]
         {
+            let schema = from_proto::parse_protobuf_file_scan_schema(
+                scan.base_conf.as_ref().unwrap(),
+            )?;
             let conf = parse_protobuf_file_scan_config(
                 scan.base_conf.as_ref().unwrap(),
                 ctx,
                 extension_codec,
-                Arc::new(AvroSource::new()),
+                Arc::new(AvroSource::new(schema)),
             )?;
             Ok(DataSourceExec::from_data_source(conf))
         }

@@ -104,8 +104,8 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let predicate = lit(true);
 /// let source = Arc::new(
-///     ParquetSource::default()
-///     .with_predicate(predicate)
+///     ParquetSource::new(Arc::clone(&file_schema))
+///         .with_predicate(predicate)
 /// );
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
 /// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
@@ -726,7 +726,7 @@ impl FileSource for ParquetSource {
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {
-                if can_expr_be_pushed_down_with_schemas(&filter, &table_schema) {
+                if can_expr_be_pushed_down_with_schemas(&filter, table_schema) {
                     PushedDownPredicate::supported(filter)
                 } else {
                     PushedDownPredicate::unsupported(filter)
@@ -800,8 +800,7 @@ mod tests {
         let predicate = lit(true);
 
         let parquet_source =
-            ParquetSource::new(TableSchema::from_file_schema(Arc::new(Schema::empty())))
-                .with_predicate(predicate);
+            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
         // same value. but filter() call Arc::clone internally
         assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
     }

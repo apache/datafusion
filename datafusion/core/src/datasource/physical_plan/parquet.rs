@@ -54,7 +54,7 @@ mod tests {
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
-    use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
+    use datafusion_datasource::{FileRange, PartitionedFile};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
@@ -161,8 +161,7 @@ mod tests {
                 .as_ref()
                 .map(|p| logical2physical(p, &table_schema));
 
-            let mut source =
-                ParquetSource::new(TableSchema::from_file_schema(table_schema));
+            let mut source = ParquetSource::new(table_schema);
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
             }

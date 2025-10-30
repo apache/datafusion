@@ -37,7 +37,6 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource::TableSchema;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
@@ -157,9 +156,7 @@ impl FileFormat for AvroFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let file_schema = Arc::clone(conf.file_schema());
         let config = FileScanConfigBuilder::from(conf)
-            .with_source(Arc::new(AvroSource::new(TableSchema::from_file_schema(
-                file_schema,
-            ))))
+            .with_source(Arc::new(AvroSource::new(file_schema)))
             .build();
         Ok(DataSourceExec::from_data_source(config))
     }
