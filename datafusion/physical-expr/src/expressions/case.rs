@@ -165,22 +165,30 @@ impl CaseBody {
 /// A derived case body that can be used to evaluate a case expression after projecting
 /// record batches using a projection vector.
 ///
-/// This is used to avoid filtering / copying columns that are not used in the
+/// This is used to avoid filtering columns that are not used in the
 /// input `RecordBatch` when progressively evaluating a `CASE` expression's
-/// remainder batches.
+/// remainder batches. Filtering these columns is wasteful since for a record
+/// batch of `n` rows, filtering requires at worst a copy of `n - 1` values
+/// per array. If these filtered values will never be accessed, the time spent
+/// producing them is better avoided.
 ///
 /// For example, if we are evaluating the following case expression that
 /// only references columns B and D:
 ///
 /// ```sql
-/// CASE WHEN B > 10 THEN D ELSE NULL END
+/// SELECT CASE WHEN B > 10 THEN D ELSE NULL END FROM (VALUES (...)) T(A, B, C, D)
 /// ```
 ///
-/// If the input has 4 columns, `[A, B, C, D]` it is wasteful to carry through
-/// columns A and C that are not used in the expression. Instead, the projection 
-/// vector will be `[1, 3]` and the case body
-/// will be rewritten to refer to columns `[0, 1]` 
-/// (i.e. remap references from `B` -> 0`, and `D` -> `1`)
+/// Of the 4 input columns `[A, B, C, D]`, the `CASE` expression only access `B` and `D`.
+/// Filtering `A` and `C` would be unnecessary and wasteful.
+///
+/// If we only retain columns `B` and `D` using `RecordBatch::project` and the projection vector
+/// `[1, 3]`, the indices of these two columns will change to `[0, 1]`. To evaluate the
+/// case expression, it will need to be rewritten from `CASE WHEN B@1 > 10 THEN D@3 ELSE NULL END`
+/// to `CASE WHEN B@0 > 10 THEN D@1 ELSE NULL END`.
+///
+/// The projection vector and the rewritten expression (which only differs from the original in
+/// column reference indices) are held in a `ProjectedCaseBody`.
 #[derive(Debug, Hash, PartialEq, Eq)]
 struct ProjectedCaseBody {
     projection: Vec<usize>,
