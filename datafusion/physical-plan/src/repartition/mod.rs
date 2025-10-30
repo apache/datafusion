@@ -2409,7 +2409,7 @@ mod test {
         ];
 
         for (batch, expected) in batches.iter().zip(expected.iter()) {
-            assert_batches_eq!(expected, &[batch.clone()]);
+            assert_batches_eq!(expected, std::slice::from_ref(batch));
         }
 
         // We should have spilled ~ all of the data.
