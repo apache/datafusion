@@ -1272,7 +1272,7 @@ impl SessionContext {
         })?;
 
         let state = self.state.read();
-        let context = SimplifyContext::new(&state.execution_props());
+        let context = SimplifyContext::new(state.execution_props());
         let simplifier = ExprSimplifier::new(context);
 
         // Only allow literals as parameters for now.
