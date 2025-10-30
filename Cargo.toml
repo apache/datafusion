@@ -262,3 +262,20 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+
+
+# Test with https://github.com/apache/arrow-rs/pull/8159 (push decoder)
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "776ee65abe14f6aac7d92c729e945e729ba8d4a1" }
