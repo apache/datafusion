@@ -24,10 +24,11 @@
 //! - Handle memory pressure by spilling to disk
 //! - Release memory when done
 
-use arrow::record_batch::RecordBatch;
+use arrow::array::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::SchemaRef;
-use datafusion::common::record_batch;
 use datafusion::common::{exec_datafusion_err, internal_err};
+use datafusion::common::{record_batch, record_batch_old};
 use datafusion::datasource::{memory::MemTable, DefaultTableSource};
 use datafusion::error::Result;
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -57,29 +58,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = SessionConfig::new().with_coalesce_batches(false);
     let ctx = SessionContext::new_with_config_rt(config, runtime.clone());
 
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+
     // Create smaller batches to ensure we get multiple RecordBatches from the scan
     // Make each batch smaller than the memory limit to force multiple batches
-    let batch1 = record_batch!(
+    // TODO: Use arrow::record_batch! once it supports vec repetition syntax
+    // See https://github.com/apache/arrow-rs/issues/6553
+    let batch1 = record_batch_old!(
         ("id", Int32, vec![1; 800]),
         ("name", Utf8, vec!["Alice"; 800])
     )?;
 
-    let batch2 = record_batch!(
+    let batch2 = record_batch_old!(
         ("id", Int32, vec![2; 800]),
         ("name", Utf8, vec!["Bob"; 800])
     )?;
 
-    let batch3 = record_batch!(
+    let batch3 = record_batch_old!(
         ("id", Int32, vec![3; 800]),
         ("name", Utf8, vec!["Charlie"; 800])
     )?;
 
-    let batch4 = record_batch!(
+    let batch4 = record_batch_old!(
         ("id", Int32, vec![4; 800]),
         ("name", Utf8, vec!["David"; 800])
     )?;
-
-    let schema = batch1.schema();
 
     // Create a single MemTable with all batches in one partition to preserve order but ensure streaming
     let mem_table = Arc::new(MemTable::try_new(
@@ -257,6 +263,9 @@ impl ExecutionPlan for BufferingExecutionPlan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // Required for arrow_array::record_batch! macro to work
+        use arrow::datatypes as arrow_schema;
+
         // Register memory consumer with the context's memory pool
         let reservation = MemoryConsumer::new("MyExternalBatchBufferer")
             .with_can_spill(true)
@@ -286,10 +295,9 @@ impl ExecutionPlan for BufferingExecutionPlan {
 
                 // Since this is a simplified example, return an empty batch
                 // In a real implementation, you would create a batch stream from the processed results
-                record_batch!(("id", Int32, vec![5]), ("name", Utf8, vec!["Eve"]))
-                    .map_err(|e| {
-                        exec_datafusion_err!("Failed to create final RecordBatch: {e}")
-                    })
+                record_batch!(("id", Int32, [5]), ("name", Utf8, ["Eve"])).map_err(|e| {
+                    exec_datafusion_err!("Failed to create final RecordBatch: {e}")
+                })
             }),
         )))
     }

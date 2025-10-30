@@ -318,63 +318,16 @@ pub fn get_data_dir(
     }
 }
 
-#[macro_export]
-macro_rules! create_array {
-    (Boolean, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::BooleanArray::from($values))
-    };
-    (Int8, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::Int8Array::from($values))
-    };
-    (Int16, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::Int16Array::from($values))
-    };
-    (Int32, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::Int32Array::from($values))
-    };
-    (Int64, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::Int64Array::from($values))
-    };
-    (UInt8, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::UInt8Array::from($values))
-    };
-    (UInt16, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::UInt16Array::from($values))
-    };
-    (UInt32, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::UInt32Array::from($values))
-    };
-    (UInt64, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::UInt64Array::from($values))
-    };
-    (Float16, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::Float16Array::from($values))
-    };
-    (Float32, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::Float32Array::from($values))
-    };
-    (Float64, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::Float64Array::from($values))
-    };
-    (Utf8, $values: expr) => {
-        std::sync::Arc::new($crate::arrow::array::StringArray::from($values))
-    };
-}
+// Re-export arrow-rs macros for creating arrays and record batches
+// See https://github.com/apache/arrow-rs/pull/6588
+pub use arrow::array::{create_array, record_batch};
 
-/// Creates a record batch from literal slice of values, suitable for rapid
-/// testing and development.
-///
-/// Example:
-/// ```
-/// use datafusion_common::record_batch;
-/// let batch = record_batch!(
-///     ("a", Int32, vec![1, 2, 3]),
-///     ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
-///     ("c", Utf8, vec!["alpha", "beta", "gamma"])
-/// );
-/// ```
+/// Legacy record_batch_old! macro for cases where arrow-rs macro cannot be used
+/// (e.g., when passing variables instead of literals)
+/// TODO: Remove once arrow-rs macro supports variables
+/// See https://github.com/apache/arrow-rs/issues/6553
 #[macro_export]
-macro_rules! record_batch {
+macro_rules! record_batch_old {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
         {
             let schema = std::sync::Arc::new($crate::arrow::datatypes::Schema::new(vec![
@@ -383,236 +336,248 @@ macro_rules! record_batch {
                 )*
             ]));
 
-            let batch = $crate::arrow::array::RecordBatch::try_new(
+            $crate::arrow::array::RecordBatch::try_new(
                 schema,
                 vec![$(
-                    $crate::create_array!($type, $values),
+                    $crate::record_batch_old!(@array $type, $values),
                 )*]
-            );
-
-            batch
+            )
         }
-    }
+    };
+    (@array Int32, $values: expr) => {
+        std::sync::Arc::new($crate::arrow::array::Int32Array::from($values))
+    };
+    (@array Float64, $values: expr) => {
+        std::sync::Arc::new($crate::arrow::array::Float64Array::from($values))
+    };
+    (@array Utf8, $values: expr) => {
+        std::sync::Arc::new($crate::arrow::array::StringArray::from($values))
+    };
 }
 
 pub mod array_conversion {
-    use arrow::array::ArrayRef;
+    use arrow::array::{
+        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
+        Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array,
+        UInt8Array,
+    };
+    use std::sync::Arc;
 
     use super::IntoArrayRef;
 
     impl IntoArrayRef for Vec<bool> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Boolean, self)
+            Arc::new(BooleanArray::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<bool>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Boolean, self)
+            Arc::new(BooleanArray::from(self))
         }
     }
 
     impl IntoArrayRef for &[bool] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Boolean, self.to_vec())
+            Arc::new(BooleanArray::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<bool>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Boolean, self.to_vec())
+            Arc::new(BooleanArray::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<i8> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int8, self)
+            Arc::new(Int8Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<i8>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int8, self)
+            Arc::new(Int8Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[i8] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int8, self.to_vec())
+            Arc::new(Int8Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<i8>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int8, self.to_vec())
+            Arc::new(Int8Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<i16> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int16, self)
+            Arc::new(Int16Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<i16>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int16, self)
+            Arc::new(Int16Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[i16] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int16, self.to_vec())
+            Arc::new(Int16Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<i16>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int16, self.to_vec())
+            Arc::new(Int16Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<i32> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int32, self)
+            Arc::new(Int32Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<i32>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int32, self)
+            Arc::new(Int32Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[i32] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int32, self.to_vec())
+            Arc::new(Int32Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<i32>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int32, self.to_vec())
+            Arc::new(Int32Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<i64> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int64, self)
+            Arc::new(Int64Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<i64>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int64, self)
+            Arc::new(Int64Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[i64] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int64, self.to_vec())
+            Arc::new(Int64Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<i64>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Int64, self.to_vec())
+            Arc::new(Int64Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<u8> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt8, self)
+            Arc::new(UInt8Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<u8>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt8, self)
+            Arc::new(UInt8Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[u8] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt8, self.to_vec())
+            Arc::new(UInt8Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<u8>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt8, self.to_vec())
+            Arc::new(UInt8Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<u16> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt16, self)
+            Arc::new(UInt16Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<u16>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt16, self)
+            Arc::new(UInt16Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[u16] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt16, self.to_vec())
+            Arc::new(UInt16Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<u16>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt16, self.to_vec())
+            Arc::new(UInt16Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<u32> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt32, self)
+            Arc::new(UInt32Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<u32>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt32, self)
+            Arc::new(UInt32Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[u32] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt32, self.to_vec())
+            Arc::new(UInt32Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<u32>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt32, self.to_vec())
+            Arc::new(UInt32Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<u64> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt64, self)
+            Arc::new(UInt64Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<u64>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt64, self)
+            Arc::new(UInt64Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[u64] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt64, self.to_vec())
+            Arc::new(UInt64Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<u64>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(UInt64, self.to_vec())
+            Arc::new(UInt64Array::from(self.to_vec()))
         }
     }
 
@@ -620,97 +585,97 @@ pub mod array_conversion {
 
     impl IntoArrayRef for Vec<f32> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Float32, self)
+            Arc::new(Float32Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<f32>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Float32, self)
+            Arc::new(Float32Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[f32] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Float32, self.to_vec())
+            Arc::new(Float32Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<f32>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Float32, self.to_vec())
+            Arc::new(Float32Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<f64> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Float64, self)
+            Arc::new(Float64Array::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<f64>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Float64, self)
+            Arc::new(Float64Array::from(self))
         }
     }
 
     impl IntoArrayRef for &[f64] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Float64, self.to_vec())
+            Arc::new(Float64Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<f64>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Float64, self.to_vec())
+            Arc::new(Float64Array::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<&str> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Utf8, self)
+            Arc::new(StringArray::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<&str>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Utf8, self)
+            Arc::new(StringArray::from(self))
         }
     }
 
     impl IntoArrayRef for &[&str] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Utf8, self.to_vec())
+            Arc::new(StringArray::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<&str>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Utf8, self.to_vec())
+            Arc::new(StringArray::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for Vec<String> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Utf8, self)
+            Arc::new(StringArray::from(self))
         }
     }
 
     impl IntoArrayRef for Vec<Option<String>> {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Utf8, self)
+            Arc::new(StringArray::from(self))
         }
     }
 
     impl IntoArrayRef for &[String] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Utf8, self.to_vec())
+            Arc::new(StringArray::from(self.to_vec()))
         }
     }
 
     impl IntoArrayRef for &[Option<String>] {
         fn into_array_ref(self) -> ArrayRef {
-            create_array!(Utf8, self.to_vec())
+            Arc::new(StringArray::from(self.to_vec()))
         }
     }
 }
@@ -722,6 +687,10 @@ mod tests {
 
     use super::*;
     use std::env;
+
+    // Required for arrow_array::record_batch! macro to work
+    // The macro expects arrow_schema crate but DataFusion re-exports it through arrow
+    use crate::arrow::datatypes as arrow_schema;
 
     #[test]
     fn test_data_dir() {
@@ -778,9 +747,9 @@ mod tests {
         use arrow::array::Array;
 
         let batch = record_batch!(
-            ("a", Int32, vec![1, 2, 3, 4]),
-            ("b", Float64, vec![Some(4.0), None, Some(5.0), None]),
-            ("c", Utf8, vec!["alpha", "beta", "gamma", "delta"])
+            ("a", Int32, [1, 2, 3, 4]),
+            ("b", Float64, [Some(4.0), None, Some(5.0), None]),
+            ("c", Utf8, ["alpha", "beta", "gamma", "delta"])
         )?;
 
         assert_eq!(3, batch.num_columns());

@@ -58,15 +58,11 @@ pub fn fruit_table() -> Arc<dyn TableProvider + 'static> {
 
     let partitions = vec![
         record_batch!(
-            ("units", Int32, vec![10, 20, 30]),
-            ("price", Float64, vec![1.0, 2.0, 5.0])
+            ("units", Int32, [10, 20, 30]),
+            ("price", Float64, [1.0, 2.0, 5.0])
         )
         .unwrap(),
-        record_batch!(
-            ("units", Int32, vec![5, 7]),
-            ("price", Float64, vec![1.5, 2.5])
-        )
-        .unwrap(),
+        record_batch!(("units", Int32, [5, 7]), ("price", Float64, [1.5, 2.5])).unwrap(),
     ];
 
     Arc::new(MemTable::try_new(schema, vec![partitions]).unwrap())
