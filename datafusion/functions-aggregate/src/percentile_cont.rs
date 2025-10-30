@@ -146,7 +146,9 @@ impl PercentileCont {
             variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
         }
         Self {
-            signature: Signature::one_of(variants, Volatility::Immutable),
+            signature: Signature::one_of(variants, Volatility::Immutable)
+                .with_parameter_names(vec!["expr".to_string(), "percentile".to_string()])
+                .expect("valid parameter names for percentile_cont"),
             aliases: vec![String::from("quantile_cont")],
         }
     }
