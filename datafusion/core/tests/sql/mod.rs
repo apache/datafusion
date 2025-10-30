@@ -43,7 +43,6 @@ use tempfile::TempDir;
 /// A macro to assert that some particular line contains two substrings
 ///
 /// Usage: `assert_metrics!(actual, operator_name, metrics)`
-///
 macro_rules! assert_metrics {
     ($ACTUAL: expr, $OPERATOR_NAME: expr, $METRICS: expr) => {
         let found = $ACTUAL
