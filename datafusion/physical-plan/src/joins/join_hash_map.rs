@@ -300,7 +300,8 @@ pub fn update_from_iter<'a, T>(
     let mut items: Vec<(u64, usize)> =
         iter.map(|(row, &hash_value)| (hash_value, row)).collect();
     // Sort by hash value to group same hash values together, then by row index to maintain order
-    items.sort_unstable();
+    // TODO: unstable sort?
+    items.sort_by_key(|(row, _)| *row);
     let mut prev_hash = if let Some((first_hash, _)) = items.first() {
         *first_hash
     } else {
