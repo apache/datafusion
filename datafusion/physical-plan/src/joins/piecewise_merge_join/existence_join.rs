@@ -184,7 +184,7 @@ impl ExistencePWMJStream {
                 self.join_metrics.input_rows.add(batch.num_rows());
 
                 let buffered_data =
-                    self.buffered_side.try_as_ready_mut()?.buffered_data.clone();
+                    Arc::clone(&self.buffered_side.try_as_ready_mut()?.buffered_data);
 
                 let min_max_val =
                     if matches!(self.operator, Operator::Lt | Operator::LtEq) {
@@ -409,7 +409,7 @@ impl BatchProcessState {
     }
 }
 
-// Tests for Existence Joins can only properly handle Left Semi/Anti joins because 
+// Tests for Existence Joins can only properly handle Left Semi/Anti joins because
 // Right Semi/Anti are swapped
 #[cfg(test)]
 mod tests {
