@@ -60,6 +60,11 @@ impl RowGroupAccessPlanFilter {
         self.access_plan.is_empty()
     }
 
+    /// Return the number of row groups that are currently expected to be scanned
+    pub fn remaining_row_group_count(&self) -> usize {
+        self.access_plan.row_group_index_iter().count()
+    }
+
     /// Returns the inner access plan
     pub fn build(self) -> ParquetAccessPlan {
         self.access_plan
@@ -134,9 +139,9 @@ impl RowGroupAccessPlanFilter {
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
                     if !value {
                         self.access_plan.skip(*idx);
-                        metrics.row_groups_pruned_statistics.add(1);
+                        metrics.row_groups_pruned_statistics.add_pruned(1);
                     } else {
-                        metrics.row_groups_matched_statistics.add(1);
+                        metrics.row_groups_pruned_statistics.add_matched(1);
                     }
                 }
             }
@@ -215,10 +220,10 @@ impl RowGroupAccessPlanFilter {
             };
 
             if prune_group {
-                metrics.row_groups_pruned_bloom_filter.add(1);
+                metrics.row_groups_pruned_bloom_filter.add_pruned(1);
                 self.access_plan.skip(idx)
-            } else if !stats.column_sbbf.is_empty() {
-                metrics.row_groups_matched_bloom_filter.add(1);
+            } else {
+                metrics.row_groups_pruned_bloom_filter.add_matched(1);
             }
         }
     }
@@ -492,6 +497,18 @@ mod tests {
             self.byte_len = Some(byte_len);
             self
         }
+    }
+
+    #[test]
+    fn remaining_row_group_count_reports_non_skipped_groups() {
+        let mut filter = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(4));
+        assert_eq!(filter.remaining_row_group_count(), 4);
+
+        filter.access_plan.skip(1);
+        assert_eq!(filter.remaining_row_group_count(), 3);
+
+        filter.access_plan.skip(3);
+        assert_eq!(filter.remaining_row_group_count(), 2);
     }
 
     #[test]

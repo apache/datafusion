@@ -361,7 +361,7 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
+        let data_type = acc_args.expr_fields[0].data_type();
 
         let accumulator: Box<dyn Accumulator> = match data_type {
             // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL

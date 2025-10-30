@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
         .await?;
     let plan = format!("{}", arrow::util::pretty::pretty_format_batches(&batches)?);
     println!("{plan}");
-    assert_contains!(&plan, "row_groups_pruned_statistics=1");
+    assert_contains!(&plan, "row_groups_pruned_statistics=2 total → 1 matched");
     assert_contains!(&plan, "pushdown_rows_pruned=1");
 
     Ok(())

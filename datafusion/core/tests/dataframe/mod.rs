@@ -6328,7 +6328,7 @@ async fn test_copy_schema() -> Result<()> {
     let target_path = tmp_dir.path().join("target.csv");
 
     let query = format!(
-        "COPY source_table TO '{:?}' STORED AS csv",
+        "COPY source_table TO '{}' STORED AS csv",
         target_path.to_str().unwrap()
     );
 

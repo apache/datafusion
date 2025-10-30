@@ -33,7 +33,7 @@ use datafusion_common::{assert_contains, DFSchema};
 use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{col, lit, Expr};
-use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
 use datafusion_physical_plan::ExecutionPlan;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -178,12 +178,21 @@ async fn plan_and_filter() {
     .unwrap();
 
     // Verify that row group pruning still happens for just that group
-    let row_groups_pruned_statistics =
-        metric_value(&parquet_metrics, "row_groups_pruned_statistics").unwrap();
-    assert_eq!(
-        row_groups_pruned_statistics, 1,
-        "metrics : {parquet_metrics:#?}",
-    );
+    let row_groups_pruned_statistics = parquet_metrics
+        .sum_by_name("row_groups_pruned_statistics")
+        .unwrap();
+    if let MetricValue::PruningMetrics {
+        pruning_metrics, ..
+    } = row_groups_pruned_statistics
+    {
+        assert_eq!(
+            pruning_metrics.pruned(),
+            1,
+            "metrics : {parquet_metrics:#?}",
+        );
+    } else {
+        unreachable!("metrics `row_groups_pruned_statistics` should exist")
+    }
 }
 
 #[tokio::test]

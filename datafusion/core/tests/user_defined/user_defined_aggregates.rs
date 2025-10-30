@@ -954,13 +954,7 @@ impl AggregateUDFImpl for MetadataBasedAggregateUdf {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let input_expr = acc_args
-            .exprs
-            .first()
-            .ok_or(exec_datafusion_err!("Expected one argument"))?;
-        let input_field = input_expr.return_field(acc_args.schema)?;
-
-        let double_output = input_field
+        let double_output = acc_args.expr_fields[0]
             .metadata()
             .get("modify_values")
             .map(|v| v == "double_output")

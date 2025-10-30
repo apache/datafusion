@@ -852,10 +852,14 @@ async fn parquet_explain_analyze() {
 
     // should contain aggregated stats
     assert_contains!(&formatted, "output_rows=8");
-    assert_contains!(&formatted, "row_groups_matched_bloom_filter=0");
-    assert_contains!(&formatted, "row_groups_pruned_bloom_filter=0");
-    assert_contains!(&formatted, "row_groups_matched_statistics=1");
-    assert_contains!(&formatted, "row_groups_pruned_statistics=0");
+    assert_contains!(
+        &formatted,
+        "row_groups_pruned_bloom_filter=1 total \u{2192} 1 matched"
+    );
+    assert_contains!(
+        &formatted,
+        "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+    );
 }
 
 // This test reproduces the behavior described in
@@ -995,9 +999,7 @@ async fn parquet_explain_analyze_verbose() {
         .to_string();
 
     // should contain the raw per file stats (with the label)
-    assert_contains!(&formatted, "row_groups_matched_bloom_filter{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter{partition=0");
-    assert_contains!(&formatted, "row_groups_matched_statistics{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_statistics{partition=0");
 }
 
