@@ -309,7 +309,7 @@ pub fn update_from_iter<'a, T>(
 
     let mut prev_entry = map.insert_unique(
         prev_hash,
-        (prev_hash, (T::try_from(items[0].0 + 1).unwrap())),
+        (prev_hash, (T::try_from(items[0].1 + 1).unwrap())),
         |&(hash, _)| hash,
     );
 
