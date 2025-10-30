@@ -749,17 +749,25 @@ impl MetricValue {
             Self::ElapsedCompute(_) => 1,
             Self::OutputBytes(_) => 2,
             // Other metrics
-            Self::PruningMetrics { .. } => 3,
-            Self::SpillCount(_) => 4,
-            Self::SpilledBytes(_) => 5,
-            Self::SpilledRows(_) => 6,
-            Self::CurrentMemoryUsage(_) => 7,
-            Self::Count { .. } => 8,
-            Self::Gauge { .. } => 9,
-            Self::Time { .. } => 10,
-            Self::StartTimestamp(_) => 11, // show timestamps last
-            Self::EndTimestamp(_) => 12,
-            Self::Custom { .. } => 13,
+            Self::PruningMetrics { name, .. } => match name.as_ref() {
+                // The order is the same as the actual pruning order: from
+                // coarse-grained to fine-grained pruning levels.
+                "files_ranges_pruned_statistics" => 3,
+                "row_groups_pruned_statistics" => 4,
+                "row_groups_pruned_bloom_filter" => 5,
+                "page_index_rows_pruned" => 6,
+                _ => 7,
+            },
+            Self::SpillCount(_) => 8,
+            Self::SpilledBytes(_) => 9,
+            Self::SpilledRows(_) => 10,
+            Self::CurrentMemoryUsage(_) => 11,
+            Self::Count { .. } => 12,
+            Self::Gauge { .. } => 13,
+            Self::Time { .. } => 14,
+            Self::StartTimestamp(_) => 15, // show timestamps last
+            Self::EndTimestamp(_) => 16,
+            Self::Custom { .. } => 17,
         }
     }
 
