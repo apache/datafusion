@@ -297,6 +297,36 @@ fn has_explicit_timezone(value: &str) -> bool {
         }
     }
 
+    let mut end = len;
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+
+    let mut start = end;
+    let mut has_alpha = false;
+    while start > 0 {
+        match bytes[start - 1] {
+            b'A'..=b'Z' | b'a'..=b'z' => {
+                has_alpha = true;
+                start -= 1;
+            }
+            b'/' | b'_' | b'-' => {
+                start -= 1;
+            }
+            _ => break,
+        }
+    }
+
+    if has_alpha && start < end {
+        let tz = &value[start..end];
+        if tz.eq_ignore_ascii_case("utc")
+            || tz.eq_ignore_ascii_case("gmt")
+            || Tz::from_str(tz).is_ok()
+        {
+            return true;
+        }
+    }
+
     false
 }
 
