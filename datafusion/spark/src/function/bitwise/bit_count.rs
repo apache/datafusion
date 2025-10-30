@@ -95,7 +95,7 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Boolean => {
             let result: Int32Array = as_boolean_array(value_array)?
                 .iter()
-                .map(|x| x.map(|y| bit_count(y.into())))
+                .map(|x| x.map(|y| y as i32))
                 .collect();
             Ok(Arc::new(result))
         }
