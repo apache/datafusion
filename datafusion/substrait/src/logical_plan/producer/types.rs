@@ -18,17 +18,10 @@
 use crate::logical_plan::producer::utils::flatten_names;
 use crate::logical_plan::producer::{to_substrait_precision, SubstraitProducer};
 use crate::variation_const::{
-    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
-    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
-    DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
-    FLOAT_16_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
-    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-    VIEW_CONTAINER_TYPE_VARIATION_REF,
+    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF, DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF, DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF, DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF, DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF, FLOAT_16_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF, NULL_TYPE_NAME, TIME_32_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF
 };
 use datafusion::arrow::datatypes::{DataType, IntervalUnit};
-use datafusion::common::{internal_err, not_impl_err, plan_err, DFSchemaRef};
+use datafusion::common::{not_impl_err, plan_err, DFSchemaRef};
 use substrait::proto::{r#type, NamedStruct};
 
 pub(crate) fn to_substrait_type(
@@ -42,7 +35,17 @@ pub(crate) fn to_substrait_type(
         r#type::Nullability::Required as i32
     };
     match dt {
-        DataType::Null => internal_err!("Null cast is not valid"),
+        DataType::Null => {
+            let type_anchor = producer.register_type(NULL_TYPE_NAME.to_string());
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference: type_anchor,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters: vec![],
+                })),
+            })
+        }
         DataType::Boolean => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Bool(r#type::Boolean {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
