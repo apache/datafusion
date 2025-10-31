@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{Field, FieldRef, Fields};
+use arrow::downcast_dictionary_array;
 use arrow_schema::DataType;
 use datafusion_common::Result;
 
@@ -30,6 +31,18 @@ pub(super) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
         .enumerate()
         .map(|(i, dt)| Ok(Field::new(format!("c{i}"), dt.clone(), true)))
         .collect()
+}
+
+/// Flattens dictionary-encoded arrays to their underlying value arrays.
+/// Non-dictionary arrays are returned as-is.
+fn flatten_dictionary_array(array: &ArrayRef) -> ArrayRef {
+    downcast_dictionary_array! {
+        array => {
+            // Recursively flatten in case of nested dictionaries
+            flatten_dictionary_array(array.values())
+        }
+        _ => Arc::clone(array)
+    }
 }
 
 /// Builds InList values from join key column arrays.
@@ -60,10 +73,16 @@ pub(super) fn build_struct_inlist_values(
         return Ok(None);
     }
 
+    // Flatten any dictionary-encoded arrays
+    let flattened_arrays: Vec<ArrayRef> = join_key_arrays
+        .iter()
+        .map(flatten_dictionary_array)
+        .collect();
+
     // Size check using built-in method
     // This is not 1:1 with the actual size of ScalarValues, but it is a good approximation
     // and at this point is basically "free" to compute since we have the arrays already.
-    let estimated_size = join_key_arrays
+    let estimated_size = flattened_arrays
         .iter()
         .map(|arr| arr.get_array_memory_size())
         .sum::<usize>();
@@ -73,13 +92,13 @@ pub(super) fn build_struct_inlist_values(
     }
 
     // Build the source array/struct
-    let source_array: ArrayRef = if join_key_arrays.len() == 1 {
+    let source_array: ArrayRef = if flattened_arrays.len() == 1 {
         // Single column: use directly
-        Arc::clone(&join_key_arrays[0])
+        Arc::clone(&flattened_arrays[0])
     } else {
         // Multi-column: build StructArray once from all columns
         let fields = build_struct_fields(
-            &join_key_arrays
+            &flattened_arrays
                 .iter()
                 .map(|arr| arr.data_type().clone())
                 .collect::<Vec<_>>(),
@@ -89,7 +108,7 @@ pub(super) fn build_struct_inlist_values(
         let arrays_with_fields: Vec<(FieldRef, ArrayRef)> = fields
             .iter()
             .cloned()
-            .zip(join_key_arrays.iter().cloned())
+            .zip(flattened_arrays.iter().cloned())
             .collect();
 
         Arc::new(StructArray::from(arrays_with_fields))
