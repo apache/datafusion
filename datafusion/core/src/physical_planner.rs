@@ -1212,7 +1212,7 @@ impl DefaultPhysicalPlanner {
                         let filter_df_fields = filter_df_fields
                             .into_iter()
                             .map(|(qualifier, field)| {
-                                (qualifier.cloned(), Arc::new(field.clone()))
+                                (qualifier.cloned(), Arc::clone(field))
                             })
                             .collect();
 
