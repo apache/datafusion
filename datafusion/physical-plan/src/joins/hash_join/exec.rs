@@ -114,29 +114,6 @@ pub(super) struct JoinLeftData {
 }
 
 impl JoinLeftData {
-    /// Create a new `JoinLeftData` from its parts
-    pub(super) fn new(
-        hash_map: Arc<dyn JoinHashMapType>,
-        batch: RecordBatch,
-        values: Vec<ArrayRef>,
-        visited_indices_bitmap: SharedBitmapBuilder,
-        probe_threads_counter: AtomicUsize,
-        reservation: MemoryReservation,
-        bounds: Option<Vec<ColumnBounds>>,
-        membership: PushdownStrategy,
-    ) -> Self {
-        Self {
-            hash_map,
-            batch,
-            values,
-            visited_indices_bitmap,
-            probe_threads_counter,
-            _reservation: reservation,
-            bounds,
-            membership,
-        }
-    }
-
     /// return a reference to the hash map
     pub(super) fn hash_map(&self) -> &dyn JoinHashMapType {
         &*self.hash_map
@@ -1481,15 +1458,15 @@ async fn collect_left_input(
         offset += batch.num_rows();
     }
     // Merge all batches into a single batch, so we can directly index into the arrays
-    let single_batch = concat_batches(&schema, batches_iter)?;
+    let batch = concat_batches(&schema, batches_iter)?;
 
     // Reserve additional memory for visited indices bitmap and create shared builder
     let visited_indices_bitmap = if with_visited_indices_bitmap {
-        let bitmap_size = bit_util::ceil(single_batch.num_rows(), 8);
+        let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
         reservation.try_grow(bitmap_size)?;
         metrics.build_mem_used.add(bitmap_size);
 
-        let mut bitmap_buffer = BooleanBufferBuilder::new(single_batch.num_rows());
+        let mut bitmap_buffer = BooleanBufferBuilder::new(batch.num_rows());
         bitmap_buffer.append_n(num_rows, false);
         bitmap_buffer
     } else {
@@ -1499,8 +1476,8 @@ async fn collect_left_input(
     let left_values = on_left
         .iter()
         .map(|c| {
-            c.evaluate(&single_batch)?
-                .into_array(single_batch.num_rows())
+            c.evaluate(&batch)?
+                .into_array(batch.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -1517,7 +1494,7 @@ async fn collect_left_input(
     };
 
     // Convert Box to Arc for sharing with SharedBuildAccumulator
-    let hashmap_arc: Arc<dyn JoinHashMapType> = hashmap.into();
+    let hash_map: Arc<dyn JoinHashMapType> = hashmap.into();
 
     let membership = if num_rows == 0 {
         PushdownStrategy::Empty
@@ -1530,20 +1507,20 @@ async fn collect_left_input(
         {
             PushdownStrategy::InList(in_list_values)
         } else {
-            PushdownStrategy::HashTable(Arc::clone(&hashmap_arc))
+            PushdownStrategy::HashTable(Arc::clone(&hash_map))
         }
     };
 
-    let data = JoinLeftData::new(
-        hashmap_arc,
-        single_batch,
-        left_values.clone(),
-        Mutex::new(visited_indices_bitmap),
-        AtomicUsize::new(probe_threads_count),
-        reservation,
+    let data = JoinLeftData {
+        hash_map,
+        batch,
+        values: left_values,
+        visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
+        probe_threads_counter: AtomicUsize::new(probe_threads_count),
+        _reservation: reservation,
         bounds,
         membership,
-    );
+    };
 
     Ok(data)
 }

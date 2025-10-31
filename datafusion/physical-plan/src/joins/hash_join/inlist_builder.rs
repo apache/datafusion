@@ -28,7 +28,7 @@ pub(crate) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
     data_types
         .iter()
         .enumerate()
-        .map(|(i, dt)| Ok(Field::new(format!("c{}", i), dt.clone(), false)))
+        .map(|(i, dt)| Ok(Field::new(format!("c{i}"), dt.clone(), false)))
         .collect()
 }
 
@@ -36,12 +36,12 @@ pub(crate) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
 ///
 /// If `join_key_arrays` is:
 /// 1. A single array, let's say Int32, this will produce a flat
-/// InList expression where the lookup is expected to be scalar Int32 values,
-/// that is: this will produce `IN LIST (1, 2, 3)` expected to be used as `2 IN LIST (1, 2, 3)`.
+///    InList expression where the lookup is expected to be scalar Int32 values,
+///    that is: this will produce `IN LIST (1, 2, 3)` expected to be used as `2 IN LIST (1, 2, 3)`.
 /// 2. An Int32 array and a Utf8 array, this will produce a Struct InList expression
-/// where the lookup is expected to be Struct values with two fields (Int32, Utf8),
-/// that is: this will produce `IN LIST ((1, "a"), (2, "b"))` expected to be used as `(2, "b") IN LIST ((1, "a"), (2, "b"))`.
-/// The field names of the struct are auto-generated as "c0", "c1", ... and should match the struct expression used in the join keys.
+///    where the lookup is expected to be Struct values with two fields (Int32, Utf8),
+///    that is: this will produce `IN LIST ((1, "a"), (2, "b"))` expected to be used as `(2, "b") IN LIST ((1, "a"), (2, "b"))`.
+///    The field names of the struct are auto-generated as "c0", "c1", ... and should match the struct expression used in the join keys.
 ///
 /// Note that this will not deduplicate values, that will happen later when building an InList expression from this array.
 ///
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn test_build_single_column_inlist_array() {
         let array = Arc::new(Int32Array::from(vec![1, 2, 3, 2, 1])) as ArrayRef;
-        let result = build_struct_inlist_values(&[array.clone()], 1024 * 1024)
+        let result = build_struct_inlist_values(std::slice::from_ref(&array), 1024 * 1024)
             .unwrap()
             .unwrap();
 

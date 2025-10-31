@@ -112,7 +112,7 @@ fn create_membership_predicate(
 
                 // The return field name and the function field name don't really matter here.
                 let return_field =
-                    Arc::new(Field::new("struct", DataType::Struct(fields.into()), true));
+                    Arc::new(Field::new("struct", DataType::Struct(fields), true));
 
                 Arc::new(ScalarFunctionExpr::new(
                     "struct",
