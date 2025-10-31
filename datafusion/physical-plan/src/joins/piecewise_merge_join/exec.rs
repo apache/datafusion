@@ -503,7 +503,8 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
-        // Sort the right side in memory, so we do not need to enforce any sorting
+        // The left side is sorted for classic and existence joins.
+        // For classic joins, the right side is sorted in memory so there is no need to sort
         vec![
             Some(OrderingRequirements::from(
                 self.left_child_plan_required_order.clone(),
