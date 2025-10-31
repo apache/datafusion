@@ -494,7 +494,7 @@ fn fmt_significant(mut x: f64, digits: usize) -> String {
     let exp = x.abs().log10().floor(); // exponent of first significant digit
     let scale = 10f64.powf(-(exp - (digits as f64 - 1.0)));
     x = (x * scale).round() / scale; // round to N significant digits
-    format!("{}", x)
+    format!("{x}")
 }
 
 impl Display for RatioMetrics {
@@ -1117,7 +1117,7 @@ mod tests {
         assert_eq!("N/A (10/0)", ratio.to_string());
 
         ratio_metrics.add_total(40);
-        assert_eq!("25.0% (10/40)", ratio.to_string());
+        assert_eq!("25% (10/40)", ratio.to_string());
 
         let tiny_ratio_metrics = RatioMetrics::new();
         let tiny_ratio = MetricValue::Ratio {

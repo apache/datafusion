@@ -266,7 +266,7 @@ impl<'a> MetricBuilder<'a> {
                 name: name.into(),
                 // inner values will be `Arc::clone()`
                 pruning_metrics: pruning_metrics.clone(),
-        });
+            });
         pruning_metrics
     }
 
@@ -277,11 +277,10 @@ impl<'a> MetricBuilder<'a> {
         partition: usize,
     ) -> RatioMetrics {
         let ratio_metrics = RatioMetrics::new();
-        self.with_partition(partition)
-            .build(MetricValue::Ratio {
-                name: name.into(),
-                ratio_metrics: ratio_metrics.clone(),
-            });
+        self.with_partition(partition).build(MetricValue::Ratio {
+            name: name.into(),
+            ratio_metrics: ratio_metrics.clone(),
+        });
         ratio_metrics
     }
 }

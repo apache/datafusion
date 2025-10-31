@@ -390,7 +390,7 @@ impl ExecutionPlan for FilterExec {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
             input: self.input.execute(partition, context)?,
-            metrics: metrics,
+            metrics,
             projection: self.projection.clone(),
         }))
     }
