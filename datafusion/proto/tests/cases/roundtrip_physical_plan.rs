@@ -920,7 +920,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         schema,
         file_source,
     )
-    .with_projection(Some(vec![0, 1]))
+    .with_projection_indices(Some(vec![0, 1]))
     .with_file_group(FileGroup::new(vec![file_group]))
     .with_table_partition_cols(vec![Field::new(
         "part".to_string(),
@@ -1814,7 +1814,7 @@ async fn roundtrip_projection_source() -> Result<()> {
         1024,
     )])])
     .with_statistics(statistics)
-    .with_projection(Some(vec![0, 1, 2]))
+    .with_projection_indices(Some(vec![0, 1, 2]))
     .build();
 
     let filter = Arc::new(

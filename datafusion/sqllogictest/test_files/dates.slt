@@ -316,6 +316,14 @@ select to_date('2022-01-23', '%Y-%m-%d');
 ----
 2022-01-23
 
+# invalid date_trunc format
+query error DataFusion error: Execution error: Unsupported date_trunc granularity: ''. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year
+SELECT date_trunc('', to_date('2022-02-23', '%Y-%m-%d'))
+
+# invalid date_trunc format
+query error DataFusion error: Execution error: Unsupported date_trunc granularity: 'invalid'. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year
+SELECT date_trunc('invalid', to_date('2022-02-23', '%Y-%m-%d'))
+
 query PPPP
 select
     date_trunc('YEAR', to_date('2022-02-23', '%Y-%m-%d')),

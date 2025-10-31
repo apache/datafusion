@@ -44,6 +44,7 @@ fn create_max_bytes_accumulator() -> Box<dyn GroupsAccumulator> {
     max.create_groups_accumulator(AccumulatorArgs {
         return_field: Arc::new(Field::new("value", DataType::Utf8, true)),
         schema: &input_schema,
+        expr_fields: &[Field::new("value", DataType::Utf8, true).into()],
         ignore_nulls: true,
         order_bys: &[],
         is_reversed: false,
