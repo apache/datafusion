@@ -18,7 +18,7 @@
 //! Logical Expressions: [`Expr`]
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -44,6 +44,10 @@ use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     RenameSelectItem, ReplaceSelectElement,
 };
+
+// Moved in 51.0.0 to datafusion_common
+pub use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::metadata::ScalarAndMetadata;
 
 // This mirrors sqlparser::ast::NullTreatment but we need our own variant
 // for when the sql feature is disabled.
@@ -160,11 +164,11 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// # use datafusion_expr::{lit, col, Operator, Expr};
 /// // Use the `+` operator to add two columns together
 /// let expr = col("c1") + col("c2");
-/// assert!(matches!(expr, Expr::BinaryExpr { ..} ));
+/// assert!(matches!(expr, Expr::BinaryExpr { .. }));
 /// if let Expr::BinaryExpr(binary_expr) = expr {
-///   assert_eq!(*binary_expr.left, col("c1"));
-///   assert_eq!(*binary_expr.right, col("c2"));
-///   assert_eq!(binary_expr.op, Operator::Plus);
+///     assert_eq!(*binary_expr.left, col("c1"));
+///     assert_eq!(*binary_expr.right, col("c2"));
+///     assert_eq!(binary_expr.op, Operator::Plus);
 /// }
 /// ```
 ///
@@ -175,12 +179,12 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::{lit, col, Operator, Expr};
 /// let expr = col("c1").eq(lit(42_i32));
-/// assert!(matches!(expr, Expr::BinaryExpr { .. } ));
+/// assert!(matches!(expr, Expr::BinaryExpr { .. }));
 /// if let Expr::BinaryExpr(binary_expr) = expr {
-///   assert_eq!(*binary_expr.left, col("c1"));
-///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*binary_expr.right, Expr::Literal(scalar, None));
-///   assert_eq!(binary_expr.op, Operator::Eq);
+///     assert_eq!(*binary_expr.left, col("c1"));
+///     let scalar = ScalarValue::Int32(Some(42));
+///     assert_eq!(*binary_expr.right, Expr::Literal(scalar, None));
+///     assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
 ///
@@ -193,22 +197,22 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// # use datafusion_expr::Expr;
 /// // Create a schema c1(int, c2 float)
 /// let arrow_schema = Schema::new(vec![
-///    Field::new("c1", DataType::Int32, false),
-///    Field::new("c2", DataType::Float64, false),
+///     Field::new("c1", DataType::Int32, false),
+///     Field::new("c2", DataType::Float64, false),
 /// ]);
 /// // DFSchema is a an Arrow schema with optional relation name
-/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema)
-///   .unwrap();
+/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
 ///
 /// // Form Vec<Expr> with an expression for each column in the schema
-/// let exprs: Vec<_> = df_schema.iter()
-///   .map(Expr::from)
-///   .collect();
+/// let exprs: Vec<_> = df_schema.iter().map(Expr::from).collect();
 ///
-/// assert_eq!(exprs, vec![
-///   Expr::from(Column::from_qualified_name("t1.c1")),
-///   Expr::from(Column::from_qualified_name("t1.c2")),
-/// ]);
+/// assert_eq!(
+///     exprs,
+///     vec![
+///         Expr::from(Column::from_qualified_name("t1.c1")),
+///         Expr::from(Column::from_qualified_name("t1.c2")),
+///     ]
+/// );
 /// ```
 ///
 /// # Examples: Displaying `Exprs`
@@ -269,12 +273,13 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// let mut scalars = HashSet::new();
 /// // apply recursively visits all nodes in the expression tree
 /// expr.apply(|e| {
-///    if let Expr::Literal(scalar, _) = e {
-///       scalars.insert(scalar);
-///    }
-///    // The return value controls whether to continue visiting the tree
-///    Ok(TreeNodeRecursion::Continue)
-/// }).unwrap();
+///     if let Expr::Literal(scalar, _) = e {
+///         scalars.insert(scalar);
+///     }
+///     // The return value controls whether to continue visiting the tree
+///     Ok(TreeNodeRecursion::Continue)
+/// })
+/// .unwrap();
 /// // All subtrees have been visited and literals found
 /// assert_eq!(scalars.len(), 2);
 /// assert!(scalars.contains(&ScalarValue::Int32(Some(5))));
@@ -421,6 +426,14 @@ impl From<WindowFunction> for Expr {
     }
 }
 
+/// Create an [`Expr`] from an [`ScalarAndMetadata`]
+impl From<ScalarAndMetadata> for Expr {
+    fn from(value: ScalarAndMetadata) -> Self {
+        let (value, metadata) = value.into_inner();
+        Expr::Literal(value, metadata)
+    }
+}
+
 /// Create an [`Expr`] from an optional qualifier and a [`FieldRef`]. This is
 /// useful for creating [`Expr`] from a [`DFSchema`].
 ///
@@ -444,235 +457,6 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         f(self)
-    }
-}
-
-/// Literal metadata
-///
-/// Stores metadata associated with a literal expressions
-/// and is designed to be fast to `clone`.
-///
-/// This structure is used to store metadata associated with a literal expression, and it
-/// corresponds to the `metadata` field on [`Field`].
-///
-/// # Example: Create [`FieldMetadata`] from a [`Field`]
-/// ```
-/// # use std::collections::HashMap;
-/// # use datafusion_expr::expr::FieldMetadata;
-/// # use arrow::datatypes::{Field, DataType};
-/// # let field = Field::new("c1", DataType::Int32, true)
-/// #  .with_metadata(HashMap::from([("foo".to_string(), "bar".to_string())]));
-/// // Create a new `FieldMetadata` instance from a `Field`
-/// let metadata = FieldMetadata::new_from_field(&field);
-/// // There is also a `From` impl:
-/// let metadata = FieldMetadata::from(&field);
-/// ```
-///
-/// # Example: Update a [`Field`] with [`FieldMetadata`]
-/// ```
-/// # use datafusion_expr::expr::FieldMetadata;
-/// # use arrow::datatypes::{Field, DataType};
-/// # let field = Field::new("c1", DataType::Int32, true);
-/// # let metadata = FieldMetadata::new_from_field(&field);
-/// // Add any metadata from `FieldMetadata` to `Field`
-/// let updated_field = metadata.add_to_field(field);
-/// ```
-///
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-pub struct FieldMetadata {
-    /// The inner metadata of a literal expression, which is a map of string
-    /// keys to string values.
-    ///
-    /// Note this is not a `HashMap` because `HashMap` does not provide
-    /// implementations for traits like `Debug` and `Hash`.
-    inner: Arc<BTreeMap<String, String>>,
-}
-
-impl Default for FieldMetadata {
-    fn default() -> Self {
-        Self::new_empty()
-    }
-}
-
-impl FieldMetadata {
-    /// Create a new empty metadata instance.
-    pub fn new_empty() -> Self {
-        Self {
-            inner: Arc::new(BTreeMap::new()),
-        }
-    }
-
-    /// Merges two optional `FieldMetadata` instances, overwriting any existing
-    /// keys in `m` with keys from `n` if present.
-    ///
-    /// This function is commonly used in alias operations, particularly for literals
-    /// with metadata. When creating an alias expression, the metadata from the original
-    /// expression (such as a literal) is combined with any metadata specified on the alias.
-    ///
-    /// # Arguments
-    ///
-    /// * `m` - The first metadata (typically from the original expression like a literal)
-    /// * `n` - The second metadata (typically from the alias definition)
-    ///
-    /// # Merge Strategy
-    ///
-    /// - If both metadata instances exist, they are merged with `n` taking precedence
-    /// - Keys from `n` will overwrite keys from `m` if they have the same name
-    /// - If only one metadata instance exists, it is returned unchanged
-    /// - If neither exists, `None` is returned
-    ///
-    /// # Example usage
-    /// ```rust
-    /// use datafusion_expr::expr::FieldMetadata;
-    /// use std::collections::BTreeMap;
-    ///
-    /// // Create metadata for a literal expression
-    /// let literal_metadata = Some(FieldMetadata::from(BTreeMap::from([
-    ///     ("source".to_string(), "constant".to_string()),
-    ///     ("type".to_string(), "int".to_string()),
-    /// ])));
-    ///
-    /// // Create metadata for an alias
-    /// let alias_metadata = Some(FieldMetadata::from(BTreeMap::from([
-    ///     ("description".to_string(), "answer".to_string()),
-    ///     ("source".to_string(), "user".to_string()), // This will override literal's "source"
-    /// ])));
-    ///
-    /// // Merge the metadata
-    /// let merged = FieldMetadata::merge_options(
-    ///     literal_metadata.as_ref(),
-    ///     alias_metadata.as_ref(),
-    /// );
-    ///
-    /// // Result contains: {"source": "user", "type": "int", "description": "answer"}
-    /// assert!(merged.is_some());
-    /// ```
-    pub fn merge_options(
-        m: Option<&FieldMetadata>,
-        n: Option<&FieldMetadata>,
-    ) -> Option<FieldMetadata> {
-        match (m, n) {
-            (Some(m), Some(n)) => {
-                let mut merged = m.clone();
-                merged.extend(n.clone());
-                Some(merged)
-            }
-            (Some(m), None) => Some(m.clone()),
-            (None, Some(n)) => Some(n.clone()),
-            (None, None) => None,
-        }
-    }
-
-    /// Create a new metadata instance from a `Field`'s metadata.
-    pub fn new_from_field(field: &Field) -> Self {
-        let inner = field
-            .metadata()
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        Self {
-            inner: Arc::new(inner),
-        }
-    }
-
-    /// Create a new metadata instance from a map of string keys to string values.
-    pub fn new(inner: BTreeMap<String, String>) -> Self {
-        Self {
-            inner: Arc::new(inner),
-        }
-    }
-
-    /// Get the inner metadata as a reference to a `BTreeMap`.
-    pub fn inner(&self) -> &BTreeMap<String, String> {
-        &self.inner
-    }
-
-    /// Return the inner metadata
-    pub fn into_inner(self) -> Arc<BTreeMap<String, String>> {
-        self.inner
-    }
-
-    /// Adds metadata from `other` into `self`, overwriting any existing keys.
-    pub fn extend(&mut self, other: Self) {
-        if other.is_empty() {
-            return;
-        }
-        let other = Arc::unwrap_or_clone(other.into_inner());
-        Arc::make_mut(&mut self.inner).extend(other);
-    }
-
-    /// Returns true if the metadata is empty.
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    /// Returns the number of key-value pairs in the metadata.
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Convert this `FieldMetadata` into a `HashMap<String, String>`
-    pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
-        self.inner
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    /// Updates the metadata on the Field with this metadata, if it is not empty.
-    pub fn add_to_field(&self, field: Field) -> Field {
-        if self.inner.is_empty() {
-            return field;
-        }
-
-        field.with_metadata(self.to_hashmap())
-    }
-}
-
-impl From<&Field> for FieldMetadata {
-    fn from(field: &Field) -> Self {
-        Self::new_from_field(field)
-    }
-}
-
-impl From<BTreeMap<String, String>> for FieldMetadata {
-    fn from(inner: BTreeMap<String, String>) -> Self {
-        Self::new(inner)
-    }
-}
-
-impl From<std::collections::HashMap<String, String>> for FieldMetadata {
-    fn from(map: std::collections::HashMap<String, String>) -> Self {
-        Self::new(map.into_iter().collect())
-    }
-}
-
-/// From reference
-impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
-    fn from(map: &std::collections::HashMap<String, String>) -> Self {
-        let inner = map
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        Self::new(inner)
-    }
-}
-
-/// From hashbrown map
-impl From<HashMap<String, String>> for FieldMetadata {
-    fn from(map: HashMap<String, String>) -> Self {
-        let inner = map.into_iter().collect();
-        Self::new(inner)
-    }
-}
-
-impl From<&HashMap<String, String>> for FieldMetadata {
-    fn from(map: &HashMap<String, String>) -> Self {
-        let inner = map
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        Self::new(inner)
     }
 }
 
@@ -1370,13 +1154,22 @@ pub struct Placeholder {
     /// The identifier of the parameter, including the leading `$` (e.g, `"$1"` or `"$foo"`)
     pub id: String,
     /// The type the parameter will be filled in with
-    pub data_type: Option<DataType>,
+    pub field: Option<FieldRef>,
 }
 
 impl Placeholder {
     /// Create a new Placeholder expression
+    #[deprecated(since = "51.0.0", note = "Use new_with_field instead")]
     pub fn new(id: String, data_type: Option<DataType>) -> Self {
-        Self { id, data_type }
+        Self {
+            id,
+            field: data_type.map(|dt| Arc::new(Field::new("", dt, true))),
+        }
+    }
+
+    /// Create a new Placeholder expression from a Field
+    pub fn new_with_field(id: String, field: Option<FieldRef>) -> Self {
+        Self { id, field }
     }
 }
 
@@ -1843,12 +1636,11 @@ impl Expr {
     /// ```
     /// # use datafusion_expr::col;
     /// # use std::collections::HashMap;
-    /// # use datafusion_expr::expr::FieldMetadata;
+    /// # use datafusion_common::metadata::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
     /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
     /// ```
-    ///
     pub fn alias_with_metadata(
         self,
         name: impl Into<String>,
@@ -1875,12 +1667,12 @@ impl Expr {
     /// ```
     /// # use datafusion_expr::col;
     /// # use std::collections::HashMap;
-    /// # use datafusion_expr::expr::FieldMetadata;
+    /// # use datafusion_common::metadata::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
     /// let metadata = FieldMetadata::from(metadata);
-    /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
+    /// let expr =
+    ///     col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
     /// ```
-    ///
     pub fn alias_qualified_with_metadata(
         self,
         relation: Option<impl Into<TableReference>>,
@@ -2886,19 +2678,23 @@ impl HashNode for Expr {
     }
 }
 
-// Modifies expr if it is a placeholder with datatype of right
+// Modifies expr to match the DataType, metadata, and nullability of other if it is
+// a placeholder with previously unspecified type information (i.e., most placeholders)
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
-    if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
-        if data_type.is_none() {
-            let other_dt = other.get_type(schema);
-            match other_dt {
+    if let Expr::Placeholder(Placeholder { id: _, field }) = expr {
+        if field.is_none() {
+            let other_field = other.to_field(schema);
+            match other_field {
                 Err(e) => {
                     Err(e.context(format!(
                         "Can not find type of {other} needed to infer type of {expr}"
                     )))?;
                 }
-                Ok(dt) => {
-                    *data_type = Some(dt);
+                Ok((_, other_field)) => {
+                    // We can't infer the nullability of the future parameter that might
+                    // be bound, so ensure this is set to true
+                    *field =
+                        Some(other_field.as_ref().clone().with_nullable(true).into());
                 }
             }
         };
@@ -3715,8 +3511,8 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 mod test {
     use crate::expr_fn::col;
     use crate::{
-        case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
+        case, lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
     };
     use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
@@ -3730,15 +3526,15 @@ mod test {
         let param_placeholders = vec![
             Expr::Placeholder(Placeholder {
                 id: "$1".to_string(),
-                data_type: None,
+                field: None,
             }),
             Expr::Placeholder(Placeholder {
                 id: "$2".to_string(),
-                data_type: None,
+                field: None,
             }),
             Expr::Placeholder(Placeholder {
                 id: "$3".to_string(),
-                data_type: None,
+                field: None,
             }),
         ];
         let in_list = Expr::InList(InList {
@@ -3764,8 +3560,8 @@ mod test {
                     match expr {
                         Expr::Placeholder(placeholder) => {
                             assert_eq!(
-                                placeholder.data_type,
-                                Some(DataType::Int32),
+                                placeholder.field.unwrap().data_type(),
+                                &DataType::Int32,
                                 "Placeholder {} should infer Int32",
                                 placeholder.id
                             );
@@ -3789,7 +3585,7 @@ mod test {
             expr: Box::new(col("name")),
             pattern: Box::new(Expr::Placeholder(Placeholder {
                 id: "$1".to_string(),
-                data_type: None,
+                field: None,
             })),
             negated: false,
             case_insensitive: false,
@@ -3802,7 +3598,7 @@ mod test {
         match inferred_expr {
             Expr::Like(like) => match *like.pattern {
                 Expr::Placeholder(placeholder) => {
-                    assert_eq!(placeholder.data_type, Some(DataType::Utf8));
+                    assert_eq!(placeholder.field.unwrap().data_type(), &DataType::Utf8);
                 }
                 _ => panic!("Expected Placeholder"),
             },
@@ -3817,8 +3613,8 @@ mod test {
             Expr::SimilarTo(like) => match *like.pattern {
                 Expr::Placeholder(placeholder) => {
                     assert_eq!(
-                        placeholder.data_type,
-                        Some(DataType::Utf8),
+                        placeholder.field.unwrap().data_type(),
+                        &DataType::Utf8,
                         "Placeholder {} should infer Utf8",
                         placeholder.id
                     );
@@ -3826,6 +3622,39 @@ mod test {
                 _ => panic!("Expected Placeholder expression"),
             },
             _ => panic!("Expected SimilarTo expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_with_metadata() {
+        // name == $1, where name is a non-nullable string
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)
+                .with_metadata(
+                    [("some_key".to_string(), "some_value".to_string())].into(),
+                )]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let expr = binary_expr(col("name"), Operator::Eq, placeholder("$1"));
+
+        let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
+        match inferred_expr {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => match *right {
+                Expr::Placeholder(placeholder) => {
+                    assert_eq!(
+                        placeholder.field.as_ref().unwrap().data_type(),
+                        &DataType::Utf8
+                    );
+                    assert_eq!(
+                        placeholder.field.as_ref().unwrap().metadata(),
+                        df_schema.field(0).metadata()
+                    );
+                    // Inferred placeholder should still be nullable
+                    assert!(placeholder.field.as_ref().unwrap().is_nullable());
+                }
+                _ => panic!("Expected Placeholder"),
+            },
+            _ => panic!("Expected BinaryExpr"),
         }
     }
 

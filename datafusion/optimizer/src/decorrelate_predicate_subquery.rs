@@ -1972,14 +1972,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r#"
+            @r"
         Projection: test.b [b:UInt32]
           LeftSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [arr:Int32;N]
               Unnest: lists[sq.arr|depth=1] structs[] [arr:Int32;N]
-                TableScan: sq [arr:List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]
-        "#
+                TableScan: sq [arr:List(Field { data_type: Int32, nullable: true });N]
+        "
         )
     }
 
@@ -2007,14 +2007,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r#"
+            @r"
         Projection: test.b [b:UInt32]
           LeftSemi Join:  Filter: __correlated_sq_1.a = test.b [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [a:UInt32;N]
               Unnest: lists[sq.a|depth=1] structs[] [a:UInt32;N]
-                TableScan: sq [a:List(Field { name: "item", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]
-        "#
+                TableScan: sq [a:List(Field { data_type: UInt32, nullable: true });N]
+        "
         )
     }
 

@@ -29,7 +29,6 @@
   --pst-color-h2: var(--color-text-base);
   /* Use softer blue from bootstrap's default info color */
   --pst-color-info: 23, 162, 184;
-  --pst-header-height: 0px;
 }
 
 code {
@@ -38,6 +37,36 @@ code {
 
 .footer {
   text-align: center;
+}
+
+/* Limit both light and dark mode logos in the navbar */
+.logo__image {
+  height: 32px;
+  width: auto;     
+  max-height: 2.5rem;
+}
+
+/* Display appropriate logo for dark and light mode */
+.light-logo {
+  display: inline;
+}
+
+.dark-logo {
+  display: none;
+}
+
+html[data-theme="dark"] .light-logo {
+  display: none;
+}
+
+html[data-theme="dark"] .dark-logo {
+  display: inline;
+  background-color: transparent !important;
+}
+
+/* Align search bar & theme switch right */
+.navbar-header-items__end {
+  margin-left: auto;
 }
 
 /* Ensure the logo is properly displayed */
@@ -91,6 +120,13 @@ Details: 8rem for search box etc*/
   display: block;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+/* Make table container width fit content instead of spanning full width. */
+.pst-scrollable-table-container {
+  display: inline-block;
+  overflow-x: auto;
   max-width: 100%;
 }
 

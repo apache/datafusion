@@ -94,17 +94,17 @@ impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
 /// `foo:Utf8;N` if `foo` is nullable.
 ///
 /// ```
-/// use arrow::datatypes::{Field, Schema, DataType};
+/// use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_expr::logical_plan::display_schema;
 /// let schema = Schema::new(vec![
 ///     Field::new("id", DataType::Int32, false),
 ///     Field::new("first_name", DataType::Utf8, true),
-///  ]);
+/// ]);
 ///
-///  assert_eq!(
-///      "[id:Int32, first_name:Utf8;N]",
-///      format!("{}", display_schema(&schema))
-///  );
+/// assert_eq!(
+///     "[id:Int32, first_name:Utf8;N]",
+///     format!("{}", display_schema(&schema))
+/// );
 /// ```
 pub fn display_schema(schema: &Schema) -> impl fmt::Display + '_ {
     struct Wrapper<'a>(&'a Schema);

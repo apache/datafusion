@@ -17,6 +17,8 @@
 
 pub mod ascii;
 pub mod char;
+pub mod concat;
+pub mod elt;
 pub mod format_string;
 pub mod ilike;
 pub mod length;
@@ -29,8 +31,10 @@ use std::sync::Arc;
 
 make_udf_function!(ascii::SparkAscii, ascii);
 make_udf_function!(char::CharFunc, char);
+make_udf_function!(concat::SparkConcat, concat);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(length::SparkLengthFunc, length);
+make_udf_function!(elt::SparkElt, elt);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
@@ -47,6 +51,16 @@ pub mod expr_fn {
         char,
         "Returns the ASCII character having the binary equivalent to col. If col is larger than 256 the result is equivalent to char(col % 256).",
         arg1
+    ));
+    export_functions!((
+        concat,
+        "Concatenates multiple input strings into a single string. Returns NULL if any input is NULL.",
+        args
+    ));
+    export_functions!((
+        elt,
+        "Returns the n-th input (1-indexed), e.g. returns 2nd input when n is 2. The function returns NULL if the index is 0 or exceeds the length of the array.",
+        select_col arg1 arg2 argn
     ));
     export_functions!((
         ilike,
@@ -79,6 +93,8 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         ascii(),
         char(),
+        concat(),
+        elt(),
         ilike(),
         length(),
         like(),

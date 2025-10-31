@@ -41,6 +41,7 @@ pub mod schema_adapter;
 pub mod sink;
 pub mod source;
 mod statistics;
+pub mod table_schema;
 
 #[cfg(test)]
 pub mod test_util;
@@ -57,6 +58,7 @@ use datafusion_common::{ScalarValue, Statistics};
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
 #[allow(deprecated)]
 pub use statistics::add_row_stats;
@@ -308,7 +310,6 @@ pub async fn calculate_range(
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
 ///
 /// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
-///
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,
