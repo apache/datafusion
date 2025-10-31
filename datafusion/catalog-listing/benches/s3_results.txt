@@ -1,0 +1,386 @@
+## --------------------------------------------------------------------------------
+depth_variation_constant_files_s3/original/total/depth=1_partitions=10_files=100000
+                        time:   [1.8864 s 1.8987 s 1.9111 s]
+depth_variation_constant_files_s3/list_all/total/depth=1_partitions=10_files=100000
+                        time:   [13.132 s 13.146 s 13.161 s]
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low severe
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+
+
+depth_variation_constant_files_s3/original/ttfr/depth=1_partitions=10_files=100000
+                        time:   [1.8640 s 1.8691 s 1.8751 s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+depth_variation_constant_files_s3/list_all/ttfr/depth=1_partitions=10_files=100000
+                        time:   [135.48 ms 136.46 ms 137.53 ms]
+
+
+## --------------------------------------------------------------------------------
+depth_variation_constant_files_s3/original/total/depth=2_partitions=100_files=100000
+                        time:   [1.2809 s 1.3590 s 1.4279 s]
+depth_variation_constant_files_s3/list_all/total/depth=2_partitions=100_files=100000
+                        time:   [13.153 s 13.186 s 13.231 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+
+depth_variation_constant_files_s3/original/ttfr/depth=2_partitions=100_files=100000
+                        time:   [1.1500 s 1.1619 s 1.1763 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+depth_variation_constant_files_s3/list_all/ttfr/depth=2_partitions=100_files=100000
+                        time:   [133.73 ms 134.02 ms 134.37 ms]
+
+
+## --------------------------------------------------------------------------------
+depth_variation_constant_files_s3/original/total/depth=3_partitions=1000_files=100000
+                        time:   [1.7933 s 1.8071 s 1.8198 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+depth_variation_constant_files_s3/list_all/total/depth=3_partitions=1000_files=100000
+                        time:   [13.035 s 13.049 s 13.061 s]
+
+
+depth_variation_constant_files_s3/original/ttfr/depth=3_partitions=1000_files=100000
+                        time:   [1.7305 s 1.7353 s 1.7405 s]
+depth_variation_constant_files_s3/list_all/ttfr/depth=3_partitions=1000_files=100000
+                        time:   [133.82 ms 134.02 ms 134.26 ms]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+
+
+## --------------------------------------------------------------------------------
+depth_variation_constant_files_s3/original/total/depth=4_partitions=10000_files=100000
+                        time:   [13.730 s 13.764 s 13.800 s]
+depth_variation_constant_files_s3/list_all/total/depth=4_partitions=10000_files=100000
+                        time:   [13.056 s 13.071 s 13.088 s]
+
+
+depth_variation_constant_files_s3/original/ttfr/depth=4_partitions=10000_files=100000
+                        time:   [13.729 s 13.766 s 13.804 s]
+depth_variation_constant_files_s3/list_all/ttfr/depth=4_partitions=10000_files=100000
+                        time:   [136.19 ms 136.51 ms 137.04 ms]
+
+
+## --------------------------------------------------------------------------------
+depth_variation_constant_files_s3/original/total/depth=5_partitions=100000_files=100000
+                        time:   [134.85 s 134.89 s 134.92 s]
+depth_variation_constant_files_s3/list_all/total/depth=5_partitions=100000_files=100000
+                        time:   [13.314 s 13.330 s 13.344 s]
+
+
+depth_variation_constant_files_s3/original/ttfr/depth=5_partitions=100000_files=100000
+                        time:   [134.62 s 134.67 s 134.71 s]
+depth_variation_constant_files_s3/list_all/ttfr/depth=5_partitions=100000_files=100000
+                        time:   [147.78 ms 148.04 ms 148.37 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+
+## --------------------------------------------------------------------------------
+breadth_variation_constant_files_s3/original/total/breadth=5_partitions=125_files=100000
+                        time:   [1.4606 s 1.4765 s 1.4943 s]
+breadth_variation_constant_files_s3/list_all/total/breadth=5_partitions=125_files=100000
+                        time:   [13.156 s 13.168 s 13.181 s]
+
+
+breadth_variation_constant_files_s3/original/ttfr/breadth=5_partitions=125_files=100000
+                        time:   [1.2281 s 1.2366 s 1.2447 s]
+breadth_variation_constant_files_s3/list_all/ttfr/breadth=5_partitions=125_files=100000
+                        time:   [134.80 ms 135.32 ms 135.88 ms]
+
+
+## --------------------------------------------------------------------------------
+breadth_variation_constant_files_s3/original/total/breadth=10_partitions=1000_files=100000
+                        time:   [1.8073 s 1.8147 s 1.8244 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+breadth_variation_constant_files_s3/list_all/total/breadth=10_partitions=1000_files=100000
+                        time:   [13.039 s 13.051 s 13.062 s]
+
+
+breadth_variation_constant_files_s3/original/ttfr/breadth=10_partitions=1000_files=100000
+                        time:   [1.7326 s 1.7377 s 1.7432 s]
+breadth_variation_constant_files_s3/list_all/ttfr/breadth=10_partitions=1000_files=100000
+                        time:   [134.12 ms 135.07 ms 136.30 ms]
+
+
+## --------------------------------------------------------------------------------
+breadth_variation_constant_files_s3/original/total/breadth=20_partitions=8000_files=96000
+                        time:   [10.463 s 10.477 s 10.502 s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high severe
+breadth_variation_constant_files_s3/list_all/total/breadth=20_partitions=8000_files=96000
+                        time:   [12.644 s 12.659 s 12.677 s]
+
+
+breadth_variation_constant_files_s3/original/ttfr/breadth=20_partitions=8000_files=96000
+                        time:   [10.437 s 10.452 s 10.476 s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+breadth_variation_constant_files_s3/list_all/ttfr/breadth=20_partitions=8000_files=96000
+                        time:   [134.78 ms 135.29 ms 135.99 ms]
+
+
+## --------------------------------------------------------------------------------
+breadth_variation_constant_files_s3/original/total/breadth=30_partitions=27000_files=81000
+                        time:   [34.069 s 34.082 s 34.104 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+breadth_variation_constant_files_s3/list_all/total/breadth=30_partitions=27000_files=81000
+                        time:   [10.702 s 10.719 s 10.741 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+
+breadth_variation_constant_files_s3/original/ttfr/breadth=30_partitions=27000_files=81000
+                        time:   [34.034 s 34.060 s 34.095 s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+breadth_variation_constant_files_s3/list_all/ttfr/breadth=30_partitions=27000_files=81000
+                        time:   [139.35 ms 141.38 ms 145.28 ms]
+
+
+## --------------------------------------------------------------------------------
+breadth_variation_constant_files_s3/original/total/breadth=32_partitions=32768_files=98304
+                        time:   [41.324 s 41.347 s 41.363 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low severe
+breadth_variation_constant_files_s3/list_all/total/breadth=32_partitions=32768_files=98304
+                        time:   [12.970 s 12.985 s 13.003 s]
+
+
+breadth_variation_constant_files_s3/original/ttfr/breadth=32_partitions=32768_files=98304
+                        time:   [41.304 s 41.310 s 41.316 s]
+breadth_variation_constant_files_s3/list_all/ttfr/breadth=32_partitions=32768_files=98304
+                        time:   [138.04 ms 138.31 ms 138.65 ms]
+
+
+## --------------------------------------------------------------------------------
+scale_constant_partitions_s3/original/total/files_per_part=1_partitions=32768_total=32768
+                        time:   [45.727 s 45.769 s 45.816 s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+scale_constant_partitions_s3/list_all/total/files_per_part=1_partitions=32768_total=32768
+                        time:   [4.3972 s 4.4150 s 4.4320 s]
+
+
+scale_constant_partitions_s3/original/ttfr/files_per_part=1_partitions=32768_total=32768
+                        time:   [45.701 s 45.747 s 45.803 s]
+scale_constant_partitions_s3/list_all/ttfr/files_per_part=1_partitions=32768_total=32768
+                        time:   [148.25 ms 148.95 ms 149.70 ms]
+
+
+## --------------------------------------------------------------------------------
+scale_constant_partitions_s3/original/total/files_per_part=5_partitions=32768_total=163840
+                        time:   [45.784 s 45.830 s 45.879 s]
+scale_constant_partitions_s3/list_all/total/files_per_part=5_partitions=32768_total=163840
+                        time:   [21.562 s 21.629 s 21.710 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+
+scale_constant_partitions_s3/original/ttfr/files_per_part=5_partitions=32768_total=163840
+                        time:   [45.693 s 45.735 s 45.780 s]
+scale_constant_partitions_s3/list_all/ttfr/files_per_part=5_partitions=32768_total=163840
+                        time:   [136.74 ms 136.94 ms 137.32 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+
+## --------------------------------------------------------------------------------
+scale_constant_partitions_s3/original/total/files_per_part=15_partitions=32768_total=491520
+                        time:   [45.966 s 46.009 s 46.048 s]
+scale_constant_partitions_s3/list_all/total/files_per_part=15_partitions=32768_total=491520
+                        time:   [64.565 s 64.697 s 64.851 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+
+scale_constant_partitions_s3/original/ttfr/files_per_part=15_partitions=32768_total=491520
+                        time:   [45.819 s 45.850 s 45.876 s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) low mild
+scale_constant_partitions_s3/list_all/ttfr/files_per_part=15_partitions=32768_total=491520
+                        time:   [135.37 ms 135.56 ms 135.75 ms]
+
+
+## --------------------------------------------------------------------------------
+combined_scenarios_s3/original/total/tiny_d5_b1_f1_partitions=1_files=1
+                        time:   [727.08 ms 728.49 ms 729.82 ms]
+combined_scenarios_s3/list_all/total/tiny_d5_b1_f1_partitions=1_files=1
+                        time:   [121.46 ms 121.68 ms 121.99 ms]
+
+
+combined_scenarios_s3/original/ttfr/tiny_d5_b1_f1_partitions=1_files=1
+                        time:   [727.92 ms 729.25 ms 730.62 ms]
+combined_scenarios_s3/list_all/ttfr/tiny_d5_b1_f1_partitions=1_files=1
+                        time:   [121.24 ms 121.44 ms 121.80 ms]
+
+
+## --------------------------------------------------------------------------------
+combined_scenarios_s3/original/total/small_d1_b100_f1_partitions=100_files=100
+                        time:   [246.29 ms 246.91 ms 247.55 ms]
+combined_scenarios_s3/list_all/total/small_d1_b100_f1_partitions=100_files=100
+                        time:   [124.23 ms 124.63 ms 125.24 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+
+combined_scenarios_s3/original/ttfr/small_d1_b100_f1_partitions=100_files=100
+                        time:   [246.09 ms 246.46 ms 246.93 ms]
+Found 4 outliers among 10 measurements (40.00%)
+  1 (10.00%) low severe
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+combined_scenarios_s3/list_all/ttfr/small_d1_b100_f1_partitions=100_files=100
+                        time:   [124.73 ms 125.02 ms 125.16 ms]
+
+
+## --------------------------------------------------------------------------------
+combined_scenarios_s3/original/total/medium_d2_b50_f10_partitions=2500_files=25000
+                        time:   [3.2967 s 3.2992 s 3.3017 s]
+combined_scenarios_s3/list_all/total/medium_d2_b50_f10_partitions=2500_files=25000
+                        time:   [3.3723 s 3.3783 s 3.3840 s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+
+
+combined_scenarios_s3/original/ttfr/medium_d2_b50_f10_partitions=2500_files=25000
+                        time:   [3.2905 s 3.2935 s 3.2966 s]
+combined_scenarios_s3/list_all/ttfr/medium_d2_b50_f10_partitions=2500_files=25000
+                        time:   [135.49 ms 136.11 ms 136.93 ms]
+
+
+## --------------------------------------------------------------------------------
+combined_scenarios_s3/original/total/large_d3_b20_f50_partitions=8000_files=400000
+                        time:   [10.677 s 10.683 s 10.688 s]
+combined_scenarios_s3/list_all/total/large_d3_b20_f50_partitions=8000_files=400000
+                        time:   [52.393 s 52.439 s 52.479 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+
+
+combined_scenarios_s3/original/ttfr/large_d3_b20_f50_partitions=8000_files=400000
+                        time:   [10.590 s 10.599 s 10.607 s]
+Found 3 outliers among 10 measurements (30.00%)
+  2 (20.00%) low severe
+  1 (10.00%) high mild
+combined_scenarios_s3/list_all/ttfr/large_d3_b20_f50_partitions=8000_files=400000
+                        time:   [133.91 ms 134.27 ms 134.56 ms]
+
+
+## --------------------------------------------------------------------------------
+combined_scenarios_s3/original/total/deep_d5_b5_f10_partitions=3125_files=31250
+                        time:   [5.1146 s 5.1472 s 5.1810 s]
+combined_scenarios_s3/list_all/total/deep_d5_b5_f10_partitions=3125_files=31250
+                        time:   [4.2020 s 4.2150 s 4.2291 s]
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low mild
+  2 (20.00%) high mild
+
+
+combined_scenarios_s3/original/ttfr/deep_d5_b5_f10_partitions=3125_files=31250
+                        time:   [5.1345 s 5.1687 s 5.2025 s]
+combined_scenarios_s3/list_all/ttfr/deep_d5_b5_f10_partitions=3125_files=31250
+                        time:   [135.25 ms 135.57 ms 135.97 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+
+## --------------------------------------------------------------------------------
+partition_filtering_s3/original/total/small/no_filter/partitions=100_files=10000_pruned=0%
+                        time:   [438.07 ms 439.44 ms 440.84 ms]
+partition_filtering_s3/list_all/total/small/no_filter/partitions=100_files=10000_pruned=0%
+                        time:   [1.4384 s 1.4466 s 1.4547 s]
+
+
+partition_filtering_s3/original/ttfr/small/no_filter/partitions=100_files=10000_pruned=0%
+                        time:   [436.45 ms 437.78 ms 439.09 ms]
+partition_filtering_s3/list_all/ttfr/small/no_filter/partitions=100_files=10000_pruned=0%
+                        time:   [133.83 ms 133.99 ms 134.30 ms]
+
+
+## --------------------------------------------------------------------------------
+partition_filtering_s3/original/total/small/restrictive_filter/partitions=100_files=10000_pruned=99%
+                        time:   [122.07 ms 122.24 ms 122.59 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+partition_filtering_s3/list_all/total/small/restrictive_filter/partitions=100_files=10000_pruned=99%
+                        time:   [1.4556 s 1.4613 s 1.4667 s]
+
+
+partition_filtering_s3/original/ttfr/small/restrictive_filter/partitions=100_files=10000_pruned=99%
+                        time:   [122.86 ms 123.22 ms 123.76 ms]
+partition_filtering_s3/list_all/ttfr/small/restrictive_filter/partitions=100_files=10000_pruned=99%
+                        time:   [270.18 ms 271.21 ms 272.71 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+
+## --------------------------------------------------------------------------------
+partition_filtering_s3/original/total/small/broad_filter/partitions=100_files=10000_pruned=50%
+                        time:   [437.13 ms 437.77 ms 438.44 ms]
+partition_filtering_s3/list_all/total/small/broad_filter/partitions=100_files=10000_pruned=50%
+                        time:   [1.4564 s 1.4689 s 1.4822 s]
+
+
+partition_filtering_s3/original/ttfr/small/broad_filter/partitions=100_files=10000_pruned=50%
+                        time:   [435.94 ms 436.71 ms 437.60 ms]
+partition_filtering_s3/list_all/ttfr/small/broad_filter/partitions=100_files=10000_pruned=50%
+                        time:   [134.28 ms 135.31 ms 136.18 ms]
+
+
+## --------------------------------------------------------------------------------
+partition_filtering_s3/original/total/large/no_filter/partitions=32768_files=32768_pruned=0%
+                        time:   [45.738 s 45.783 s 45.829 s]
+partition_filtering_s3/list_all/total/large/no_filter/partitions=32768_files=32768_pruned=0%
+                        time:   [4.4023 s 4.4228 s 4.4428 s]
+
+
+partition_filtering_s3/original/ttfr/large/no_filter/partitions=32768_files=32768_pruned=0%
+                        time:   [45.760 s 45.810 s 45.859 s]
+partition_filtering_s3/list_all/ttfr/large/no_filter/partitions=32768_files=32768_pruned=0%
+                        time:   [149.29 ms 163.02 ms 188.64 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+
+## --------------------------------------------------------------------------------
+partition_filtering_s3/original/total/large/restrictive_filter/partitions=32768_files=32768_pruned=99.99%
+                        time:   [120.79 ms 120.87 ms 121.03 ms]
+partition_filtering_s3/list_all/total/large/restrictive_filter/partitions=32768_files=32768_pruned=99.99%
+                        time:   [4.5039 s 4.5247 s 4.5467 s]
+Found 4 outliers among 10 measurements (40.00%)
+  2 (20.00%) low mild
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+
+
+partition_filtering_s3/original/ttfr/large/restrictive_filter/partitions=32768_files=32768_pruned=99.99%
+                        time:   [120.93 ms 121.06 ms 121.16 ms]
+partition_filtering_s3/list_all/ttfr/large/restrictive_filter/partitions=32768_files=32768_pruned=99.99%
+                        time:   [4.4925 s 4.5200 s 4.5482 s]
+
+
+## --------------------------------------------------------------------------------
+partition_filtering_s3/original/total/large/broad_filter/partitions=32768_files=32768_pruned=50%
+                        time:   [45.730 s 45.781 s 45.838 s]
+partition_filtering_s3/list_all/total/large/broad_filter/partitions=32768_files=32768_pruned=50%
+                        time:   [4.4564 s 4.4838 s 4.5101 s]
+
+
+partition_filtering_s3/original/ttfr/large/broad_filter/partitions=32768_files=32768_pruned=50%
+                        time:   [45.699 s 45.725 s 45.758 s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+partition_filtering_s3/list_all/ttfr/large/broad_filter/partitions=32768_files=32768_pruned=50%
+                        time:   [149.61 ms 150.11 ms 150.37 ms]

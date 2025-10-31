@@ -25,7 +25,7 @@ use datafusion_common::internal_err;
 use datafusion_common::{HashMap, Result, ScalarValue};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::PartitionedFile;
-use datafusion_expr::{BinaryExpr, Operator};
+use datafusion_expr::{lit, utils, BinaryExpr, Operator};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, StringBuilder},
@@ -498,6 +498,114 @@ pub async fn pruned_partition_list<'a>(
         .try_flatten()
         .boxed();
     Ok(stream)
+}
+
+fn filter_partitions(
+    pf: PartitionedFile,
+    filters: &[Expr],
+    df_schema: &DFSchema,
+) -> Result<Option<PartitionedFile>> {
+    if pf.partition_values.is_empty() && !filters.is_empty() {
+        return Ok(None);
+    } else if filters.is_empty() {
+        return Ok(Some(pf));
+    }
+
+    let arrays = pf
+        .partition_values
+        .iter()
+        .map(|v| v.to_array())
+        .collect::<Result<_, _>>()?;
+
+    let batch = RecordBatch::try_new(Arc::clone(df_schema.inner()), arrays)?;
+
+    let filter = utils::conjunction(filters.iter().cloned()).unwrap_or_else(|| lit(true));
+    let props = ExecutionProps::new();
+    let expr = create_physical_expr(&filter, df_schema, &props)?;
+
+    // Since we're only operating on a single file, our batch and resulting "array" holds only one
+    // value indicating if the input file matches the provided filters
+    let matches = expr.evaluate(&batch)?.into_array(1)?;
+    if matches.as_boolean().value(0) {
+        return Ok(Some(pf));
+    }
+
+    Ok(None)
+}
+
+fn try_into_partitioned_file(
+    object_meta: ObjectMeta,
+    partition_cols: &[(String, DataType)],
+    table_path: &ListingTableUrl,
+) -> Result<PartitionedFile> {
+    let cols = partition_cols.iter().map(|(name, _)| name.as_str());
+    let parsed = parse_partitions_for_path(table_path, &object_meta.location, cols);
+
+    let partition_values = parsed
+        .into_iter()
+        .flatten()
+        .zip(partition_cols)
+        .map(|(parsed, (_, datatype))| {
+            ScalarValue::try_from_string(parsed.to_string(), datatype)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut pf: PartitionedFile = object_meta.into();
+    pf.partition_values = partition_values;
+
+    Ok(pf)
+}
+
+/// Discover the partitions on the given path and prune out files
+/// that belong to irrelevant partitions using `filters` expressions.
+/// `filters` should only contain expressions that can be evaluated
+/// using only the partition columns.
+/// 
+/// This is an alternative implementation that lists all files directly
+/// and filters them individually, rather than using partition-based pruning.
+pub async fn pruned_partition_list_all<'a>(
+    ctx: &'a dyn Session,
+    store: &'a dyn ObjectStore,
+    table_path: &'a ListingTableUrl,
+    filters: &'a [Expr],
+    file_extension: &'a str,
+    partition_cols: &'a [(String, DataType)],
+) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
+    let objects = table_path
+        .list_all_files(ctx, store, file_extension)
+        .await?
+        .try_filter(|object_meta| futures::future::ready(object_meta.size > 0));
+
+    if partition_cols.is_empty() {
+        if !filters.is_empty() {
+            return internal_err!(
+                "Got partition filters for unpartitioned table {}",
+                table_path
+            );
+        }
+
+        // if no partition col => simply list all the files
+        Ok(objects.map_ok(|object_meta| object_meta.into()).boxed())
+    } else {
+        let df_schema = DFSchema::from_unqualified_fields(
+            partition_cols
+                .iter()
+                .map(|(n, d)| Field::new(n, d.clone(), true))
+                .collect(),
+            Default::default(),
+        )?;
+
+        Ok(objects
+            .map_ok(|object_meta| {
+                try_into_partitioned_file(object_meta, partition_cols, table_path)
+            })
+            .try_filter_map(move |pf| {
+                futures::future::ready(
+                    pf.and_then(|pf| filter_partitions(pf, filters, &df_schema)),
+                )
+            })
+            .boxed())
+    }
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
