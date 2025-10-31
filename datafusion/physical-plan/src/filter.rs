@@ -633,7 +633,7 @@ struct FilterExecStream {
 struct FilterExecMetrics {
     // Common metrics for most operators
     baseline_metrics: BaselineMetrics,
-    // Selectivity of the filter, calcualted as output_rows / input_rows
+    // Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
 }
 

@@ -91,7 +91,7 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "selectivity="
+        "selectivity=99% (99/100)"
     );
     assert_metrics!(
         &formatted,
