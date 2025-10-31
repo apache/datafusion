@@ -40,7 +40,7 @@ itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = { workspace = true }
 prost = { workspace = true }
-substrait = { version = "0.59", features = ["serde"] }
+substrait = { version = "0.62", features = ["serde"] }
 url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 uuid = { version = "1.17.0", features = ["v4"] }
