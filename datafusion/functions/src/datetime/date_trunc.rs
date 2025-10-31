@@ -63,37 +63,43 @@ enum DateTruncGranularity {
 }
 
 impl DateTruncGranularity {
-    /// Mapping of string representations to enum variants
-    const GRANULARITY_MAP: &[(&str, Self)] = &[
-        ("microsecond", Self::Microsecond),
-        ("millisecond", Self::Millisecond),
-        ("second", Self::Second),
-        ("minute", Self::Minute),
-        ("hour", Self::Hour),
-        ("day", Self::Day),
-        ("week", Self::Week),
-        ("month", Self::Month),
-        ("quarter", Self::Quarter),
-        ("year", Self::Year),
+    /// List of all supported granularity values
+    /// Cannot use HashMap here as it would require lazy_static or once_cell,
+    /// Rust does not support const HashMap yet.
+    const SUPPORTED_GRANULARITIES: &[&str] = &[
+        "microsecond",
+        "millisecond",
+        "second",
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month",
+        "quarter",
+        "year",
     ];
 
     /// Parse a granularity string into a DateTruncGranularity enum
     fn from_str(s: &str) -> Result<Self> {
-        let s_lower = s.to_lowercase();
-        Self::GRANULARITY_MAP
-            .iter()
-            .find(|(key, _)| *key == s_lower.as_str())
-            .map(|(_, value)| *value)
-            .ok_or_else(|| {
-                let supported = Self::GRANULARITY_MAP
-                    .iter()
-                    .map(|(key, _)| *key)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                exec_datafusion_err!(
-                    "Unsupported date_trunc granularity: {s}. Supported values are: {supported}"
+        // Using match for O(1) lookup - compiler optimizes this into a jump table or perfect hash
+        match s.to_lowercase().as_str() {
+            "microsecond" => Ok(Self::Microsecond),
+            "millisecond" => Ok(Self::Millisecond),
+            "second" => Ok(Self::Second),
+            "minute" => Ok(Self::Minute),
+            "hour" => Ok(Self::Hour),
+            "day" => Ok(Self::Day),
+            "week" => Ok(Self::Week),
+            "month" => Ok(Self::Month),
+            "quarter" => Ok(Self::Quarter),
+            "year" => Ok(Self::Year),
+            _ => {
+                let supported = Self::SUPPORTED_GRANULARITIES.join(", ");
+                exec_err!(
+                    "Unsupported date_trunc granularity: '{s}'. Supported values are: {supported}"
                 )
-            })
+            }
+        }
     }
 
     /// Returns true if this granularity can be handled with simple arithmetic
