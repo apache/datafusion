@@ -27,7 +27,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::file_meta::FileMeta;
 use crate::file_scan_config::{FileScanConfig, PartitionColumnProjector};
 use crate::PartitionedFile;
 use arrow::datatypes::SchemaRef;
@@ -81,7 +80,7 @@ impl FileStream {
         let pc_projector = PartitionColumnProjector::new(
             Arc::clone(&projected_schema),
             &config
-                .table_partition_cols
+                .table_partition_cols()
                 .iter()
                 .map(|x| x.name().clone())
                 .collect::<Vec<_>>(),
@@ -118,17 +117,10 @@ impl FileStream {
     fn start_next_file(&mut self) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>)>> {
         let part_file = self.file_iter.pop_front()?;
 
-        let file_meta = FileMeta {
-            object_meta: part_file.object_meta.clone(),
-            range: part_file.range.clone(),
-            extensions: part_file.extensions.clone(),
-            metadata_size_hint: part_file.metadata_size_hint,
-        };
-
         let partition_values = part_file.partition_values.clone();
         Some(
             self.file_opener
-                .open(file_meta, part_file)
+                .open(part_file)
                 .map(|future| (future, partition_values)),
         )
     }
@@ -366,7 +358,7 @@ impl Default for OnError {
 pub trait FileOpener: Unpin + Send + Sync {
     /// Asynchronously open the specified file and return a stream
     /// of [`RecordBatch`]
-    fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture>;
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture>;
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll
@@ -531,7 +523,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use crate::file_meta::FileMeta;
     use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
     use crate::test_util::MockSource;
     use arrow::array::RecordBatch;
@@ -553,11 +544,7 @@ mod tests {
     }
 
     impl FileOpener for TestOpener {
-        fn open(
-            &self,
-            _file_meta: FileMeta,
-            _file: PartitionedFile,
-        ) -> Result<FileOpenFuture> {
+        fn open(&self, _partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let idx = self.current_idx.fetch_add(1, Ordering::SeqCst);
 
             if self.error_opening_idx.contains(&idx) {

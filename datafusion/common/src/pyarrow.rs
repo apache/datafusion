@@ -22,7 +22,7 @@ use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::PyErr;
 use pyo3::types::{PyAnyMethods, PyList};
-use pyo3::{Bound, FromPyObject, IntoPyObject, PyAny, PyObject, PyResult, Python};
+use pyo3::{Bound, FromPyObject, IntoPyObject, PyAny, PyResult, Python};
 
 use crate::{DataFusionError, ScalarValue};
 
@@ -52,11 +52,11 @@ impl FromPyArrow for ScalarValue {
 }
 
 impl ToPyArrow for ScalarValue {
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let array = self.to_array()?;
         // convert to pyarrow array using C data interface
         let pyarray = array.to_data().to_pyarrow(py)?;
-        let pyscalar = pyarray.call_method1(py, "__getitem__", (0,))?;
+        let pyscalar = pyarray.call_method1("__getitem__", (0,))?;
 
         Ok(pyscalar)
     }
@@ -79,23 +79,22 @@ impl<'source> IntoPyObject<'source> for ScalarValue {
         let array = self.to_array()?;
         // convert to pyarrow array using C data interface
         let pyarray = array.to_data().to_pyarrow(py)?;
-        let pyarray_bound = pyarray.bind(py);
-        pyarray_bound.call_method1("__getitem__", (0,))
+        pyarray.call_method1("__getitem__", (0,))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use pyo3::ffi::c_str;
-    use pyo3::prepare_freethreaded_python;
     use pyo3::py_run;
     use pyo3::types::PyDict;
+    use pyo3::Python;
 
     use super::*;
 
     fn init_python() {
-        prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        Python::initialize();
+        Python::attach(|py| {
             if py.run(c_str!("import pyarrow"), None, None).is_err() {
                 let locals = PyDict::new(py);
                 py.run(
@@ -135,12 +134,11 @@ mod tests {
             ScalarValue::Date32(Some(1234)),
         ];
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             for scalar in example_scalars.iter() {
-                let result = ScalarValue::from_pyarrow_bound(
-                    scalar.to_pyarrow(py).unwrap().bind(py),
-                )
-                .unwrap();
+                let result =
+                    ScalarValue::from_pyarrow_bound(&scalar.to_pyarrow(py).unwrap())
+                        .unwrap();
                 assert_eq!(scalar, &result);
             }
         });
@@ -150,7 +148,7 @@ mod tests {
     fn test_py_scalar() -> PyResult<()> {
         init_python();
 
-        Python::with_gil(|py| -> PyResult<()> {
+        Python::attach(|py| -> PyResult<()> {
             let scalar_float = ScalarValue::Float64(Some(12.34));
             let py_float = scalar_float
                 .into_pyobject(py)?

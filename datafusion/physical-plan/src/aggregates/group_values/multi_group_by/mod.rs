@@ -20,7 +20,7 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
-mod primitive;
+pub mod primitive;
 
 use std::mem::{self, size_of};
 
@@ -1248,6 +1248,16 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::BinaryView
             | DataType::Boolean
     )
+}
+
+///Shows how many `null`s there are in an array
+enum Nulls {
+    /// All array items are `null`s
+    All,
+    /// There are both `null`s and non-`null`s in the array items
+    Some,
+    /// There are no `null`s in the array items
+    None,
 }
 
 #[cfg(test)]
