@@ -382,10 +382,7 @@ impl TypeSignatureClass {
     }
 
     /// Does the specified `NativeType` match this type signature class?
-    pub fn matches_native_type(
-        self: &TypeSignatureClass,
-        logical_type: &NativeType,
-    ) -> bool {
+    pub fn matches_native_type(&self, logical_type: &NativeType) -> bool {
         if logical_type == &NativeType::Null {
             return true;
         }
@@ -431,6 +428,7 @@ impl TypeSignatureClass {
             TypeSignatureClass::Binary if native_type.is_binary() => {
                 Ok(origin_type.to_owned())
             }
+            _ if native_type.is_null() => Ok(origin_type.to_owned()),
             _ => internal_err!("May miss the matching logic in `matches_native_type`"),
         }
     }

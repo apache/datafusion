@@ -953,3 +953,40 @@ drop table u1;
 
 statement count 0
 drop table u2;
+
+# repro for https://github.com/apache/datafusion/issues/18327
+# should not error
+query TITT
+  WITH typ(oid, typnamespace, typname, typtype) AS (
+                      SELECT * FROM (VALUES (1, 10, 't1', 'b'))
+            UNION ALL SELECT * FROM (VALUES (2, NULL, 't2', 'b'))
+            UNION ALL SELECT * FROM (VALUES (3, 12, 't3', NULL))
+       )
+       , ns(oid, nspname) AS (VALUES (1, 'ns1'), (2, 'ns2'))
+    SELECT ns.nspname, typ.oid, typ.typname, typ.typtype
+      FROM typ JOIN ns ON (ns.oid = typ.typnamespace)
+     WHERE typ.typtype IN ('b','r','m','e','d')
+     ORDER BY CASE WHEN typ.typtype IN ('b','e','p') THEN 0
+                   WHEN typ.typtype = 'r' THEN 1
+              END
+----
+
+# Add another row with a non-NULL value `m` which is retained by the
+# filter but not matching any WHEN branch m?
+query TITT
+  WITH typ(oid, typnamespace, typname, typtype) AS (
+                      SELECT * FROM (VALUES (1, 10, 't1', 'b'))
+            UNION ALL SELECT * FROM (VALUES (2, NULL, 't2', 'b'))
+            UNION ALL SELECT * FROM (VALUES (3, 12, 't3', NULL))
+            UNION ALL SELECT * FROM (VALUES (4, 40, 't3', 'm'))
+       ), ns(oid, nspname) AS (
+         VALUES (1, 'ns1'), (2, 'ns2'), (40, 'ns3')
+       )
+    SELECT ns.nspname, typ.oid, typ.typname, typ.typtype
+      FROM typ JOIN ns ON (ns.oid = typ.typnamespace)
+     WHERE typ.typtype IN ('b','r','m','e','d')
+     ORDER BY CASE WHEN typ.typtype IN ('b','e','p') THEN 0
+                   WHEN typ.typtype = 'r' THEN 1
+              END
+----
+ns3 4 t3 m
