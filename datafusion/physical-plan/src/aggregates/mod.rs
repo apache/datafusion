@@ -1046,7 +1046,6 @@ impl ExecutionPlan for AggregateExec {
         // This optimization is NOT safe for filters on aggregated columns (like filtering on
         // the result of SUM or COUNT), as those require computing all groups first.
 
-        // Check if all filter columns are in the grouping columns
         let filter_columns: HashSet<_> =
             parent_filters.iter().flat_map(collect_columns).collect();
 
@@ -1057,9 +1056,9 @@ impl ExecutionPlan for AggregateExec {
             .flat_map(|(expr, _)| collect_columns(expr))
             .collect();
 
+        // Check if filters reference non-grouping columns
         if !grouping_columns.is_empty() && !filter_columns.is_subset(&grouping_columns) {
-            // Filters reference non-grouping columns - not safe to push through
-            let unsupported_filters: Vec<_> = parent_filters
+            let unsupported_filters = parent_filters
                 .into_iter()
                 .map(PushedDownPredicate::unsupported)
                 .collect();
@@ -1067,6 +1066,37 @@ impl ExecutionPlan for AggregateExec {
                 parent_filters: unsupported_filters,
                 self_filters: vec![],
             }));
+        }
+
+        // For GROUPING SETS, verify filtered columns appear in all grouping sets
+        if self.group_by.groups().len() > 1 {
+            let filter_column_indices: HashSet<usize> = filter_columns
+                .iter()
+                .filter_map(|filter_col| {
+                    self.group_by
+                        .expr()
+                        .iter()
+                        .position(|(expr, _)| collect_columns(expr).contains(filter_col))
+                })
+                .collect();
+
+            // Check if any filtered column is missing from any grouping set
+            let has_missing_column = self.group_by.groups().iter().any(|null_mask| {
+                filter_column_indices
+                    .iter()
+                    .any(|&idx| null_mask.get(idx) == Some(&true))
+            });
+
+            if has_missing_column {
+                let unsupported_filters = parent_filters
+                    .into_iter()
+                    .map(PushedDownPredicate::unsupported)
+                    .collect();
+                return Ok(FilterDescription::new().with_child(ChildFilterDescription {
+                    parent_filters: unsupported_filters,
+                    self_filters: vec![],
+                }));
+            }
         }
 
         FilterDescription::from_children(parent_filters, &self.children())
