@@ -1283,7 +1283,9 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     let plan = FilterPushdown::new_post_optimization()
         .optimize(plan, &config)
         .unwrap();
-    let config = SessionConfig::new().with_batch_size(10).with_target_partitions(4);
+    let config = SessionConfig::new()
+        .with_batch_size(10)
+        .with_target_partitions(4);
     let session_ctx = SessionContext::new_with_config(config);
     session_ctx.register_object_store(
         ObjectStoreUrl::parse("test://").unwrap().as_ref(),
@@ -1480,7 +1482,9 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     let plan = FilterPushdown::new_post_optimization()
         .optimize(plan, &config)
         .unwrap();
-    let config = SessionConfig::new().with_batch_size(10).with_target_partitions(4);
+    let config = SessionConfig::new()
+        .with_batch_size(10)
+        .with_target_partitions(4);
     let session_ctx = SessionContext::new_with_config(config);
     session_ctx.register_object_store(
         ObjectStoreUrl::parse("test://").unwrap().as_ref(),
@@ -1629,8 +1633,13 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left_hash_lookup() {
         .unwrap();
 
     // Create SessionContext with the same config settings
-    let mut session_config = SessionConfig::new().with_batch_size(10).with_target_partitions(4);
-    session_config.options_mut().optimizer.hash_join_inlist_pushdown_max_size = 0;
+    let mut session_config = SessionConfig::new()
+        .with_batch_size(10)
+        .with_target_partitions(4);
+    session_config
+        .options_mut()
+        .optimizer
+        .hash_join_inlist_pushdown_max_size = 0;
     let session_ctx = SessionContext::new_with_config(session_config);
     session_ctx.register_object_store(
         ObjectStoreUrl::parse("test://").unwrap().as_ref(),
