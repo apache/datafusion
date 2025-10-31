@@ -242,9 +242,7 @@ pub fn apply_masking(
                 let fields = column_indices
                     .iter()
                     .map(|i| schema.qualified_field(*i))
-                    .map(|(qualifier, field)| {
-                        (qualifier.cloned(), Arc::new(field.clone()))
-                    })
+                    .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
                     .collect();
 
                 Ok(DFSchema::new_with_metadata(
@@ -288,7 +286,7 @@ fn apply_projection(
             let fields = column_indices
                 .iter()
                 .map(|i| df_schema.qualified_field(*i))
-                .map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone())))
+                .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
                 .collect();
 
             scan.projected_schema = DFSchemaRef::new(DFSchema::new_with_metadata(

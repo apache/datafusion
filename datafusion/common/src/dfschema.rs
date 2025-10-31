@@ -353,13 +353,13 @@ impl DFSchema {
 
     /// Returns an immutable reference of a specific `Field` instance selected using an
     /// offset within the internal `fields` vector
-    pub fn field(&self, i: usize) -> &Field {
+    pub fn field(&self, i: usize) -> &FieldRef {
         &self.inner.fields[i]
     }
 
     /// Returns an immutable reference of a specific `Field` instance selected using an
     /// offset within the internal `fields` vector and its qualifier
-    pub fn qualified_field(&self, i: usize) -> (Option<&TableReference>, &Field) {
+    pub fn qualified_field(&self, i: usize) -> (Option<&TableReference>, &FieldRef) {
         (self.field_qualifiers[i].as_ref(), self.field(i))
     }
 
@@ -415,7 +415,7 @@ impl DFSchema {
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
-    ) -> Result<&Field> {
+    ) -> Result<&FieldRef> {
         if let Some(qualifier) = qualifier {
             self.field_with_qualified_name(qualifier, name)
         } else {
@@ -428,7 +428,7 @@ impl DFSchema {
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
-    ) -> Result<(Option<&TableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &FieldRef)> {
         if let Some(qualifier) = qualifier {
             let idx = self
                 .index_of_column_by_name(Some(qualifier), name)
@@ -440,10 +440,10 @@ impl DFSchema {
     }
 
     /// Find all fields having the given qualifier
-    pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&Field> {
+    pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&FieldRef> {
         self.iter()
             .filter(|(q, _)| q.map(|q| q.eq(qualifier)).unwrap_or(false))
-            .map(|(_, f)| f.as_ref())
+            .map(|(_, f)| f)
             .collect()
     }
 
@@ -459,11 +459,10 @@ impl DFSchema {
     }
 
     /// Find all fields that match the given name
-    pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&Field> {
+    pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&FieldRef> {
         self.fields()
             .iter()
             .filter(|field| field.name() == name)
-            .map(|f| f.as_ref())
             .collect()
     }
 
@@ -471,10 +470,9 @@ impl DFSchema {
     pub fn qualified_fields_with_unqualified_name(
         &self,
         name: &str,
-    ) -> Vec<(Option<&TableReference>, &Field)> {
+    ) -> Vec<(Option<&TableReference>, &FieldRef)> {
         self.iter()
             .filter(|(_, field)| field.name() == name)
-            .map(|(qualifier, field)| (qualifier, field.as_ref()))
             .collect()
     }
 
@@ -499,7 +497,7 @@ impl DFSchema {
     pub fn qualified_field_with_unqualified_name(
         &self,
         name: &str,
-    ) -> Result<(Option<&TableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &FieldRef)> {
         let matches = self.qualified_fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(unqualified_field_not_found(name, self)),
@@ -528,7 +526,7 @@ impl DFSchema {
     }
 
     /// Find the field with the given name
-    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
+    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&FieldRef> {
         self.qualified_field_with_unqualified_name(name)
             .map(|(_, field)| field)
     }
@@ -538,7 +536,7 @@ impl DFSchema {
         &self,
         qualifier: &TableReference,
         name: &str,
-    ) -> Result<&Field> {
+    ) -> Result<&FieldRef> {
         let idx = self
             .index_of_column_by_name(Some(qualifier), name)
             .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
@@ -550,7 +548,7 @@ impl DFSchema {
     pub fn qualified_field_from_column(
         &self,
         column: &Column,
-    ) -> Result<(Option<&TableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &FieldRef)> {
         self.qualified_field_with_name(column.relation.as_ref(), &column.name)
     }
 
@@ -1221,7 +1219,7 @@ pub trait ExprSchema: std::fmt::Debug {
     }
 
     // Return the column's field
-    fn field_from_column(&self, col: &Column) -> Result<&Field>;
+    fn field_from_column(&self, col: &Column) -> Result<&FieldRef>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -1242,13 +1240,13 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         self.as_ref().data_type_and_nullable(col)
     }
 
-    fn field_from_column(&self, col: &Column) -> Result<&Field> {
+    fn field_from_column(&self, col: &Column) -> Result<&FieldRef> {
         self.as_ref().field_from_column(col)
     }
 }
 
 impl ExprSchema for DFSchema {
-    fn field_from_column(&self, col: &Column) -> Result<&Field> {
+    fn field_from_column(&self, col: &Column) -> Result<&FieldRef> {
         match &col.relation {
             Some(r) => self.field_with_qualified_name(r, &col.name),
             None => self.field_with_unqualified_name(&col.name),

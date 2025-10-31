@@ -62,6 +62,9 @@ impl DataTypeExt for DataType {
 
 /// DataFusion extension methods for Arrow [`Field`] and [`FieldRef`]
 pub trait FieldExt {
+    /// Rename the field, returning a new Field with the given name
+    fn renamed(self, new_name: &str) -> Self;
+
     /// Returns a new Field representing a List of this Field's DataType.
     ///
     /// For example if input represents an `Int32`, the return value will
@@ -130,6 +133,15 @@ pub trait FieldExt {
 }
 
 impl FieldExt for Field {
+    fn renamed(self, new_name: &str) -> Self {
+        // check before allocating a new field
+        if self.name() == new_name {
+            self
+        } else {
+            self.with_name(new_name)
+        }
+    }
+
     fn into_list(self) -> Self {
         DataType::List(Arc::new(self.into_list_item())).into_nullable_field()
     }
@@ -149,6 +161,14 @@ impl FieldExt for Field {
 }
 
 impl FieldExt for Arc<Field> {
+    fn renamed(self, new_name: &str) -> Self {
+        if self.name() == new_name {
+            self
+        } else {
+            Arc::new(Arc::unwrap_or_clone(self).with_name(new_name))
+        }
+    }
+
     fn into_list(self) -> Self {
         DataType::List(self.into_list_item())
             .into_nullable_field()
