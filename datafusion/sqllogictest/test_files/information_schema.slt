@@ -220,6 +220,7 @@ datafusion.execution.collect_statistics true
 datafusion.execution.enable_recursive_ctes true
 datafusion.execution.enforce_batch_size_in_joins false
 datafusion.execution.keep_partition_by_columns false
+datafusion.execution.listing_table_factory_infer_partitions true
 datafusion.execution.listing_table_ignore_subdirectory true
 datafusion.execution.max_buffered_batches_per_output_file 2
 datafusion.execution.meta_fetch_concurrency 32
@@ -241,11 +242,11 @@ datafusion.execution.parquet.dictionary_enabled true
 datafusion.execution.parquet.dictionary_page_size_limit 1048576
 datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.encoding NULL
+datafusion.execution.parquet.max_predicate_cache_size NULL
 datafusion.execution.parquet.max_row_group_size 1048576
-datafusion.execution.parquet.max_statistics_size 4096
 datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2
 datafusion.execution.parquet.maximum_parallel_row_group_writers 1
-datafusion.execution.parquet.metadata_size_hint NULL
+datafusion.execution.parquet.metadata_size_hint 524288
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
@@ -253,7 +254,7 @@ datafusion.execution.parquet.schema_force_view_types true
 datafusion.execution.parquet.skip_arrow_metadata false
 datafusion.execution.parquet.skip_metadata true
 datafusion.execution.parquet.statistics_enabled page
-datafusion.execution.parquet.statistics_truncate_length NULL
+datafusion.execution.parquet.statistics_truncate_length 64
 datafusion.execution.parquet.write_batch_size 1024
 datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.planning_concurrency 13
@@ -268,6 +269,7 @@ datafusion.execution.split_file_groups_by_statistics false
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false
+datafusion.explain.analyze_level dev
 datafusion.explain.format indent
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
@@ -288,8 +290,12 @@ datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.default_filter_selectivity 20
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true
 datafusion.optimizer.enable_dynamic_filter_pushdown true
+datafusion.optimizer.enable_join_dynamic_filter_pushdown true
+datafusion.optimizer.enable_piecewise_merge_join false
 datafusion.optimizer.enable_round_robin_repartition true
 datafusion.optimizer.enable_topk_aggregation true
+datafusion.optimizer.enable_topk_dynamic_filter_pushdown true
+datafusion.optimizer.enable_window_limits true
 datafusion.optimizer.expand_views_at_output false
 datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
@@ -307,6 +313,7 @@ datafusion.optimizer.repartition_windows true
 datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
 datafusion.sql_parser.collect_spans false
+datafusion.sql_parser.default_null_ordering nulls_max
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
 datafusion.sql_parser.enable_options_value_normalization false
@@ -333,6 +340,7 @@ datafusion.execution.collect_statistics true Should DataFusion collect statistic
 datafusion.execution.enable_recursive_ctes true Should DataFusion support recursive CTEs
 datafusion.execution.enforce_batch_size_in_joins false Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower.
 datafusion.execution.keep_partition_by_columns false Should DataFusion keep the columns used for partition_by in the output RecordBatches
+datafusion.execution.listing_table_factory_infer_partitions true Should a `ListingTable` created through the `ListingTableFactory` infer table partitions from Hive compliant directories. Defaults to true (partition columns are inferred and will be represented in the table schema).
 datafusion.execution.listing_table_ignore_subdirectory true Should sub directories be ignored when scanning directories for data files. Defaults to true (ignores subdirectories), consistent with Hive. Note that this setting does not affect reading partitioned tables (e.g. `/table/year=2021/month=01/data.parquet`).
 datafusion.execution.max_buffered_batches_per_output_file 2 This is the maximum number of RecordBatches buffered for each output file being worked. Higher values can potentially give faster write performance at the cost of higher peak memory consumption
 datafusion.execution.meta_fetch_concurrency 32 Number of files to read in parallel when inferring schema and statistics
@@ -354,11 +362,11 @@ datafusion.execution.parquet.dictionary_enabled true (writing) Sets if dictionar
 datafusion.execution.parquet.dictionary_page_size_limit 1048576 (writing) Sets best effort maximum dictionary page size, in bytes
 datafusion.execution.parquet.enable_page_index true (reading) If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.
 datafusion.execution.parquet.encoding NULL (writing)  Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.max_predicate_cache_size NULL (reading) The maximum predicate cache size, in bytes. When `pushdown_filters` is enabled, sets the maximum memory used to cache the results of predicate evaluation between filter evaluation and output generation. Decreasing this value will reduce memory usage, but may increase IO and CPU usage. None means use the default parquet reader setting. 0 means no caching.
 datafusion.execution.parquet.max_row_group_size 1048576 (writing) Target maximum number of rows in each row group (defaults to 1M rows). Writing larger row groups requires more memory to write, but can get better compression and be faster to read.
-datafusion.execution.parquet.max_statistics_size 4096 (writing) Sets max statistics size for any column. If NULL, uses default parquet writer setting max_statistics_size is deprecated, currently it is not being used
 datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2 (writing) By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.
 datafusion.execution.parquet.maximum_parallel_row_group_writers 1 (writing) By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.
-datafusion.execution.parquet.metadata_size_hint NULL (reading) If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer
+datafusion.execution.parquet.metadata_size_hint 524288 (reading) If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer Default setting to 512 KiB, which should be sufficient for most parquet files, it can reduce one I/O operation per parquet file. If the metadata is larger than the hint, two reads will still be performed.
 datafusion.execution.parquet.pruning true (reading) If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file
 datafusion.execution.parquet.pushdown_filters false (reading) If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called "late materialization".
 datafusion.execution.parquet.reorder_filters false (reading) If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query
@@ -366,7 +374,7 @@ datafusion.execution.parquet.schema_force_view_types true (reading) If true, par
 datafusion.execution.parquet.skip_arrow_metadata false (writing) Skip encoding the embedded arrow metadata in the KV_meta This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`. Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
 datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata
 datafusion.execution.parquet.statistics_enabled page (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting
-datafusion.execution.parquet.statistics_truncate_length NULL (writing) Sets statictics truncate length. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.statistics_truncate_length 64 (writing) Sets statistics truncate length. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in bytes
 datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer version valid values are "1.0" and "2.0"
 datafusion.execution.planning_concurrency 13 Fan-out during initial physical planning. This is mostly use to plan `UNION` children in parallel. Defaults to the number of CPU cores on the system
@@ -381,6 +389,7 @@ datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate 
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
 datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
+datafusion.explain.analyze_level dev Verbosity level for "EXPLAIN ANALYZE". Default is "dev" "summary" shows common metrics for high-level insights. "dev" provides deep operator-level introspection for developers.
 datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format.
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
 datafusion.explain.physical_plan_only false When set to true, the explain statement will only print physical plans
@@ -400,9 +409,13 @@ datafusion.format.types_info false Show types in visual representation batches
 datafusion.optimizer.allow_symmetric_joins_without_pruning true Should DataFusion allow symmetric hash joins for unbounded data sources even when its inputs do not have any ordering or filtering If the flag is not enabled, the SymmetricHashJoin operator will be unable to prune its internal buffers, resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right, RightAnti, and RightSemi - being produced only at the end of the execution. This is not typical in stream processing. Additionally, without proper design for long runner execution, all types of joins may encounter out-of-memory errors.
 datafusion.optimizer.default_filter_selectivity 20 The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true When set to true, the optimizer will push a limit operation into grouped aggregations which have no aggregate expressions, as a soft limit, emitting groups once the limit is reached, before all rows in the group are read.
-datafusion.optimizer.enable_dynamic_filter_pushdown true When set to true attempts to push down dynamic filters generated by operators into the file scan phase. For example, for a query such as `SELECT * FROM t ORDER BY timestamp DESC LIMIT 10`, the optimizer will attempt to push down the current top 10 timestamps that the TopK operator references into the file scans. This means that if we already have 10 timestamps in the year 2025 any files that only have timestamps in the year 2024 can be skipped / pruned at various stages in the scan.
+datafusion.optimizer.enable_dynamic_filter_pushdown true When set to true attempts to push down dynamic filters generated by operators (topk & join) into the file scan phase. For example, for a query such as `SELECT * FROM t ORDER BY timestamp DESC LIMIT 10`, the optimizer will attempt to push down the current top 10 timestamps that the TopK operator references into the file scans. This means that if we already have 10 timestamps in the year 2025 any files that only have timestamps in the year 2024 can be skipped / pruned at various stages in the scan. The config will suppress `enable_join_dynamic_filter_pushdown` & `enable_topk_dynamic_filter_pushdown` So if you disable `enable_topk_dynamic_filter_pushdown`, then enable `enable_dynamic_filter_pushdown`, the `enable_topk_dynamic_filter_pushdown` will be overridden.
+datafusion.optimizer.enable_join_dynamic_filter_pushdown true When set to true, the optimizer will attempt to push down Join dynamic filters into the file scan phase.
+datafusion.optimizer.enable_piecewise_merge_join false When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently experimental. Physical planner will opt for PiecewiseMergeJoin when there is only one range filter.
 datafusion.optimizer.enable_round_robin_repartition true When set to true, the physical plan optimizer will try to add round robin repartitioning to increase parallelism to leverage more CPU cores
 datafusion.optimizer.enable_topk_aggregation true When set to true, the optimizer will attempt to perform limit operations during aggregations, if possible
+datafusion.optimizer.enable_topk_dynamic_filter_pushdown true When set to true, the optimizer will attempt to push down TopK dynamic filters into the file scan phase.
+datafusion.optimizer.enable_window_limits true When set to true, the optimizer will attempt to push limit operations past window functions, if possible
 datafusion.optimizer.expand_views_at_output false When set to true, if the returned type is a view type then the output will be coerced to a non-view. Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
 datafusion.optimizer.filter_null_join_keys false When set to true, the optimizer will insert filters before a join between a nullable and non-nullable column to filter out nulls on the nullable side. This filter can add additional overhead when the file format does not fully support predicate push down.
 datafusion.optimizer.hash_join_single_partition_threshold 1048576 The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition
@@ -420,6 +433,7 @@ datafusion.optimizer.repartition_windows true Should DataFusion repartition data
 datafusion.optimizer.skip_failed_rules false When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
 datafusion.sql_parser.collect_spans false When set to true, the source locations relative to the original SQL query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected and recorded in the logical plan nodes.
+datafusion.sql_parser.default_null_ordering nulls_max Specifies the default null ordering for query results. There are 4 options: - `nulls_max`: Nulls appear last in ascending order. - `nulls_min`: Nulls appear first in ascending order. - `nulls_first`: Nulls always be first in any order. - `nulls_last`: Nulls always be last in any order. By default, `nulls_max` is used to follow Postgres's behavior. postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
 datafusion.sql_parser.enable_options_value_normalization false When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.
@@ -690,6 +704,54 @@ query TTTT
 SHOW CREATE TABLE abc;
 ----
 datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+# show_external_create_table_with_order
+statement ok
+CREATE EXTERNAL TABLE abc_ordered
+STORED AS CSV
+WITH ORDER (c1)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TTTT
+SHOW CREATE TABLE abc_ordered;
+----
+datafusion public abc_ordered CREATE EXTERNAL TABLE abc_ordered STORED AS CSV WITH ORDER (c1) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+statement ok
+DROP TABLE abc_ordered;
+
+# show_external_create_table_with_multiple_order_columns
+statement ok
+CREATE EXTERNAL TABLE abc_multi_order
+STORED AS CSV
+WITH ORDER (c1, c2 DESC)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TTTT
+SHOW CREATE TABLE abc_multi_order;
+----
+datafusion public abc_multi_order CREATE EXTERNAL TABLE abc_multi_order STORED AS CSV WITH ORDER (c1, c2 DESC) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+statement ok
+DROP TABLE abc_multi_order;
+
+# show_external_create_table_with_order_nulls
+statement ok
+CREATE EXTERNAL TABLE abc_order_nulls
+STORED AS CSV
+WITH ORDER (c1 NULLS LAST, c2 DESC NULLS FIRST)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TTTT
+SHOW CREATE TABLE abc_order_nulls;
+----
+datafusion public abc_order_nulls CREATE EXTERNAL TABLE abc_order_nulls STORED AS CSV WITH ORDER (c1 NULLS LAST, c2 DESC NULLS FIRST) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+statement ok
+DROP TABLE abc_order_nulls;
 
 # string_agg has different arg_types but same return type. Test avoiding duplicate entries for the same function.
 query TTT

@@ -1005,10 +1005,10 @@ SELECT extract(day from arrow_cast(864000, 'Duration(Second)'))
 ----
 10
 
-query error DataFusion error: Arrow error: Compute error: Month does not support: Duration\(Second\)
+query error DataFusion error: Arrow error: Compute error: Month does not support: Duration\(s\)
 SELECT extract(month from arrow_cast(864000, 'Duration(Second)'))
 
-query error DataFusion error: Arrow error: Compute error: Year does not support: Duration\(Second\)
+query error DataFusion error: Arrow error: Compute error: Year does not support: Duration\(s\)
 SELECT extract(year from arrow_cast(864000, 'Duration(Second)'))
 
 query I
@@ -1070,3 +1070,23 @@ true
 
 query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT (date_part('nanosecond', now()) = EXTRACT(nanosecond FROM now()))
+
+query I
+SELECT date_part('ISODOW', CAST('2000-01-01' AS DATE))
+----
+5
+
+query I
+SELECT EXTRACT(isodow FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+1
+
+query I
+SELECT EXTRACT("isodow" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+1
+
+query I
+SELECT EXTRACT('isodow' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+1

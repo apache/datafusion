@@ -56,7 +56,6 @@
 //!
 //! The same answer can be produced by simply keeping track of the top
 //! N elements, reducing the total amount of required buffer memory.
-//!
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -580,7 +579,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         self.input.schema()
     }
 
-    fn check_invariants(&self, check: InvariantLevel, _plan: &LogicalPlan) -> Result<()> {
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
         if let Some(InvariantMock {
             should_fail_invariant,
             kind,

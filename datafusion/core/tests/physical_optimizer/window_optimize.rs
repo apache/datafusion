@@ -42,10 +42,15 @@ mod test {
             .schema(schema.clone())
             .alias("t")
             .build()?;
-        let parition = [col("a", &schema)?];
+        let partition = [col("a", &schema)?];
         let frame = WindowFrame::new(None);
-        let plain =
-            PlainAggregateWindowExpr::new(Arc::new(cnt), &parition, &[], Arc::new(frame));
+        let plain = PlainAggregateWindowExpr::new(
+            Arc::new(cnt),
+            &partition,
+            &[],
+            Arc::new(frame),
+            None,
+        );
 
         let bounded_agg_exec = BoundedWindowAggExec::try_new(
             vec![Arc::new(plain)],

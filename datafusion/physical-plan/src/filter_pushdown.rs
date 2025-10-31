@@ -38,10 +38,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use itertools::Itertools;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterPushdownPhase {
     /// Pushdown that happens before most other optimizations.
     /// This pushdown allows static filters that do not reference any [`ExecutionPlan`]s to be pushed down.
@@ -257,6 +258,19 @@ impl<T> FilterPushdownPropagation<T> {
         }
     }
 
+    /// Create a new [`FilterPushdownPropagation`] that tells the parent node that no filters were pushed down regardless of the child results.
+    pub fn all_unsupported(child_pushdown_result: ChildPushdownResult) -> Self {
+        let filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|_| PushedDown::No)
+            .collect();
+        Self {
+            filters,
+            updated_node: None,
+        }
+    }
+
     /// Create a new [`FilterPushdownPropagation`] with the specified filter support.
     /// This transmits up to our parent node what the result of pushing down the filters into our node and possibly our subtree was.
     pub fn with_parent_pushdown_result(filters: Vec<PushedDown>) -> Self {
@@ -267,7 +281,7 @@ impl<T> FilterPushdownPropagation<T> {
     }
 
     /// Bind an updated node to the [`FilterPushdownPropagation`].
-    /// Use this when the current node wants to update iself in the tree or replace itself with a new node (e.g. one of it's children).
+    /// Use this when the current node wants to update itself in the tree or replace itself with a new node (e.g. one of it's children).
     /// You do not need to call this if one of the children of the current node may have updated itself, that is handled by the optimizer.
     pub fn with_updated_node(mut self, updated_node: T) -> Self {
         self.updated_node = Some(updated_node);
@@ -329,7 +343,7 @@ impl ChildFilterDescription {
                 // All columns exist in child - we can push down
                 // Need to reassign column indices to match child schema
                 let reassigned_filter =
-                    reassign_predicate_columns(Arc::clone(filter), &child_schema, false)?;
+                    reassign_expr_columns(Arc::clone(filter), &child_schema)?;
                 child_parent_filters
                     .push(PushedDownPredicate::supported(reassigned_filter));
             } else {
@@ -411,6 +425,25 @@ impl FilterDescription {
         }
 
         Ok(desc)
+    }
+
+    /// Mark all parent filters as unsupported for all children.
+    pub fn all_unsupported(
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+        children: &[&Arc<dyn crate::ExecutionPlan>],
+    ) -> Self {
+        let mut desc = Self::new();
+        let child_filters = parent_filters
+            .iter()
+            .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
+            .collect_vec();
+        for _ in 0..children.len() {
+            desc = desc.with_child(ChildFilterDescription {
+                parent_filters: child_filters.clone(),
+                self_filters: vec![],
+            });
+        }
+        desc
     }
 
     pub fn parent_filters(&self) -> Vec<Vec<PushedDownPredicate>> {

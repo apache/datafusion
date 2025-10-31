@@ -62,7 +62,7 @@ fn select_arrow_cast() {
         plan,
         @r#"
     Projection: Float64(1234) AS f64, LargeUtf8("foo") AS large
-      EmptyRelation
+      EmptyRelation: rows=1
     "#
     );
 }
@@ -144,8 +144,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
 
     // create a logical query plan
+    let config = ConfigOptions::default();
     let context_provider = MyContextProvider::default()
-        .with_udf(datetime::now())
+        .with_udf(datetime::now(&config))
         .with_udf(datafusion_functions::core::arrow_cast())
         .with_udf(datafusion_functions::string::concat())
         .with_udf(datafusion_functions::string::concat_ws());
@@ -160,7 +161,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
-    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
+    let plan = analyzer.execute_and_check(plan, &config.options(), |_, _| {})?;
     optimizer.optimize(plan, &config, |_, _| {})
 }
 

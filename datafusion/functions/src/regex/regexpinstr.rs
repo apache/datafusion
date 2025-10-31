@@ -72,7 +72,7 @@ use crate::regex::compile_and_cache_regex;
         description = "Optional Specifies which capture group (subexpression) to return the position for. Defaults to 0, which returns the position of the entire match."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexpInstrFunc {
     signature: Signature,
 }
@@ -451,6 +451,7 @@ mod tests {
     use arrow::array::Int64Array;
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarFunctionArgs;
     #[test]
     fn test_regexp_instr() {
@@ -492,6 +493,7 @@ mod tests {
             arg_fields,
             number_rows: args.len(),
             return_field: Arc::new(Field::new("f", Int64, true)),
+            config_options: Arc::new(ConfigOptions::default()),
         })
     }
 

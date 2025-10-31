@@ -162,6 +162,30 @@ STORED AS PARQUET
 LOCATION 'gs://bucket/my_table/';
 ```
 
+When specifying a directory path that has a Hive compliant partition structure, by default, DataFusion CLI will
+automatically parse and incorporate the Hive columns and their values into the table's schema and data. Given the
+following remote object paths:
+
+```console
+gs://bucket/my_table/a=1/b=100/file1.parquet
+gs://bucket/my_table/a=2/b=200/file2.parquet
+```
+
+`my_table` can be queried and filtered on the Hive columns:
+
+```sql
+CREATE EXTERNAL TABLE my_table
+STORED AS PARQUET
+LOCATION 'gs://bucket/my_table/';
+
+SELECT count(*) FROM my_table WHERE b=200;
++----------+
+| count(*) |
++----------+
+| 1        |
++----------+
+```
+
 # Formats
 
 ## Parquet

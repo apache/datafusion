@@ -64,13 +64,9 @@ impl ReaderBuilder {
     ///     let file = File::open("test/data/basic.avro").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = ReaderBuilder::new()
-    ///       .read_schema()
-    ///       .with_batch_size(100);
+    ///     let builder = ReaderBuilder::new().read_schema().with_batch_size(100);
     ///
-    ///     let reader = builder
-    ///       .build::<File>(file)
-    ///       .unwrap();
+    ///     let reader = builder.build::<File>(file).unwrap();
     ///
     ///     reader
     /// }
@@ -195,7 +191,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use std::fs::File;
 
-    fn build_reader(name: &str, projection: Option<Vec<String>>) -> Reader<File> {
+    fn build_reader(name: &'_ str, projection: Option<Vec<String>>) -> Reader<'_, File> {
         let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
         let mut builder = ReaderBuilder::new().read_schema().with_batch_size(64);

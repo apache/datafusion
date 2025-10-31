@@ -31,17 +31,28 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use datafusion_physical_plan::ExecutionPlan;
 use parking_lot::RwLock;
+use std::any::Any;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
 /// Empty generator that produces no rows - used when series arguments contain null values
 #[derive(Debug, Clone)]
-struct Empty {
+pub struct Empty {
     name: &'static str,
 }
 
+impl Empty {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
 impl LazyBatchGenerator for Empty {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
         Ok(None)
     }
@@ -54,7 +65,7 @@ impl fmt::Display for Empty {
 }
 
 /// Trait for values that can be generated in a series
-trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
+pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
     type StepType: fmt::Debug + Clone + Send + Sync;
     type ValueType: fmt::Debug + Clone + Send + Sync;
 
@@ -101,10 +112,20 @@ impl SeriesValue for i64 {
 }
 
 #[derive(Debug, Clone)]
-struct TimestampValue {
+pub struct TimestampValue {
     value: i64,
     parsed_tz: Option<Tz>,
     tz_str: Option<Arc<str>>,
+}
+
+impl TimestampValue {
+    pub fn value(&self) -> i64 {
+        self.value
+    }
+
+    pub fn tz_str(&self) -> Option<&Arc<str>> {
+        self.tz_str.as_ref()
+    }
 }
 
 impl SeriesValue for TimestampValue {
@@ -167,7 +188,7 @@ impl SeriesValue for TimestampValue {
 
 /// Indicates the arguments used for generating a series.
 #[derive(Debug, Clone)]
-enum GenSeriesArgs {
+pub enum GenSeriesArgs {
     /// ContainsNull signifies that at least one argument(start, end, step) was null, thus no series will be generated.
     ContainsNull { name: &'static str },
     /// Int64Args holds the start, end, and step values for generating integer series when all arguments are not null.
@@ -203,13 +224,119 @@ enum GenSeriesArgs {
 
 /// Table that generates a series of integers/timestamps from `start`(inclusive) to `end`, incrementing by step
 #[derive(Debug, Clone)]
-struct GenerateSeriesTable {
+pub struct GenerateSeriesTable {
     schema: SchemaRef,
     args: GenSeriesArgs,
 }
 
+impl GenerateSeriesTable {
+    pub fn new(schema: SchemaRef, args: GenSeriesArgs) -> Self {
+        Self { schema, args }
+    }
+
+    pub fn as_generator(
+        &self,
+        batch_size: usize,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
+        let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
+            GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
+            GenSeriesArgs::Int64Args {
+                start,
+                end,
+                step,
+                include_end,
+                name,
+            } => Arc::new(RwLock::new(GenericSeriesState {
+                schema: self.schema(),
+                start: *start,
+                end: *end,
+                step: *step,
+                current: *start,
+                batch_size,
+                include_end: *include_end,
+                name,
+                projection,
+            })),
+            GenSeriesArgs::TimestampArgs {
+                start,
+                end,
+                step,
+                tz,
+                include_end,
+                name,
+            } => {
+                let parsed_tz = tz
+                    .as_ref()
+                    .map(|s| Tz::from_str(s.as_ref()))
+                    .transpose()
+                    .map_err(|e| {
+                        datafusion_common::internal_datafusion_err!(
+                            "Failed to parse timezone: {e}"
+                        )
+                    })?
+                    .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
+                Arc::new(RwLock::new(GenericSeriesState {
+                    schema: self.schema(),
+                    start: TimestampValue {
+                        value: *start,
+                        parsed_tz: Some(parsed_tz),
+                        tz_str: tz.clone(),
+                    },
+                    end: TimestampValue {
+                        value: *end,
+                        parsed_tz: Some(parsed_tz),
+                        tz_str: tz.clone(),
+                    },
+                    step: *step,
+                    current: TimestampValue {
+                        value: *start,
+                        parsed_tz: Some(parsed_tz),
+                        tz_str: tz.clone(),
+                    },
+                    batch_size,
+                    include_end: *include_end,
+                    name,
+                    projection,
+                }))
+            }
+            GenSeriesArgs::DateArgs {
+                start,
+                end,
+                step,
+                include_end,
+                name,
+            } => Arc::new(RwLock::new(GenericSeriesState {
+                schema: self.schema(),
+                start: TimestampValue {
+                    value: *start,
+                    parsed_tz: None,
+                    tz_str: None,
+                },
+                end: TimestampValue {
+                    value: *end,
+                    parsed_tz: None,
+                    tz_str: None,
+                },
+                step: *step,
+                current: TimestampValue {
+                    value: *start,
+                    parsed_tz: None,
+                    tz_str: None,
+                },
+                batch_size,
+                include_end: *include_end,
+                name,
+                projection,
+            })),
+        };
+
+        Ok(generator)
+    }
+}
+
 #[derive(Debug, Clone)]
-struct GenericSeriesState<T: SeriesValue> {
+pub struct GenericSeriesState<T: SeriesValue> {
     schema: SchemaRef,
     start: T,
     end: T,
@@ -218,9 +345,44 @@ struct GenericSeriesState<T: SeriesValue> {
     current: T,
     include_end: bool,
     name: &'static str,
+    projection: Option<Vec<usize>>,
+}
+
+impl<T: SeriesValue> GenericSeriesState<T> {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    pub fn include_end(&self) -> bool {
+        self.include_end
+    }
+
+    pub fn start(&self) -> &T {
+        &self.start
+    }
+
+    pub fn end(&self) -> &T {
+        &self.end
+    }
+
+    pub fn step(&self) -> &T::StepType {
+        &self.step
+    }
+
+    pub fn current(&self) -> &T {
+        &self.current
+    }
 }
 
 impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
         let mut buf = Vec::with_capacity(self.batch_size);
 
@@ -239,7 +401,11 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
 
         let array = self.current.create_array(buf)?;
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
-        Ok(Some(batch))
+        let projected = match self.projection.as_ref() {
+            Some(projection) => batch.project(projection)?,
+            None => batch,
+        };
+        Ok(Some(projected))
     }
 }
 
@@ -295,7 +461,7 @@ fn validate_interval_step(
 
 #[async_trait]
 impl TableProvider for GenerateSeriesTable {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -319,94 +485,8 @@ impl TableProvider for GenerateSeriesTable {
             Some(projection) => Arc::new(self.schema.project(projection)?),
             None => self.schema(),
         };
-        let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
-            GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
-            GenSeriesArgs::Int64Args {
-                start,
-                end,
-                step,
-                include_end,
-                name,
-            } => Arc::new(RwLock::new(GenericSeriesState {
-                schema: self.schema(),
-                start: *start,
-                end: *end,
-                step: *step,
-                current: *start,
-                batch_size,
-                include_end: *include_end,
-                name,
-            })),
-            GenSeriesArgs::TimestampArgs {
-                start,
-                end,
-                step,
-                tz,
-                include_end,
-                name,
-            } => {
-                let parsed_tz = tz
-                    .as_ref()
-                    .map(|s| Tz::from_str(s.as_ref()))
-                    .transpose()
-                    .map_err(|e| {
-                        datafusion_common::DataFusionError::Internal(format!(
-                            "Failed to parse timezone: {e}"
-                        ))
-                    })?
-                    .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
-                Arc::new(RwLock::new(GenericSeriesState {
-                    schema: self.schema(),
-                    start: TimestampValue {
-                        value: *start,
-                        parsed_tz: Some(parsed_tz),
-                        tz_str: tz.clone(),
-                    },
-                    end: TimestampValue {
-                        value: *end,
-                        parsed_tz: Some(parsed_tz),
-                        tz_str: tz.clone(),
-                    },
-                    step: *step,
-                    current: TimestampValue {
-                        value: *start,
-                        parsed_tz: Some(parsed_tz),
-                        tz_str: tz.clone(),
-                    },
-                    batch_size,
-                    include_end: *include_end,
-                    name,
-                }))
-            }
-            GenSeriesArgs::DateArgs {
-                start,
-                end,
-                step,
-                include_end,
-                name,
-            } => Arc::new(RwLock::new(GenericSeriesState {
-                schema: self.schema(),
-                start: TimestampValue {
-                    value: *start,
-                    parsed_tz: None,
-                    tz_str: None,
-                },
-                end: TimestampValue {
-                    value: *end,
-                    parsed_tz: None,
-                    tz_str: None,
-                },
-                step: *step,
-                current: TimestampValue {
-                    value: *start,
-                    parsed_tz: None,
-                    tz_str: None,
-                },
-                batch_size,
-                include_end: *include_end,
-                name,
-            })),
-        };
+
+        let generator = self.as_generator(batch_size, projection.cloned())?;
 
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }

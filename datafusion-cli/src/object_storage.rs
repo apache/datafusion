@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod instrumented;
+
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_credential_types::provider::{
@@ -295,10 +297,7 @@ pub fn get_gcs_object_store_builder(
 
 fn get_bucket_name(url: &Url) -> Result<&str> {
     url.host_str().ok_or_else(|| {
-        DataFusionError::Execution(format!(
-            "Not able to parse bucket name from url: {}",
-            url.as_str()
-        ))
+        exec_datafusion_err!("Not able to parse bucket name from url: {}", url.as_str())
     })
 }
 
@@ -579,6 +578,12 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
+            // Skip test if AWS envs are not set
+            eprintln!("{e}");
+            return Ok(());
+        }
+
         let location = "s3://bucket/path/FAKE/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
         std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
@@ -733,6 +738,11 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_resolves_region_when_none_provided() -> Result<()> {
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
+            // Skip test if AWS envs are not set
+            eprintln!("{e}");
+            return Ok(());
+        }
         let expected_region = "eu-central-1";
         let location = "s3://test-bucket/path/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
@@ -759,6 +769,12 @@ mod tests {
     #[tokio::test]
     async fn s3_object_store_builder_overrides_region_when_resolve_region_enabled(
     ) -> Result<()> {
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
+            // Skip test if AWS envs are not set
+            eprintln!("{e}");
+            return Ok(());
+        }
+
         let original_region = "us-east-1";
         let expected_region = "eu-central-1"; // This should be the auto-detected region
         let location = "s3://test-bucket/path/file.parquet";
@@ -859,5 +875,20 @@ mod tests {
             .alter_with_string_hash_map(&cmd.options)
             .unwrap();
         table_options
+    }
+
+    async fn check_aws_envs() -> Result<()> {
+        let aws_envs = [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION",
+            "AWS_ALLOW_HTTP",
+        ];
+        for aws_env in aws_envs {
+            std::env::var(aws_env).map_err(|_| {
+                exec_datafusion_err!("aws envs not set, skipping s3 tests")
+            })?;
+        }
+        Ok(())
     }
 }

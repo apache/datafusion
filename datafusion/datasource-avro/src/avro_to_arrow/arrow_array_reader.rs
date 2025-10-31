@@ -19,6 +19,7 @@
 
 use apache_avro::schema::RecordSchema;
 use apache_avro::{
+    error::Details as AvroErrorDetails,
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
     Error as AvroError, Reader as AvroReader,
@@ -152,7 +153,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             .map(|value| match value {
                 Ok(Value::Record(v)) => Ok(v),
                 Err(e) => Err(ArrowError::ParseError(format!(
-                    "Failed to parse avro value: {e:?}"
+                    "Failed to parse avro value: {e}"
                 ))),
                 other => Err(ArrowError::ParseError(format!(
                     "Row needs to be of type object, got: {other:?}"
@@ -280,7 +281,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 self.list_array_string_array_builder::<UInt64Type>(&dtype, col_name, rows)
             }
             ref e => Err(SchemaError(format!(
-                "Data type is currently not supported for dictionaries in list : {e:?}"
+                "Data type is currently not supported for dictionaries in list : {e}"
             ))),
         }
     }
@@ -307,7 +308,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             e => {
                 return Err(SchemaError(format!(
-                    "Nested list data builder type is not supported: {e:?}"
+                    "Nested list data builder type is not supported: {e}"
                 )))
             }
         };
@@ -372,7 +373,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     }
                     e => {
                         return Err(SchemaError(format!(
-                            "Nested list data builder type is not supported: {e:?}"
+                            "Nested list data builder type is not supported: {e}"
                         )))
                     }
                 }
@@ -609,7 +610,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             datatype => {
                 return Err(SchemaError(format!(
-                    "Nested list of {datatype:?} not supported"
+                    "Nested list of {datatype} not supported"
                 )));
             }
         };
@@ -830,7 +831,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     }
                     _ => {
                         return Err(SchemaError(format!(
-                            "type {:?} not supported",
+                            "type {} not supported",
                             field.data_type()
                         )))
                     }
@@ -929,13 +930,13 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
     match v {
         Value::String(s) => Ok(Some(s.clone())),
         Value::Bytes(bytes) => String::from_utf8(bytes.to_vec())
-            .map_err(AvroError::ConvertToUtf8)
+            .map_err(|e| AvroError::new(AvroErrorDetails::ConvertToUtf8(e)))
             .map(Some),
         Value::Enum(_, s) => Ok(Some(s.clone())),
         Value::Null => Ok(None),
-        other => Err(AvroError::GetString(other.into())),
+        other => Err(AvroError::new(AvroErrorDetails::GetString(other.clone()))),
     }
-    .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))
+    .map_err(|e| SchemaError(format!("expected resolvable string : {e}")))
 }
 
 fn resolve_u8(v: &Value) -> Option<u8> {
@@ -1046,7 +1047,7 @@ mod test {
     use std::fs::File;
     use std::sync::Arc;
 
-    fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
+    fn build_reader(name: &'_ str, batch_size: usize) -> Reader<'_, File> {
         let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
         let builder = ReaderBuilder::new()

@@ -106,7 +106,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression", prefix = "The")
 )]
 /// BOOL_AND aggregate expression
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BoolAnd {
     signature: Signature,
 }
@@ -241,7 +241,7 @@ impl Accumulator for BoolAndAccumulator {
     standard_argument(name = "expression", prefix = "The")
 )]
 /// BOOL_OR aggregate expression
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BoolOr {
     signature: Signature,
 }

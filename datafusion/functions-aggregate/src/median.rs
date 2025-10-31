@@ -35,7 +35,9 @@ use arrow::{
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
-use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, FieldRef};
+use arrow::datatypes::{
+    ArrowNativeType, ArrowPrimitiveType, Decimal32Type, Decimal64Type, FieldRef,
+};
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, DataFusionError, HashSet, Result, ScalarValue,
@@ -81,6 +83,7 @@ make_udaf_expr_and_func!(
 /// If using the distinct variation, the memory usage will be similarly high if the
 /// cardinality is high as it stores all distinct values in memory before computing the
 /// result, but if cardinality is low then memory usage will also be lower.
+#[derive(PartialEq, Eq, Hash)]
 pub struct Median {
     signature: Signature,
 }
@@ -159,12 +162,14 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        let dt = acc_args.exprs[0].data_type(acc_args.schema)?;
+        let dt = acc_args.expr_fields[0].data_type().clone();
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),
             DataType::Float32 => helper!(Float32Type, dt),
             DataType::Float64 => helper!(Float64Type, dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
             DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
             DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -191,7 +196,7 @@ impl AggregateUDFImpl for Median {
             );
         }
 
-        let dt = args.exprs[0].data_type(args.schema)?;
+        let dt = args.expr_fields[0].data_type().clone();
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
@@ -204,6 +209,8 @@ impl AggregateUDFImpl for Median {
             DataType::Float16 => helper!(Float16Type, dt),
             DataType::Float32 => helper!(Float32Type, dt),
             DataType::Float64 => helper!(Float64Type, dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
             DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
             DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
             _ => Err(DataFusionError::NotImplemented(format!(

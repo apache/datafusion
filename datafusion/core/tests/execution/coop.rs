@@ -28,8 +28,8 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{DataFusionError, JoinType, ScalarValue};
-use datafusion_execution::TaskContext;
+use datafusion_common::{exec_datafusion_err, DataFusionError, JoinType, ScalarValue};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::operator::Operator::{Divide, Eq, Gt, Modulo};
 use datafusion_functions_aggregate::min_max;
@@ -42,16 +42,19 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::ensure_coop::EnsureCooperative;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_physical_plan::coop::make_cooperative;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::union::InterleaveExec;
 use futures::StreamExt;
 use parking_lot::RwLock;
 use rstest::rstest;
+use std::any::Any;
 use std::error::Error;
 use std::fmt::Formatter;
 use std::ops::Range;
@@ -78,6 +81,10 @@ impl std::fmt::Display for RangeBatchGenerator {
 }
 
 impl LazyBatchGenerator for RangeBatchGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn boundedness(&self) -> Boundedness {
         self.boundedness
     }
@@ -252,6 +259,58 @@ async fn agg_grouped_topk_yields(
 
 #[rstest]
 #[tokio::test]
+// A test that mocks the behavior of `SpillManager::read_spill_as_stream` without file access
+// to verify that a cooperative stream would properly yields in a spill file read scenario
+async fn spill_reader_stream_yield() -> Result<(), Box<dyn Error>> {
+    use datafusion_physical_plan::common::spawn_buffered;
+
+    // A mock stream that always returns `Poll::Ready(Some(...))` immediately
+    let always_ready =
+        make_lazy_exec("value", false).execute(0, SessionContext::new().task_ctx())?;
+
+    // this function makes a consumer stream that resembles how read_stream from spill file is constructed
+    let stream = make_cooperative(always_ready);
+
+    // Set large buffer so that buffer always has free space for the producer/sender
+    let buffer_capacity = 100_000;
+    let mut mock_stream = spawn_buffered(stream, buffer_capacity);
+    let schema = mock_stream.schema();
+
+    let consumer_stream = futures::stream::poll_fn(move |cx| {
+        let mut collected = vec![];
+        // To make sure that inner stream is polled multiple times, loop until the buffer is full
+        // Ideally, the stream will yield before the loop ends
+        for _ in 0..buffer_capacity {
+            match mock_stream.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(batch))) => {
+                    collected.push(batch);
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(e)));
+                }
+                Poll::Ready(None) => {
+                    break;
+                }
+                Poll::Pending => {
+                    // polling inner stream may return Pending only when it reaches budget, since
+                    // we intentionally made ProducerStream always return Ready
+                    return Poll::Pending;
+                }
+            }
+        }
+
+        // This should be unreachable since the stream is canceled
+        unreachable!("Expected the stream to be canceled, but it continued polling");
+    });
+
+    let consumer_record_batch_stream =
+        Box::pin(RecordBatchStreamAdapter::new(schema, consumer_stream));
+
+    stream_yields(consumer_record_batch_stream).await
+}
+
+#[rstest]
+#[tokio::test]
 async fn sort_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -375,7 +434,7 @@ async fn interleave_then_filter_all_yields(
     let mut infinite_children = vec![];
 
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    for thr in 1..32 {
+    for threshold in 1..32 {
         // One infinite exec:
         let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
@@ -385,7 +444,7 @@ async fn interleave_then_filter_all_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
         let filter_expr = binary(
             binary(
                 binary(
@@ -395,7 +454,7 @@ async fn interleave_then_filter_all_yields(
                     &inf.schema(),
                 )?,
                 Modulo,
-                lit(thr as i64),
+                lit(threshold as i64),
                 &inf.schema(),
             )?,
             Eq,
@@ -431,7 +490,7 @@ async fn interleave_then_aggregate_yields(
     let mut infinite_children = vec![];
 
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    for thr in 1..32 {
+    for threshold in 1..32 {
         // One infinite exec:
         let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
@@ -441,7 +500,7 @@ async fn interleave_then_aggregate_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
         let filter_expr = binary(
             binary(
                 binary(
@@ -451,7 +510,7 @@ async fn interleave_then_aggregate_yields(
                     &inf.schema(),
                 )?,
                 Modulo,
-                lit(thr as i64),
+                lit(threshold as i64),
                 &inf.schema(),
             )?,
             Eq,
@@ -592,7 +651,7 @@ async fn join_agg_yields(
     // Project only one column (“value” from the left side) because we just want to sum that
     let input_schema = join.schema();
 
-    let proj_expr = vec![(
+    let proj_expr = vec![ProjectionExpr::new(
         Arc::new(Column::new_with_schema("value", &input_schema)?) as _,
         "value".to_string(),
     )];
@@ -698,17 +757,9 @@ enum Yielded {
     Timeout,
 }
 
-async fn query_yields(
-    plan: Arc<dyn ExecutionPlan>,
-    task_ctx: Arc<TaskContext>,
+async fn stream_yields(
+    mut stream: SendableRecordBatchStream,
 ) -> Result<(), Box<dyn Error>> {
-    // Run plan through EnsureCooperative
-    let optimized =
-        EnsureCooperative::new().optimize(plan, task_ctx.session_config().options())?;
-
-    // Get the stream
-    let mut stream = physical_plan::execute_stream(optimized, task_ctx)?;
-
     // Create an independent executor pool
     let child_runtime = Runtime::new()?;
 
@@ -732,7 +783,7 @@ async fn query_yields(
                 Ok(Pending) => Yielded::ReadyOrPending,
                 Ok(Ready(Ok(_))) => Yielded::ReadyOrPending,
                 Ok(Ready(Err(e))) => Yielded::Err(e),
-                Err(_) => Yielded::Err(DataFusionError::Execution("join error".into())),
+                Err(_) => Yielded::Err(exec_datafusion_err!("join error")),
             }
         },
         _ = tokio::time::sleep(Duration::from_secs(10)) => {
@@ -752,4 +803,19 @@ async fn query_yields(
         "Result is not Ready or Pending: {yielded:?}"
     );
     Ok(())
+}
+
+async fn query_yields(
+    plan: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+) -> Result<(), Box<dyn Error>> {
+    // Run plan through EnsureCooperative
+    let optimized =
+        EnsureCooperative::new().optimize(plan, task_ctx.session_config().options())?;
+
+    // Get the stream
+    let stream = physical_plan::execute_stream(optimized, task_ctx)?;
+
+    // Spawn a task that tries to poll the stream and check whether given stream yields
+    stream_yields(stream).await
 }

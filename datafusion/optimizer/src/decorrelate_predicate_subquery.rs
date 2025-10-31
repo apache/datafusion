@@ -31,7 +31,7 @@ use datafusion_common::{internal_err, plan_err, Column, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::{conjunction, split_conjunction_owned};
+use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
     exists, in_subquery, lit, not, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
     LogicalPlan, LogicalPlanBuilder, Operator,
@@ -342,7 +342,7 @@ fn build_join(
             replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
         })?;
 
-    let join_filter = match (join_filter_opt, in_predicate_opt) {
+    let join_filter = match (join_filter_opt, in_predicate_opt.clone()) {
         (
             Some(join_filter),
             Some(Expr::BinaryExpr(BinaryExpr {
@@ -371,6 +371,51 @@ fn build_join(
         (None, None) => lit(true),
         _ => return Ok(None),
     };
+
+    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
+        let right_schema = sub_query_alias.schema();
+
+        // Gather all columns needed for the join filter + predicates
+        let mut needed = std::collections::HashSet::new();
+        expr_to_columns(&join_filter, &mut needed)?;
+        if let Some(ref in_pred) = in_predicate_opt {
+            expr_to_columns(in_pred, &mut needed)?;
+        }
+
+        // Keep only columns that actually belong to the RIGHT child, and sort by their
+        // position in the right schema for deterministic order.
+        let mut right_cols_idx_and_col: Vec<(usize, Column)> = needed
+            .into_iter()
+            .filter_map(|c| right_schema.index_of_column(&c).ok().map(|idx| (idx, c)))
+            .collect();
+
+        right_cols_idx_and_col.sort_by_key(|(idx, _)| *idx);
+
+        let right_proj_exprs: Vec<Expr> = right_cols_idx_and_col
+            .into_iter()
+            .map(|(_, c)| Expr::Column(c))
+            .collect();
+
+        let right_projected = if !right_proj_exprs.is_empty() {
+            LogicalPlanBuilder::from(sub_query_alias.clone())
+                .project(right_proj_exprs)?
+                .build()?
+        } else {
+            // Degenerate case: no right columns referenced by the predicate(s)
+            sub_query_alias.clone()
+        };
+        let new_plan = LogicalPlanBuilder::from(left.clone())
+            .join_on(right_projected, join_type, Some(join_filter))?
+            .build()?;
+
+        debug!(
+            "predicate subquery optimized:\n{}",
+            new_plan.display_indent()
+        );
+
+        return Ok(Some(new_plan));
+    }
+
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(left.clone())
         .join_on(sub_query_alias, join_type, Some(join_filter))?
@@ -1927,14 +1972,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r#"
+            @r"
         Projection: test.b [b:UInt32]
           LeftSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [arr:Int32;N]
               Unnest: lists[sq.arr|depth=1] structs[] [arr:Int32;N]
-                TableScan: sq [arr:List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]
-        "#
+                TableScan: sq [arr:List(Field { data_type: Int32, nullable: true });N]
+        "
         )
     }
 
@@ -1962,14 +2007,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r#"
+            @r"
         Projection: test.b [b:UInt32]
           LeftSemi Join:  Filter: __correlated_sq_1.a = test.b [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [a:UInt32;N]
               Unnest: lists[sq.a|depth=1] structs[] [a:UInt32;N]
-                TableScan: sq [a:List(Field { name: "item", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]
-        "#
+                TableScan: sq [a:List(Field { data_type: UInt32, nullable: true });N]
+        "
         )
     }
 

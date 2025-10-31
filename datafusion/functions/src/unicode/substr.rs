@@ -56,7 +56,7 @@ use datafusion_macros::user_doc;
         description = "Number of characters to extract. If not specified, returns the rest of the string after the start position."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SubstrFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -71,7 +71,13 @@ impl Default for SubstrFunc {
 impl SubstrFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable)
+                .with_parameter_names(vec![
+                    "str".to_string(),
+                    "start_pos".to_string(),
+                    "length".to_string(),
+                ])
+                .expect("valid parameter names"),
             aliases: vec![String::from("substring")],
         }
     }

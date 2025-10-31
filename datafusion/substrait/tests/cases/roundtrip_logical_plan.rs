@@ -92,6 +92,8 @@ impl PartialOrd for MockUserDefinedLogicalPlan {
             Some(Ordering::Equal) => self.inputs.partial_cmp(&other.inputs),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -112,11 +114,7 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         &self.empty_schema
     }
 
-    fn check_invariants(
-        &self,
-        _check: InvariantLevel,
-        _plan: &LogicalPlan,
-    ) -> Result<()> {
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
         Ok(())
     }
 
@@ -348,7 +346,7 @@ async fn decimal_literal() -> Result<()> {
 
 #[tokio::test]
 async fn null_decimal_literal() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE b = NULL").await
+    roundtrip("SELECT *, CAST(NULL AS decimal(10, 2)) FROM data").await
 }
 
 #[tokio::test]
@@ -424,6 +422,41 @@ async fn simple_scalar_function_pow() -> Result<()> {
 #[tokio::test]
 async fn simple_scalar_function_substr() -> Result<()> {
     roundtrip("SELECT SUBSTR(f, 1, 3) FROM data").await
+}
+
+// Test that DataFusion functions gets correctly mapped to Substrait names (when the names are different)
+// Follows the same structure as existing roundtrip tests, but more explicitly tests for name mappings
+async fn test_substrait_to_df_name_mapping(
+    substrait_name: &str,
+    sql: &str,
+) -> Result<()> {
+    let ctx = create_context().await?;
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+    let function_name = match proto.extensions[0].mapping_type.as_ref().unwrap() {
+        MappingType::ExtensionFunction(ext_f) => &ext_f.name,
+        _ => unreachable!("Expected function extension"),
+    };
+
+    assert_eq!(function_name, substrait_name);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    let plan1str = format!("{plan}");
+    let plan2str = format!("{plan2}");
+    assert_eq!(plan1str, plan2str);
+
+    assert_eq!(plan.schema(), plan2.schema());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn scalar_function_is_nan_mapping() -> Result<()> {
+    test_substrait_to_df_name_mapping("is_nan", "SELECT ISNAN(a) FROM data").await
 }
 
 #[tokio::test]
@@ -588,6 +621,66 @@ async fn roundtrip_exists_filter() -> Result<()> {
       LeftSemi Join: data.a = data2.a Filter: data2.e != CAST(data.e AS Int64)
         TableScan: data projection=[a, b, e]
         TableScan: data2 projection=[a, e]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_not_exists_filter_left_anti_join() -> Result<()> {
+    let plan = generate_plan_from_sql(
+        "SELECT ba.isbn, ba.author FROM book_author ba WHERE NOT EXISTS (SELECT 1 FROM book b WHERE b.isbn = ba.isbn)",
+        false,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    LeftAnti Join: book_author.isbn = book.isbn
+      TableScan: book_author projection=[isbn, author]
+      TableScan: book projection=[isbn]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_right_anti_join() -> Result<()> {
+    let plan = generate_plan_from_sql(
+        "SELECT * FROM book b RIGHT ANTI JOIN book_author ba ON b.isbn = ba.isbn",
+        false,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    RightAnti Join: book.isbn = book_author.isbn
+      TableScan: book projection=[isbn]
+      TableScan: book_author projection=[isbn, author]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_right_semi_join() -> Result<()> {
+    let plan = generate_plan_from_sql(
+        "SELECT * FROM book b RIGHT SEMI JOIN book_author ba ON b.isbn = ba.isbn",
+        false,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    RightSemi Join: book.isbn = book_author.isbn
+      TableScan: book projection=[isbn]
+      TableScan: book_author projection=[isbn, author]
     "#
             );
     Ok(())
@@ -1051,6 +1144,7 @@ async fn all_type_literal() -> Result<()> {
             uint32_col = arrow_cast('0', 'UInt32') AND
             int64_col = arrow_cast('0', 'Int64') AND
             uint64_col = arrow_cast('0', 'UInt64') AND
+            float16_col = arrow_cast(0.0, 'Float16') AND
             float32_col = arrow_cast('0', 'Float32') AND
             float64_col = arrow_cast('0', 'Float64') AND
             sec_timestamp_col = arrow_cast('2020-01-01 00:00:00', 'Timestamp (Second, None)') AND
@@ -1442,7 +1536,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::ExtensionLeaf(_)) | Some(RelType::Read(_)) => Ok(()),
         _ => not_impl_err!(
-            "Unsupported RelType: {:?} in post join filter check",
+            "Unsupported Reltype: {:?} in post join filter check",
             rel.rel_type
         ),
     }
@@ -1718,6 +1812,34 @@ async fn create_context() -> Result<SessionContext> {
     ctx.register_csv("data2", "tests/testdata/data.csv", CsvReadOptions::new())
         .await?;
 
+    // Register test tables for anti join tests
+    let book_fields = vec![
+        Field::new("isbn", DataType::Int64, false),
+        Field::new("title", DataType::Utf8, true),
+        Field::new("genre", DataType::Utf8, true),
+    ];
+    let book_schema = Schema::new(book_fields);
+    let mut book_options = CsvReadOptions::new();
+    book_options.schema = Some(&book_schema);
+    book_options.has_header = false;
+    ctx.register_csv("book", "tests/testdata/empty.csv", book_options)
+        .await?;
+
+    let book_author_fields = vec![
+        Field::new("isbn", DataType::Int64, true),
+        Field::new("author", DataType::Utf8, true),
+    ];
+    let book_author_schema = Schema::new(book_author_fields);
+    let mut book_author_options = CsvReadOptions::new();
+    book_author_options.schema = Some(&book_author_schema);
+    book_author_options.has_header = false;
+    ctx.register_csv(
+        "book_author",
+        "tests/testdata/empty.csv",
+        book_author_options,
+    )
+    .await?;
+
     Ok(ctx)
 }
 
@@ -1735,6 +1857,7 @@ async fn create_all_type_context() -> Result<SessionContext> {
         Field::new("uint32_col", DataType::UInt32, true),
         Field::new("int64_col", DataType::Int64, true),
         Field::new("uint64_col", DataType::UInt64, true),
+        Field::new("float16_col", DataType::Float16, true),
         Field::new("float32_col", DataType::Float32, true),
         Field::new("float64_col", DataType::Float64, true),
         Field::new(

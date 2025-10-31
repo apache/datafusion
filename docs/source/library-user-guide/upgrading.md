@@ -19,10 +19,556 @@
 
 # Upgrade Guides
 
+## DataFusion `51.0.0`
+
+**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
+
+### `arrow` / `parquet` updated to 57.0.0
+
+### Upgrade to arrow `57.0.0` and parquet `57.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `57.0.0`, including several dependent crates such as `prost`,
+`tonic`, `pyo3`, and `substrait`. . See the [release
+notes](https://github.com/apache/arrow-rs/releases/tag/57.0.0) for more details.
+
+### `MSRV` updated to 1.87.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+
+[`1.87.0`]: https://releases.rs/docs/1.87.0/
+
+### `FunctionRegistry` exposes two additional methods
+
+`FunctionRegistry` exposes two additional methods `udafs` and `udwfs` which expose set of registered user defined aggregation and window function names. To upgrade implement methods returning set of registered function names:
+
+```diff
+impl FunctionRegistry for FunctionRegistryImpl {
+      fn udfs(&self) -> HashSet<String> {
+         self.scalar_functions.keys().cloned().collect()
+     }
++    fn udafs(&self) -> HashSet<String> {
++        self.aggregate_functions.keys().cloned().collect()
++    }
++
++    fn udwfs(&self) -> HashSet<String> {
++        self.window_functions.keys().cloned().collect()
++    }
+}
+```
+
+### `datafusion-proto` use `TaskContext` rather than `SessionContext` in physical plan serde methods
+
+There have been changes in the public API methods of `datafusion-proto` which handle physical plan serde.
+
+Methods like `physical_plan_from_bytes`, `parse_physical_expr` and similar, expect `TaskContext` instead of `SessionContext`
+
+```diff
+- let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
++ let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+```
+
+as `TaskContext` contains `RuntimeEnv` methods such as `try_into_physical_plan` will not have explicit `RuntimeEnv` parameter.
+
+```diff
+let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+-   .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
++.  .try_into_physical_plan(&ctx.task_ctx(), &composed_codec)
+```
+
+`PhysicalExtensionCodec::try_decode()` expects `TaskContext` instead of `FunctionRegistry`:
+
+```diff
+pub trait PhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+-        registry: &dyn FunctionRegistry,
++        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+```
+
+See [issue #17601] for more details.
+
+[issue #17601]: https://github.com/apache/datafusion/issues/17601
+
+### `SessionState`'s `sql_to_statement` method takes `Dialect` rather than a `str`
+
+The `dialect` parameter of `sql_to_statement` method defined in `datafusion::execution::session_state::SessionState`
+has changed from `&str` to `&Dialect`.
+`Dialect` is an enum defined in the `datafusion-common`
+crate under the `config` module that provides type safety
+and better validation for SQL dialect selection
+
+### Reorganization of `ListingTable` into `datafusion-catalog-listing` crate
+
+There has been a long standing request to remove features such as `ListingTable`
+from the `datafusion` crate to support faster build times. The structs
+`ListingOptions`, `ListingTable`, and `ListingTableConfig` are now available
+within the `datafusion-catalog-listing` crate. These are re-exported in
+the `datafusion` crate, so this should be a minimal impact to existing users.
+
+See [issue #14462] and [issue #17713] for more details.
+
+[issue #14462]: https://github.com/apache/datafusion/issues/14462
+[issue #17713]: https://github.com/apache/datafusion/issues/17713
+
+### Reorganization of `ArrowSource` into `datafusion-datasource-arrow` crate
+
+To support [issue #17713] the `ArrowSource` code has been removed from
+the `datafusion` core crate into it's own crate, `datafusion-datasource-arrow`.
+This follows the pattern for the AVRO, CSV, JSON, and Parquet data sources.
+Users may need to update their paths to account for these changes.
+
+See [issue #17713] for more details.
+
+### `FileScanConfig::projection` renamed to `FileScanConfig::projection_exprs`
+
+The `projection` field in `FileScanConfig` has been renamed to `projection_exprs` and its type has changed from `Option<Vec<usize>>` to `Option<ProjectionExprs>`. This change enables more powerful projection pushdown capabilities by supporting arbitrary physical expressions rather than just column indices.
+
+**Impact on direct field access:**
+
+If you directly access the `projection` field:
+
+```rust
+# /* comment to avoid running
+let config: FileScanConfig = ...;
+let projection = config.projection;
+# */
+```
+
+You should update to:
+
+```rust
+# /* comment to avoid running
+let config: FileScanConfig = ...;
+let projection_exprs = config.projection_exprs;
+# */
+```
+
+**Impact on builders:**
+
+The `FileScanConfigBuilder::with_projection()` method has been deprecated in favor of `with_projection_indices()`:
+
+```diff
+let config = FileScanConfigBuilder::new(url, schema, file_source)
+-   .with_projection(Some(vec![0, 2, 3]))
++   .with_projection_indices(Some(vec![0, 2, 3]))
+    .build();
+```
+
+Note: `with_projection()` still works but is deprecated and will be removed in a future release.
+
+**What is `ProjectionExprs`?**
+
+`ProjectionExprs` is a new type that represents a list of physical expressions for projection. While it can be constructed from column indices (which is what `with_projection_indices` does internally), it also supports arbitrary physical expressions, enabling advanced features like expression evaluation during scanning.
+
+You can access column indices from `ProjectionExprs` using its methods if needed:
+
+```rust
+# /* comment to avoid running
+let projection_exprs: ProjectionExprs = ...;
+// Get the column indices if the projection only contains simple column references
+let indices = projection_exprs.column_indices();
+# */
+```
+
+### `DESCRIBE query` support
+
+`DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the
+_execution plan_ of the query. With this release, `DESCRIBE query` now outputs
+the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
+
+### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
+
+A new `TableSchema` struct has been introduced in the `datafusion-datasource` crate to better manage table schemas with partition columns. This struct helps distinguish between:
+
+- **File schema**: The schema of actual data files on disk
+- **Partition columns**: Columns derived from directory structure (e.g., Hive-style partitioning)
+- **Table schema**: The complete schema combining both file and partition columns
+
+As part of this change, the `FileSource::with_schema()` method signature has changed from accepting a `SchemaRef` to accepting a `TableSchema`.
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations will need to update their code
+- Users who only use built-in file sources (Parquet, CSV, JSON, AVRO, Arrow) are not affected
+
+**Migration guide for custom `FileSource` implementations:**
+
+```diff
+ use datafusion_datasource::file::FileSource;
+-use arrow::datatypes::SchemaRef;
++use datafusion_datasource::TableSchema;
+
+ impl FileSource for MyCustomSource {
+-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
++    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+         Arc::new(Self {
+-            schema: Some(schema),
++            // Use schema.file_schema() to get the file schema without partition columns
++            schema: Some(Arc::clone(schema.file_schema())),
+             ..self.clone()
+         })
+     }
+ }
+```
+
+For implementations that need access to partition columns:
+
+```rust,ignore
+fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+    Arc::new(Self {
+        file_schema: Arc::clone(schema.file_schema()),
+        partition_cols: schema.table_partition_cols().clone(),
+        table_schema: Arc::clone(schema.table_schema()),
+        ..self.clone()
+    })
+}
+```
+
+**Note**: Most `FileSource` implementations only need to store the file schema (without partition columns), as shown in the first example. The second pattern of storing all three schema components is typically only needed for advanced use cases where you need access to different schema representations for different operations (e.g., ParquetSource uses the file schema for building pruning predicates but needs the table schema for filter pushdown logic).
+
+**Using `TableSchema` directly:**
+
+If you're constructing a `FileScanConfig` or working with table schemas and partition columns, you can now use `TableSchema`:
+
+```rust
+use datafusion_datasource::TableSchema;
+use arrow::datatypes::{Schema, Field, DataType};
+use std::sync::Arc;
+
+// Create a TableSchema with partition columns
+let file_schema = Arc::new(Schema::new(vec![
+    Field::new("user_id", DataType::Int64, false),
+    Field::new("amount", DataType::Float64, false),
+]));
+
+let partition_cols = vec![
+    Arc::new(Field::new("date", DataType::Utf8, false)),
+    Arc::new(Field::new("region", DataType::Utf8, false)),
+];
+
+let table_schema = TableSchema::new(file_schema, partition_cols);
+
+// Access different schema representations
+let file_schema_ref = table_schema.file_schema();      // Schema without partition columns
+let full_schema = table_schema.table_schema();          // Complete schema with partition columns
+let partition_cols_ref = table_schema.table_partition_cols(); // Just the partition columns
+```
+
 ## DataFusion `50.0.0`
 
-**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+### ListingTable automatically detects Hive Partitioned tables
+
+DataFusion 50.0.0 automatically infers Hive partitions when using the `ListingTableFactory` and `CREATE EXTERNAL TABLE`. Previously,
+when creating a `ListingTable`, datasets that use Hive partitioning (e.g.
+`/table_root/column1=value1/column2=value2/data.parquet`) would not have the Hive columns reflected in
+the table's schema or data. The previous behavior can be
+restored by setting the `datafusion.execution.listing_table_factory_infer_partitions` configuration option to `false`.
+See [issue #17049] for more details.
+
+[issue #17049]: https://github.com/apache/datafusion/issues/17049
+
+### `MSRV` updated to 1.86.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.86.0`].
+See [#17230] for details.
+
+[`1.86.0`]: https://releases.rs/docs/1.86.0/
+[#17230]: https://github.com/apache/datafusion/pull/17230
+
+### `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
+
+To address error-proneness of `ScalarUDFImpl::equals`, `AggregateUDFImpl::equals`and
+`WindowUDFImpl::equals` methods and to make it easy to implement function equality correctly,
+the `equals` and `hash_value` methods have been removed from `ScalarUDFImpl`, `AggregateUDFImpl`
+and `WindowUDFImpl` traits. They are replaced the requirement to implement the `PartialEq`, `Eq`,
+and `Hash` traits on any type implementing `ScalarUDFImpl`, `AggregateUDFImpl` or `WindowUDFImpl`.
+Please see [issue #16677] for more details.
+
+Most of the scalar functions are stateless and have a `signature` field. These can be migrated
+using regular expressions
+
+- search for `\#\[derive\(Debug\)\](\n *(pub )?struct \w+ \{\n *signature\: Signature\,\n *\})`,
+- replace with `#[derive(Debug, PartialEq, Eq, Hash)]$1`,
+- review all the changes and make sure only function structs were changed.
+
+[issue #16677]: https://github.com/apache/datafusion/issues/16677
+
+### `AsyncScalarUDFImpl::invoke_async_with_args` returns `ColumnarValue`
+
+In order to enable single value optimizations and be consistent with other
+user defined function APIs, the `AsyncScalarUDFImpl::invoke_async_with_args` method now
+returns a `ColumnarValue` instead of a `ArrayRef`.
+
+To upgrade, change the return type of your implementation
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ColumnarValue> {
+        ..
+      return array_ref; // old code
+    }
+}
+# */
+```
+
+To return a `ColumnarValue`
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ColumnarValue> {
+        ..
+      return ColumnarValue::from(array_ref); // new code
+    }
+}
+# */
+```
+
+See [#16896](https://github.com/apache/datafusion/issues/16896) for more details.
+
+### `ProjectionExpr` changed from type alias to struct
+
+`ProjectionExpr` has been changed from a type alias to a struct with named fields to improve code clarity and maintainability.
+
+**Before:**
+
+```rust,ignore
+pub type ProjectionExpr = (Arc<dyn PhysicalExpr>, String);
+```
+
+**After:**
+
+```rust,ignore
+#[derive(Debug, Clone)]
+pub struct ProjectionExpr {
+    pub expr: Arc<dyn PhysicalExpr>,
+    pub alias: String,
+}
+```
+
+To upgrade your code:
+
+- Replace tuple construction `(expr, alias)` with `ProjectionExpr::new(expr, alias)` or `ProjectionExpr { expr, alias }`
+- Replace tuple field access `.0` and `.1` with `.expr` and `.alias`
+- Update pattern matching from `(expr, alias)` to `ProjectionExpr { expr, alias }`
+
+This mainly impacts use of `ProjectionExec`.
+
+This change was done in [#17398]
+
+[#17398]: https://github.com/apache/datafusion/pull/17398
+
+### `SessionState`, `SessionConfig`, and `OptimizerConfig` returns `&Arc<ConfigOptions>` instead of `&ConfigOptions`
+
+To provide broader access to `ConfigOptions` and reduce required clones, some
+APIs have been changed to return a `&Arc<ConfigOptions>` instead of a
+`&ConfigOptions`. This allows sharing the same `ConfigOptions` across multiple
+threads without needing to clone the entire `ConfigOptions` structure unless it
+is modified.
+
+Most users will not be impacted by this change since the Rust compiler typically
+automatically dereference the `Arc` when needed. However, in some cases you may
+have to change your code to explicitly call `as_ref()` for example, from
+
+```rust
+# /* comment to avoid running
+let optimizer_config: &ConfigOptions = state.options();
+#  */
+```
+
+To
+
+```rust
+# /* comment to avoid running
+let optimizer_config: &ConfigOptions = state.options().as_ref();
+#  */
+```
+
+See PR [#16970](https://github.com/apache/datafusion/pull/16970)
+
+### API Change to `AsyncScalarUDFImpl::invoke_async_with_args`
+
+The `invoke_async_with_args` method of the `AsyncScalarUDFImpl` trait has been
+updated to remove the `_option: &ConfigOptions` parameter to simplify the API
+now that the `ConfigOptions` can be accessed through the `ScalarFunctionArgs`
+parameter.
+
+You can change your code like this
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ArrayRef> {
+        ..
+    }
+    ...
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+    ) -> Result<ArrayRef> {
+        let options = &args.config_options;
+        ..
+    }
+    ...
+}
+# */
+```
+
+### Schema Rewriter Module Moved to New Crate
+
+The `schema_rewriter` module and its associated symbols have been moved from `datafusion_physical_expr` to a new crate `datafusion_physical_expr_adapter`. This affects the following symbols:
+
+- `DefaultPhysicalExprAdapter`
+- `DefaultPhysicalExprAdapterFactory`
+- `PhysicalExprAdapter`
+- `PhysicalExprAdapterFactory`
+
+To upgrade, change your imports to:
+
+```rust
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory,
+    PhysicalExprAdapter, PhysicalExprAdapterFactory
+};
+```
+
+### Upgrade to arrow `56.0.0` and parquet `56.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `56.0.0`. See the [release notes](https://github.com/apache/arrow-rs/releases/tag/56.0.0)
+for more details.
+
+### Added `ExecutionPlan::reset_state`
+
+In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the presence of a query such as `ORDER BY ... LIMIT ...`)
+produced incorrect results in recursive queries, a new method `reset_state` has been added to the `ExecutionPlan` trait.
+
+Any `ExecutionPlan` that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
+See [#17028] for more details and an example implementation for `SortExec`.
+
+[#17028]: https://github.com/apache/datafusion/pull/17028
+
+### Nested Loop Join input sort order cannot be preserved
+
+The Nested Loop Join operator has been rewritten from scratch to improve performance and memory efficiency. From the micro-benchmarks: this change introduces up to 5X speed-up and uses only 1% memory in extreme cases compared to the previous implementation.
+
+However, the new implementation cannot preserve input sort order like the old version could. This is a fundamental design trade-off that prioritizes performance and memory efficiency over sort order preservation.
+
+See [#16996] for details.
+
+[#16996]: https://github.com/apache/datafusion/pull/16996
+
+### Add `as_any()` method to `LazyBatchGenerator`
+
+To help with protobuf serialization, the `as_any()` method has been added to the `LazyBatchGenerator` trait. This means you will need to add `as_any()` to your implementation of `LazyBatchGenerator`:
+
+```rust
+# /* comment to avoid running
+
+impl LazyBatchGenerator for MyBatchGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    ...
+}
+
+# */
+```
+
+See [#17200](https://github.com/apache/datafusion/pull/17200) for details.
+
+### Refactored `DataSource::try_swapping_with_projection`
+
+We refactored `DataSource::try_swapping_with_projection` to simplify the method and minimize leakage across the ExecutionPlan <-> DataSource abstraction layer.
+Reimplementation for any custom `DataSource` should be relatively straightforward, see [#17395] for more details.
+
+[#17395]: https://github.com/apache/datafusion/pull/17395/
+
+### `FileOpenFuture` now uses `DataFusionError` instead of `ArrowError`
+
+The `FileOpenFuture` type alias has been updated to use `DataFusionError` instead of `ArrowError` for its error type. This change affects the `FileOpener` trait and any implementations that work with file streaming operations.
+
+**Before:**
+
+```rust,ignore
+pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
+```
+
+**After:**
+
+```rust,ignore
+pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch>>>>;
+```
+
+If you have custom implementations of `FileOpener` or work directly with `FileOpenFuture`, you'll need to update your error handling to use `DataFusionError` instead of `ArrowError`. The `FileStreamState` enum's `Open` variant has also been updated accordingly. See [#17397] for more details.
+
+[#17397]: https://github.com/apache/datafusion/pull/17397
+
+### FFI user defined aggregate function signature change
+
+The Foreign Function Interface (FFI) signature for user defined aggregate functions
+has been updated to call `return_field` instead of `return_type` on the underlying
+aggregate function. This is to support metadata handling with these aggregate functions.
+This change should be transparent to most users. If you have written unit tests to call
+`return_type` directly, you may need to change them to calling `return_field` instead.
+
+This update is a breaking change to the FFI API. The current best practice when using the
+FFI crate is to ensure that all libraries that are interacting are using the same
+underlying Rust version. Issue [#17374] has been opened to discuss stabilization of
+this interface so that these libraries can be used across different DataFusion versions.
+
+See [#17407] for details.
+
+[#17407]: https://github.com/apache/datafusion/pull/17407
+[#17374]: https://github.com/apache/datafusion/issues/17374
+
+### Added `PhysicalExpr::is_volatile_node`
+
+We added a method to `PhysicalExpr` to mark a `PhysicalExpr` as volatile:
+
+```rust,ignore
+impl PhysicalExpr for MyRandomExpr {
+  fn is_volatile_node(&self) -> bool {
+    true
+  }
+}
+```
+
+We've shipped this with a default value of `false` to minimize breakage but we highly recommend that implementers of `PhysicalExpr` opt into a behavior, even if it is returning `false`.
+
+You can see more discussion and example implementations in [#17351].
+
+[#17351]: https://github.com/apache/datafusion/pull/17351
 
 ## DataFusion `49.0.0`
 
@@ -420,7 +966,7 @@ to access the metadata associated with the columnar values during invocation.
 To upgrade user defined aggregate functions, there is now a function
 `return_field` that will allow you to specify both metadata and nullability of
 your function. You are not required to implement this if you do not need to
-handle metatdata.
+handle metadata.
 
 The largest change to aggregate functions happens in the accumulator arguments.
 Both the `AccumulatorArgs` and `StateFieldsArgs` now contain `FieldRef` rather
@@ -782,8 +1328,8 @@ Elapsed 0.005 seconds.
 DataFusion 46 has changed the way scalar array function signatures are
 declared. Previously, functions needed to select from a list of predefined
 signatures within the `ArrayFunctionSignature` enum. Now the signatures
-can be defined via a `Vec` of psuedo-types, which each correspond to a
-single argument. Those psuedo-types are the variants of the
+can be defined via a `Vec` of pseudo-types, which each correspond to a
+single argument. Those pseudo-types are the variants of the
 `ArrayFunctionArgument` enum and are as follows:
 
 - `Array`: An argument of type List/LargeList/FixedSizeList. All Array

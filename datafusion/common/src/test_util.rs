@@ -55,7 +55,7 @@ pub fn format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowErro
 /// # use arrow::array::{ArrayRef, Int32Array};
 /// # use datafusion_common::assert_batches_eq;
 /// let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-///  let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
+/// let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
 /// // Expected output is a vec of strings
 /// let expected = vec![
 ///     "+--------+",
@@ -158,7 +158,7 @@ macro_rules! assert_batches_sorted_eq {
 /// Is a macro so test error
 /// messages are on the same line as the failure;
 ///
-/// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
+/// Both arguments must be convertible into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_contains {
     ($ACTUAL: expr, $EXPECTED: expr) => {
@@ -181,7 +181,7 @@ macro_rules! assert_contains {
 /// Is a macro so test error
 /// messages are on the same line as the failure;
 ///
-/// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
+/// Both arguments must be convertible into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_not_contains {
     ($ACTUAL: expr, $UNEXPECTED: expr) => {
@@ -255,7 +255,14 @@ pub fn arrow_test_data() -> String {
 #[cfg(feature = "parquet")]
 pub fn parquet_test_data() -> String {
     match get_data_dir("PARQUET_TEST_DATA", "../../parquet-testing/data") {
-        Ok(pb) => pb.display().to_string(),
+        Ok(pb) => {
+            let mut path = pb.display().to_string();
+            if cfg!(target_os = "windows") {
+                // Replace backslashes (Windows paths; avoids some test issues).
+                path = path.replace("\\", "/");
+            }
+            path
+        }
         Err(err) => panic!("failed to get parquet data dir: {err}"),
     }
 }
@@ -314,43 +321,43 @@ pub fn get_data_dir(
 #[macro_export]
 macro_rules! create_array {
     (Boolean, $values: expr) => {
-        std::sync::Arc::new(arrow::array::BooleanArray::from($values))
+        std::sync::Arc::new($crate::arrow::array::BooleanArray::from($values))
     };
     (Int8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int8Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int8Array::from($values))
     };
     (Int16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int16Array::from($values))
     };
     (Int32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int32Array::from($values))
     };
     (Int64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int64Array::from($values))
     };
     (UInt8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt8Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt8Array::from($values))
     };
     (UInt16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt16Array::from($values))
     };
     (UInt32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt32Array::from($values))
     };
     (UInt64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt64Array::from($values))
     };
     (Float16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float16Array::from($values))
     };
     (Float32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float32Array::from($values))
     };
     (Float64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float64Array::from($values))
     };
     (Utf8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::StringArray::from($values))
+        std::sync::Arc::new($crate::arrow::array::StringArray::from($values))
     };
 }
 
@@ -359,7 +366,7 @@ macro_rules! create_array {
 ///
 /// Example:
 /// ```
-/// use datafusion_common::{record_batch, create_array};
+/// use datafusion_common::record_batch;
 /// let batch = record_batch!(
 ///     ("a", Int32, vec![1, 2, 3]),
 ///     ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
@@ -370,13 +377,13 @@ macro_rules! create_array {
 macro_rules! record_batch {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
         {
-            let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            let schema = std::sync::Arc::new($crate::arrow::datatypes::Schema::new(vec![
                 $(
-                    arrow::datatypes::Field::new($name, arrow::datatypes::DataType::$type, true),
+                    $crate::arrow::datatypes::Field::new($name, $crate::arrow::datatypes::DataType::$type, true),
                 )*
             ]));
 
-            let batch = arrow::array::RecordBatch::try_new(
+            let batch = $crate::arrow::array::RecordBatch::try_new(
                 schema,
                 vec![$(
                     $crate::create_array!($type, $values),

@@ -117,7 +117,7 @@ mod tests {
             .build()?;
 
         // No aggregate / scan / limit
-        assert_optimized_plan_equal!(plan, @"EmptyRelation")
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     #[test]
@@ -131,7 +131,7 @@ mod tests {
             .build()?;
 
         // No aggregate / scan / limit
-        assert_optimized_plan_equal!(plan, @"EmptyRelation")
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     #[test]
@@ -151,7 +151,7 @@ mod tests {
         // Left side is removed
         assert_optimized_plan_equal!(plan, @r"
         Union
-          EmptyRelation
+          EmptyRelation: rows=0
           Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]
             TableScan: test
         ")
@@ -217,7 +217,7 @@ mod tests {
         // Filter is removed
         assert_optimized_plan_equal!(plan, @r"
         Projection: test.a
-          EmptyRelation
+          EmptyRelation: rows=0
         ")
     }
 }

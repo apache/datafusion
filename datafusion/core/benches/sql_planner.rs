@@ -28,7 +28,7 @@ use arrow::datatypes::{DataType, Field, Fields, Schema};
 use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use datafusion_common::ScalarValue;
+use datafusion_common::{config::Dialect, ScalarValue};
 use datafusion_expr::col;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -137,7 +137,10 @@ fn benchmark_with_param_values_many_columns(
     }
     // SELECT max(attr0), ..., max(attrN) FROM t1.
     let query = format!("SELECT {aggregates} FROM t1");
-    let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
+    let statement = ctx
+        .state()
+        .sql_to_statement(&query, &Dialect::Generic)
+        .unwrap();
     let plan =
         rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
     b.iter(|| {
@@ -182,11 +185,11 @@ fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows
 
 /// return a query like
 /// ```sql
-/// select c1, null as c2, ... null as cn from t ORDER BY c1
+/// select c1, 2 as c2, ... n as cn from t ORDER BY c1
 ///   UNION ALL
-/// select null as c1, c2, ... null as cn from t ORDER BY c2
+/// select 1 as c1, c2, ... n as cn from t ORDER BY c2
 /// ...
-/// select null as c1, null as c2, ... cn from t ORDER BY cn
+/// select 1 as c1, 2 as c2, ... cn from t ORDER BY cn
 ///  ORDER BY c1, c2 ... CN
 /// ```
 fn union_orderby_query(n: usize) -> String {
@@ -200,7 +203,7 @@ fn union_orderby_query(n: usize) -> String {
                 if i == j {
                     format!("c{j}")
                 } else {
-                    format!("null as c{j}")
+                    format!("{j} as c{j}")
                 }
             })
             .collect::<Vec<_>>()
@@ -298,6 +301,34 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
+    // It was observed in production that queries with window functions sometimes partition over more than 30 columns
+    for partitioning_columns in [4, 7, 8, 12, 30] {
+        c.bench_function(
+            &format!(
+                "physical_window_function_partition_by_{partitioning_columns}_on_values"
+            ),
+            |b| {
+                let source = format!(
+                    "SELECT 1 AS n{}",
+                    (0..partitioning_columns)
+                        .map(|i| format!(", {i} AS c{i}"))
+                        .collect::<String>()
+                );
+                let window = format!(
+                    "SUM(n) OVER (PARTITION BY {}) AS sum_n",
+                    (0..partitioning_columns)
+                        .map(|i| format!("c{i}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let query = format!("SELECT {window} FROM ({source})");
+                b.iter(|| {
+                    physical_plan(&ctx, &rt, &query);
+                });
+            },
+        );
+    }
+
     // Benchmark for Physical Planning Joins
     c.bench_function("physical_join_consider_sort", |b| {
         b.iter(|| {
@@ -370,15 +401,23 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     // -- Sorted Queries --
-    register_union_order_table(&ctx, 100, 1000);
+    // 100, 200 && 300 is taking too long - https://github.com/apache/datafusion/issues/18366
+    for column_count in [10, 50 /* 100, 200, 300 */] {
+        register_union_order_table(&ctx, column_count, 1000);
 
-    // this query has many expressions in its sort order so stresses
-    // order equivalence validation
-    c.bench_function("physical_sorted_union_orderby", |b| {
-        // SELECT ... UNION ALL ...
-        let query = union_orderby_query(20);
-        b.iter(|| physical_plan(&ctx, &rt, &query))
-    });
+        // this query has many expressions in its sort order so stresses
+        // order equivalence validation
+        c.bench_function(
+            &format!("physical_sorted_union_order_by_{column_count}"),
+            |b| {
+                // SELECT ... UNION ALL ...
+                let query = union_orderby_query(column_count);
+                b.iter(|| physical_plan(&ctx, &rt, &query))
+            },
+        );
+
+        let _ = ctx.deregister_table("t");
+    }
 
     // --- TPC-H ---
 
@@ -437,6 +476,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
 
     let raw_tpcds_sql_queries = (1..100)
+        // skip query 75 until it is fixed
+        // https://github.com/apache/datafusion/issues/17801
+        .filter(|q| *q != 75)
         .map(|q| std::fs::read_to_string(format!("{tests_path}tpc-ds/{q}.sql")).unwrap())
         .collect::<Vec<_>>();
 

@@ -15,7 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-build
-temp
+temp/
+build/
 venv/
 .python-version
+__pycache__/

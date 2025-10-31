@@ -65,10 +65,9 @@
 //! The optimizer rule currently checks the plan for exchange-like operators and leave operators
 //! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
-#[cfg(any(
-    datafusion_coop = "tokio_fallback",
-    not(any(datafusion_coop = "tokio", datafusion_coop = "per_stream"))
-))]
+use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr::PhysicalExpr;
+#[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
 use std::any::Any;
 use std::pin::Pin;
@@ -76,6 +75,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::execution_plan::CardinalityEffect::{self, Equal};
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
@@ -133,10 +136,14 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        #[cfg(datafusion_coop = "tokio")]
+        #[cfg(any(
+            datafusion_coop = "tokio",
+            not(any(
+                datafusion_coop = "tokio_fallback",
+                datafusion_coop = "per_stream"
+            ))
+        ))]
         {
-            // TODO this should be the default implementation
-            // Enable once https://github.com/tokio-rs/tokio/issues/7403 is merged and released
             let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
             let value = self.inner.poll_next_unpin(cx);
             if value.is_ready() {
@@ -145,10 +152,7 @@ where
             value
         }
 
-        #[cfg(any(
-            datafusion_coop = "tokio_fallback",
-            not(any(datafusion_coop = "tokio", datafusion_coop = "per_stream"))
-        ))]
+        #[cfg(datafusion_coop = "tokio_fallback")]
         {
             // This is a temporary placeholder implementation that may have slightly
             // worse performance compared to `poll_proceed`
@@ -254,7 +258,7 @@ impl ExecutionPlan for CooperativeExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        self.input.maintains_input_order()
+        vec![true; self.children().len()]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -290,6 +294,24 @@ impl ExecutionPlan for CooperativeExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         Equal
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 }
 

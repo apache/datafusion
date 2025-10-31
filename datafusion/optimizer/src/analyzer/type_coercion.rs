@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_expr::binary::BinaryTypeCoercer;
-use itertools::izip;
+use itertools::{izip, Itertools as _};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 
@@ -29,8 +29,9 @@ use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
@@ -50,9 +51,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_u
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, Limit, LogicalPlan,
-    Operator, Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    AggregateUDF, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection,
+    ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 /// Performs type coercion by determining the schema
@@ -253,7 +253,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             if dt.is_integer() || dt.is_null() {
                 expr.cast_to(&DataType::Int64, schema)
             } else {
-                plan_err!("Expected {expr_name} to be an integer or null, but got {dt:?}")
+                plan_err!("Expected {expr_name} to be an integer or null, but got {dt}")
             }
         }
 
@@ -352,9 +352,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
-                        "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
-                    ),
+                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
+                    plan_datafusion_err!(
+                    "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+                ),
                 )?;
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
@@ -440,23 +441,23 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let low_type = low.get_type(self.schema)?;
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
+                        internal_datafusion_err!(
                             "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
-                        ))
+                        )
                     })?;
                 let high_type = high.get_type(self.schema)?;
                 let high_coerced_type = comparison_coercion(&expr_type, &high_type)
                     .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
+                        internal_datafusion_err!(
                             "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                        ))
+                        )
                     })?;
                 let coercion_type =
                     comparison_coercion(&low_coerced_type, &high_coerced_type)
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                            ))
+                            )
                         })?;
                 Ok(Transformed::yes(Expr::Between(Between::new(
                     Box::new(expr.cast_to(&coercion_type, self.schema)?),
@@ -479,7 +480,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => plan_err!(
-                        "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
+                        "Can not find compatible types to compare {expr_data_type} with [{}]", list_data_types.iter().join(", ")
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
@@ -548,6 +549,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                             partition_by,
                             order_by,
                             window_frame,
+                            filter,
                             null_treatment,
                             distinct,
                         },
@@ -566,26 +568,19 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     _ => args,
                 };
 
-                if distinct {
-                    Ok(Transformed::yes(
-                        Expr::from(WindowFunction::new(fun, args))
-                            .partition_by(partition_by)
-                            .order_by(order_by)
-                            .window_frame(window_frame)
-                            .null_treatment(null_treatment)
-                            .distinct()
-                            .build()?,
-                    ))
-                } else {
-                    Ok(Transformed::yes(
-                        Expr::from(WindowFunction::new(fun, args))
-                            .partition_by(partition_by)
-                            .order_by(order_by)
-                            .window_frame(window_frame)
-                            .null_treatment(null_treatment)
-                            .build()?,
-                    ))
-                }
+                let new_expr = Expr::from(WindowFunction {
+                    fun,
+                    params: expr::WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        filter,
+                        null_treatment,
+                        distinct,
+                    },
+                });
+                Ok(Transformed::yes(new_expr))
             }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
@@ -692,7 +687,7 @@ fn coerce_scalar_range_aware(
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
             coerce_scalar(largest_type, value).map_or_else(
-                |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
+                |_| exec_err!("Cannot cast {value:?} to {target_type}"),
                 |_| ScalarValue::try_from(target_type),
             )
         } else {
@@ -744,7 +739,7 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
     } else {
-        return internal_err!("Cannot run range queries on datatype: {col_type:?}");
+        internal_err!("Cannot run range queries on datatype: {col_type}")
     }
 }
 
@@ -903,8 +898,9 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
                 get_coerce_type_for_case_expression(&when_types, Some(case_type));
             coerced_type.ok_or_else(|| {
                 plan_datafusion_err!(
-                    "Failed to coerce case ({case_type:?}) and when ({when_types:?}) \
-                     to common types in CASE WHEN expression"
+                    "Failed to coerce case ({case_type}) and when ({}) \
+                     to common types in CASE WHEN expression",
+                    when_types.iter().join(", ")
                 )
             })
         })
@@ -912,10 +908,19 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     let then_else_coerce_type =
         get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(
             || {
-                plan_datafusion_err!(
-                    "Failed to coerce then ({then_types:?}) and else ({else_type:?}) \
-                     to common types in CASE WHEN expression"
-                )
+                if let Some(else_type) = else_type {
+                    plan_datafusion_err!(
+                        "Failed to coerce then ({}) and else ({else_type}) \
+                         to common types in CASE WHEN expression",
+                        then_types.iter().join(", ")
+                    )
+                } else {
+                    plan_datafusion_err!(
+                        "Failed to coerce then ({}) and else (None) \
+                         to common types in CASE WHEN expression",
+                        then_types.iter().join(", ")
+                    )
+                }
             },
         )?;
 
@@ -957,6 +962,43 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 ///
 /// This method presumes that the wildcard expansion is unneeded, or has already
 /// been applied.
+///
+/// ## Schema and Field Handling in Union Coercion
+///
+/// **Processing order**: The function starts with the base schema (first input) and then
+/// processes remaining inputs sequentially, with later inputs taking precedence in merging.
+///
+/// **Schema-level metadata merging**: Later schemas take precedence for duplicate keys.
+///
+/// **Field-level metadata merging**: Later fields take precedence for duplicate metadata keys.
+///
+/// **Type coercion precedence**: The coerced type is determined by iteratively applying
+/// `comparison_coercion()` between the accumulated type and each new input's type. The
+/// result depends on type coercion rules, not input order.
+///
+/// **Nullability merging**: Nullability is accumulated using logical OR (`||`).
+/// Once any input field is nullable, the result field becomes nullable permanently.
+/// Later inputs can make a field nullable but cannot make it non-nullable.
+///
+/// **Field precedence**: Field names come from the first (base) schema, but the field properties
+/// (nullability and field-level metadata) have later schemas taking precedence.
+///
+/// **Example**:
+/// ```sql
+/// SELECT a, b FROM table1  -- a: Int32, metadata {"source": "t1"}, nullable=false
+/// UNION
+/// SELECT a, b FROM table2  -- a: Int64, metadata {"source": "t2"}, nullable=true
+/// UNION
+/// SELECT a, b FROM table3  -- a: Int32, metadata {"encoding": "utf8"}, nullable=false
+/// -- Result:
+/// -- a: Int64 (from type coercion), nullable=true (from table2),
+/// -- metadata: {"source": "t2", "encoding": "utf8"} (later inputs take precedence)
+/// ```
+///
+/// **Precedence Summary**:
+/// - **Datatypes**: Determined by `comparison_coercion()` rules, not input order
+/// - **Nullability**: Later inputs can add nullability but cannot remove it (logical OR)
+/// - **Metadata**: Later inputs take precedence for same keys (HashMap::extend semantics)
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
     coerce_union_schema_with_schema(&inputs[1..], inputs[0].schema())
 }
@@ -1188,7 +1230,7 @@ mod test {
             plan,
             @r"
         Projection: a < CAST(UInt32(2) AS Float64)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1231,8 +1273,8 @@ mod test {
         Projection: a
           Union
             Projection: CAST(datafusion.test.foo.a AS Int64) AS a
-              EmptyRelation
-            EmptyRelation
+              EmptyRelation: rows=0
+            EmptyRelation: rows=0
         "
         )
     }
@@ -1254,7 +1296,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: a
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1264,7 +1306,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: CAST(a AS LargeUtf8)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1281,7 +1323,7 @@ mod test {
             bool_plan.clone(),
             @r#"
         Projection: a < CAST(Utf8("foo") AS Utf8View)
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1290,7 +1332,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: a
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1300,7 +1342,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: CAST(a AS LargeUtf8)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1320,7 +1362,7 @@ mod test {
             @r"
         Sort: a ASC NULLS FIRST
           Projection: a
-            EmptyRelation
+            EmptyRelation: rows=0
         "
         )?;
 
@@ -1332,7 +1374,7 @@ mod test {
         Projection: CAST(a AS LargeUtf8)
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1350,7 +1392,7 @@ mod test {
         Projection: a
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
         // Plan B: coerce requested: Utf8View => LargeUtf8 only on outermost
@@ -1361,7 +1403,7 @@ mod test {
         Projection: CAST(a AS LargeUtf8)
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1385,7 +1427,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: a
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1395,7 +1437,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: CAST(a AS LargeBinary)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1413,7 +1455,7 @@ mod test {
             bool_plan.clone(),
             @r#"
         Projection: a < CAST(Binary("8,1,8,1") AS BinaryView)
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1423,7 +1465,7 @@ mod test {
             bool_plan.clone(),
             @r#"
         Projection: a < CAST(Binary("8,1,8,1") AS BinaryView)
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1443,7 +1485,7 @@ mod test {
             @r"
         Sort: a ASC NULLS FIRST
           Projection: a
-            EmptyRelation
+            EmptyRelation: rows=0
         "
         )?;
         // Plan C: coerce requested: BinaryView => LargeBinary
@@ -1454,7 +1496,7 @@ mod test {
         Projection: CAST(a AS LargeBinary)
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1473,7 +1515,7 @@ mod test {
         Projection: a
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1485,7 +1527,7 @@ mod test {
         Projection: CAST(a AS LargeBinary)
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1506,12 +1548,12 @@ mod test {
             plan,
             @r"
         Projection: a < CAST(UInt32(2) AS Float64) OR a < CAST(UInt32(2) AS Float64)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
     }
@@ -1552,7 +1594,7 @@ mod test {
             plan,
             @r"
         Projection: TestScalarUDF(CAST(Int32(123) AS Float32))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1589,7 +1631,7 @@ mod test {
             plan,
             @r"
         Projection: TestScalarUDF(CAST(Int64(10) AS Float32))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1619,7 +1661,7 @@ mod test {
             plan,
             @r"
         Projection: MY_AVG(CAST(Int64(10) AS Float64))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1651,7 +1693,7 @@ mod test {
 
         let err = Projection::try_new(vec![udaf], empty).err().unwrap();
         assert!(
-            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'MY_AVG' function: coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
+            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'MY_AVG' function: coercion from Utf8 to the signature Uniform(1, [Float64]) failed")
         );
         Ok(())
     }
@@ -1673,7 +1715,7 @@ mod test {
             plan,
             @r"
         Projection: avg(Float64(12))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1692,7 +1734,7 @@ mod test {
             plan,
             @r"
         Projection: avg(CAST(a AS Float64))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1712,7 +1754,7 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed"));
+        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from Utf8 to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed"));
         Ok(())
     }
 
@@ -1728,7 +1770,7 @@ mod test {
             plan,
             @r#"
         Projection: CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 456 }")
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -1743,7 +1785,7 @@ mod test {
             plan,
             @r"
         Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])
-          EmptyRelation
+          EmptyRelation: rows=0
         ")?;
 
         // a in (1,4,8), a is decimal
@@ -1760,7 +1802,7 @@ mod test {
             plan,
             @r"
         Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])
-          EmptyRelation
+          EmptyRelation: rows=0
         ")
     }
 
@@ -1779,7 +1821,7 @@ mod test {
             plan,
             @r#"
         Filter: CAST(a AS Date32) BETWEEN CAST(Utf8("2002-05-08") AS Date32) AND CAST(Utf8("2002-05-08") AS Date32) + IntervalYearMonth("1")
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -1800,7 +1842,7 @@ mod test {
             plan,
             @r#"
         Filter: CAST(a AS Date32) BETWEEN CAST(Utf8("2002-05-08") AS Date32) + IntervalYearMonth("1") AND CAST(Utf8("2002-12-08") AS Date32)
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -1815,7 +1857,7 @@ mod test {
             plan,
             @r"
         Filter: CAST(NULL AS Int64) BETWEEN CAST(NULL AS Int64) AND Int64(2)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1832,7 +1874,7 @@ mod test {
             plan,
             @r"
         Projection: a IS TRUE
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1852,7 +1894,7 @@ mod test {
             plan,
             @r"
         Projection: a IS NOT TRUE
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1865,7 +1907,7 @@ mod test {
             plan,
             @r"
         Projection: a IS FALSE
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1878,7 +1920,7 @@ mod test {
             plan,
             @r"
         Projection: a IS NOT FALSE
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1896,7 +1938,7 @@ mod test {
             plan,
             @r#"
         Projection: a LIKE Utf8("abc")
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1910,7 +1952,7 @@ mod test {
             plan,
             @r"
         Projection: a LIKE CAST(NULL AS Utf8)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1935,7 +1977,7 @@ mod test {
             plan,
             @r#"
         Projection: a ILIKE Utf8("abc")
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1949,7 +1991,7 @@ mod test {
             plan,
             @r"
         Projection: a ILIKE CAST(NULL AS Utf8)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1978,7 +2020,7 @@ mod test {
             plan,
             @r"
         Projection: a IS UNKNOWN
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1998,7 +2040,7 @@ mod test {
             plan,
             @r"
         Projection: a IS NOT UNKNOWN
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -2019,7 +2061,7 @@ mod test {
             plan,
             @r#"
         Projection: TestScalarUDF(a, Utf8("b"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2075,8 +2117,8 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8("1998-03-18") AS Date32) AS Timestamp(Nanosecond, None))
-          EmptyRelation
+        Projection: CAST(Utf8("1998-03-18") AS Timestamp(ns)) = CAST(CAST(Utf8("1998-03-18") AS Date32) AS Timestamp(ns))
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2201,7 +2243,7 @@ mod test {
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
-            @"Error during planning: Failed to coerce case (Interval(MonthDayNano)) and when ([Float32, Binary, Utf8]) to common types in CASE WHEN expression"
+            @"Error during planning: Failed to coerce case (Interval(MonthDayNano)) and when (Float32, Binary, Utf8) to common types in CASE WHEN expression"
         );
 
         let case = Case {
@@ -2216,7 +2258,7 @@ mod test {
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
-            @"Error during planning: Failed to coerce then ([Date32, Float32, Binary]) and else (Some(Timestamp(Nanosecond, None))) to common types in CASE WHEN expression"
+            @"Error during planning: Failed to coerce then (Date32, Float32, Binary) and else (Timestamp(ns)) to common types in CASE WHEN expression"
         );
 
         Ok(())
@@ -2414,17 +2456,17 @@ mod test {
         let map_type_entries = DataType::Map(Arc::new(fields), false);
 
         let fields = Field::new("key_value", DataType::Struct(struct_fields), false);
-        let may_type_cutsom = DataType::Map(Arc::new(fields), false);
+        let may_type_custom = DataType::Map(Arc::new(fields), false);
 
-        let expr = col("a").eq(cast(col("a"), may_type_cutsom));
+        let expr = col("a").eq(cast(col("a"), may_type_custom));
         let empty = empty_with_type(map_type_entries);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: a = CAST(CAST(a AS Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false)) AS Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))
-          EmptyRelation
+        Projection: a = CAST(CAST(a AS Map("key_value": Struct("key": Utf8, "value": nullable Float64), unsorted)) AS Map("entries": Struct("key": Utf8, "value": nullable Float64), unsorted))
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2446,8 +2488,8 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: IntervalYearMonth("12") + CAST(Utf8("2000-01-01T00:00:00") AS Timestamp(Nanosecond, None))
-          EmptyRelation
+        Projection: IntervalYearMonth("12") + CAST(Utf8("2000-01-01T00:00:00") AS Timestamp(ns))
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2471,8 +2513,8 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None)) - CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None))
-          EmptyRelation
+        Projection: CAST(Utf8("1998-03-18") AS Timestamp(ns)) - CAST(Utf8("1998-03-18") AS Timestamp(ns))
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2500,8 +2542,8 @@ mod test {
         Filter: a IN (<subquery>)
           Subquery:
             Projection: CAST(a AS Int64)
-              EmptyRelation
-          EmptyRelation
+              EmptyRelation: rows=0
+          EmptyRelation: rows=0
         "
         )
     }
@@ -2528,8 +2570,8 @@ mod test {
             @r"
         Filter: CAST(a AS Int64) IN (<subquery>)
           Subquery:
-            EmptyRelation
-          EmptyRelation
+            EmptyRelation: rows=0
+          EmptyRelation: rows=0
         "
         )
     }
@@ -2557,8 +2599,8 @@ mod test {
         Filter: CAST(a AS Decimal128(13, 8)) IN (<subquery>)
           Subquery:
             Projection: CAST(a AS Decimal128(13, 8))
-              EmptyRelation
-          EmptyRelation
+              EmptyRelation: rows=0
+          EmptyRelation: rows=0
         "
         )
     }

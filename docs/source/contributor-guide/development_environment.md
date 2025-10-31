@@ -75,18 +75,20 @@ Alternatively a binary release can be downloaded from the [Release Page](https:/
 
 DataFusion is written in Rust and it uses a standard rust toolkit:
 
+- `rustup update stable` DataFusion generally uses the latest stable release of Rust, though it may lag when new Rust toolchains release
+  - See which toolchain is currently pinned in the [`rust-toolchain.toml`](https://github.com/apache/datafusion/blob/main/rust-toolchain.toml) file
+  - This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. `rustup component add --toolchain 1.88 rust-analyzer`
 - `cargo build`
 - `cargo fmt` to format the code
-- `cargo test` to test
 - etc.
-
-Note that running `cargo test` requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running `cargo test -- --test-threads=1`. For more information see [this issue](https://github.com/apache/datafusion/issues/5347).
 
 Testing setup:
 
-- `rustup update stable` DataFusion uses the latest stable release of rust
 - `git submodule init`
 - `git submodule update --init --remote --recursive`
+- `cargo test` to run tests
+
+Note that running `cargo test` requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running `cargo test -- --test-threads=1`. For more information see [this issue](https://github.com/apache/datafusion/issues/5347).
 
 Formatting instructions:
 

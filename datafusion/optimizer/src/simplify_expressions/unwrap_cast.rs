@@ -53,7 +53,6 @@
 //! ```text
 //! c1 > INT32(10)
 //! ```
-//!
 
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, tree_node::Transformed};
@@ -90,7 +89,7 @@ pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
             let Some(value) = try_cast_literal_to_type(&lit_value, &expr_type) else {
                 return internal_err!(
-                    "Can't cast the literal expr {:?} to type {:?}",
+                    "Can't cast the literal expr {:?} to type {}",
                     &lit_value,
                     &expr_type
                 );
@@ -297,9 +296,9 @@ mod tests {
         let expected = col("c2").eq(lit(16i64));
         assert_eq!(optimize_test(c2_eq_lit, &schema), expected);
 
-        // cast(c1, INT64) < INT64(NULL) => INT32(c1) < INT32(NULL)
+        // cast(c1, INT64) < INT64(NULL) => NULL
         let c1_lt_lit_null = cast(col("c1"), DataType::Int64).lt(null_i64());
-        let expected = col("c1").lt(null_i32());
+        let expected = null_bool();
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
         // cast(INT8(NULL), INT32) < INT32(12) => INT8(NULL) < INT8(12) => BOOL(NULL)
@@ -317,9 +316,9 @@ mod tests {
         let expected = col("c1").not_eq(lit(123i32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
-        // cast(c1, UTF8) = NULL => c1 = NULL
+        // cast(c1, UTF8) = NULL => NULL
         let expr_input = cast(col("c1"), DataType::Utf8).eq(lit(ScalarValue::Utf8(None)));
-        let expected = col("c1").eq(lit(ScalarValue::Int32(None)));
+        let expected = null_bool();
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
@@ -422,7 +421,7 @@ mod tests {
 
         // c3 < INT64(NULL)
         let c1_lt_lit_null = cast(col("c3"), DataType::Int64).lt(null_i64());
-        let expected = col("c3").lt(null_decimal(18, 2));
+        let expected = null_bool();
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
         // decimal to decimal
@@ -651,10 +650,6 @@ mod tests {
     fn lit_timestamp_nano_utc(ts: i64) -> Expr {
         let utc = Some("+0:00".into());
         lit(ScalarValue::TimestampNanosecond(Some(ts), utc))
-    }
-
-    fn null_decimal(precision: u8, scale: i8) -> Expr {
-        lit(ScalarValue::Decimal128(None, precision, scale))
     }
 
     fn timestamp_nano_none_type() -> DataType {

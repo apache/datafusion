@@ -32,7 +32,8 @@ use arrow::{
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
 use arrow_schema::FieldRef;
-use datafusion::logical_expr::{udf_equals_hash, ReturnFieldArgs};
+use datafusion::config::ConfigOptions;
+use datafusion::logical_expr::ReturnFieldArgs;
 use datafusion::{
     error::DataFusionError,
     logical_expr::type_coercion::functions::data_types_with_scalar_udf,
@@ -94,7 +95,7 @@ pub struct FFI_ScalarUDF {
     /// See [`ScalarUDFImpl`] for details on short_circuits
     pub short_circuits: bool,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`ScalarUDF`]
@@ -207,6 +208,8 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         arg_fields,
         number_rows,
         return_field,
+        // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = rresult_return!(udf
@@ -301,6 +304,7 @@ impl PartialEq for ForeignScalarUDF {
             && signature == &other.signature
     }
 }
+impl Eq for ForeignScalarUDF {}
 
 impl Hash for ForeignScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -378,6 +382,8 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
+            // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
+            config_options: _config_options,
         } = invoke_args;
 
         let args = args
@@ -438,8 +444,6 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[cfg(test)]

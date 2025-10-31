@@ -40,7 +40,7 @@ use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
 #[derive(Debug, StructOpt)]
 pub struct RunOpt {
@@ -50,7 +50,7 @@ pub struct RunOpt {
 
     /// Sort query number. If not specified, runs all queries
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Path to data files (lineitem). Only parquet format is supported
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
@@ -73,6 +73,9 @@ pub struct RunOpt {
     #[structopt(short = "l", long = "limit")]
     limit: Option<usize>,
 }
+
+pub const SORT_TPCH_QUERY_START_ID: usize = 1;
+pub const SORT_TPCH_QUERY_END_ID: usize = 11;
 
 impl RunOpt {
     const SORT_TABLES: [&'static str; 1] = ["lineitem"];
@@ -178,7 +181,7 @@ impl RunOpt {
 
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
-            None => 1..=Self::SORT_QUERIES.len(),
+            None => SORT_TPCH_QUERY_START_ID..=SORT_TPCH_QUERY_END_ID,
         };
 
         for query_id in query_range {
@@ -238,13 +241,16 @@ impl RunOpt {
             millis.push(ms);
 
             println!(
-                "Q{query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
             query_results.push(QueryResult { elapsed, row_count });
         }
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-        println!("Q{query_id} avg time: {avg:.2} ms");
+        println!("Query {query_id} avg time: {avg:.2} ms");
+
+        // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
+        print_memory_stats();
 
         Ok(query_results)
     }

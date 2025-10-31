@@ -33,4 +33,6 @@ mod sort_preserving_repartition_fuzz;
 mod window_fuzz;
 
 // Utility modules
+mod once_exec;
 mod record_batch_generator;
+mod spilling_fuzz_in_memory_constrained_env;

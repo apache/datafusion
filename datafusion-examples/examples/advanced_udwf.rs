@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
-use std::any::Any;
-
 use arrow::datatypes::Field;
 use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
@@ -33,17 +30,21 @@ use datafusion::logical_expr::function::{
 };
 use datafusion::logical_expr::simplify::SimplifyInfo;
 use datafusion::logical_expr::{
-    Expr, PartitionEvaluator, Signature, WindowFrame, WindowFunctionDefinition,
-    WindowUDF, WindowUDFImpl,
+    Expr, LimitEffect, PartitionEvaluator, Signature, WindowFrame,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
+use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
+use std::any::Any;
+use std::sync::Arc;
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
 /// defined window function. As in the `simple_udwf.rs` example, this struct implements
 /// a function `partition_evaluator` that returns the `MyPartitionEvaluator` instance.
 ///
 /// To do so, we must implement the `WindowUDFImpl` trait.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SmoothItUdf {
     signature: Signature,
 }
@@ -90,6 +91,10 @@ impl WindowUDFImpl for SmoothItUdf {
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(field_args.name(), DataType::Float64, true).into())
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 
@@ -149,7 +154,7 @@ impl PartitionEvaluator for MyPartitionEvaluator {
 }
 
 /// This UDWF will show how to use the WindowUDFImpl::simplify() API
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SimplifySmoothItUdf {
     signature: Signature,
 }
@@ -200,6 +205,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
                     window_frame: window_function.params.window_frame,
                     null_treatment: window_function.params.null_treatment,
                     distinct: window_function.params.distinct,
+                    filter: window_function.params.filter,
                 },
             }))
         };
@@ -209,6 +215,10 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(field_args.name(), DataType::Float64, true).into())
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 

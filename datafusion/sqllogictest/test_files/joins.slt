@@ -3199,7 +3199,7 @@ physical_plan
 04)------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@5 ASC NULLS LAST
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-07)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+07)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 09)----CoalesceBatchesExec: target_batch_size=2
 10)------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST
@@ -3237,7 +3237,7 @@ physical_plan
 08)------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@5 ASC NULLS LAST
 09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 10)----------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-11)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+11)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 12)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
@@ -3276,14 +3276,14 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2
 07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 08)--------------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-09)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+09)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 11)------SortExec: expr=[a@1 ASC], preserve_partitioning=[true]
 12)--------CoalesceBatchesExec: target_batch_size=2
 13)----------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2
 14)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 15)--------------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-16)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+16)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 17)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
@@ -3318,7 +3318,7 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@1, a@1)]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 04)----ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # hash join should propagate ordering equivalence of the right side for RIGHT ANTI join.
@@ -3345,8 +3345,29 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(a@0, a@1)]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC], file_type=csv, has_header=true
 04)----ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Test ordering preservation for RIGHT join
+query TT
+EXPLAIN SELECT *
+FROM annotated_data as l_table
+RIGHT JOIN (SELECT * FROM annotated_data) as r_table
+ON l_table.b = r_table.b
+ORDER BY r_table.a ASC NULLS FIRST, r_table.b, r_table.c, l_table.a ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: r_table.a ASC NULLS FIRST, r_table.b ASC NULLS LAST, r_table.c ASC NULLS LAST, l_table.a ASC NULLS FIRST
+02)--Right Join: l_table.b = r_table.b
+03)----SubqueryAlias: l_table
+04)------TableScan: annotated_data projection=[a0, a, b, c, d]
+05)----SubqueryAlias: r_table
+06)------TableScan: annotated_data projection=[a0, a, b, c, d]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@2, b@2)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT l.a, LAST_VALUE(r.b ORDER BY r.a ASC NULLS FIRST) as last_col1
@@ -3420,7 +3441,7 @@ physical_plan
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10, projection=[a@0, d@1, row_n@4]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 06)--------ProjectionExec: expr=[a@0 as a, d@1 as d, row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as row_n]
-07)----------BoundedWindowAggExec: wdw=[row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+07)----------BoundedWindowAggExec: wdw=[row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 08)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 # run query above in multiple partitions
@@ -3498,10 +3519,12 @@ logical_plan
 04)--SubqueryAlias: t2
 05)----TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
-01)NestedLoopJoinExec: join_type=Inner, filter=example(CAST(a@0 AS Float64), CAST(a@1 AS Float64)) > 3
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
-03)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+01)NestedLoopJoinExec: join_type=Inner, filter=example(join_proj_push_down_1@0, join_proj_push_down_2@1) > 3, projection=[a0@0, a@1, b@2, c@3, d@4, a0@6, a@7, b@8, c@9, d@10]
+02)--ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, CAST(a@1 AS Float64) as join_proj_push_down_1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+04)--ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, CAST(a@1 AS Float64) as join_proj_push_down_2]
+05)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 ####
 # Config teardown
@@ -3608,12 +3631,12 @@ logical_plan
 02)--SubqueryAlias: a
 03)----Union
 04)------Projection: Int64(1) AS c, Int64(2) AS d
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Projection: Int64(1) AS c, Int64(3) AS d
-07)--------EmptyRelation
+07)--------EmptyRelation: rows=1
 08)--SubqueryAlias: rhs
 09)----Projection: Int64(1) AS e, Int64(3) AS f
-10)------EmptyRelation
+10)------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -3651,12 +3674,12 @@ logical_plan
 02)--SubqueryAlias: a
 03)----Union
 04)------Projection: Int64(1) AS c, Int64(2) AS d
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Projection: Int64(1) AS c, Int64(3) AS d
-07)--------EmptyRelation
+07)--------EmptyRelation: rows=1
 08)--SubqueryAlias: rhs
 09)----Projection: Int64(1) AS e, Int64(3) AS f
-10)------EmptyRelation
+10)------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -3691,7 +3714,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a INNER JOIN (SELECT 1 as a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Inner join with empty right table
 query TT
@@ -3699,7 +3722,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a INNER JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left join with empty left table
 query TT
@@ -3707,7 +3730,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a LEFT JOIN (SELECT 1 as a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left join with empty left and empty right table
 query TT
@@ -3715,7 +3738,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a LEFT JOIN (SELECT 1 as a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right join with empty right table
 query TT
@@ -3723,7 +3746,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right join with empty right and empty left table
 query TT
@@ -3731,7 +3754,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a RIGHT JOIN (SELECT 1 as a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left SEMI join with empty left table
 query TT
@@ -3739,7 +3762,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a LEFT SEMI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left SEMI join with empty right table
 query TT
@@ -3747,7 +3770,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a LEFT SEMI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right SEMI join with empty left table
 query TT
@@ -3755,7 +3778,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a RIGHT SEMI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right SEMI join with empty right table
 query TT
@@ -3763,7 +3786,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT SEMI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left ANTI join with empty left table
 query TT
@@ -3771,7 +3794,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a LEFT ANTI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right ANTI join with empty right table
 query TT
@@ -3779,7 +3802,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT ANTI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # FULL OUTER join with empty left and empty right table
 query TT
@@ -3787,7 +3810,7 @@ EXPLAIN SELECT * FROM (
 	SELECT 1 as a WHERE 1=0
 ) AS a FULL JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left ANTI join with empty right table
 query TT
@@ -3798,7 +3821,7 @@ EXPLAIN SELECT * FROM (
 logical_plan
 01)SubqueryAlias: a
 02)--Projection: Int64(1) AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 
 # Right ANTI join with empty left table
 query TT
@@ -3809,7 +3832,7 @@ EXPLAIN SELECT * FROM (
 logical_plan
 01)SubqueryAlias: b
 02)--Projection: Int64(1) AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 
 
 statement ok
@@ -4012,13 +4035,13 @@ logical_plan
 08)----------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))
 09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
 10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
-11)----------------EmptyRelation
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
+11)----------------EmptyRelation: rows=1
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true }, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
 
 
 # Test CROSS JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(UInt32, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true \}, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
 select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
 
 
@@ -4037,13 +4060,13 @@ logical_plan
 08)----------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int)))
 09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))|depth=1] structs[]
 10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))
-11)----------------EmptyRelation
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
+11)----------------EmptyRelation: rows=1
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true }, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
 
 
 # Test INNER JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(UInt32, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true \}, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
 select t1_id, t1_name, i from join_t1 t2 inner join lateral (select * from unnest(generate_series(1, t1_int))) as series(i) on(t1_id > i);
 
 # Test RIGHT JOIN LATERAL syntax (unsupported)
@@ -4127,9 +4150,9 @@ logical_plan
 03)----TableScan: left_table projection=[a, b, c]
 04)----TableScan: right_table projection=[x, y, z]
 physical_plan
-01)NestedLoopJoinExec: join_type=Inner, filter=a@0 < x@1
-02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+01)SortExec: expr=[x@3 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=Inner, filter=a@0 < x@1
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
@@ -4217,7 +4240,7 @@ physical_plan
 03)----DataSourceExec: partitions=1, partition_sizes=[2]
 04)----DataSourceExec: partitions=1, partition_sizes=[2]
 
-## Test join.on.is_empty() && join.filter.is_some()
+## Test join.on.is_empty() && join.filter.is_some() -> single filter now a PWMJ
 query TT
 EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 2;
 ----
@@ -4648,7 +4671,7 @@ logical_plan
 05)------Subquery:
 06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
 07)----------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id), LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4
@@ -4664,7 +4687,7 @@ logical_plan
 08)----Subquery:
 09)------Filter: j3.j3_string = outer_ref(j2.j2_string)
 10)--------TableScan: j3 projection=[j3_string, j3_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Utf8View, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j2_string", data_type: Utf8View, nullable: true }, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
 
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT * FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id = j2_id) as j2) as j2;
@@ -4680,7 +4703,7 @@ logical_plan
 08)----------Subquery:
 09)------------Filter: outer_ref(j1.j1_id) = j2.j2_id
 10)--------------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT j1_string, j2_string FROM j1 LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);
@@ -4693,7 +4716,7 @@ logical_plan
 05)------Subquery:
 06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
 07)----------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1, (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true));
@@ -4707,7 +4730,7 @@ logical_plan
 06)------Subquery:
 07)--------Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id
 08)----------TableScan: j3 projection=[j3_string, j3_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT 1) AS j2;
@@ -4717,7 +4740,7 @@ logical_plan
 02)--TableScan: j1 projection=[j1_string, j1_id]
 03)--SubqueryAlias: j2
 04)----Projection: Int64(1)
-05)------EmptyRelation
+05)------EmptyRelation: rows=1
 physical_plan
 01)CrossJoinExec
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
@@ -5139,6 +5162,70 @@ LEFT ANTI JOIN t2 ON k1 = k2
 WHERE k1 < 0
 ----
 
+# Mark testing
+statement ok
+CREATE OR REPLACE TABLE t1(b INT, c INT, d INT);
+
+statement ok
+INSERT INTO t1 VALUES
+  (10, 5, 3),   
+  ( 1, 7, 8),  
+  ( 2, 9, 7),   
+  ( 3, 8,10),   
+  ( 5, 6, 6),   
+  ( 0, 4, 9),   
+  ( 4, 8, 7),   
+  (100,6, 5);  
+
+query I rowsort
+SELECT c
+  FROM t1
+ WHERE c > d
+    OR EXISTS(SELECT 1 FROM t1 AS x WHERE x.b<t1.b)
+    OR (c <= d-2 OR c >= d+2)
+----
+4
+5
+6
+6
+7
+8
+8
+9
+
+# PiecewiseMergeJoin Test
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query II
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id > join_t2.t2_id
+WHERE join_t1.t1_id > 10 AND join_t2.t2_int > 1
+ORDER BY 1
+----
+22 11
+33 11
+44 11
+
+query TT
+EXPLAIN
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id > join_t2.t2_id
+WHERE join_t1.t1_id > 10 AND join_t2.t2_int > 1
+ORDER BY 1
+----
+physical_plan
+01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
+03)----SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
+04)------CoalesceBatchesExec: target_batch_size=3
+05)--------FilterExec: t1_id@0 > 10
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=3
+08)------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE t1;
@@ -5148,3 +5235,6 @@ DROP TABLE t2;
 
 statement ok
 set datafusion.explain.physical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;

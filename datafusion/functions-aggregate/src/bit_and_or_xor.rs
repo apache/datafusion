@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::{size_of, size_of_val};
 
 use ahash::RandomState;
@@ -40,7 +40,7 @@ use datafusion_expr::{
     Signature, Volatility,
 };
 
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
+use datafusion_doc::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use std::ops::{BitAndAssign, BitOrAssign, BitXorAssign};
 use std::sync::LazyLock;
@@ -211,7 +211,7 @@ impl Display for BitwiseOperationType {
 }
 
 /// [BitwiseOperation] struct encapsulates information about a bitwise operation.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct BitwiseOperation {
     signature: Signature,
     /// `operation` indicates the type of bitwise operation to be performed.
@@ -313,38 +313,6 @@ impl AggregateUDFImpl for BitwiseOperation {
     fn documentation(&self) -> Option<&Documentation> {
         Some(self.documentation)
     }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            operation,
-            func_name,
-            documentation,
-        } = self;
-        signature == &other.signature
-            && operation == &other.operation
-            && func_name == &other.func_name
-            && documentation == &other.documentation
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            operation,
-            func_name,
-            documentation,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        operation.hash(&mut hasher);
-        func_name.hash(&mut hasher);
-        documentation.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 struct BitAndAccumulator<T: ArrowNumericType> {
@@ -414,7 +382,7 @@ where
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_or(values[0].as_primitive::<T>()) {
-            let v = self.value.get_or_insert(T::Native::usize_as(0));
+            let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
             *v = *v | x;
         }
         Ok(())
@@ -459,7 +427,7 @@ where
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_xor(values[0].as_primitive::<T>()) {
-            let v = self.value.get_or_insert(T::Native::usize_as(0));
+            let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
             *v = *v ^ x;
         }
         Ok(())

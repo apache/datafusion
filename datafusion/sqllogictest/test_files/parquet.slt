@@ -268,7 +268,7 @@ FROM (
 ) t
 GROUP BY 1
 ----
-Timestamp(Millisecond, Some("UTC")) 2014-08-27T14:00:00Z 131072
+Timestamp(ms, "UTC") 2014-08-27T14:00:00Z 131072
 
 # Test config listing_table_ignore_subdirectory:
 
@@ -689,7 +689,7 @@ LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
 query TTT
 describe int96_from_spark
 ----
-a Timestamp(Nanosecond, None) YES
+a Timestamp(ns) YES
 
 # Note that the values are read as nanosecond precision
 query P
@@ -718,7 +718,7 @@ LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
 query TTT
 describe int96_from_spark;
 ----
-a Timestamp(Millisecond, None) YES
+a Timestamp(ms) YES
 
 # Per https://github.com/apache/parquet-testing/blob/6e851ddd768d6af741c7b15dc594874399fc3cff/data/int96_from_spark.md?plain=1#L37
 # these values should be
@@ -742,7 +742,7 @@ select * from int96_from_spark
 9999-12-31T03:00:00
 2024-12-30T23:00:00
 NULL
-ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(Millisecond, None)
+ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(ms)
 
 # Cleanup / reset default setting
 statement ok
@@ -750,3 +750,142 @@ drop table int96_from_spark;
 
 statement ok
 set datafusion.execution.parquet.coerce_int96 = ns;
+
+
+### Tests for metadata caching
+
+# Create temporary data
+query I
+COPY (
+  SELECT 'k-' || i as k, i as v
+  FROM generate_series(1, 20000) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata.parquet'
+OPTIONS (MAX_ROW_GROUP_SIZE 4096, DATA_PAGE_ROW_COUNT_LIMIT 2048);
+----
+20000
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/cache_metadata.parquet';
+
+query TI
+select * from t where k = 'k-1000' or k = 'k-9999' order by k
+----
+k-1000 1000
+k-9999 9999
+
+query IT
+select v, k from t where (v between 1 and 2) or (v between 9999 and 10000) order by v
+----
+1 k-1
+2 k-2
+9999 k-9999
+10000 k-10000
+
+# Updating the file should invalidate the cache. Otherwise, the following queries would fail
+# (e.g., with "Arrow: Parquet argument error: External: incomplete frame").
+query I
+COPY (
+  SELECT 'k-' || i as k, 20000 - i as v
+  FROM generate_series(1, 20000) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata.parquet'
+OPTIONS (MAX_ROW_GROUP_SIZE 4096, DATA_PAGE_ROW_COUNT_LIMIT 2048);
+----
+20000
+
+query TI
+select * from t where k = 'k-1000' or k = 'k-9999' order by k
+----
+k-1000 19000
+k-9999 10001
+
+query IT
+select v, k from t where (v between 1 and 2) or (v between 9999 and 10000) order by v
+----
+1 k-19999
+2 k-19998
+9999 k-10001
+10000 k-10000
+
+statement ok
+DROP TABLE t;
+
+# Partitioned files should be independently cached. Otherwise, the following queries might fail.
+statement ok
+COPY (
+  SELECT i % 10 as part, 'k-' || i as k, i as v 
+  FROM generate_series(0, 9) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata_partitioned.parquet'
+PARTITIONED BY (part);
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+PARTITIONED BY (part)
+LOCATION 'test_files/scratch/parquet/cache_metadata_partitioned.parquet';
+
+query TTI
+select part, k, v from t where k = 'k-0'
+----
+0 k-0 0
+
+query TTI
+select part, k, v from t where k = 'k-5'
+----
+5 k-5 5
+
+query TTI
+select part, k, v from t where k = 'k-9'
+----
+9 k-9 9
+
+query TTI
+select part, k, v from t order by k
+----
+0 k-0 0
+1 k-1 1
+2 k-2 2
+3 k-3 3
+4 k-4 4
+5 k-5 5
+6 k-6 6
+7 k-7 7
+8 k-8 8
+9 k-9 9
+
+statement ok
+DROP TABLE t;
+
+# Regression test for files with stats on some columns and not others
+# See https://github.com/apache/datafusion/pull/18276
+
+query I
+COPY (SELECT 1::int AS a, 2::int as b)
+TO 'test_files/scratch/parquet/mixed_stats.parquet'
+STORED AS PARQUET OPTIONS (
+  'STATISTICS_ENABLED::b' 'none'
+);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/mixed_stats.parquet';
+
+query I
+SELECT b
+FROM t
+WHERE b = 2;
+----
+2
+
+statement ok
+DROP TABLE t;

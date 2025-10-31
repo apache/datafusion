@@ -57,7 +57,7 @@
 /// #
 /// # assert_eq!(simple_udwf().name(), "simple_user_defined_window_function");
 /// #
-/// #  #[derive(Debug)]
+/// #  #[derive(Debug, PartialEq, Eq, Hash)]
 /// #  struct SimpleUDWF {
 /// #      signature: Signature,
 /// #  }
@@ -171,7 +171,7 @@ macro_rules! get_or_init_udwf {
 /// #     "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct RowNumber {
 /// #     signature: Signature,
 /// # }
@@ -250,7 +250,7 @@ macro_rules! get_or_init_udwf {
 /// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct Lead {
 /// #     signature: Signature,
 /// # }
@@ -379,7 +379,7 @@ macro_rules! create_udwf_expr {
 /// #
 /// # assert_eq!(simple_udwf().name(), "simple_user_defined_window_function");
 /// #
-/// #  #[derive(Debug)]
+/// #  #[derive(Debug, PartialEq, Eq, Hash)]
 /// #  struct SimpleUDWF {
 /// #      signature: Signature,
 /// #  }
@@ -446,7 +446,7 @@ macro_rules! create_udwf_expr {
 /// #     "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct RowNumber {
 /// #     signature: Signature,
 /// # }
@@ -524,7 +524,7 @@ macro_rules! create_udwf_expr {
 /// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct Lead {
 /// #     signature: Signature,
 /// # }
@@ -614,7 +614,7 @@ macro_rules! create_udwf_expr {
 /// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct Lead {
 /// #     signature: Signature,
 /// # }

@@ -26,7 +26,7 @@ use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use crate::schema_adapter::SchemaAdapterFactory;
-use arrow::datatypes::SchemaRef;
+use crate::TableSchema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
@@ -64,11 +64,15 @@ pub trait FileSource: Send + Sync {
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
     /// Initialize new instance with a new schema
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource>;
+    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource>;
     /// Initialize new instance with projection information
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
     /// Initialize new instance with projected statistics
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
+    /// Returns the filter expression that will be applied during the file scan.
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        None
+    }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics

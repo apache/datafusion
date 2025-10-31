@@ -15,23 +15,163 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query T
+SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'HOST'::string);
+----
+spark.apache.org
 
-## Original Query: SELECT parse_url('http://spark.apache.org/path?query=1', 'HOST');
-## PySpark 3.5.5 Result: {'parse_url(http://spark.apache.org/path?query=1, HOST)': 'spark.apache.org', 'typeof(parse_url(http://spark.apache.org/path?query=1, HOST))': 'string', 'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(HOST)': 'string'}
-#query
-#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'HOST'::string);
+query T
+SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'QUERY'::string);
+----
+query=1
 
-## Original Query: SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY');
-## PySpark 3.5.5 Result: {'parse_url(http://spark.apache.org/path?query=1, QUERY)': 'query=1', 'typeof(parse_url(http://spark.apache.org/path?query=1, QUERY))': 'string', 'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(QUERY)': 'string'}
-#query
-#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'QUERY'::string);
+query T
+SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'QUERY'::string, 'query'::string);
+----
+1
 
-## Original Query: SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');
-## PySpark 3.5.5 Result: {'parse_url(http://spark.apache.org/path?query=1, QUERY, query)': '1', 'typeof(parse_url(http://spark.apache.org/path?query=1, QUERY, query))': 'string', 'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(QUERY)': 'string', 'typeof(query)': 'string'}
-#query
-#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'QUERY'::string, 'query'::string);
+query T
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'HOST'::string);
+----
+spark.apache.org
+
+query T
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'PATH'::string);
+----
+/path
+
+query T
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'QUERY'::string);
+----
+query=1
+
+query T
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'REF'::string);
+----
+Ref
+
+query T
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'PROTOCOL'::string);
+----
+http
+
+query T
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'FILE'::string);
+----
+/path?query=1
+
+query T
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'AUTHORITY'::string);
+----
+userinfo@spark.apache.org
+
+query T
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'USERINFO'::string);
+----
+userinfo
+
+query T
+SELECT parse_url('https://example.com/a?x=1', 'QUERY', 'x');
+----
+1
+
+query T
+SELECT parse_url('https://example.com/a?x=1', 'query', 'x');
+----
+NULL
+
+query T
+SELECT parse_url('www.example.com/path?x=1', 'HOST');
+----
+NULL
+
+query T
+SELECT parse_url('www.example.com/path?x=1', 'host');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com/?a=1', 'QUERY', 'b');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com/?a=1', 'query', 'b');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com/path#frag', 'REF');
+----
+frag
+
+query T
+SELECT parse_url('https://example.com/path#frag', 'ref');
+----
+NULL
+
+query T
+SELECT parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO');
+----
+user:pwd
+
+query T
+SELECT parse_url('ftp://user:pwd@ftp.example.com:21/files', 'userinfo');
+----
+NULL
+
+query T
+SELECT parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST');
+----
+[2001:db8::2]
+
+query T
+SELECT parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'host');
+----
+NULL
+
+query T
+SELECT parse_url('notaurl', 'HOST');
+----
+NULL
+
+query T
+SELECT parse_url('notaurl', 'host');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com', 'PATH');
+----
+(empty)
+
+query T
+SELECT parse_url('https://example.com', 'path');
+----
+NULL
+
+query T
+SELECT parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL');
+----
+https
+
+query T
+SELECT parse_url('https://example.com/a/b?x=1&y=2#frag', 'protocol');
+----
+NULL
+
+query T
+SELECT parse_url('https://ex.com/?Tag=ok', 'QUERY', 'tag');
+----
+NULL
+
+query T
+SELECT parse_url('https://ex.com/?Tag=ok', 'query', 'tag');
+----
+NULL
+
+statement error 'parse_url' does not support zero arguments
+SELECT parse_url();
+
+query error DataFusion error: Execution error: The url is invalid: inva lid://spark\.apache\.org/path\?query=1\. Use `try_parse_url` to tolerate invalid URL and return NULL instead\. SQLSTATE: 22P02
+SELECT parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');

@@ -57,6 +57,7 @@ make_udaf_expr_and_func!(
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxMedian {
     signature: Signature,
 }
@@ -133,7 +134,7 @@ impl AggregateUDFImpl for ApproxMedian {
 
         Ok(Box::new(ApproxPercentileAccumulator::new(
             0.5_f64,
-            acc_args.exprs[0].data_type(acc_args.schema)?,
+            acc_args.expr_fields[0].data_type().clone(),
         )))
     }
 

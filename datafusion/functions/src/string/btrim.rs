@@ -65,7 +65,7 @@ fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     related_udf(name = "ltrim"),
     related_udf(name = "rtrim")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BTrimFunc {
     signature: Signature,
     aliases: Vec<String>,

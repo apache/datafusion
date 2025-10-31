@@ -78,7 +78,7 @@ make_udf_expr_and_func!(ArrayReplaceAll,
     argument(name = "from", description = "Initial element."),
     argument(name = "to", description = "Final element.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayReplace {
     signature: Signature,
     aliases: Vec<String>,
@@ -105,6 +105,7 @@ impl ArrayReplace {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace")],
         }
@@ -164,7 +165,7 @@ impl ScalarUDFImpl for ArrayReplace {
     argument(name = "to", description = "Final element."),
     argument(name = "max", description = "Number of first occurrences to replace.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayReplaceN {
     signature: Signature,
     aliases: Vec<String>,
@@ -186,6 +187,7 @@ impl ArrayReplaceN {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace_n")],
         }
@@ -244,7 +246,7 @@ impl ScalarUDFImpl for ArrayReplaceN {
     argument(name = "from", description = "Initial element."),
     argument(name = "to", description = "Final element.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayReplaceAll {
     signature: Signature,
     aliases: Vec<String>,
@@ -265,6 +267,7 @@ impl ArrayReplaceAll {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace_all")],
         }
@@ -430,7 +433,7 @@ pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_replace::<i64>(list_array, from, to, arr_n)
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
-        array_type => exec_err!("array_replace does not support type '{array_type:?}'."),
+        array_type => exec_err!("array_replace does not support type '{array_type}'."),
     }
 }
 
@@ -450,7 +453,7 @@ pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
-            exec_err!("array_replace_n does not support type '{array_type:?}'.")
+            exec_err!("array_replace_n does not support type '{array_type}'.")
         }
     }
 }
@@ -471,7 +474,7 @@ pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
-            exec_err!("array_replace_all does not support type '{array_type:?}'.")
+            exec_err!("array_replace_all does not support type '{array_type}'.")
         }
     }
 }

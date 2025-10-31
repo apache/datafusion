@@ -41,7 +41,7 @@ use datafusion::prelude::*;
 /// a function `accumulator` that returns the `Accumulator` instance.
 ///
 /// To do so, we must implement the `AggregateUDFImpl` trait.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct GeoMeanUdaf {
     signature: Signature,
 }
@@ -368,7 +368,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
 
 /// This example shows how to use the AggregateUDFImpl::simplify API to simplify/replace user
 /// defined aggregate function with a different expression which is defined in the `simplify` method.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SimplifiedGeoMeanUdaf {
     signature: Signature,
 }

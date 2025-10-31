@@ -28,11 +28,11 @@ use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     as_file_source, calculate_range, ListingTableUrl, PartitionedFile, RangeCalculation,
+    TableSchema,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -123,7 +123,7 @@ impl FileSource for JsonSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn with_schema(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
@@ -176,18 +176,15 @@ impl FileOpener for JsonOpener {
     /// are applied to determine which lines to read:
     /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
     /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
-    fn open(
-        &self,
-        file_meta: FileMeta,
-        _file: PartitionedFile,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let store = Arc::clone(&self.object_store);
         let schema = Arc::clone(&self.projected_schema);
         let batch_size = self.batch_size;
         let file_compression_type = self.file_compression_type.to_owned();
 
         Ok(Box::pin(async move {
-            let calculated_range = calculate_range(&file_meta, &store, None).await?;
+            let calculated_range =
+                calculate_range(&partitioned_file, &store, None).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
@@ -204,12 +201,14 @@ impl FileOpener for JsonOpener {
                 ..Default::default()
             };
 
-            let result = store.get_opts(file_meta.location(), options).await?;
+            let result = store
+                .get_opts(&partitioned_file.object_meta.location, options)
+                .await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
-                    let bytes = match file_meta.range {
+                    let bytes = match partitioned_file.range {
                         None => file_compression_type.convert_read(file)?,
                         Some(_) => {
                             file.seek(SeekFrom::Start(result.range.start as _))?;
@@ -222,7 +221,9 @@ impl FileOpener for JsonOpener {
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
 
-                    Ok(futures::stream::iter(reader).boxed())
+                    Ok(futures::stream::iter(reader)
+                        .map(|r| r.map_err(Into::into))
+                        .boxed())
                 }
                 GetResultPayload::Stream(s) => {
                     let s = s.map_err(DataFusionError::from);
@@ -232,10 +233,11 @@ impl FileOpener for JsonOpener {
                         .build_decoder()?;
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    Ok(deserialize_stream(
+                    let stream = deserialize_stream(
                         input,
                         DecoderDeserializer::new(JsonDecoder::new(decoder)),
-                    ))
+                    );
+                    Ok(stream.map_err(Into::into).boxed())
                 }
             }
         }))

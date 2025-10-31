@@ -70,6 +70,10 @@ use substrait::proto::{
 ///        self.extensions.register_function(signature)
 ///     }
 ///
+///     fn register_type(&mut self, type_name: String) -> u32 {
+///         self.extensions.register_type(type_name)
+///     }
+///
 ///     fn get_extensions(self) -> Extensions {
 ///         self.extensions
 ///     }
@@ -113,6 +117,15 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     /// When given a function signature, this method should return the existing anchor for it if
     /// there is one. Otherwise, it should generate a new anchor.
     fn register_function(&mut self, signature: String) -> u32;
+
+    /// Within a Substrait plan, user defined types are referenced using type anchors that are stored at
+    /// the top level of the [Plan](substrait::proto::Plan) within
+    /// [ExtensionType](substrait::proto::extensions::simple_extension_declaration::ExtensionType)
+    /// messages.
+    ///
+    /// When given a type name, this method should return the existing anchor for it if
+    /// there is one. Otherwise, it should generate a new anchor.
+    fn register_type(&mut self, name: String) -> u32;
 
     /// Consume the producer to generate the [Extensions] for the Substrait plan based on the
     /// functions that have been registered
@@ -182,7 +195,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         &mut self,
         plan: &EmptyRelation,
     ) -> datafusion::common::Result<Box<Rel>> {
-        from_empty_relation(plan)
+        from_empty_relation(self, plan)
     }
 
     fn handle_subquery_alias(
@@ -365,6 +378,10 @@ impl<'a> DefaultSubstraitProducer<'a> {
 impl SubstraitProducer for DefaultSubstraitProducer<'_> {
     fn register_function(&mut self, fn_name: String) -> u32 {
         self.extensions.register_function(fn_name)
+    }
+
+    fn register_type(&mut self, type_name: String) -> u32 {
+        self.extensions.register_type(type_name)
     }
 
     fn get_extensions(self) -> Extensions {

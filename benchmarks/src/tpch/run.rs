@@ -19,9 +19,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{
-    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
+    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_QUERY_END_ID,
+    TPCH_QUERY_START_ID, TPCH_TABLES,
 };
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -60,7 +61,7 @@ type BoolDefaultTrue = bool;
 pub struct RunOpt {
     /// Query number. If not specified, runs all queries
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Common options
     #[structopt(flatten)]
@@ -91,14 +92,20 @@ pub struct RunOpt {
     #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
 
+    /// If true then Piecewise Merge Join can be used, if false then it will opt for Nested Loop Join
+    /// True by default.
+    #[structopt(
+        short = "j",
+        long = "enable_piecewise_merge_join",
+        default_value = "false"
+    )]
+    enable_piecewise_merge_join: BoolDefaultTrue,
+
     /// Mark the first column of each table as sorted in ascending order.
     /// The tables should have been created with the `--sort` option for this to have any effect.
     #[structopt(short = "t", long = "sorted")]
     sorted: bool,
 }
-
-const TPCH_QUERY_START_ID: usize = 1;
-const TPCH_QUERY_END_ID: usize = 22;
 
 impl RunOpt {
     pub async fn run(self) -> Result<()> {
@@ -114,6 +121,8 @@ impl RunOpt {
             .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
+        config.options_mut().optimizer.enable_piecewise_merge_join =
+            self.enable_piecewise_merge_join;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         // register tables
@@ -170,7 +179,7 @@ impl RunOpt {
                 }
             }
 
-            let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
+            let elapsed = start.elapsed();
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
             info!("output:\n\n{}\n\n", pretty_format_batches(&result)?);
@@ -183,6 +192,9 @@ impl RunOpt {
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
+
+        // Print memory stats using mimalloc (only when compiled with --features mimalloc_extended)
+        print_memory_stats();
 
         Ok(query_results)
     }
@@ -378,6 +390,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            enable_piecewise_merge_join: false,
             sorted: false,
         };
         opt.register_tables(&ctx).await?;
@@ -386,7 +399,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
-            let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", plan.display_indent());
             let plan2_formatted = format!("{}", plan2.display_indent());
             assert_eq!(plan_formatted, plan2_formatted);
@@ -415,6 +428,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            enable_piecewise_merge_join: false,
             sorted: false,
         };
         opt.register_tables(&ctx).await?;
@@ -423,7 +437,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.create_physical_plan().await?;
             let bytes = physical_plan_to_bytes(plan.clone())?;
-            let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", displayable(plan.as_ref()).indent(false));
             let plan2_formatted =
                 format!("{}", displayable(plan2.as_ref()).indent(false));

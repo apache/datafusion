@@ -22,8 +22,8 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_err};
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
+use crate::{Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
     OffsetSizeTrait,
@@ -31,9 +31,8 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, SchemaRef};
-use sqlparser::ast::Ident;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
+#[cfg(feature = "sql")]
+use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{min, Ordering};
 use std::collections::HashSet;
@@ -47,26 +46,23 @@ use std::thread::available_parallelism;
 ///
 /// Example:
 /// ```
-/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 /// use datafusion_common::project_schema;
 ///
 /// // Schema with columns 'a', 'b', and 'c'
 /// let schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("a", DataType::Int32, true),
-///   Field::new("b", DataType::Int64, true),
-///   Field::new("c", DataType::Utf8, true),
+///     Field::new("a", DataType::Int32, true),
+///     Field::new("b", DataType::Int64, true),
+///     Field::new("c", DataType::Utf8, true),
 /// ]));
 ///
 /// // Pick columns 'c' and 'b'
-/// let projection = Some(vec![2,1]);
-/// let projected_schema = project_schema(
-///    &schema,
-///    projection.as_ref()
-///  ).unwrap();
+/// let projection = Some(vec![2, 1]);
+/// let projected_schema = project_schema(&schema, projection.as_ref()).unwrap();
 ///
 /// let expected_schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("c", DataType::Utf8, true),
-///   Field::new("b", DataType::Int64, true),
+///     Field::new("c", DataType::Utf8, true),
+///     Field::new("b", DataType::Int64, true),
 /// ]));
 ///
 /// assert_eq!(projected_schema, expected_schema);
@@ -148,9 +144,7 @@ pub fn bisect<const SIDE: bool>(
     let low: usize = 0;
     let high: usize = item_columns
         .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
+        .ok_or_else(|| _internal_datafusion_err!("Column array shouldn't be empty"))?
         .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare_rows(current, target, sort_options)?;
@@ -199,9 +193,7 @@ pub fn linear_search<const SIDE: bool>(
     let low: usize = 0;
     let high: usize = item_columns
         .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
+        .ok_or_else(|| _internal_datafusion_err!("Column array shouldn't be empty"))?
         .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare_rows(current, target, sort_options)?;
@@ -260,7 +252,7 @@ pub fn evaluate_partition_ranges(
 /// the identifier by replacing it with two double quotes
 ///
 /// e.g. identifier `tab.le"name` becomes `"tab.le""name"`
-pub fn quote_identifier(s: &str) -> Cow<str> {
+pub fn quote_identifier(s: &str) -> Cow<'_, str> {
     if needs_quotes(s) {
         Cow::Owned(format!("\"{}\"", s.replace('"', "\"\"")))
     } else {
@@ -282,6 +274,7 @@ fn needs_quotes(s: &str) -> bool {
     !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+#[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     let dialect = GenericDialect;
     let mut parser = Parser::new(&dialect).try_with_sql(s)?;
@@ -289,6 +282,10 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
+/// Parse a string into a vector of identifiers.
+///
+/// Note: If ignore_case is false, the string will be normalized to lowercase.
+#[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
@@ -297,6 +294,59 @@ pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<St
             Some(_) => id.value,
             None if ignore_case => id.value,
             _ => id.value.to_ascii_lowercase(),
+        })
+        .collect::<Vec<_>>()
+}
+
+#[cfg(not(feature = "sql"))]
+pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<String>> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in s.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '.' if !in_quotes => {
+                result.push(current.clone());
+                current.clear();
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+
+    // Push the last part if it's not empty
+    if !current.is_empty() {
+        result.push(current);
+    }
+
+    Ok(result)
+}
+
+#[cfg(not(feature = "sql"))]
+pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
+    parse_identifiers(s)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| {
+            let is_double_quoted = if id.len() > 2 {
+                let mut chars = id.chars();
+                chars.next() == Some('"') && chars.last() == Some('"')
+            } else {
+                false
+            };
+            if is_double_quoted {
+                id[1..id.len() - 1].to_string().replace("\"\"", "\"")
+            } else if ignore_case {
+                id
+            } else {
+                id.to_ascii_lowercase()
+            }
         })
         .collect::<Vec<_>>()
 }
@@ -311,9 +361,7 @@ pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
         .map(|idx| items.get(*idx.borrow()).cloned())
         .collect::<Option<Vec<T>>>()
         .ok_or_else(|| {
-            DataFusionError::Execution(
-                "Expects indices to be in the range of searched vector".to_string(),
-            )
+            _exec_datafusion_err!("Expects indices to be in the range of searched vector")
         })
 }
 
@@ -347,9 +395,11 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// # use arrow::array::types::Int64Type;
 /// # use datafusion_common::utils::SingleRowListArrayBuilder;
 /// // Array is [1, 2, 3]
-/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-///       Some(vec![Some(1), Some(2), Some(3)]),
-/// ]);
+/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+///     Some(1),
+///     Some(2),
+///     Some(3),
+/// ])]);
 /// // Wrap as a list array: [[1, 2, 3]]
 /// let list_arr = SingleRowListArrayBuilder::new(Arc::new(arr)).build_list_array();
 /// assert_eq!(list_arr.len(), 1);
@@ -444,94 +494,6 @@ impl SingleRowListArrayBuilder {
     }
 }
 
-/// Wrap an array into a single element `ListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-/// The field in the list array is nullable.
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(true)
-        .build_list_array()
-}
-
-/// Wrap an array into a single element `ListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(nullable)
-        .build_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array_with_field_name(
-    arr: ArrayRef,
-    nullable: bool,
-    field_name: &str,
-) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(nullable)
-        .with_field_name(Some(field_name.to_string()))
-        .build_list_array()
-}
-
-/// Wrap an array into a single element `LargeListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
-    SingleRowListArrayBuilder::new(arr).build_large_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_large_list_array_with_field_name(
-    arr: ArrayRef,
-    field_name: &str,
-) -> LargeListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_field_name(Some(field_name.to_string()))
-        .build_large_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_fixed_size_list_array(
-    arr: ArrayRef,
-    list_size: usize,
-) -> FixedSizeListArray {
-    SingleRowListArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_fixed_size_list_array_with_field_name(
-    arr: ArrayRef,
-    list_size: usize,
-    field_name: &str,
-) -> FixedSizeListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_field_name(Some(field_name.to_string()))
-        .build_fixed_size_list_array(list_size)
-}
-
 /// Wrap arrays into a single element `ListArray`.
 ///
 /// Example:
@@ -591,7 +553,8 @@ pub fn fixed_size_list_to_arrays(a: &ArrayRef) -> Vec<ArrayRef> {
 /// use datafusion_common::utils::base_type;
 /// use std::sync::Arc;
 ///
-/// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+/// let data_type =
+///     DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// assert_eq!(base_type(&data_type), DataType::Int32);
 ///
 /// let data_type = DataType::Int32;
@@ -832,21 +795,6 @@ pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
         .collect()
 }
 
-/// Checks whether the given index sequence is monotonically non-decreasing.
-#[deprecated(since = "45.0.0", note = "Use std::Iterator::is_sorted instead")]
-pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
-    // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
-    let mut previous = 0;
-    for item in sequence.into_iter() {
-        let current = *item.borrow();
-        if current < previous {
-            return false;
-        }
-        previous = current;
-    }
-    true
-}
-
 /// Find indices of each element in `targets` inside `items`. If one of the
 /// elements is absent in `items`, returns an error.
 pub fn find_indices<T: PartialEq, S: Borrow<T>>(
@@ -857,7 +805,7 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
         .into_iter()
         .map(|target| items.iter().position(|e| target.borrow().eq(e)))
         .collect::<Option<_>>()
-        .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
+        .ok_or_else(|| _exec_datafusion_err!("Target not found"))
 }
 
 /// Transposes the given vector of vectors.
@@ -958,16 +906,19 @@ pub fn get_available_parallelism() -> usize {
 /// # use datafusion_common::utils::take_function_args;
 /// # use datafusion_common::ScalarValue;
 /// fn my_function(args: &[ScalarValue]) -> Result<()> {
-///   // function expects 2 args, so create a 2-element array
-///   let [arg1, arg2] = take_function_args("my_function", args)?;
-///   // ... do stuff..
-///   Ok(())
+///     // function expects 2 args, so create a 2-element array
+///     let [arg1, arg2] = take_function_args("my_function", args)?;
+///     // ... do stuff..
+///     Ok(())
 /// }
 ///
 /// // Calling the function with 1 argument produces an error:
 /// let args = vec![ScalarValue::Int32(Some(10))];
 /// let err = my_function(&args).unwrap_err();
-/// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
+/// assert_eq!(
+///     err.to_string(),
+///     "Execution error: my_function function requires 2 arguments, got 1"
+/// );
 /// // Calling the function with 2 arguments works great
 /// let args = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))];
 /// my_function(&args).unwrap();
@@ -993,6 +944,7 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
+    use sqlparser::ast::Ident;
     use sqlparser::tokenizer::Span;
 
     #[test]
@@ -1189,6 +1141,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "sql")]
     #[test]
     fn test_quote_identifier() -> Result<()> {
         let cases = vec![
@@ -1272,19 +1225,6 @@ mod tests {
         assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
         assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
         assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
-    }
-
-    #[test]
-    #[expect(deprecated)]
-    fn test_is_sorted() {
-        assert!(is_sorted::<usize>([]));
-        assert!(is_sorted([0]));
-        assert!(is_sorted([0, 3, 4]));
-        assert!(is_sorted([0, 1, 2]));
-        assert!(is_sorted([0, 1, 4]));
-        assert!(is_sorted([0usize; 0]));
-        assert!(is_sorted([1, 2]));
-        assert!(!is_sorted([3, 2]));
     }
 
     #[test]

@@ -46,7 +46,7 @@ use std::sync::Arc;
     standard_argument(name = "str", prefix = "String"),
     argument(name = "search_str", description = "The string to search for in str.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ContainsFunc {
     signature: Signature,
 }
@@ -140,7 +140,7 @@ fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         }
     } else {
         exec_err!(
-            "Unsupported data type {:?}, {:?} for function `contains`.",
+            "Unsupported data type {}, {:?} for function `contains`.",
             args[0].data_type(),
             args[1].data_type()
         )
@@ -153,6 +153,7 @@ mod test {
     use crate::expr_fn::contains;
     use arrow::array::{BooleanArray, StringArray};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -175,6 +176,7 @@ mod test {
             arg_fields,
             number_rows: 2,
             return_field: Field::new("f", DataType::Boolean, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();

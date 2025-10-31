@@ -35,8 +35,10 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
-use datafusion_common::{config::ConfigOptions, Result};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{config::ConfigOptions, internal_err, Result};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -45,7 +47,7 @@ use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use itertools::{izip, Itertools};
 
-/// Attempts to recursively push given filters from the top of the tree into leafs.
+/// Attempts to recursively push given filters from the top of the tree into leaves.
 ///
 /// # Default Implementation
 ///
@@ -447,30 +449,33 @@ fn push_down_filters(
     let mut new_children = Vec::with_capacity(node.children().len());
 
     let children = node.children();
-    let filter_description =
-        node.gather_filters_for_pushdown(phase, parent_predicates.clone(), config)?;
+
+    // Filter out expressions that are not allowed for pushdown
+    let parent_filtered = FilteredVec::new(&parent_predicates, allow_pushdown_for_expr);
+
+    let filter_description = node.gather_filters_for_pushdown(
+        phase,
+        parent_filtered.items().to_vec(),
+        config,
+    )?;
 
     let filter_description_parent_filters = filter_description.parent_filters();
     let filter_description_self_filters = filter_description.self_filters();
     if filter_description_parent_filters.len() != children.len() {
-        return Err(datafusion_common::DataFusionError::Internal(
-            format!(
-                "Filter pushdown expected FilterDescription to have parent filters for {expected_num_children}, but got {actual_num_children} for node {node_name}",
-                expected_num_children = children.len(),
-                actual_num_children = filter_description_parent_filters.len(),
-                node_name = node.name(),
-            ),
-        ));
+        return internal_err!(
+            "Filter pushdown expected FilterDescription to have parent filters for {}, but got {} for node {}",
+            children.len(),
+            filter_description_parent_filters.len(),
+            node.name()
+        );
     }
     if filter_description_self_filters.len() != children.len() {
-        return Err(datafusion_common::DataFusionError::Internal(
-            format!(
-                "Filter pushdown expected FilterDescription to have self filters for {expected_num_children}, but got {actual_num_children} for node {node_name}",
-                expected_num_children = children.len(),
-                actual_num_children = filter_description_self_filters.len(),
-                node_name = node.name(),
-            ),
-        ));
+        return internal_err!(
+            "Filter pushdown expected FilterDescription to have self filters for {}, but got {} for node {}",
+            children.len(),
+            filter_description_self_filters.len(),
+            node.name()
+        );
     }
 
     for (child_idx, (child, parent_filters, self_filters)) in izip!(
@@ -485,27 +490,21 @@ fn push_down_filters(
         // currently. `self_filters` are the predicates which are provided by the current node,
         // and tried to be pushed down over the child similarly.
 
-        let num_self_filters = self_filters.len();
-        let mut all_predicates = self_filters.clone();
+        // Filter out self_filters that contain volatile expressions and track indices
+        let self_filtered = FilteredVec::new(&self_filters, allow_pushdown_for_expr);
 
-        // Track which parent filters are supported for this child
-        let mut parent_filter_indices = vec![];
+        let num_self_filters = self_filtered.len();
+        let mut all_predicates = self_filtered.items().to_vec();
 
-        // Iterate over each predicate coming from the parent
-        for (parent_filter_idx, filter) in parent_filters.into_iter().enumerate() {
-            // Check if we can push this filter down to our child.
-            // These supports are defined in `gather_filters_for_pushdown()`
-            match filter.discriminant {
-                PushedDown::Yes => {
-                    // Queue this filter up for pushdown to this child
-                    all_predicates.push(filter.predicate);
-                    parent_filter_indices.push(parent_filter_idx);
-                }
-                PushedDown::No => {
-                    // This filter won't be pushed down to this child
-                    // Will be marked as unsupported later in the initialization loop
-                }
-            }
+        // Apply second filter pass: collect indices of parent filters that can be pushed down
+        let parent_filters_for_child = parent_filtered
+            .chain_filter_slice(&parent_filters, |filter| {
+                matches!(filter.discriminant, PushedDown::Yes)
+            });
+
+        // Add the filtered parent predicates to all_predicates
+        for filter in parent_filters_for_child.items() {
+            all_predicates.push(Arc::clone(&filter.predicate));
         }
 
         let num_parent_filters = all_predicates.len() - num_self_filters;
@@ -526,27 +525,30 @@ fn push_down_filters(
         // this since we do need to distinguish between them.
         let mut all_filters = result.filters.into_iter().collect_vec();
         if all_filters.len() != num_self_filters + num_parent_filters {
-            return Err(datafusion_common::DataFusionError::Internal(
-                format!(
-                    "Filter pushdown did not return the expected number of filters: expected {num_self_filters} self filters and {num_parent_filters} parent filters, but got {num_filters_from_child}. Likely culprit is {child}",
-                    num_self_filters = num_self_filters,
-                    num_parent_filters = num_parent_filters,
-                    num_filters_from_child = all_filters.len(),
-                    child = child.name(),
-                ),
-            ));
+            return internal_err!(
+                "Filter pushdown did not return the expected number of filters: expected {} self filters and {} parent filters, but got {}. Likely culprit is {}",
+                num_self_filters,
+                num_parent_filters,
+                all_filters.len(),
+                child.name()
+            );
         }
         let parent_filters = all_filters
             .split_off(num_self_filters)
             .into_iter()
             .collect_vec();
-        self_filters_pushdown_supports.push(
-            all_filters
-                .into_iter()
-                .zip(self_filters)
-                .map(|(s, f)| s.wrap_expression(f))
-                .collect(),
-        );
+        // Map the results from filtered self filters back to their original positions using FilteredVec
+        let mapped_self_results =
+            self_filtered.map_results_to_original(all_filters, PushedDown::No);
+
+        // Wrap each result with its corresponding expression
+        let self_filter_results: Vec<_> = mapped_self_results
+            .into_iter()
+            .zip(self_filters)
+            .map(|(support, filter)| support.wrap_expression(filter))
+            .collect();
+
+        self_filters_pushdown_supports.push(self_filter_results);
 
         // Start by marking all parent filters as unsupported for this child
         for parent_filter_pushdown_support in parent_filter_pushdown_supports.iter_mut() {
@@ -558,11 +560,13 @@ fn push_down_filters(
             );
         }
         // Map results from pushed-down filters back to original parent filter indices
-        for (result_idx, parent_filter_support) in parent_filters.into_iter().enumerate()
-        {
-            let original_parent_idx = parent_filter_indices[result_idx];
-            parent_filter_pushdown_supports[original_parent_idx][child_idx] =
-                parent_filter_support;
+        let mapped_parent_results = parent_filters_for_child
+            .map_results_to_original(parent_filters, PushedDown::No);
+
+        // Update parent_filter_pushdown_supports with the mapped results
+        // mapped_parent_results already has the results at their original indices
+        for (idx, support) in parent_filter_pushdown_supports.iter_mut().enumerate() {
+            support[child_idx] = mapped_parent_results[idx];
         }
     }
 
@@ -596,4 +600,268 @@ fn push_down_filters(
         res.updated_node = Some(updated_node)
     }
     Ok(res)
+}
+
+/// A helper structure for filtering elements from a vector through multiple passes while
+/// tracking their original indices, allowing results to be mapped back to the original positions.
+struct FilteredVec<T> {
+    items: Vec<T>,
+    // Chain of index mappings: each Vec maps from current level to previous level
+    // index_mappings[0] maps from first filter to original indices
+    // index_mappings[1] maps from second filter to first filter indices, etc.
+    index_mappings: Vec<Vec<usize>>,
+    original_len: usize,
+}
+
+impl<T: Clone> FilteredVec<T> {
+    /// Creates a new FilteredVec by filtering items based on the given predicate
+    fn new<F>(items: &[T], predicate: F) -> Self
+    where
+        F: Fn(&T) -> bool,
+    {
+        let mut filtered_items = Vec::new();
+        let mut original_indices = Vec::new();
+
+        for (idx, item) in items.iter().enumerate() {
+            if predicate(item) {
+                filtered_items.push(item.clone());
+                original_indices.push(idx);
+            }
+        }
+
+        Self {
+            items: filtered_items,
+            index_mappings: vec![original_indices],
+            original_len: items.len(),
+        }
+    }
+
+    /// Returns a reference to the filtered items
+    fn items(&self) -> &[T] {
+        &self.items
+    }
+
+    /// Returns the number of filtered items
+    fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Maps results from the filtered items back to their original positions
+    /// Returns a vector with the same length as the original input, filled with default_value
+    /// and updated with results at their original positions
+    fn map_results_to_original<R: Clone>(
+        &self,
+        results: Vec<R>,
+        default_value: R,
+    ) -> Vec<R> {
+        let mut mapped_results = vec![default_value; self.original_len];
+
+        for (result_idx, result) in results.into_iter().enumerate() {
+            let original_idx = self.trace_to_original_index(result_idx);
+            mapped_results[original_idx] = result;
+        }
+
+        mapped_results
+    }
+
+    /// Traces a filtered index back to its original index through all filter passes
+    fn trace_to_original_index(&self, mut current_idx: usize) -> usize {
+        // Work backwards through the chain of index mappings
+        for mapping in self.index_mappings.iter().rev() {
+            current_idx = mapping[current_idx];
+        }
+        current_idx
+    }
+
+    /// Apply a filter to a new set of items while chaining the index mapping from self (parent)
+    /// This is useful when you have filtered items and then get a transformed slice
+    /// (e.g., from gather_filters_for_pushdown) that you need to filter again
+    fn chain_filter_slice<U: Clone, F>(&self, items: &[U], predicate: F) -> FilteredVec<U>
+    where
+        F: Fn(&U) -> bool,
+    {
+        let mut filtered_items = Vec::new();
+        let mut filtered_indices = Vec::new();
+
+        for (idx, item) in items.iter().enumerate() {
+            if predicate(item) {
+                filtered_items.push(item.clone());
+                filtered_indices.push(idx);
+            }
+        }
+
+        // Chain the index mappings from parent (self)
+        let mut index_mappings = self.index_mappings.clone();
+        index_mappings.push(filtered_indices);
+
+        FilteredVec {
+            items: filtered_items,
+            index_mappings,
+            original_len: self.original_len,
+        }
+    }
+}
+
+fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut allow_pushdown = true;
+    expr.apply(|e| {
+        allow_pushdown = allow_pushdown && !is_volatile(e);
+        if allow_pushdown {
+            Ok(TreeNodeRecursion::Continue)
+        } else {
+            Ok(TreeNodeRecursion::Stop)
+        }
+    })
+    .expect("Infallible traversal of PhysicalExpr tree failed");
+    allow_pushdown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_filtered_vec_single_pass() {
+        let items = vec![1, 2, 3, 4, 5, 6];
+        let filtered = FilteredVec::new(&items, |&x| x % 2 == 0);
+
+        // Check filtered items
+        assert_eq!(filtered.items(), &[2, 4, 6]);
+        assert_eq!(filtered.len(), 3);
+
+        // Check index mapping
+        let results = vec!["a", "b", "c"];
+        let mapped = filtered.map_results_to_original(results, "default");
+        assert_eq!(mapped, vec!["default", "a", "default", "b", "default", "c"]);
+    }
+
+    #[test]
+    fn test_filtered_vec_empty_filter() {
+        let items = vec![1, 3, 5];
+        let filtered = FilteredVec::new(&items, |&x| x % 2 == 0);
+
+        assert_eq!(filtered.items(), &[] as &[i32]);
+        assert_eq!(filtered.len(), 0);
+
+        let results: Vec<&str> = vec![];
+        let mapped = filtered.map_results_to_original(results, "default");
+        assert_eq!(mapped, vec!["default", "default", "default"]);
+    }
+
+    #[test]
+    fn test_filtered_vec_all_pass() {
+        let items = vec![2, 4, 6];
+        let filtered = FilteredVec::new(&items, |&x| x % 2 == 0);
+
+        assert_eq!(filtered.items(), &[2, 4, 6]);
+        assert_eq!(filtered.len(), 3);
+
+        let results = vec!["a", "b", "c"];
+        let mapped = filtered.map_results_to_original(results, "default");
+        assert_eq!(mapped, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_chain_filter_slice_different_types() {
+        // First pass: filter numbers
+        let numbers = vec![1, 2, 3, 4, 5, 6];
+        let first_pass = FilteredVec::new(&numbers, |&x| x > 3);
+        assert_eq!(first_pass.items(), &[4, 5, 6]);
+
+        // Transform to strings (simulating gather_filters_for_pushdown transformation)
+        let strings = vec!["four", "five", "six"];
+
+        // Second pass: filter strings that contain 'i'
+        let second_pass = first_pass.chain_filter_slice(&strings, |s| s.contains('i'));
+        assert_eq!(second_pass.items(), &["five", "six"]);
+
+        // Map results back to original indices
+        let results = vec![100, 200];
+        let mapped = second_pass.map_results_to_original(results, 0);
+        // "five" was at index 4 (1-based: 5), "six" was at index 5 (1-based: 6)
+        assert_eq!(mapped, vec![0, 0, 0, 0, 100, 200]);
+    }
+
+    #[test]
+    fn test_chain_filter_slice_complex_scenario() {
+        // Simulating the filter pushdown scenario
+        // Parent predicates: [A, B, C, D, E]
+        let parent_predicates = vec!["A", "B", "C", "D", "E"];
+
+        // First pass: filter out some predicates (simulating allow_pushdown_for_expr)
+        let first_pass = FilteredVec::new(&parent_predicates, |s| *s != "B" && *s != "D");
+        assert_eq!(first_pass.items(), &["A", "C", "E"]);
+
+        // After gather_filters_for_pushdown, we get transformed results for a specific child
+        // Let's say child gets [A_transformed, C_transformed, E_transformed]
+        // but only C and E can be pushed down
+        #[derive(Clone, Debug, PartialEq)]
+        struct TransformedPredicate {
+            name: String,
+            can_push: bool,
+        }
+
+        let child_predicates = vec![
+            TransformedPredicate {
+                name: "A_transformed".to_string(),
+                can_push: false,
+            },
+            TransformedPredicate {
+                name: "C_transformed".to_string(),
+                can_push: true,
+            },
+            TransformedPredicate {
+                name: "E_transformed".to_string(),
+                can_push: true,
+            },
+        ];
+
+        // Second pass: filter based on can_push
+        let second_pass =
+            first_pass.chain_filter_slice(&child_predicates, |p| p.can_push);
+        assert_eq!(second_pass.len(), 2);
+        assert_eq!(second_pass.items()[0].name, "C_transformed");
+        assert_eq!(second_pass.items()[1].name, "E_transformed");
+
+        // Simulate getting results back from child
+        let child_results = vec!["C_result", "E_result"];
+        let mapped = second_pass.map_results_to_original(child_results, "no_result");
+
+        // Results should be at original positions: C was at index 2, E was at index 4
+        assert_eq!(
+            mapped,
+            vec![
+                "no_result",
+                "no_result",
+                "C_result",
+                "no_result",
+                "E_result"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_trace_to_original_index() {
+        let items = vec![10, 20, 30, 40, 50];
+        let filtered = FilteredVec::new(&items, |&x| x != 20 && x != 40);
+
+        // filtered items are [10, 30, 50] at original indices [0, 2, 4]
+        assert_eq!(filtered.trace_to_original_index(0), 0); // 10 was at index 0
+        assert_eq!(filtered.trace_to_original_index(1), 2); // 30 was at index 2
+        assert_eq!(filtered.trace_to_original_index(2), 4); // 50 was at index 4
+    }
+
+    #[test]
+    fn test_chain_filter_preserves_original_len() {
+        let items = vec![1, 2, 3, 4, 5];
+        let first = FilteredVec::new(&items, |&x| x > 2);
+
+        let strings = vec!["three", "four", "five"];
+        let second = first.chain_filter_slice(&strings, |s| s.len() == 4);
+
+        // Original length should still be 5
+        let results = vec!["x", "y"];
+        let mapped = second.map_results_to_original(results, "-");
+        assert_eq!(mapped.len(), 5);
+    }
 }

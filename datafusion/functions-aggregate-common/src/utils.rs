@@ -15,22 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::{ArrowNativeType, FieldRef};
-use arrow::{
-    array::ArrowNativeTypeOp,
-    compute::SortOptions,
-    datatypes::{
-        DataType, Decimal128Type, DecimalType, Field, TimeUnit, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        ToByteSlice,
-    },
+use arrow::array::{ArrayRef, ArrowNativeTypeOp};
+use arrow::compute::SortOptions;
+use arrow::datatypes::{
+    ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
 };
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use std::sync::Arc;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
@@ -41,50 +34,6 @@ pub fn get_accum_scalar_values_as_arrays(
         .iter()
         .map(|s| s.to_array_of_size(1))
         .collect()
-}
-
-/// Adjust array type metadata if needed
-///
-/// Since `Decimal128Arrays` created from `Vec<NativeType>` have
-/// default precision and scale, this function adjusts the output to
-/// match `data_type`, if necessary
-#[deprecated(since = "44.0.0", note = "use PrimitiveArray::with_datatype")]
-pub fn adjust_output_array(data_type: &DataType, array: ArrayRef) -> Result<ArrayRef> {
-    let array = match data_type {
-        DataType::Decimal128(p, s) => Arc::new(
-            array
-                .as_primitive::<Decimal128Type>()
-                .clone()
-                .with_precision_and_scale(*p, *s)?,
-        ) as ArrayRef,
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => Arc::new(
-            array
-                .as_primitive::<TimestampNanosecondType>()
-                .clone()
-                .with_timezone_opt(tz.clone()),
-        ),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => Arc::new(
-            array
-                .as_primitive::<TimestampMicrosecondType>()
-                .clone()
-                .with_timezone_opt(tz.clone()),
-        ),
-        DataType::Timestamp(TimeUnit::Millisecond, tz) => Arc::new(
-            array
-                .as_primitive::<TimestampMillisecondType>()
-                .clone()
-                .with_timezone_opt(tz.clone()),
-        ),
-        DataType::Timestamp(TimeUnit::Second, tz) => Arc::new(
-            array
-                .as_primitive::<TimestampSecondType>()
-                .clone()
-                .with_timezone_opt(tz.clone()),
-        ),
-        // no adjustment needed for other arrays
-        _ => array,
-    };
-    Ok(array)
 }
 
 /// Construct corresponding fields for the expressions in an ORDER BY clause.
@@ -146,6 +95,8 @@ pub struct DecimalAverager<T: DecimalType> {
     target_mul: T::Native,
     /// the output precision
     target_precision: u8,
+    /// the output scale
+    target_scale: i8,
 }
 
 impl<T: DecimalType> DecimalAverager<T> {
@@ -163,21 +114,24 @@ impl<T: DecimalType> DecimalAverager<T> {
     ) -> Result<Self> {
         let sum_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(sum_scale as u32))
-            .ok_or(DataFusionError::Internal(
-                "Failed to compute sum_mul in DecimalAverager".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!("Failed to compute sum_mul in DecimalAverager")
+            })?;
 
         let target_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(target_scale as u32))
-            .ok_or(DataFusionError::Internal(
-                "Failed to compute target_mul in DecimalAverager".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Failed to compute target_mul in DecimalAverager"
+                )
+            })?;
 
         if target_mul >= sum_mul {
             Ok(Self {
                 sum_mul,
                 target_mul,
                 target_precision,
+                target_scale,
             })
         } else {
             // can't convert the lit decimal to the returned data type
@@ -196,8 +150,11 @@ impl<T: DecimalType> DecimalAverager<T> {
         if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
             let new_value = value.div_wrapping(count);
 
-            let validate =
-                T::validate_decimal_precision(new_value, self.target_precision);
+            let validate = T::validate_decimal_precision(
+                new_value,
+                self.target_precision,
+                self.target_scale,
+            );
 
             if validate.is_ok() {
                 Ok(new_value)

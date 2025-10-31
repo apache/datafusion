@@ -29,6 +29,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource::TableSchema;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
@@ -84,11 +85,13 @@ impl FileSource for AvroSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.schema = Some(schema);
+        // TableSchema may have partition columns, but AvroSource does not use partition columns or values atm
+        conf.schema = Some(Arc::clone(schema.file_schema()));
         Arc::new(conf)
     }
+
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projected_statistics = Some(statistics);
@@ -145,9 +148,7 @@ mod private {
     use super::*;
 
     use bytes::Buf;
-    use datafusion_datasource::{
-        file_meta::FileMeta, file_stream::FileOpenFuture, PartitionedFile,
-    };
+    use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
 
@@ -157,24 +158,26 @@ mod private {
     }
 
     impl FileOpener for AvroOpener {
-        fn open(
-            &self,
-            file_meta: FileMeta,
-            _file: PartitionedFile,
-        ) -> Result<FileOpenFuture> {
+        fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let config = Arc::clone(&self.config);
             let object_store = Arc::clone(&self.object_store);
             Ok(Box::pin(async move {
-                let r = object_store.get(file_meta.location()).await?;
+                let r = object_store
+                    .get(&partitioned_file.object_meta.location)
+                    .await?;
                 match r.payload {
                     GetResultPayload::File(file, _) => {
                         let reader = config.open(file)?;
-                        Ok(futures::stream::iter(reader).boxed())
+                        Ok(futures::stream::iter(reader)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
                         let reader = config.open(bytes.reader())?;
-                        Ok(futures::stream::iter(reader).boxed())
+                        Ok(futures::stream::iter(reader)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
                     }
                 }
             }))

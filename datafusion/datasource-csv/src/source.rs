@@ -26,11 +26,10 @@ use std::task::Poll;
 
 use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
     as_file_source, calculate_range, FileRange, ListingTableUrl, PartitionedFile,
-    RangeCalculation,
+    RangeCalculation, TableSchema,
 };
 
 use arrow::csv;
@@ -94,6 +93,7 @@ pub struct CsvSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    truncate_rows: bool,
 }
 
 impl CsvSource {
@@ -110,6 +110,11 @@ impl CsvSource {
     /// true if the first line of each file is a header
     pub fn has_header(&self) -> bool {
         self.has_header
+    }
+
+    // true if rows length support truncate
+    pub fn truncate_rows(&self) -> bool {
+        self.truncate_rows
     }
     /// A column delimiter
     pub fn delimiter(&self) -> u8 {
@@ -156,6 +161,13 @@ impl CsvSource {
         conf.comment = comment;
         conf
     }
+
+    /// Whether to support truncate rows when read csv file
+    pub fn with_truncate_rows(&self, truncate_rows: bool) -> Self {
+        let mut conf = self.clone();
+        conf.truncate_rows = truncate_rows;
+        conf
+    }
 }
 
 impl CsvSource {
@@ -175,7 +187,8 @@ impl CsvSource {
                 .expect("Batch size must be set before initializing builder"),
         )
         .with_header(self.has_header)
-        .with_quote(self.quote);
+        .with_quote(self.quote)
+        .with_truncated_rows(self.truncate_rows);
         if let Some(terminator) = self.terminator {
             builder = builder.with_terminator(terminator);
         }
@@ -245,9 +258,9 @@ impl FileSource for CsvSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.file_schema = Some(schema);
+        conf.file_schema = Some(Arc::clone(schema.file_schema()));
         Arc::new(conf)
     }
 
@@ -323,16 +336,12 @@ impl FileOpener for CsvOpener {
     ///  A,1,2,3,4,5,6,7,8,9\n
     ///  A},1,2,3,4,5,6,7,8,9\n
     ///  The lines read would be: [1, 2]
-    fn open(
-        &self,
-        file_meta: FileMeta,
-        _file: PartitionedFile,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         // `self.config.has_header` controls whether to skip reading the 1st line header
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line
         let mut csv_has_header = self.config.has_header;
-        if let Some(FileRange { start, .. }) = file_meta.range {
+        if let Some(FileRange { start, .. }) = partitioned_file.range {
             if start != 0 {
                 csv_has_header = false;
             }
@@ -340,12 +349,13 @@ impl FileOpener for CsvOpener {
 
         let config = CsvSource {
             has_header: csv_has_header,
+            truncate_rows: self.config.truncate_rows,
             ..(*self.config).clone()
         };
 
         let file_compression_type = self.file_compression_type.to_owned();
 
-        if file_meta.range.is_some() {
+        if partitioned_file.range.is_some() {
             assert!(
                 !file_compression_type.is_compressed(),
                 "Reading compressed .csv in parallel is not supported"
@@ -359,7 +369,7 @@ impl FileOpener for CsvOpener {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
 
             let calculated_range =
-                calculate_range(&file_meta, &store, terminator).await?;
+                calculate_range(&partitioned_file, &store, terminator).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
@@ -376,12 +386,14 @@ impl FileOpener for CsvOpener {
                 ..Default::default()
             };
 
-            let result = store.get_opts(file_meta.location(), options).await?;
+            let result = store
+                .get_opts(&partitioned_file.object_meta.location, options)
+                .await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
-                    let is_whole_file_scanned = file_meta.range.is_none();
+                    let is_whole_file_scanned = partitioned_file.range.is_none();
                     let decoder = if is_whole_file_scanned {
                         // Don't seek if no range as breaks FIFO files
                         file_compression_type.convert_read(file)?
@@ -392,17 +404,20 @@ impl FileOpener for CsvOpener {
                         )?
                     };
 
-                    Ok(futures::stream::iter(config.open(decoder)?).boxed())
+                    Ok(futures::stream::iter(config.open(decoder)?)
+                        .map(|r| r.map_err(Into::into))
+                        .boxed())
                 }
                 GetResultPayload::Stream(s) => {
                     let decoder = config.builder().build_decoder();
                     let s = s.map_err(DataFusionError::from);
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    Ok(deserialize_stream(
+                    let stream = deserialize_stream(
                         input,
                         DecoderDeserializer::new(CsvDecoder::new(decoder)),
-                    ))
+                    );
+                    Ok(stream.map_err(Into::into).boxed())
                 }
             }
         }))

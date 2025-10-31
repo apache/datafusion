@@ -53,7 +53,7 @@ use datafusion_macros::user_doc;
         description = "The count of characters to be replaced from start position of str. If not specified, will use substr length instead."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct OverlayFunc {
     signature: Signature,
 }

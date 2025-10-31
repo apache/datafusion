@@ -31,7 +31,8 @@ use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
-    exec_err, plan_err, utils::take_function_args, DataFusionError, Result, ScalarValue,
+    exec_err, internal_datafusion_err, plan_err, utils::take_function_args, Result,
+    ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -68,11 +69,11 @@ use datafusion_macros::user_doc;
 FROM (
   SELECT '2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels' AS time
 );
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
-| time                      | type                                           | to_local_time       | to_local_time_type          |
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
-| 2024-04-01T00:00:20+02:00 | Timestamp(Nanosecond, Some("Europe/Brussels")) | 2024-04-01T00:00:20 | Timestamp(Nanosecond, None) |
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
++---------------------------+----------------------------------+---------------------+--------------------+
+| time                      | type                             | to_local_time       | to_local_time_type |
++---------------------------+----------------------------------+---------------------+--------------------+
+| 2024-04-01T00:00:20+02:00 | Timestamp(ns, "Europe/Brussels") | 2024-04-01T00:00:20 | Timestamp(ns)      |
++---------------------------+----------------------------------+---------------------+--------------------+
 
 # combine `to_local_time()` with `date_bin()` to bin on boundaries in the timezone rather
 # than UTC boundaries
@@ -96,7 +97,7 @@ FROM (
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToLocalTimeFunc {
     signature: Signature,
 }
@@ -326,15 +327,15 @@ fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
         // This should not fail under normal circumstances as the
         // maximum possible offset is 26 hours (93,600 seconds)
         TimeDelta::try_seconds(offset_seconds)
-            .ok_or(DataFusionError::Internal("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000".to_string()))?,
+            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
     );
 
     // convert the naive datetime back to i64
     match T::UNIT {
-        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or(
-            DataFusionError::Internal(
-                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807".to_string(),
-            ),
+        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(||
+            internal_datafusion_err!(
+                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
+            )
         ),
         Microsecond => Ok(adjusted_date_time.timestamp_micros()),
         Millisecond => Ok(adjusted_date_time.timestamp_millis()),
@@ -372,7 +373,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
     ) -> Result<ColumnarValue> {
         let [time_value] = take_function_args(self.name(), args.args)?;
 
-        self.to_local_time(&[time_value.clone()])
+        self.to_local_time(std::slice::from_ref(&time_value))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -385,6 +386,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 
         let first_arg = arg_types[0].clone();
         match &first_arg {
+            DataType::Null => Ok(vec![Timestamp(Nanosecond, None)]),
             Timestamp(Nanosecond, timezone) => {
                 Ok(vec![Timestamp(Nanosecond, timezone.clone())])
             }
@@ -411,6 +413,7 @@ mod tests {
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::NaiveDateTime;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
@@ -545,6 +548,7 @@ mod tests {
                 arg_fields: vec![arg_field],
                 number_rows: 1,
                 return_field: Field::new("f", expected.data_type(), true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
         match res {
@@ -615,6 +619,7 @@ mod tests {
                     true,
                 )
                 .into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

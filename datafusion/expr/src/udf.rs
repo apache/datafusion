@@ -21,14 +21,17 @@ use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
+use crate::udf_eq::UdfEq;
+use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
@@ -60,17 +63,35 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.equals(other.inner.as_ref())
+        self.inner.dyn_eq(other.inner.as_any())
     }
 }
 
-// Manual implementation based on `ScalarUDFImpl::equals`
 impl PartialOrd for ScalarUDF {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.name().partial_cmp(other.name()) {
-            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
-            cmp => cmp,
+        let mut cmp = self.name().cmp(other.name());
+        if cmp == Ordering::Equal {
+            cmp = self.signature().partial_cmp(other.signature())?;
         }
+        if cmp == Ordering::Equal {
+            cmp = self.aliases().partial_cmp(other.aliases())?;
+        }
+        // Contract for PartialOrd and PartialEq consistency requires that
+        // a == b if and only if partial_cmp(a, b) == Some(Equal).
+        if cmp == Ordering::Equal && self != other {
+            // Functions may have other properties besides name and signature
+            // that differentiate two instances (e.g. type, or arbitrary parameters).
+            // We cannot return Some(Equal) in such case.
+            return None;
+        }
+        debug_assert!(
+            cmp == Ordering::Equal || self != other,
+            "Detected incorrect implementation of PartialEq when comparing functions: '{}' and '{}'. \
+            The functions compare as equal, but they are not equal based on general properties that \
+            the PartialOrd implementation observes,",
+            self.name(), other.name()
+        );
+        Some(cmp)
     }
 }
 
@@ -78,7 +99,7 @@ impl Eq for ScalarUDF {}
 
 impl Hash for ScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.hash_value().hash(state)
+        self.inner.dyn_hash(state)
     }
 }
 
@@ -141,7 +162,12 @@ impl ScalarUDF {
     /// Returns this function's display_name.
     ///
     /// See [`ScalarUDFImpl::display_name`] for more details
+    #[deprecated(
+        since = "50.0.0",
+        note = "This method is unused and will be removed in a future release"
+    )]
     pub fn display_name(&self, args: &[Expr]) -> Result<String> {
+        #[expect(deprecated)]
         self.inner.display_name(args)
     }
 
@@ -197,8 +223,9 @@ impl ScalarUDF {
         self.inner.simplify(args, info)
     }
 
-    #[allow(deprecated)]
+    #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        #[allow(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -206,10 +233,40 @@ impl ScalarUDF {
     ///
     /// See [`ScalarUDFImpl::invoke_with_args`] for details.
     pub fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        self.inner.invoke_with_args(args)
+        #[cfg(debug_assertions)]
+        let return_field = Arc::clone(&args.return_field);
+        let result = self.inner.invoke_with_args(args)?;
+        // Maybe this could be enabled always?
+        // This doesn't use debug_assert!, but it's meant to run anywhere except on production. It's same in spirit, thus conditioning on debug_assertions.
+        #[cfg(debug_assertions)]
+        {
+            if &result.data_type() != return_field.data_type() {
+                return datafusion_common::internal_err!("Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
+                        self.name(),
+                        result.data_type(),
+                        return_field.data_type()
+                    );
+            }
+            // TODO verify return data is non-null when it was promised to be?
+        }
+        Ok(result)
     }
 
-    /// Get the circuits of inner implementation
+    /// Determines which of the arguments passed to this function are evaluated eagerly
+    /// and which may be evaluated lazily.
+    ///
+    /// See [ScalarUDFImpl::conditional_arguments] for more information.
+    pub fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        self.inner.conditional_arguments(args)
+    }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered.
+    ///
+    /// See [ScalarUDFImpl::short_circuits] for more information.
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
     }
@@ -311,6 +368,8 @@ pub struct ScalarFunctionArgs {
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
     pub return_field: FieldRef,
+    /// The config options at execution time
+    pub config_options: Arc<ConfigOptions>,
 }
 
 impl ScalarFunctionArgs {
@@ -361,7 +420,7 @@ pub struct ReturnFieldArgs<'a> {
 /// # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
 /// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 /// /// This struct for a simple UDF that adds one to an int32
-/// #[derive(Debug)]
+/// #[derive(Debug, PartialEq, Eq, Hash)]
 /// struct AddOne {
 ///   signature: Signature,
 /// }
@@ -410,10 +469,7 @@ pub struct ReturnFieldArgs<'a> {
 /// // Call the function `add_one(col)`
 /// let expr = add_one.call(vec![col("a")]);
 /// ```
-pub trait ScalarUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedScalarUDFImpl below!
-
+pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -439,6 +495,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// function.
     ///
     /// Defaults to `name(args[0], args[1], ...)`
+    #[deprecated(
+        since = "50.0.0",
+        note = "This method is unused and will be removed in a future release"
+    )]
     fn display_name(&self, args: &[Expr]) -> Result<String> {
         let names: Vec<String> = args.iter().map(ToString::to_string).collect();
         // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
@@ -456,21 +516,61 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         ))
     }
 
-    /// Returns the function's [`Signature`] for information about what input
-    /// types are accepted and the function's Volatility.
+    /// Returns a [`Signature`] describing the argument types for which this
+    /// function has an implementation, and the function's [`Volatility`].
+    ///
+    /// See [`Signature`] for more details on argument type handling
+    /// and [`Self::return_type`] for computing the return type.
+    ///
+    /// [`Volatility`]: datafusion_expr_common::signature::Volatility
     fn signature(&self) -> &Signature;
 
-    /// What [`DataType`] will be returned by this function, given the types of
-    /// the arguments.
+    /// [`DataType`] returned by this function, given the types of the
+    /// arguments.
+    ///
+    /// # Arguments
+    ///
+    /// `arg_types` Data types of the arguments. The implementation of
+    /// `return_type` can assume that some other part of the code has coerced
+    /// the actual argument types to match [`Self::signature`].
     ///
     /// # Notes
     ///
     /// If you provide an implementation for [`Self::return_field_from_args`],
-    /// DataFusion will not call `return_type` (this function). In such cases
-    /// is recommended to return [`DataFusionError::Internal`].
+    /// DataFusion will not call `return_type` (this function). While it is
+    /// valid to to put [`unimplemented!()`] or [`unreachable!()`], it is
+    /// recommended to return [`DataFusionError::Internal`] instead, which
+    /// reduces the severity of symptoms if bugs occur (an error rather than a
+    /// panic).
     ///
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// Create a new instance of this function with updated configuration.
+    ///
+    /// This method is called when configuration options change at runtime
+    /// (e.g., via `SET` statements) to allow functions that depend on
+    /// configuration to update themselves accordingly.
+    ///
+    /// Note the current [`ConfigOptions`] are also passed to [`Self::invoke_with_args`] so
+    /// this API is not needed for functions where the values may
+    /// depend on the current options.
+    ///
+    /// This API is useful for functions where the return
+    /// **type** depends on the configuration options, such as the `now()` function
+    /// which depends on the current timezone.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The updated configuration options
+    ///
+    /// # Returns
+    ///
+    /// * `Some(ScalarUDF)` - A new instance of this function configured with the new settings
+    /// * `None` - If this function does not change with new configuration settings (the default)
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+        None
+    }
 
     /// What type will be returned by this function, given the arguments?
     ///
@@ -503,10 +603,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// # struct Example{}
     /// # impl Example {
     /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-    ///   // report output is only nullable if any one of the arguments are nullable
-    ///   let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-    ///   let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
-    ///   Ok(field)
+    ///     // report output is only nullable if any one of the arguments are nullable
+    ///     let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
+    ///     Ok(field)
     /// }
     /// # }
     /// ```
@@ -575,6 +675,14 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
     /// if the function cannot be simplified, the arguments *MUST* be returned
     /// unmodified
+    ///
+    /// # Notes
+    ///
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(
         &self,
         args: Vec<Expr>,
@@ -588,8 +696,40 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// Setting this to true prevents certain optimizations such as common
     /// subexpression elimination
+    ///
+    /// When overriding this function to return `true`, [ScalarUDFImpl::conditional_arguments] can also be
+    /// overridden to report more accurately which arguments are eagerly evaluated and which ones
+    /// lazily.
     fn short_circuits(&self) -> bool {
         false
+    }
+
+    /// Determines which of the arguments passed to this function are evaluated eagerly
+    /// and which may be evaluated lazily.
+    ///
+    /// If this function returns `None`, all arguments are eagerly evaluated.
+    /// Returning `None` is a micro optimization that saves a needless `Vec`
+    /// allocation.
+    ///
+    /// If the function returns `Some`, returns (`eager`, `lazy`) where `eager`
+    /// are the arguments that are always evaluated, and `lazy` are the
+    /// arguments that may be evaluated lazily (i.e. may not be evaluated at all
+    /// in some cases).
+    ///
+    /// Implementations must ensure that the two returned `Vec`s are disjunct,
+    /// and that each argument from `args` is present in one the two `Vec`s.
+    ///
+    /// When overriding this function, [ScalarUDFImpl::short_circuits] must
+    /// be overridden to return `true`.
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        if self.short_circuits() {
+            Some((vec![], args.iter().collect()))
+        } else {
+            None
+        }
     }
 
     /// Computes the output [`Interval`] for a [`ScalarUDFImpl`], given the input
@@ -694,42 +834,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
-    /// Return true if this scalar UDF is equal to the other.
-    ///
-    /// Allows customizing the equality of scalar UDFs.
-    /// *Must* be implemented explicitly if the UDF type has internal state.
-    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
-    ///
-    /// - reflexive: `a.equals(a)`;
-    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
-    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
-    ///
-    /// By default, compares type, [`Self::name`], [`Self::aliases`] and [`Self::signature`].
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.as_any().type_id() == other.as_any().type_id()
-            && self.name() == other.name()
-            && self.aliases() == other.aliases()
-            && self.signature() == other.signature()
-    }
-
-    /// Returns a hash value for this scalar UDF.
-    ///
-    /// Allows customizing the hash code of scalar UDFs.
-    /// *Must* be implemented explicitly whenever [`Self::equals`] is implemented.
-    ///
-    /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
-    /// their `hash_value`s must be the same.
-    ///
-    /// By default, it is consistent with default implementation of [`Self::equals`].
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.as_any().type_id().hash(hasher);
-        self.name().hash(hasher);
-        self.aliases().hash(hasher);
-        self.signature().hash(hasher);
-        hasher.finish()
-    }
-
     /// Returns the documentation for this Scalar UDF.
     ///
     /// Documentation can be accessed programmatically as well as generating
@@ -741,25 +845,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
 /// implement [`ScalarUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedScalarUDFImpl {
-    inner: Arc<dyn ScalarUDFImpl>,
+    inner: UdfEq<Arc<dyn ScalarUDFImpl>>,
     aliases: Vec<String>,
-}
-
-impl PartialEq for AliasedScalarUDFImpl {
-    fn eq(&self, other: &Self) -> bool {
-        let Self { inner, aliases } = self;
-        inner.equals(other.inner.as_ref()) && aliases == &other.aliases
-    }
-}
-
-impl Hash for AliasedScalarUDFImpl {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let Self { inner, aliases } = self;
-        inner.hash_value().hash(state);
-        aliases.hash(state);
-    }
 }
 
 impl AliasedScalarUDFImpl {
@@ -769,10 +858,14 @@ impl AliasedScalarUDFImpl {
     ) -> Self {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -783,6 +876,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
+        #[expect(deprecated)]
         self.inner.display_name(args)
     }
 
@@ -802,8 +896,17 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_field_from_args(args)
     }
 
+    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        #[allow(deprecated)]
+        self.inner.is_nullable(args, schema)
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         self.inner.invoke_with_args(args)
+    }
+
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+        None
     }
 
     fn aliases(&self) -> &[String] {
@@ -816,6 +919,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
+    }
+
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        self.inner.conditional_arguments(args)
     }
 
     fn short_circuits(&self) -> bool {
@@ -846,125 +956,87 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    udf_equals_hash!(ScalarUDFImpl);
-
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
 }
 
-// Scalar UDF doc sections for use in public documentation
-pub mod scalar_doc_sections {
-    use crate::DocSection;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_expr_common::signature::Volatility;
+    use std::hash::DefaultHasher;
 
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_MATH,
-            DOC_SECTION_CONDITIONAL,
-            DOC_SECTION_STRING,
-            DOC_SECTION_BINARY_STRING,
-            DOC_SECTION_REGEX,
-            DOC_SECTION_DATETIME,
-            DOC_SECTION_ARRAY,
-            DOC_SECTION_STRUCT,
-            DOC_SECTION_MAP,
-            DOC_SECTION_HASHING,
-            DOC_SECTION_UNION,
-            DOC_SECTION_OTHER,
-        ]
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestScalarUDFImpl {
+        name: &'static str,
+        field: &'static str,
+        signature: Signature,
+    }
+    impl ScalarUDFImpl for TestScalarUDFImpl {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
     }
 
-    pub const fn doc_sections_const() -> &'static [DocSection] {
-        &[
-            DOC_SECTION_MATH,
-            DOC_SECTION_CONDITIONAL,
-            DOC_SECTION_STRING,
-            DOC_SECTION_BINARY_STRING,
-            DOC_SECTION_REGEX,
-            DOC_SECTION_DATETIME,
-            DOC_SECTION_ARRAY,
-            DOC_SECTION_STRUCT,
-            DOC_SECTION_MAP,
-            DOC_SECTION_HASHING,
-            DOC_SECTION_UNION,
-            DOC_SECTION_OTHER,
-        ]
+    // PartialEq and Hash must be consistent, and also PartialEq and PartialOrd
+    // must be consistent, so they are tested together.
+    #[test]
+    fn test_partial_eq_hash_and_partial_ord() {
+        // A parameterized function
+        let f = test_func("foo", "a");
+
+        // Same like `f`, different instance
+        let f2 = test_func("foo", "a");
+        assert_eq!(f, f2);
+        assert_eq!(hash(&f), hash(&f2));
+        assert_eq!(f.partial_cmp(&f2), Some(Ordering::Equal));
+
+        // Different parameter
+        let b = test_func("foo", "b");
+        assert_ne!(f, b);
+        assert_ne!(hash(&f), hash(&b)); // hash can collide for different values but does not collide in this test
+        assert_eq!(f.partial_cmp(&b), None);
+
+        // Different name
+        let o = test_func("other", "a");
+        assert_ne!(f, o);
+        assert_ne!(hash(&f), hash(&o)); // hash can collide for different values but does not collide in this test
+        assert_eq!(f.partial_cmp(&o), Some(Ordering::Less));
+
+        // Different name and parameter
+        assert_ne!(b, o);
+        assert_ne!(hash(&b), hash(&o)); // hash can collide for different values but does not collide in this test
+        assert_eq!(b.partial_cmp(&o), Some(Ordering::Less));
     }
 
-    pub const DOC_SECTION_MATH: DocSection = DocSection {
-        include: true,
-        label: "Math Functions",
-        description: None,
-    };
+    fn test_func(name: &'static str, parameter: &'static str) -> ScalarUDF {
+        ScalarUDF::from(TestScalarUDFImpl {
+            name,
+            field: parameter,
+            signature: Signature::any(1, Volatility::Immutable),
+        })
+    }
 
-    pub const DOC_SECTION_CONDITIONAL: DocSection = DocSection {
-        include: true,
-        label: "Conditional Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_STRING: DocSection = DocSection {
-        include: true,
-        label: "String Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_BINARY_STRING: DocSection = DocSection {
-        include: true,
-        label: "Binary String Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_REGEX: DocSection = DocSection {
-        include: true,
-        label: "Regular Expression Functions",
-        description: Some(
-            r#"Apache DataFusion uses a [PCRE-like](https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions)
-regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
-(minus support for several features including look-around and backreferences).
-The following regular expression functions are supported:"#,
-        ),
-    };
-
-    pub const DOC_SECTION_DATETIME: DocSection = DocSection {
-        include: true,
-        label: "Time and Date Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_ARRAY: DocSection = DocSection {
-        include: true,
-        label: "Array Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_STRUCT: DocSection = DocSection {
-        include: true,
-        label: "Struct Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_MAP: DocSection = DocSection {
-        include: true,
-        label: "Map Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_HASHING: DocSection = DocSection {
-        include: true,
-        label: "Hashing Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_OTHER: DocSection = DocSection {
-        include: true,
-        label: "Other Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_UNION: DocSection = DocSection {
-        include: true,
-        label: "Union Functions",
-        description: Some("Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator"),
-    };
+    fn hash<T: Hash>(value: &T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
+    }
 }

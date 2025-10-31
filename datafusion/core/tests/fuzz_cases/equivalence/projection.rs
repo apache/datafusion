@@ -20,6 +20,7 @@ use crate::fuzz_cases::equivalence::utils::{
     is_table_same_after_sort, TestScalarUDF,
 };
 use arrow::compute::SortOptions;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -49,6 +50,7 @@ fn project_orderings_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            Arc::new(ConfigOptions::default()),
         )?);
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(
@@ -71,7 +73,7 @@ fn project_orderings_random() -> Result<()> {
             for proj_exprs in proj_exprs.iter().combinations(n_req) {
                 let proj_exprs = proj_exprs
                     .into_iter()
-                    .map(|(expr, name)| (Arc::clone(expr), name.to_string()))
+                    .map(|(expr, name)| (Arc::clone(expr), (*name).to_string()))
                     .collect::<Vec<_>>();
                 let (projected_batch, projected_eq) = apply_projection(
                     proj_exprs.clone(),
@@ -122,6 +124,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            Arc::new(ConfigOptions::default()),
         )?) as PhysicalExprRef;
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(
@@ -144,7 +147,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             for proj_exprs in proj_exprs.iter().combinations(n_req) {
                 let proj_exprs = proj_exprs
                     .into_iter()
-                    .map(|(expr, name)| (Arc::clone(expr), name.to_string()));
+                    .map(|(expr, name)| (Arc::clone(expr), (*name).to_string()));
                 let (projected_batch, projected_eq) = apply_projection(
                     proj_exprs.clone(),
                     &table_data_with_properties,

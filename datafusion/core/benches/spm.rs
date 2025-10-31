@@ -66,7 +66,7 @@ fn generate_spm_for_round_robin_tie_breaker(
     };
 
     let rbs = (0..batch_count).map(|_| rb.clone()).collect::<Vec<_>>();
-    let partitiones = vec![rbs.clone(); partition_count];
+    let partitions = vec![rbs.clone(); partition_count];
 
     let schema = rb.schema();
     let sort = [
@@ -81,7 +81,7 @@ fn generate_spm_for_round_robin_tie_breaker(
     ]
     .into();
 
-    let exec = MemorySourceConfig::try_new_exec(&partitiones, schema, None).unwrap();
+    let exec = MemorySourceConfig::try_new_exec(&partitions, schema, None).unwrap();
     SortPreservingMergeExec::new(sort, exec)
         .with_round_robin_repartition(enable_round_robin_repartition)
 }

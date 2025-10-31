@@ -49,7 +49,7 @@ use datafusion_macros::user_doc;
     standard_argument(name = "str", prefix = "String"),
     argument(name = "substr", description = "Substring expression to search for.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StrposFunc {
     signature: Signature,
     aliases: Vec<String>,

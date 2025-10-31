@@ -22,12 +22,12 @@ use arrow::array::{Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int32, Int64};
 use datafusion_common::cast::as_int32_array;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#factorial>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFactorial {
     signature: Signature,
     aliases: Vec<String>,
@@ -100,9 +100,7 @@ const FACTORIALS: [i64; 21] = [
 
 pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
     if args.len() != 1 {
-        return Err(DataFusionError::Internal(
-            "`factorial` expects exactly one argument".to_string(),
-        ));
+        return internal_err!("`factorial` expects exactly one argument");
     }
 
     match &args[0] {
@@ -111,7 +109,7 @@ pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
             Ok(ColumnarValue::Scalar(ScalarValue::Int64(result)))
         }
         ColumnarValue::Scalar(other) => {
-            exec_err!("`factorial` got an unexpected scalar type: {:?}", other)
+            exec_err!("`factorial` got an unexpected scalar type: {}", other)
         }
         ColumnarValue::Array(array) => match array.data_type() {
             Int32 => {
@@ -122,7 +120,7 @@ pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             other => {
-                exec_err!("`factorial` got an unexpected argument type: {:?}", other)
+                exec_err!("`factorial` got an unexpected argument type: {}", other)
             }
         },
     }

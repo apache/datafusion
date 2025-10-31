@@ -23,17 +23,17 @@ use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
 use crate::window::standard::add_new_ordering_expr_with_partition_by;
-use crate::window::window_expr::{AggregateWindowExpr, WindowFn};
+use crate::window::window_expr::{filter_array, AggregateWindowExpr, WindowFn};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
 use crate::{EquivalenceProperties, PhysicalExpr};
 
-use arrow::array::Array;
 use arrow::array::ArrayRef;
+use arrow::array::BooleanArray;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -47,6 +47,7 @@ pub struct PlainAggregateWindowExpr {
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
     is_constant_in_partition: bool,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl PlainAggregateWindowExpr {
@@ -56,6 +57,7 @@ impl PlainAggregateWindowExpr {
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
         let is_constant_in_partition =
             Self::is_window_constant_in_partition(order_by, &window_frame);
@@ -65,6 +67,7 @@ impl PlainAggregateWindowExpr {
             order_by: order_by.to_vec(),
             window_frame,
             is_constant_in_partition,
+            filter,
         }
     }
 
@@ -154,10 +157,9 @@ impl WindowExpr for PlainAggregateWindowExpr {
         // This enables us to run queries involving UNBOUNDED PRECEDING frames
         // using bounded memory for suitable aggregations.
         for partition_row in partition_batches.keys() {
-            let window_state =
-                window_agg_state.get_mut(partition_row).ok_or_else(|| {
-                    DataFusionError::Execution("Cannot find state".to_string())
-                })?;
+            let window_state = window_agg_state
+                .get_mut(partition_row)
+                .ok_or_else(|| exec_datafusion_err!("Cannot find state"))?;
             let state = &mut window_state.state;
             if self.window_frame.start_bound.is_unbounded() {
                 state.window_frame_range.start =
@@ -192,6 +194,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
                         .map(|e| e.reverse())
                         .collect::<Vec<_>>(),
                     Arc::new(self.window_frame.reverse()),
+                    self.filter.clone(),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
@@ -203,6 +206,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
                         .map(|e| e.reverse())
                         .collect::<Vec<_>>(),
                     Arc::new(self.window_frame.reverse()),
+                    self.filter.clone(),
                 )) as _
             }
         })
@@ -222,6 +226,10 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
         self.aggregate.create_accumulator()
     }
 
+    fn filter_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.filter.as_ref()
+    }
+
     /// For a given range, calculate accumulation result inside the range on
     /// `value_slice` and update accumulator state.
     // We assume that `cur_range` contains `last_range` and their start points
@@ -233,6 +241,7 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
         cur_range: &Range<usize>,
         value_slice: &[ArrayRef],
         accumulator: &mut Box<dyn Accumulator>,
+        filter_mask: Option<&BooleanArray>,
     ) -> Result<ScalarValue> {
         if cur_range.start == cur_range.end {
             self.aggregate
@@ -245,10 +254,16 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
             // same point (i.e. the beginning of the table/frame). Hence, we
             // do not call `retract_batch`.
             if update_bound > 0 {
+                let slice_mask =
+                    filter_mask.map(|m| m.slice(last_range.end, update_bound));
                 let update: Vec<ArrayRef> = value_slice
                     .iter()
                     .map(|v| v.slice(last_range.end, update_bound))
-                    .collect();
+                    .map(|arr| match &slice_mask {
+                        Some(m) => filter_array(&arr, m),
+                        None => Ok(arr),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 accumulator.update_batch(&update)?
             }
             accumulator.evaluate()

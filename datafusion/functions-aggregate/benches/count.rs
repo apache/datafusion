@@ -33,15 +33,17 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn prepare_group_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
+    let expr = col("f", &schema).unwrap();
     let accumulator_args = AccumulatorArgs {
         return_field: Field::new("f", DataType::Int64, true).into(),
         schema: &schema,
+        expr_fields: &[expr.return_field(&schema).unwrap()],
         ignore_nulls: false,
         order_bys: &[],
         is_reversed: false,
         name: "COUNT(f)",
         is_distinct: false,
-        exprs: &[col("f", &schema).unwrap()],
+        exprs: &[expr],
     };
     let count_fn = Count::new();
 
@@ -56,15 +58,17 @@ fn prepare_accumulator() -> Box<dyn Accumulator> {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         true,
     )]));
+    let expr = col("f", &schema).unwrap();
     let accumulator_args = AccumulatorArgs {
         return_field: Arc::new(Field::new_list_field(DataType::Int64, true)),
         schema: &schema,
+        expr_fields: &[expr.return_field(&schema).unwrap()],
         ignore_nulls: false,
         order_bys: &[],
         is_reversed: false,
         name: "COUNT(f)",
         is_distinct: true,
-        exprs: &[col("f", &schema).unwrap()],
+        exprs: &[expr],
     };
     let count_fn = Count::new();
 
@@ -82,7 +86,7 @@ fn convert_to_state_bench(
         b.iter(|| {
             black_box(
                 accumulator
-                    .convert_to_state(&[values.clone()], opt_filter)
+                    .convert_to_state(std::slice::from_ref(&values), opt_filter)
                     .unwrap(),
             )
         })
@@ -125,7 +129,11 @@ fn count_benchmark(c: &mut Criterion) {
     c.bench_function("count low cardinality dict 20% nulls, no filter", |b| {
         b.iter(|| {
             #[allow(clippy::unit_arg)]
-            black_box(accumulator.update_batch(&[values.clone()]).unwrap())
+            black_box(
+                accumulator
+                    .update_batch(std::slice::from_ref(&values))
+                    .unwrap(),
+            )
         })
     });
 }

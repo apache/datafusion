@@ -47,7 +47,9 @@ pub trait VecAllocExt {
     /// assert_eq!(allocated, 16); // no new allocation needed
     ///
     /// // push more data into the vec
-    /// for _ in 0..10 { vec.push_accounted(1, &mut allocated); }
+    /// for _ in 0..10 {
+    ///     vec.push_accounted(1, &mut allocated);
+    /// }
     /// assert_eq!(allocated, 64); // underlying vec has space for 10 u32s
     /// assert_eq!(vec.allocated_size(), 64);
     /// ```
@@ -82,7 +84,9 @@ pub trait VecAllocExt {
     /// assert_eq!(vec.allocated_size(), 16); // no new allocation needed
     ///
     /// // push more data into the vec
-    /// for _ in 0..10 { vec.push(1); }
+    /// for _ in 0..10 {
+    ///     vec.push(1);
+    /// }
     /// assert_eq!(vec.allocated_size(), 64); // space for 64 now
     /// ```
     fn allocated_size(&self) -> usize;
@@ -133,7 +137,9 @@ pub trait RawTableAllocExt {
     /// assert_eq!(allocated, 64);
     ///
     /// // insert more values
-    /// for i in 0..100 { table.insert_accounted(i, hash_fn, &mut allocated); }
+    /// for i in 0..100 {
+    ///     table.insert_accounted(i, hash_fn, &mut allocated);
+    /// }
     /// assert_eq!(allocated, 400);
     /// ```
     fn insert_accounted(
@@ -200,7 +206,9 @@ pub trait HashTableAllocExt {
     /// assert_eq!(allocated, 64);
     ///
     /// // insert more values
-    /// for i in 0..100 { table.insert_accounted(i, hash_fn, &mut allocated); }
+    /// for i in 0..100 {
+    ///     table.insert_accounted(i, hash_fn, &mut allocated);
+    /// }
     /// assert_eq!(allocated, 400);
     /// ```
     fn insert_accounted(

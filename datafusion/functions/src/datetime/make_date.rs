@@ -51,7 +51,7 @@ use datafusion_macros::user_doc;
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "year",
@@ -66,7 +66,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeDateFunc {
     signature: Signature,
 }
@@ -231,6 +231,7 @@ mod tests {
     use crate::datetime::make_date::MakeDateFunc;
     use arrow::array::{Array, Date32Array, Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
@@ -248,6 +249,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Field::new("f", DataType::Date32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         MakeDateFunc::new().invoke_with_args(args)
     }

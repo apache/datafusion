@@ -29,7 +29,6 @@ use datafusion::common::cast::as_string_view_array;
 use datafusion::common::error::Result;
 use datafusion::common::not_impl_err;
 use datafusion::common::utils::take_function_args;
-use datafusion::config::ConfigOptions;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::{
@@ -134,7 +133,7 @@ fn animal() -> Result<RecordBatch> {
 ///
 /// Since this is a simplified example, it does not call an LLM service, but
 /// could be extended to do so in a real-world scenario.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AskLLM {
     signature: Signature,
 }
@@ -198,8 +197,7 @@ impl AsyncScalarUDFImpl for AskLLM {
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        _option: &ConfigOptions,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ColumnarValue> {
         // in a real UDF you would likely want to special case constant
         // arguments to improve performance, but this example converts the
         // arguments to arrays for simplicity.
@@ -234,6 +232,6 @@ impl AsyncScalarUDFImpl for AskLLM {
             })
             .collect();
 
-        Ok(Arc::new(result_array))
+        Ok(ColumnarValue::from(Arc::new(result_array) as ArrayRef))
     }
 }

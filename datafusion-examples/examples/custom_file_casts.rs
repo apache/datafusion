@@ -25,23 +25,23 @@ use datafusion::common::not_impl_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::datasource::listing::{
-    ListingTable, ListingTableConfig, ListingTableUrl,
+    ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::expressions::CastExpr;
-use datafusion::physical_expr::schema_rewriter::{
-    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
-};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::SessionConfig;
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
+};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, PutPayload};
 
 // Example showing how to implement custom casting rules to adapt file schemas.
-// This example enforces that casts must be stricly widening: if the file type is Int64 and the table type is Int32, it will error
+// This example enforces that casts must be strictly widening: if the file type is Int64 and the table type is Int32, it will error
 // before even reading the data.
 // Without this custom cast rule DataFusion would happily do the narrowing cast, potentially erroring only if it found a row with data it could not cast.
 
@@ -183,14 +183,18 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
         // For example, [DataFusion Comet](https://github.com/apache/datafusion-comet) has a [custom cast kernel](https://github.com/apache/datafusion-comet/blob/b4ac876ab420ed403ac7fc8e1b29f42f1f442566/native/spark-expr/src/conversion_funcs/cast.rs#L133-L138).
         expr.transform(|expr| {
             if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
-                let input_data_type = cast.expr().data_type(&self.physical_file_schema)?;
+                let input_data_type =
+                    cast.expr().data_type(&self.physical_file_schema)?;
                 let output_data_type = cast.data_type(&self.physical_file_schema)?;
                 if !cast.is_bigger_cast(&input_data_type) {
-                    return not_impl_err!("Unsupported CAST from {input_data_type:?} to {output_data_type:?}")
+                    return not_impl_err!(
+                        "Unsupported CAST from {input_data_type} to {output_data_type}"
+                    );
                 }
             }
             Ok(Transformed::no(expr))
-        }).data()
+        })
+        .data()
     }
 
     fn with_partition_values(

@@ -23,10 +23,53 @@
 
 ## Original Query: SELECT bit_get(11, 0);
 ## PySpark 3.5.5 Result: {'bit_get(11, 0)': 1, 'typeof(bit_get(11, 0))': 'tinyint', 'typeof(11)': 'int', 'typeof(0)': 'int'}
-#query
-#SELECT bit_get(11::int, 0::int);
+query I
+SELECT bit_get(11, 0);
+----
+1
 
 ## Original Query: SELECT bit_get(11, 2);
 ## PySpark 3.5.5 Result: {'bit_get(11, 2)': 0, 'typeof(bit_get(11, 2))': 'tinyint', 'typeof(11)': 'int', 'typeof(2)': 'int'}
-#query
-#SELECT bit_get(11::int, 2::int);
+query I
+SELECT bit_get(11, 2);
+----
+0
+
+## Test additional cases
+query I
+SELECT bit_get(11, 3);
+----
+1
+
+query I
+SELECT bit_get(255, 7);
+----
+1
+
+query I
+SELECT bit_get(255, 8);
+----
+0
+
+query I
+SELECT bit_get(0, 0);
+----
+0
+
+## Test edge cases
+statement error DataFusion error: Arrow error: Compute error: bit_get: position -1 is out of bounds. Expected pos < 64 and pos >= 0
+SELECT bit_get(11, -1);
+
+statement error DataFusion error: Arrow error: Compute error: bit_get: position 64 is out of bounds. Expected pos < 64 and pos >= 0
+SELECT bit_get(11, 64);
+
+## Test null inputs
+query I
+SELECT bit_get(NULL, 0);
+----
+NULL
+
+query I
+SELECT bit_get(11, NULL);
+----
+NULL

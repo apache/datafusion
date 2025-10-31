@@ -60,6 +60,7 @@ make_udaf_expr_and_func!(
         description = "Expression to evaluate whether data is aggregated across the specified column. Can be a constant, column, or function."
     )
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct Grouping {
     signature: Signature,
 }

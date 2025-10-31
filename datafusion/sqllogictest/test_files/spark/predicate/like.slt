@@ -23,5 +23,62 @@
 
 ## Original Query: SELECT like('Spark', '_park');
 ## PySpark 3.5.5 Result: {'Spark LIKE _park': True, 'typeof(Spark LIKE _park)': 'boolean', 'typeof(Spark)': 'string', 'typeof(_park)': 'string'}
-#query
-#SELECT like('Spark'::string, '_park'::string);
+query B
+SELECT like('Spark'::string, '_park'::string);
+----
+true
+
+query B
+SELECT ilike('Spark',  arrow_cast('_park', 'LargeUtf8'));
+----
+true
+
+query B
+SELECT ilike(arrow_cast('Spark', 'Utf8View'),  arrow_cast('_park', 'LargeUtf8'));
+----
+true
+
+query B
+SELECT like('Spark'::string, '_Park'::string);
+----
+false
+
+query B
+SELECT like('SPARK'::string, '_park'::string);
+----
+false
+
+query B
+SELECT like('Spark'::string, 'Sp%'::string);
+----
+true
+
+query B
+SELECT like('Spark'::string, 'SP%'::string);
+----
+false
+
+query B
+SELECT like('Spark'::string, '%ark'::string);
+----
+true
+
+query B
+SELECT like('Spark'::string, '%ARK'::string);
+----
+false
+
+query B
+SELECT like('Spark'::string, 'xyz'::string);
+----
+false
+
+query B
+SELECT like(NULL::string, '_park'::string);
+----
+NULL
+
+query B
+SELECT like('Spark'::string, NULL::string);
+----
+NULL

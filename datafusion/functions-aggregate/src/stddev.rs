@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::align_of_val;
 use std::sync::Arc;
 
@@ -62,6 +62,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
+#[derive(PartialEq, Eq, Hash)]
 pub struct Stddev {
     signature: Signature,
     alias: Vec<String>,
@@ -154,23 +155,6 @@ impl AggregateUDFImpl for Stddev {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, alias } = self;
-        signature == &other.signature && alias == &other.alias
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, alias } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        alias.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 make_udaf_expr_and_func!(
@@ -196,6 +180,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV_POP population aggregate expression
+#[derive(PartialEq, Eq, Hash)]
 pub struct StddevPop {
     signature: Signature,
 }
@@ -458,26 +443,31 @@ mod tests {
         agg2: Arc<AggregateUDF>,
         schema: &Schema,
     ) -> Result<ScalarValue> {
+        let expr = col("a", schema)?;
+        let expr_field = expr.return_field(schema)?;
+
         let args1 = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
+            expr_fields: &[Arc::clone(&expr_field)],
             ignore_nulls: false,
             order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            exprs: &[col("a", schema)?],
+            exprs: &[Arc::clone(&expr)],
         };
 
         let args2 = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
+            expr_fields: &[expr_field],
             ignore_nulls: false,
             order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            exprs: &[col("a", schema)?],
+            exprs: &[expr],
         };
 
         let mut accum1 = agg1.accumulator(args1)?;

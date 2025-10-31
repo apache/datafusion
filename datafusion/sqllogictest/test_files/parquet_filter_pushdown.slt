@@ -405,6 +405,21 @@ physical_plan
 02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[b], file_type=parquet, predicate=a@0 = bar, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= bar AND bar <= a_max@1, required_guarantees=[a in (bar)]
 
+
+# should not push down volatile predicates such as RANDOM
+# expect that the random predicate is evaluated after the scan
+query TT
+EXPLAIN select a from t_pushdown where b > random();
+----
+logical_plan
+01)Projection: t_pushdown.a
+02)--Filter: CAST(t_pushdown.b AS Float64) > random()
+03)----TableScan: t_pushdown projection=[a, b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: CAST(b@1 AS Float64) > random(), projection=[a@0]
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], file_type=parquet
+
 ## cleanup
 statement ok
 DROP TABLE t;
@@ -459,10 +474,7 @@ EXPLAIN select * from t_pushdown where part != val
 logical_plan
 01)Filter: t_pushdown.val != t_pushdown.part
 02)--TableScan: t_pushdown projection=[val, part], partial_filters=[t_pushdown.val != t_pushdown.part]
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: val@0 != part@1
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=b/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=c/file.parquet]]}, projection=[val, part], file_type=parquet
+physical_plan DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=b/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=c/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 != part@1
 
 # If we reference only a partition column it gets evaluated during the listing phase
 query TT
@@ -490,11 +502,7 @@ EXPLAIN select * from t_pushdown where val != 'd' AND val != 'c' AND part = 'a' 
 logical_plan
 01)Filter: t_pushdown.val != Utf8View("d") AND t_pushdown.val != Utf8View("c") AND t_pushdown.val != t_pushdown.part
 02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val != Utf8View("d"), t_pushdown.val != Utf8View("c"), t_pushdown.val != t_pushdown.part]
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: val@0 != part@1
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 != d AND val@0 != c, pruning_predicate=val_null_count@2 != row_count@3 AND (val_min@0 != d OR d != val_max@1) AND val_null_count@2 != row_count@3 AND (val_min@0 != c OR c != val_max@1), required_guarantees=[val not in (c, d)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 != d AND val@0 != c AND val@0 != part@1, pruning_predicate=val_null_count@2 != row_count@3 AND (val_min@0 != d OR d != val_max@1) AND val_null_count@2 != row_count@3 AND (val_min@0 != c OR c != val_max@1), required_guarantees=[val not in (c, d)]
 
 # The order of filters should not matter
 query TT
@@ -503,10 +511,7 @@ EXPLAIN select val, part from t_pushdown where part = 'a' AND part = val;
 logical_plan
 01)Filter: t_pushdown.val = t_pushdown.part
 02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: val@0 = part@1
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 = part@1
 
 query TT
 select val, part from t_pushdown where part = 'a' AND part = val;
@@ -519,12 +524,50 @@ EXPLAIN select val, part from t_pushdown where part = val AND part = 'a';
 logical_plan
 01)Filter: t_pushdown.val = t_pushdown.part
 02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: val@0 = part@1
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 = part@1
 
 query TT
 select val, part from t_pushdown where part = val AND part = 'a';
 ----
 a a
+
+statement ok
+COPY (
+    SELECT
+        '00000000000000000000000000000001' AS trace_id,
+        '2023-10-01 00:00:00'::timestamptz AS start_timestamp,
+        'prod' as deployment_environment
+)
+TO 'test_files/scratch/parquet_filter_pushdown/data/1.parquet';
+
+statement ok
+COPY (
+    SELECT
+        '00000000000000000000000000000002' AS trace_id,
+        '2024-10-01 00:00:00'::timestamptz AS start_timestamp,
+        'staging' as deployment_environment
+)
+TO 'test_files/scratch/parquet_filter_pushdown/data/2.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t1 STORED AS PARQUET LOCATION 'test_files/scratch/parquet_filter_pushdown/data/';
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query T
+SELECT deployment_environment
+FROM t1
+WHERE trace_id = '00000000000000000000000000000002'
+ORDER BY start_timestamp, trace_id;
+----
+staging
+
+query P
+SELECT start_timestamp
+FROM t1
+WHERE trace_id = '00000000000000000000000000000002' AND deployment_environment = 'staging'
+ORDER BY start_timestamp, trace_id
+LIMIT 1;
+----
+2024-10-01T00:00:00Z

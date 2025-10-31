@@ -26,12 +26,12 @@ use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    HashMap, JoinType, Result,
+    DFSchema, HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Unnest,
-    Window,
+    logical_plan::LogicalPlan, Aggregate, Distinct, EmptyRelation, Expr, Projection,
+    TableScan, Unnest, Window,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -55,6 +55,24 @@ use datafusion_common::tree_node::{
 /// The rule analyzes the input logical plan, determines the necessary column
 /// indices, and then removes any unnecessary columns. It also removes any
 /// unnecessary projections from the plan tree.
+///
+/// ## Schema, Field Properties, and Metadata Handling
+///
+/// The `OptimizeProjections` rule preserves schema and field metadata in most optimization scenarios:
+///
+/// **Schema-level metadata preservation by plan type**:
+/// - **Window and Aggregate plans**: Schema metadata is preserved
+/// - **Projection plans**: Schema metadata is preserved per [`projection_schema`](datafusion_expr::logical_plan::projection_schema).
+/// - **Other logical plans**: Schema metadata is preserved unless [`LogicalPlan::recompute_schema`]
+///   is called on plan types that drop metadata
+///
+/// **Field-level properties and metadata**: Individual field properties are preserved when fields
+/// are retained in the optimized plan, determined by [`exprlist_to_fields`](datafusion_expr::utils::exprlist_to_fields)
+/// and [`ExprSchemable::to_field`](datafusion_expr::expr_schema::ExprSchemable::to_field).
+///
+/// **Field precedence**: When the same field appears multiple times, the optimizer
+/// maintains one occurrence and removes duplicates (refer to `RequiredIndices::compact()`),
+/// preserving the properties and metadata of that occurrence.
 #[derive(Default, Debug)]
 pub struct OptimizeProjections {}
 
@@ -153,23 +171,16 @@ fn optimize_projections(
 
             // Only use the absolutely necessary aggregate expressions required
             // by the parent:
-            let mut new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
+            let new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
 
-            // Aggregations always need at least one aggregate expression.
-            // With a nested count, we don't require any column as input, but
-            // still need to create a correct aggregate, which may be optimized
-            // out later. As an example, consider the following query:
-            //
-            // SELECT count(*) FROM (SELECT count(*) FROM [...])
-            //
-            // which always returns 1.
-            if new_aggr_expr.is_empty()
-                && new_group_bys.is_empty()
-                && !aggregate.aggr_expr.is_empty()
-            {
-                // take the old, first aggregate expression
-                new_aggr_expr = aggregate.aggr_expr;
-                new_aggr_expr.resize_with(1, || unreachable!());
+            if new_group_bys.is_empty() && new_aggr_expr.is_empty() {
+                // Global aggregation with no aggregate functions always produces 1 row and no columns.
+                return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                    EmptyRelation {
+                        produce_one_row: true,
+                        schema: Arc::new(DFSchema::empty()),
+                    },
+                )));
             }
 
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
@@ -345,11 +356,34 @@ fn optimize_projections(
                 .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
+        }
+        LogicalPlan::RecursiveQuery(recursive) => {
+            // Only allow subqueries that reference the current CTE; nested subqueries are not yet
+            // supported for projection pushdown for simplicity.
+            // TODO: be able to do projection pushdown on recursive CTEs with subqueries
+            if plan_contains_other_subqueries(
+                recursive.static_term.as_ref(),
+                &recursive.name,
+            ) || plan_contains_other_subqueries(
+                recursive.recursive_term.as_ref(),
+                &recursive.name,
+            ) {
+                return Ok(Transformed::no(plan));
+            }
+
+            plan.inputs()
+                .into_iter()
+                .map(|input| {
+                    indices
+                        .clone()
+                        .with_projection_beneficial()
+                        .with_plan_exprs(&plan, input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
@@ -441,6 +475,18 @@ fn optimize_projections(
 /// beneficial when expressions in the current projection are non-trivial and
 /// appear more than once in its input fields. This can act as a caching mechanism
 /// for non-trivial computations.
+///
+/// ## Metadata Handling During Projection Merging
+///
+/// **Alias metadata preservation**: When merging projections, alias metadata from both
+/// the current and previous projections is carefully preserved. The presence of metadata
+/// precludes alias trimming.
+///
+/// **Schema, Fields, and metadata**: If a projection is rewritten, the schema and metadata
+/// are preserved. Individual field properties and metadata flows through expression rewriting
+/// and are preserved when fields are referenced in the merged projection.
+/// Refer to [`projection_schema`](datafusion_expr::logical_plan::projection_schema)
+/// for more details.
 ///
 /// # Parameters
 ///
@@ -565,7 +611,8 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 /// - `Err(error)`: An error occurred during the function call.
 ///
 /// # Notes
-/// This rewrite also removes any unnecessary layers of aliasing.
+/// This rewrite also removes any unnecessary layers of aliasing. "Unnecessary" is
+/// defined as not contributing new information, such as metadata.
 ///
 /// Without trimming, we can end up with unnecessary indirections inside expressions
 /// during projection merges.
@@ -826,6 +873,65 @@ pub fn is_projection_unnecessary(
     ))
 }
 
+/// Returns true if the plan subtree contains any subqueries that are not the
+/// CTE reference itself. This treats any non-CTE [`LogicalPlan::SubqueryAlias`]
+/// node (including aliased relations) as a blocker, along with expression-level
+/// subqueries like scalar, EXISTS, or IN. These cases prevent projection
+/// pushdown for now because we cannot safely reason about their column usage.
+fn plan_contains_other_subqueries(plan: &LogicalPlan, cte_name: &str) -> bool {
+    if let LogicalPlan::SubqueryAlias(alias) = plan {
+        if alias.alias.table() != cte_name
+            && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
+        {
+            return true;
+        }
+    }
+
+    let mut found = false;
+    plan.apply_expressions(|expr| {
+        if expr_contains_subquery(expr) {
+            found = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("expression traversal never fails");
+    if found {
+        return true;
+    }
+
+    plan.inputs()
+        .into_iter()
+        .any(|child| plan_contains_other_subqueries(child, cte_name))
+}
+
+fn expr_contains_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| match e {
+        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => Ok(true),
+        _ => Ok(false),
+    })
+    // Safe unwrap since we are doing a simple boolean check
+    .unwrap()
+}
+
+fn subquery_alias_targets_recursive_cte(plan: &LogicalPlan, cte_name: &str) -> bool {
+    match plan {
+        LogicalPlan::TableScan(scan) => scan.table_name.table() == cte_name,
+        LogicalPlan::SubqueryAlias(alias) => {
+            subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
+        }
+        _ => {
+            let inputs = plan.inputs();
+            if inputs.len() == 1 {
+                subquery_alias_targets_recursive_cte(inputs[0], cte_name)
+            } else {
+                false
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
@@ -909,6 +1015,8 @@ mod tests {
                 Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
                 cmp => cmp,
             }
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -996,6 +1104,8 @@ mod tests {
                 }
                 cmp => cmp,
             }
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -1146,9 +1256,7 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-          Projection:
-            Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-              TableScan: ?table? projection=[]
+          EmptyRelation: rows=1
         "
         )
     }

@@ -57,7 +57,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     planner_context,
                                 )
                             } else {
-                                plan_err!("Unsupported function argument type: {:?}", arg)
+                                plan_err!("Unsupported function argument type: {}", arg)
                             }
                         })
                         .collect::<Vec<_>>();

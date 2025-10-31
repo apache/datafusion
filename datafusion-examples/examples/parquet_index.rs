@@ -246,7 +246,7 @@ impl TableProvider for IndexTableProvider {
         let source = Arc::new(ParquetSource::default().with_predicate(predicate));
         let mut file_scan_config_builder =
             FileScanConfigBuilder::new(object_store_url, self.schema(), source)
-                .with_projection(projection.cloned())
+                .with_projection_indices(projection.cloned())
                 .with_limit(limit);
 
         // Transform to the format needed to pass to DataSourceExec
@@ -313,7 +313,7 @@ impl Display for ParquetMetadataIndex {
             "ParquetMetadataIndex(last_num_pruned: {})",
             self.last_num_pruned()
         )?;
-        let batches = pretty_format_batches(&[self.index.clone()]).unwrap();
+        let batches = pretty_format_batches(std::slice::from_ref(&self.index)).unwrap();
         write!(f, "{batches}",)
     }
 }

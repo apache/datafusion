@@ -21,7 +21,146 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT if(1 < 2, 'a', 'b');
-## PySpark 3.5.5 Result: {'(IF((1 < 2), a, b))': 'a', 'typeof((IF((1 < 2), a, b)))': 'string', 'typeof((1 < 2))': 'boolean', 'typeof(a)': 'string', 'typeof(b)': 'string'}
-#query
-#SELECT if((1 < 2)::boolean, 'a'::string, 'b'::string);
+## Basic IF function tests
+
+# Test basic true condition
+query T
+SELECT if(true, 'yes', 'no');
+----
+yes
+
+# Test basic false condition
+query T
+SELECT if(false, 'yes', 'no');
+----
+no
+
+# Test with comparison operators
+query T
+SELECT if(1 < 2, 'a', 'b');
+----
+a
+
+query T
+SELECT if(1 > 2, 'a', 'b');
+----
+b
+
+
+## Numeric type tests
+
+# Test with integers
+query I
+SELECT if(true, 10, 20);
+----
+10
+
+query I
+SELECT if(false, 10, 20);
+----
+20
+
+# Test with different integer types
+query I
+SELECT if(true, 100, 200);
+----
+100
+
+## Float type tests
+
+# Test with floating point numbers
+query R
+SELECT if(true, 1.5, 2.5);
+----
+1.5
+
+query R
+SELECT if(false, 1.5, 2.5);
+----
+2.5
+
+## String type tests
+
+# Test with different string values
+query T
+SELECT if(true, 'hello', 'world');
+----
+hello
+
+query T
+SELECT if(false, 'hello', 'world');
+----
+world
+
+## NULL handling tests
+
+# Test with NULL condition
+query T
+SELECT if(NULL, 'yes', 'no');
+----
+no
+
+query T
+SELECT if(NOT NULL, 'yes', 'no');
+----
+no
+
+# Test with NULL true value
+query T
+SELECT if(true, NULL, 'no');
+----
+NULL
+
+# Test with NULL false value
+query T
+SELECT if(false, 'yes', NULL);
+----
+NULL
+
+# Test with all NULL
+query ?
+SELECT if(true, NULL, NULL);
+----
+NULL
+
+## Type coercion tests
+
+# Test integer to float coercion
+query R
+SELECT if(true, 10, 20.5);
+----
+10
+
+query R
+SELECT if(false, 10, 20.5);
+----
+20.5
+
+# Test float to integer coercion
+query R
+SELECT if(true, 10.5, 20);
+----
+10.5
+
+query R
+SELECT if(false, 10.5, 20);
+----
+20
+
+statement error Int64 is not a boolean or null
+SELECT if(1, 10.5, 20);
+
+
+statement error Utf8 is not a boolean or null
+SELECT if('x', 10.5, 20);
+
+query II
+SELECT v, IF(v < 0, 10/0, 1) FROM (VALUES (1), (2)) t(v)
+----
+1 1
+2 1
+
+query I
+SELECT IF(true, 1 / 1, 1 / 0);
+----
+1

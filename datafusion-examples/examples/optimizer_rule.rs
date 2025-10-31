@@ -175,7 +175,7 @@ fn is_lit_or_col(expr: &Expr) -> bool {
 }
 
 /// A simple user defined filter function
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct MyEq {
     signature: Signature,
 }

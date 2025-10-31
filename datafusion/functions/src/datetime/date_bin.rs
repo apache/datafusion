@@ -95,7 +95,7 @@ FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
 "#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateBinFunc {
     signature: Signature,
 }
@@ -512,6 +512,7 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use chrono::TimeDelta;
+    use datafusion_common::config::ConfigOptions;
 
     fn invoke_date_bin_with_args(
         args: Vec<ColumnarValue>,
@@ -528,6 +529,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Arc::clone(return_field),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         DateBinFunc::new().invoke_with_args(args)
     }
@@ -685,7 +687,7 @@ mod tests {
         let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision but got Timestamp(Microsecond, None)"
+            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision but got Timestamp(µs)"
         );
 
         args = vec![

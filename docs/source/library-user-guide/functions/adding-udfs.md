@@ -83,7 +83,7 @@ use datafusion_doc::Documentation;
     description = "Add one udf",
     syntax_example = "add_one(1)"
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AddOne {
   signature: Signature,
 }
@@ -146,7 +146,7 @@ We now need to register the function with DataFusion so that it can be used in t
 #     description = "Add one udf",
 #     syntax_example = "add_one(1)"
 # )]
-# #[derive(Debug)]
+# #[derive(Debug, PartialEq, Eq, Hash)]
 # struct AddOne {
 #   signature: Signature,
 # }
@@ -354,7 +354,7 @@ async fn main() {
 }
 ```
 
-## Adding a Async Scalar UDF
+## Adding an Async Scalar UDF
 
 An Async Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
@@ -384,7 +384,7 @@ To add a Scalar Async UDF, you need to:
 # use std::any::Any;
 # use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct AsyncUpper {
     signature: Signature,
 }
@@ -444,13 +444,11 @@ impl AsyncScalarUDFImpl for AsyncUpper {
     }
 
     /// This method is called to execute the async UDF and is similar
-    /// to the normal `invoke_with_args` except it returns an `ArrayRef`
-    /// instead of `ColumnarValue` and is `async`.
+    /// to the normal `invoke_with_args` except it is `async`.
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        _option: &ConfigOptions,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ColumnarValue> {
         let value = &args.args[0];
         // This function simply implements a simple string to uppercase conversion
         // but can be used for any async operation such as network calls.
@@ -465,7 +463,7 @@ impl AsyncScalarUDFImpl for AsyncUpper {
             }
             _ => return internal_err!("Expected a string argument, got {:?}", value),
         };
-        Ok(result)
+        Ok(ColumnarValue::from(result))
     }
 }
 ```
@@ -490,7 +488,7 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 # use std::any::Any;
 # use std::sync::Arc;
 #
-# #[derive(Debug)]
+# #[derive(Debug, PartialEq, Eq, Hash)]
 # pub struct AsyncUpper {
 #     signature: Signature,
 # }
@@ -549,8 +547,7 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #     async fn invoke_async_with_args(
 #         &self,
 #         args: ScalarFunctionArgs,
-#         _option: &ConfigOptions,
-#     ) -> Result<ArrayRef> {
+#     ) -> Result<ColumnarValue> {
 #         trace!("Invoking async_upper with args: {:?}", args);
 #         let value = &args.args[0];
 #         let result = match value {
@@ -564,7 +561,7 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #             }
 #             _ => return internal_err!("Expected a string argument, got {:?}", value),
 #         };
-#         Ok(result)
+#         Ok(ColumnarValue::from(result))
 #     }
 # }
 use datafusion::execution::context::SessionContext;
@@ -588,6 +585,119 @@ For async UDF implementation details, see [`async_udf.rs`](https://github.com/ap
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
 [`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
 [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+
+## Named Arguments
+
+DataFusion supports PostgreSQL-style named arguments for scalar functions, allowing you to pass arguments by parameter name:
+
+```sql
+SELECT substr(str => 'hello', start_pos => 2, length => 3);
+```
+
+Named arguments can be mixed with positional arguments, but positional arguments must come first:
+
+```sql
+SELECT substr('hello', start_pos => 2, length => 3);  -- Valid
+```
+
+### Implementing Functions with Named Arguments
+
+To support named arguments in your UDF, add parameter names to your function's signature using `.with_parameter_names()`:
+
+```rust
+# use arrow::datatypes::DataType;
+# use datafusion_expr::{Signature, Volatility};
+#
+# #[derive(Debug)]
+# struct MyFunction {
+#     signature: Signature,
+# }
+#
+impl MyFunction {
+    fn new() -> Self {
+        Self {
+            signature: Signature::uniform(
+                2,
+                vec![DataType::Float64],
+                Volatility::Immutable
+            )
+            .with_parameter_names(vec![
+                "base".to_string(),
+                "exponent".to_string()
+            ])
+            .expect("valid parameter names"),
+        }
+    }
+}
+```
+
+The parameter names should match the order of arguments in your function's signature. DataFusion automatically resolves named arguments to the correct positional order before invoking your function.
+
+### Example
+
+```rust
+# use std::sync::Arc;
+# use std::any::Any;
+# use arrow::datatypes::DataType;
+# use datafusion_common::Result;
+# use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, Signature, Volatility};
+# use datafusion_expr::ScalarUDFImpl;
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct PowerFunction {
+    signature: Signature,
+}
+
+impl PowerFunction {
+    fn new() -> Self {
+        Self {
+            signature: Signature::uniform(
+                2,
+                vec![DataType::Float64],
+                Volatility::Immutable
+            )
+            .with_parameter_names(vec![
+                "base".to_string(),
+                "exponent".to_string()
+            ])
+            .expect("valid parameter names"),
+        }
+    }
+}
+
+impl ScalarUDFImpl for PowerFunction {
+    fn as_any(&self) -> &dyn Any { self }
+    fn name(&self) -> &str { "power" }
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Your implementation - arguments are in correct positional order
+        unimplemented!()
+    }
+}
+```
+
+Once registered, users can call your function with named arguments:
+
+```sql
+SELECT power(base => 2.0, exponent => 3.0);
+SELECT power(2.0, exponent => 3.0);
+```
+
+### Error Messages
+
+When a function call fails due to incorrect arguments, DataFusion will show the parameter names in error messages to help users:
+
+```text
+No function matches the given name and argument types substr(Utf8).
+    Candidate functions:
+    substr(str: Any, start_pos: Any)
+    substr(str: Any, start_pos: Any, length: Any)
+```
 
 ## Adding a Window UDF
 
@@ -1260,7 +1370,7 @@ async fn main() -> Result<()> {
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
-## Adding a User-Defined Table Function
+## Adding a Table UDF
 
 A User-Defined Table Function (UDTF) is a function that takes parameters and returns a `TableProvider`.
 
@@ -1269,8 +1379,8 @@ This is a simple struct that holds a set of RecordBatches in memory and treats t
 be replaced with your own struct that implements `TableProvider`.
 
 While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be
-particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4]
-for a working example that reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata`
+particularly useful for reading data from external sources and interactive analysis. See the [working example][simple_udtf.rs]
+which reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata`
 in the CLI to read the metadata from a Parquet file.
 
 ```console
