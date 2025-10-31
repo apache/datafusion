@@ -165,13 +165,13 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 #[derive(Debug)]
 pub struct CachedParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
-    metadata_cache: Arc<dyn FileMetadataCache>,
+    metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 }
 
 impl CachedParquetFileReaderFactory {
     pub fn new(
         store: Arc<dyn ObjectStore>,
-        metadata_cache: Arc<dyn FileMetadataCache>,
+        metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     ) -> Self {
         Self {
             store,
@@ -208,7 +208,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             inner,
             file_metrics,
             file_meta,
-            metadata_cache: Arc::clone(&self.metadata_cache),
+            metadata_cache: self.metadata_cache.as_ref().map(Arc::clone),
             metadata_size_hint,
         }))
     }
@@ -222,7 +222,7 @@ pub struct CachedParquetFileReader {
     store: Arc<dyn ObjectStore>,
     pub inner: ParquetObjectReader,
     file_meta: FileMeta,
-    metadata_cache: Arc<dyn FileMetadataCache>,
+    metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     metadata_size_hint: Option<usize>,
 }
 
@@ -253,7 +253,7 @@ impl AsyncFileReader for CachedParquetFileReader {
         #[allow(unused_variables)] options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let file_meta = self.file_meta.clone();
-        let metadata_cache = Arc::clone(&self.metadata_cache);
+        let metadata_cache = self.metadata_cache.as_ref().map(Arc::clone);
 
         async move {
             #[cfg(feature = "parquet_encryption")]
@@ -265,7 +265,7 @@ impl AsyncFileReader for CachedParquetFileReader {
 
             DFParquetMetadata::new(&self.store, &file_meta.object_meta)
                 .with_decryption_properties(file_decryption_properties)
-                .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
+                .with_file_metadata_cache(metadata_cache)
                 .with_metadata_size_hint(self.metadata_size_hint)
                 .fetch_metadata()
                 .await

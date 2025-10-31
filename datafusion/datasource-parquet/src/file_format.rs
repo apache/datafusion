@@ -386,7 +386,9 @@ impl FileFormat for ParquetFormat {
                 let result = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(self.metadata_size_hint())
                     .with_decryption_properties(file_decryption_properties.as_ref())
-                    .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+                    .with_file_metadata_cache(
+                        file_metadata_cache.as_ref().map(Arc::clone),
+                    )
                     .with_coerce_int96(coerce_int96)
                     .fetch_schema_with_location()
                     .await?;
@@ -447,7 +449,7 @@ impl FileFormat for ParquetFormat {
         DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(self.metadata_size_hint())
             .with_decryption_properties(file_decryption_properties.as_ref())
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(file_metadata_cache)
             .fetch_statistics(&table_schema)
             .await
     }

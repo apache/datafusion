@@ -540,7 +540,11 @@ impl TableFunctionImpl for MetadataCacheFunc {
         let mut hits_arr = vec![];
         let mut extra_arr = vec![];
 
-        let cached_entries = self.cache_manager.get_file_metadata_cache().list_entries();
+        let cached_entries = self
+            .cache_manager
+            .get_file_metadata_cache()
+            .expect("Default metadata cache should be present")
+            .list_entries();
 
         for (path, entry) in cached_entries {
             path_arr.push(path.to_string());

@@ -331,9 +331,7 @@ impl RuntimeEnvBuilder {
                 .cache_manager
                 .get_file_statistic_cache(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
-            file_metadata_cache: Some(
-                runtime_env.cache_manager.get_file_metadata_cache(),
-            ),
+            file_metadata_cache: runtime_env.cache_manager.get_file_metadata_cache(),
             metadata_cache_limit: runtime_env.cache_manager.get_metadata_cache_limit(),
         };
 

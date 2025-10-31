@@ -132,7 +132,7 @@ impl Debug for dyn FileMetadataCache {
 pub struct CacheManager {
     file_statistic_cache: Option<FileStatisticsCache>,
     list_files_cache: Option<ListFilesCache>,
-    file_metadata_cache: Arc<dyn FileMetadataCache>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 }
 
 impl CacheManager {
@@ -142,16 +142,12 @@ impl CacheManager {
 
         let list_files_cache = config.list_files_cache.as_ref().map(Arc::clone);
 
-        let file_metadata_cache = config
-            .file_metadata_cache
-            .as_ref()
-            .map(Arc::clone)
-            .unwrap_or_else(|| {
-                Arc::new(DefaultFilesMetadataCache::new(config.metadata_cache_limit))
-            });
+        let file_metadata_cache = config.file_metadata_cache.as_ref().map(Arc::clone);
 
-        // the cache memory limit might have changed, ensure the limit is updated
-        file_metadata_cache.update_cache_limit(config.metadata_cache_limit);
+        // Update cache limit if cache exists
+        if let Some(ref cache) = file_metadata_cache {
+            cache.update_cache_limit(config.metadata_cache_limit);
+        }
 
         Ok(Arc::new(CacheManager {
             file_statistic_cache,
@@ -171,13 +167,15 @@ impl CacheManager {
     }
 
     /// Get the file embedded metadata cache.
-    pub fn get_file_metadata_cache(&self) -> Arc<dyn FileMetadataCache> {
-        Arc::clone(&self.file_metadata_cache)
+    pub fn get_file_metadata_cache(&self) -> Option<Arc<dyn FileMetadataCache>> {
+        self.file_metadata_cache.as_ref().map(Arc::clone)
     }
 
     /// Get the limit of the file embedded metadata cache.
     pub fn get_metadata_cache_limit(&self) -> usize {
-        self.file_metadata_cache.cache_limit()
+        self.file_metadata_cache
+            .as_ref()
+            .map_or(0, |cache| cache.cache_limit())
     }
 }
 

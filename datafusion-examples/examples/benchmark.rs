@@ -1,11 +1,13 @@
-use std::env;
-use std::sync::Arc;
-use std::time::Instant;
 use datafusion::execution::cache::cache_manager::CacheManagerConfig;
-use datafusion::execution::cache::cache_unit::{DefaultFileStatisticsCache, DefaultFilesMetadataCache};
+use datafusion::execution::cache::cache_unit::{
+    DefaultFileStatisticsCache, DefaultFilesMetadataCache,
+};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use futures::future::join_all;
+use std::env;
+use std::sync::Arc;
+use std::time::Instant;
 
 #[tokio::main]
 async fn main() {
@@ -20,7 +22,7 @@ async fn main() {
         let cache_option = args[1].clone();
         let metadata_cache = metadata_cache.clone();
         let cache = cache.clone();
-        
+
         tokio::spawn(async move {
             let mut cache_manager_config = CacheManagerConfig::default();
             if cache_option.contains("metadata_cache") {
