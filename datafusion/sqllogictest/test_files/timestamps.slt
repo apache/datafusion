@@ -691,11 +691,11 @@ select
 ----
 08:09:10.123456789 13:14:15.123456 13:14:15.123 13:14:15
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64\(ns\) type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64\(ns\) type
 SELECT TIME 'not a time' as time;
 
 # invalid time
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64\(ns\) type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64\(ns\) type
 SELECT TIME '24:01:02' as time;
 
 # invalid timezone
@@ -3271,7 +3271,7 @@ statement error The to_local_time function can only accept Timestamp as the arg 
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone
-statement error DataFusion error: Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
 select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/timezone');
 
 # valid query

@@ -492,7 +492,7 @@ Struct("r": nullable Utf8, "c": nullable Float64)
 statement ok
 drop table t;
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Float64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Float64 type
 create table t as values({r: 'a', c: 1}), ({c: 2.3, r: 'b'});
 
 ##################################
@@ -554,14 +554,14 @@ statement ok
 drop table t;
 
 # row() with incorrect order
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'blue' to value of Float32 type
-create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values 
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'blue' to value of Float32 type
+create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values
     (row('red', 1), row(2.3, 'blue')),
     (row('purple', 1), row('green', 2.3));
 
 # out of order struct literal
 # TODO: This query should not fail
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'b' to value of Int32 type
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'b' to value of Int32 type
 create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
 
 ##################################
