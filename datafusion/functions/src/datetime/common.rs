@@ -265,24 +265,61 @@ fn has_explicit_timezone(value: &str) -> bool {
                         let prev = bytes[i - 1];
                         if matches!(prev, b'T' | b't' | b' ' | b'\t') {
                             valid = true;
+                        } else if prev.is_ascii_digit() {
+                            // When following a digit, check if there's a colon before this position
+                            // to ensure it's after a time component (e.g., "13:42:29+0500")
+                            // and not a date separator (e.g., "2020-09-08" or "05-17-2023")
+                            // Check that there's no dash in the previous 4 characters,
+                            // which would indicate a date pattern like "05-17-2023"
+                            let has_colon_before = bytes[..i].contains(&b':');
+                            let lookback_start = i.saturating_sub(4);
+                            let no_dash_nearby = !bytes[lookback_start..i]
+                                .iter()
+                                .any(|&b| b == b'-' || b == b'/');
+                            let no_dash_after = j >= len || bytes[j] != b'-';
+                            if has_colon_before
+                                && i >= 2
+                                && bytes[i - 2].is_ascii_digit()
+                                && no_dash_nearby
+                                && no_dash_after
+                            {
+                                valid = true;
+                            }
                         }
                     }
-                } else if digit_count == 2 {
-                    if i > 0 {
-                        let prev = bytes[i - 1];
-                        if matches!(prev, b'T' | b't' | b' ' | b'\t') {
+                } else if digit_count == 2 && i > 0 {
+                    let prev = bytes[i - 1];
+                    if matches!(prev, b'T' | b't' | b' ' | b'\t') {
+                        valid = true;
+                    } else if prev.is_ascii_digit() {
+                        // When following a digit, check if there's a colon before this position
+                        // to ensure it's after a time component (e.g., "13:42:29+05")
+                        // and not a date separator (e.g., "2020-09-08" or "05-17")
+                        // Check that there's no dash in the previous 4 characters,
+                        // which would indicate a date pattern like "05-17"
+                        let has_colon_before = bytes[..i].contains(&b':');
+                        let lookback_start = i.saturating_sub(4);
+                        let no_dash_nearby = !bytes[lookback_start..i]
+                            .iter()
+                            .any(|&b| b == b'-' || b == b'/');
+                        let no_dash_after = j >= len || bytes[j] != b'-';
+                        if has_colon_before
+                            && i >= 2
+                            && bytes[i - 2].is_ascii_digit()
+                            && no_dash_nearby
+                            && no_dash_after
+                        {
                             valid = true;
                         }
                     }
                 }
 
-                if valid {
-                    if j == len
+                if valid
+                    && (j == len
                         || bytes[j].is_ascii_whitespace()
-                        || matches!(bytes[j], b',' | b'.' | b':' | b';')
-                    {
-                        return true;
-                    }
+                        || matches!(bytes[j], b',' | b'.' | b':' | b';'))
+                {
+                    return true;
                 }
 
                 i = j;
@@ -376,6 +413,104 @@ mod tests {
         assert!(has_explicit_timezone("UTC 2024-01-01 12:00:00"));
         assert!(has_explicit_timezone("2020-09-08T13:42:29UTC"));
         assert!(has_explicit_timezone("America/New_York 2020-09-08"));
+    }
+
+    #[test]
+    fn detects_offsets_without_colons() {
+        // ISO-8601 formats with offsets (no colons)
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+0500"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-0330"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-08"));
+
+        // 4-digit offsets
+        assert!(has_explicit_timezone("2024-01-01T12:00:00+0000"));
+        assert!(has_explicit_timezone("2024-01-01T12:00:00-1200"));
+
+        // 6-digit offsets (with seconds)
+        assert!(has_explicit_timezone("2024-01-01T12:00:00+053045"));
+        assert!(has_explicit_timezone("2024-01-01T12:00:00-123045"));
+
+        // Lowercase 't' separator
+        assert!(has_explicit_timezone("2020-09-08t13:42:29+0500"));
+        assert!(has_explicit_timezone("2020-09-08t13:42:29-0330"));
+    }
+
+    #[test]
+    fn detects_offsets_with_colons() {
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-03:30"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00:45"));
+    }
+
+    #[test]
+    fn detects_z_suffix() {
+        assert!(has_explicit_timezone("2020-09-08T13:42:29Z"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29z"));
+    }
+
+    #[test]
+    fn rejects_naive_timestamps() {
+        assert!(!has_explicit_timezone("2020-09-08T13:42:29"));
+        assert!(!has_explicit_timezone("2020-09-08 13:42:29"));
+        assert!(!has_explicit_timezone("2024-01-01 12:00:00"));
+
+        // Date formats with dashes that could be confused with offsets
+        assert!(!has_explicit_timezone("03:59:00.123456789 05-17-2023"));
+        assert!(!has_explicit_timezone("12:00:00 01-02-2024"));
+    }
+
+    #[test]
+    fn rejects_scientific_notation() {
+        // Should not treat scientific notation as timezone offset
+        assert!(!has_explicit_timezone("1.5e+10"));
+        assert!(!has_explicit_timezone("2.3E-05"));
+    }
+
+    #[test]
+    fn test_offset_without_colon_parsing() {
+        use super::{
+            string_to_timestamp_nanos_shim, string_to_timestamp_nanos_with_timezone,
+        };
+        use crate::datetime::common::ConfiguredTimeZone;
+
+        // Test the exact case from the issue: 2020-09-08T13:42:29+0500
+        // This should parse correctly as having an explicit offset
+        let utc_tz = ConfiguredTimeZone::parse("UTC").unwrap();
+        let result_utc =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+0500")
+                .unwrap();
+
+        // Parse the equivalent RFC3339 format with colon to get the expected value
+        let expected =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
+        assert_eq!(result_utc, expected);
+
+        // Test with America/New_York timezone - should NOT double-adjust
+        // Because the timestamp has an explicit timezone, the session timezone should be ignored
+        let ny_tz = ConfiguredTimeZone::parse("America/New_York").unwrap();
+        let result_ny =
+            string_to_timestamp_nanos_with_timezone(&ny_tz, "2020-09-08T13:42:29+0500")
+                .unwrap();
+
+        // The result should be the same as UTC because the timestamp has an explicit timezone
+        assert_eq!(result_ny, expected);
+
+        // Test other offset formats without colons
+        let result2 =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29-0330")
+                .unwrap();
+        let expected2 =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29-03:30").unwrap();
+        assert_eq!(result2, expected2);
+
+        // Test 2-digit offsets
+        let result3 =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+05")
+                .unwrap();
+        let expected3 =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
+        assert_eq!(result3, expected3);
     }
 }
 
