@@ -197,7 +197,7 @@ mod tests {
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let stats = DFParquetMetadata::new(&store, &meta[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone))
             .fetch_statistics(&schema)
             .await?;
 
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
         let stats = DFParquetMetadata::new(&store, &meta[1])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone))
             .fetch_statistics(&schema)
             .await?;
 
@@ -391,8 +391,8 @@ mod tests {
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 2);
 
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone));
 
         // Increases by 3 because cache has no entries yet
         df_meta.fetch_metadata().await?;
@@ -422,8 +422,8 @@ mod tests {
         assert_eq!(store.request_count(), 10);
 
         // No increase, cache being used
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone));
         let stats = df_meta.fetch_statistics(&schema).await?;
         assert_eq!(store.request_count(), 10);
 
@@ -450,8 +450,8 @@ mod tests {
         let ctx = session.state();
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone));
         // Increases by 1 because cache has no entries yet and new session context
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 2);
@@ -475,8 +475,8 @@ mod tests {
         let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
         assert_eq!(store.request_count(), 4);
         // No increase, cache being used
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone));
         let stats = df_meta.fetch_statistics(&schema).await?;
         assert_eq!(store.request_count(), 4);
 
@@ -499,8 +499,8 @@ mod tests {
         assert_eq!(store.request_count(), 1);
 
         // No increase because cache has an entry
-        let df_meta =
-            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let df_meta = df_meta
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone));
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 1);
 
@@ -557,7 +557,7 @@ mod tests {
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
         let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone))
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
@@ -635,7 +635,7 @@ mod tests {
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
         let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone))
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(store.request_count(), 6);
@@ -664,7 +664,7 @@ mod tests {
 
         // No increase in request count because cache is not empty
         let stats = DFParquetMetadata::new(store.as_ref(), &files[1])
-            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_file_metadata_cache(file_metadata_cache.as_ref().map(Arc::clone))
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(store.request_count(), 6);

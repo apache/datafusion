@@ -220,6 +220,7 @@ async fn test_test_metadata_cache_limit() {
             .runtime_env()
             .cache_manager
             .get_file_metadata_cache()
+            .expect("Default metadata cache should be present")
             .cache_limit()
     };
 

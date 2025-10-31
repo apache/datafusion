@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cache::cache_unit::DefaultFilesMetadataCache;
 use crate::cache::CacheAccessor;
 use datafusion_common::{Result, Statistics};
 use object_store::path::Path;
