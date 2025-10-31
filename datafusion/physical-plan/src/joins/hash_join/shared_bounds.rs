@@ -28,7 +28,7 @@ use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 
 use ahash::RandomState;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
@@ -114,15 +114,17 @@ fn create_membership_predicate(
             // Create struct expression from columns
             let struct_udf = struct_func();
 
-            // Build return field for the struct
-            let fields: Vec<Field> = on_right
-                .iter()
-                .enumerate()
-                .map(|(i, _expr)| {
-                    // Use generic field types - will be inferred during evaluation
-                    Field::new(format!("c{}", i), DataType::Null, true)
-                })
-                .collect();
+            // Extract field types from the first struct value in the InList
+            // This ensures the probe-side struct expression matches the build-side struct type
+            let fields: Fields =
+                if let Some(ScalarValue::Struct(first_struct)) = values.first() {
+                    first_struct.fields().clone()
+                } else {
+                    // Fallback: should not happen for multi-column joins
+                    return datafusion_common::internal_err!(
+                        "Multi-column InList should contain struct values"
+                    );
+                };
 
             let return_field =
                 Arc::new(Field::new("struct", DataType::Struct(fields.into()), true));

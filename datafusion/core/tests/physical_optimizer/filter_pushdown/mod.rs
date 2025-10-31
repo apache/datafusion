@@ -1078,7 +1078,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
         @r"
     - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
     -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND hash_lookup ]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
     "
     );
 }
@@ -1309,7 +1309,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -         CoalesceBatchesExec: target_batch_size=8192
     -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 0 THEN lookup_p0 WHEN 1 THEN lookup_p1 WHEN 2 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND lookup_p2 WHEN 3 THEN lookup_p3 WHEN 4 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND lookup_p4 WHEN 5 THEN lookup_p5 WHEN 6 THEN lookup_p6 WHEN 7 THEN lookup_p7 WHEN 8 THEN lookup_p8 WHEN 9 THEN lookup_p9 WHEN 10 THEN lookup_p10 WHEN 11 THEN lookup_p11 ELSE false END ]
+    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 0 THEN hash_lookup WHEN 1 THEN hash_lookup WHEN 2 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN ([{c0:ab,c1:bb}]) WHEN 3 THEN hash_lookup WHEN 4 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN ([{c0:aa,c1:ba}]) WHEN 5 THEN hash_lookup WHEN 6 THEN hash_lookup WHEN 7 THEN hash_lookup WHEN 8 THEN hash_lookup WHEN 9 THEN hash_lookup WHEN 10 THEN hash_lookup WHEN 11 THEN hash_lookup ELSE false END ]
     "
     );
 
@@ -1503,7 +1503,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -         CoalesceBatchesExec: target_batch_size=8192
     -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND hash_lookup ]
+    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
     "
     );
 
