@@ -389,6 +389,7 @@ mod tests {
 
     #[test]
     fn round_trip_types() -> Result<()> {
+        round_trip_type(DataType::Null)?;
         round_trip_type(DataType::Boolean)?;
         round_trip_type(DataType::Int8)?;
         round_trip_type(DataType::UInt8)?;
