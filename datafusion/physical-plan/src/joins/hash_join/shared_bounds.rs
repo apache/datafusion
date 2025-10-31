@@ -93,7 +93,7 @@ fn create_membership_predicate(
     pushdown: PushdownStrategy,
     random_state: &RandomState,
     schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>> {
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     match pushdown {
         // Use InList expression for small build sides
         PushdownStrategy::InList(in_list_array) => {
@@ -124,7 +124,7 @@ fn create_membership_predicate(
             };
 
             // Use in_list_from_array() helper to create InList with static_filter optimization (hash-based lookup)
-            in_list_from_array(expr, in_list_array, false)
+            Ok(Some(in_list_from_array(expr, in_list_array, false)?))
         }
         // Use hash table lookup for large build sides
         PushdownStrategy::HashTable(hash_map) => {
@@ -134,18 +134,63 @@ fn create_membership_predicate(
                 "hash_join".to_string(),
             )) as Arc<dyn PhysicalExpr>;
 
-            Ok(Arc::new(HashTableLookupExpr::new(
+            Ok(Some(
+                Arc::new(HashTableLookupExpr::new(
                 lookup_hash_expr,
                 hash_map,
                 "hash_lookup".to_string(),
-            )) as Arc<dyn PhysicalExpr>)
+            )) as Arc<dyn PhysicalExpr>
+            ))
         }
         // Empty partition - should not create a filter for this
-        PushdownStrategy::Empty => {
-            datafusion_common::internal_err!(
-                "Cannot create membership predicate for empty partition"
-            )
+        PushdownStrategy::Empty => Ok(None),
+    }
+}
+
+/// Creates a bounds predicate from partition bounds.
+///
+/// Returns `None` if no column bounds are available.
+/// Returns a combined predicate (col >= min AND col <= max) for all columns with bounds.
+fn create_bounds_predicate(
+    on_right: &[PhysicalExprRef],
+    bounds: &PartitionBounds,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    let mut column_predicates = Vec::new();
+
+    for (col_idx, right_expr) in on_right.iter().enumerate() {
+        if let Some(column_bounds) = bounds.get_column_bounds(col_idx) {
+            // Create predicate: col >= min AND col <= max
+            let min_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(right_expr),
+                Operator::GtEq,
+                lit(column_bounds.min.clone()),
+            )) as Arc<dyn PhysicalExpr>;
+            let max_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(right_expr),
+                Operator::LtEq,
+                lit(column_bounds.max.clone()),
+            )) as Arc<dyn PhysicalExpr>;
+            let range_expr = Arc::new(BinaryExpr::new(
+                min_expr,
+                Operator::And,
+                max_expr,
+            )) as Arc<dyn PhysicalExpr>;
+            column_predicates.push(range_expr);
         }
+    }
+
+    if column_predicates.is_empty() {
+        None
+    } else {
+        Some(
+            column_predicates
+                .into_iter()
+                .reduce(|acc, pred| {
+                    Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                        as Arc<dyn PhysicalExpr>
+                })
+                .unwrap(),
+        )
     }
 }
 
@@ -370,55 +415,26 @@ impl SharedBuildAccumulator {
                         )?;
 
                         // Create bounds check expression (if bounds available)
-                        let mut filter_expr = membership_expr;
+                        let bounds_expr =
+                            create_bounds_predicate(&self.on_right, &partition_data.bounds);
 
-                        let mut column_predicates = Vec::new();
-
-                        for (col_idx, right_expr) in self.on_right.iter().enumerate() {
-                            if let Some(column_bounds) =
-                                partition_data.bounds.get_column_bounds(col_idx)
-                            {
-                                // Create predicate: col >= min AND col <= max
-                                let min_expr = Arc::new(BinaryExpr::new(
-                                    Arc::clone(right_expr),
-                                    Operator::GtEq,
-                                    lit(column_bounds.min.clone()),
-                                ))
-                                    as Arc<dyn PhysicalExpr>;
-                                let max_expr = Arc::new(BinaryExpr::new(
-                                    Arc::clone(right_expr),
-                                    Operator::LtEq,
-                                    lit(column_bounds.max.clone()),
-                                ))
-                                    as Arc<dyn PhysicalExpr>;
-                                let range_expr = Arc::new(BinaryExpr::new(
-                                    min_expr,
+                        // Combine membership and bounds expressions
+                        let filter_expr = match (membership_expr, bounds_expr) {
+                            (Some(membership), Some(bounds)) => {
+                                // Both available: combine with AND
+                                Arc::new(BinaryExpr::new(
+                                    bounds,
                                     Operator::And,
-                                    max_expr,
-                                ))
-                                    as Arc<dyn PhysicalExpr>;
-                                column_predicates.push(range_expr);
+                                    membership,
+                                )) as Arc<dyn PhysicalExpr>
                             }
-                        }
-
-                        // Combine all column range predicates with AND
-                        if !column_predicates.is_empty() {
-                            let bounds_expr = column_predicates
-                                .into_iter()
-                                .reduce(|acc, pred| {
-                                    Arc::new(BinaryExpr::new(acc, Operator::And, pred))
-                                        as Arc<dyn PhysicalExpr>
-                                })
-                                .unwrap();
-
-                            // Combine bounds_expr AND membership_expr
-                            filter_expr = Arc::new(BinaryExpr::new(
-                                bounds_expr,
-                                Operator::And,
-                                filter_expr,
-                            ))
-                                as Arc<dyn PhysicalExpr>;
-                        }
+                            (Some(membership), None) => membership,
+                            (None, Some(bounds)) => bounds,
+                            (None, None) => {
+                                // No filter available, nothing to update
+                                return Ok(());
+                            }
+                        };
 
                         self.dynamic_filter.update(filter_expr)?;
                     }
@@ -487,61 +503,27 @@ impl SharedBuildAccumulator {
                                 )?;
 
                                 // 2. Create bounds check expression for this partition (if bounds available)
-                                let mut then_expr = membership_expr;
+                                let bounds_expr =
+                                    create_bounds_predicate(&self.on_right, &partition.bounds);
 
-                                let mut column_predicates = Vec::new();
-
-                                for (col_idx, right_expr) in
-                                    self.on_right.iter().enumerate()
-                                {
-                                    if let Some(column_bounds) =
-                                        partition.bounds.get_column_bounds(col_idx)
-                                    {
-                                        // Create predicate: col >= min AND col <= max
-                                        let min_expr = Arc::new(BinaryExpr::new(
-                                            Arc::clone(right_expr),
-                                            Operator::GtEq,
-                                            lit(column_bounds.min.clone()),
-                                        ))
-                                            as Arc<dyn PhysicalExpr>;
-                                        let max_expr = Arc::new(BinaryExpr::new(
-                                            Arc::clone(right_expr),
-                                            Operator::LtEq,
-                                            lit(column_bounds.max.clone()),
-                                        ))
-                                            as Arc<dyn PhysicalExpr>;
-                                        let range_expr = Arc::new(BinaryExpr::new(
-                                            min_expr,
+                                // 3. Combine membership and bounds expressions
+                                let then_expr = match (membership_expr, bounds_expr) {
+                                    (Some(membership), Some(bounds)) => {
+                                        // Both available: combine with AND
+                                        Arc::new(BinaryExpr::new(
+                                            bounds,
                                             Operator::And,
-                                            max_expr,
-                                        ))
-                                            as Arc<dyn PhysicalExpr>;
-                                        column_predicates.push(range_expr);
+                                            membership,
+                                        )) as Arc<dyn PhysicalExpr>
                                     }
-                                }
-
-                                // Combine all column range predicates with AND
-                                if !column_predicates.is_empty() {
-                                    let bounds_expr = column_predicates
-                                        .into_iter()
-                                        .reduce(|acc, pred| {
-                                            Arc::new(BinaryExpr::new(
-                                                acc,
-                                                Operator::And,
-                                                pred,
-                                            ))
-                                                as Arc<dyn PhysicalExpr>
-                                        })
-                                        .unwrap();
-
-                                    // Combine bounds_expr AND membership_expr
-                                    then_expr = Arc::new(BinaryExpr::new(
-                                        bounds_expr,
-                                        Operator::And,
-                                        then_expr,
-                                    ))
-                                        as Arc<dyn PhysicalExpr>;
-                                }
+                                    (Some(membership), None) => membership,
+                                    (None, Some(bounds)) => bounds,
+                                    (None, None) => {
+                                        // No filter for this partition - should not happen due to filter_map above
+                                        // but handle defensively by returning a "true" literal
+                                        lit(true)
+                                    }
+                                };
 
                                 Ok((when_expr, then_expr))
                             })
