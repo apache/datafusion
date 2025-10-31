@@ -59,6 +59,24 @@ macro_rules! export_functions {
         }
     };
 
+    // function that requires config and takes a vector argument
+    (single $FUNC:ident, $DOC:expr, @config $arg:ident,) => {
+        #[doc = $DOC]
+        pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call($arg)
+        }
+    };
+
+    // function that requires config and variadic arguments
+    (single $FUNC:ident, $DOC:expr, @config $($arg:ident)*) => {
+        #[doc = $DOC]
+        pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call(vec![$($arg),*])
+        }
+    };
+
     // single vector argument (a single argument followed by a comma)
     (single $FUNC:ident, $DOC:expr, $arg:ident,) => {
         #[doc = $DOC]

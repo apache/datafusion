@@ -26,10 +26,11 @@ use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -69,6 +70,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampFunc {
     signature: Signature,
+    timezone: ConfiguredTimeZone,
 }
 
 #[user_doc(
@@ -103,6 +105,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampSecondsFunc {
     signature: Signature,
+    timezone: ConfiguredTimeZone,
 }
 
 #[user_doc(
@@ -137,6 +140,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampMillisFunc {
     signature: Signature,
+    timezone: ConfiguredTimeZone,
 }
 
 #[user_doc(
@@ -171,6 +175,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampMicrosFunc {
     signature: Signature,
+    timezone: ConfiguredTimeZone,
 }
 
 #[user_doc(
@@ -205,74 +210,105 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampNanosFunc {
     signature: Signature,
+    timezone: ConfiguredTimeZone,
 }
 
 impl Default for ToTimestampFunc {
     fn default() -> Self {
-        Self::new()
+        Self::new_with_config(&ConfigOptions::default())
     }
 }
 
 impl ToTimestampFunc {
+    #[deprecated(note = "use new_with_config instead")]
     pub fn new() -> Self {
+        Self::new_with_config(&ConfigOptions::default())
+    }
+
+    pub fn new_with_config(config: &ConfigOptions) -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            timezone: ConfiguredTimeZone::from_config(config),
         }
     }
 }
 
 impl Default for ToTimestampSecondsFunc {
     fn default() -> Self {
-        Self::new()
+        Self::new_with_config(&ConfigOptions::default())
     }
 }
 
 impl ToTimestampSecondsFunc {
+    #[deprecated(note = "use new_with_config instead")]
     pub fn new() -> Self {
+        Self::new_with_config(&ConfigOptions::default())
+    }
+
+    pub fn new_with_config(config: &ConfigOptions) -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            timezone: ConfiguredTimeZone::from_config(config),
         }
     }
 }
 
 impl Default for ToTimestampMillisFunc {
     fn default() -> Self {
-        Self::new()
+        Self::new_with_config(&ConfigOptions::default())
     }
 }
 
 impl ToTimestampMillisFunc {
+    #[deprecated(note = "use new_with_config instead")]
     pub fn new() -> Self {
+        Self::new_with_config(&ConfigOptions::default())
+    }
+
+    pub fn new_with_config(config: &ConfigOptions) -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            timezone: ConfiguredTimeZone::from_config(config),
         }
     }
 }
 
 impl Default for ToTimestampMicrosFunc {
     fn default() -> Self {
-        Self::new()
+        Self::new_with_config(&ConfigOptions::default())
     }
 }
 
 impl ToTimestampMicrosFunc {
+    #[deprecated(note = "use new_with_config instead")]
     pub fn new() -> Self {
+        Self::new_with_config(&ConfigOptions::default())
+    }
+
+    pub fn new_with_config(config: &ConfigOptions) -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            timezone: ConfiguredTimeZone::from_config(config),
         }
     }
 }
 
 impl Default for ToTimestampNanosFunc {
     fn default() -> Self {
-        Self::new()
+        Self::new_with_config(&ConfigOptions::default())
     }
 }
 
 impl ToTimestampNanosFunc {
+    #[deprecated(note = "use new_with_config instead")]
     pub fn new() -> Self {
+        Self::new_with_config(&ConfigOptions::default())
+    }
+
+    pub fn new_with_config(config: &ConfigOptions) -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            timezone: ConfiguredTimeZone::from_config(config),
         }
     }
 }
@@ -296,6 +332,10 @@ impl ScalarUDFImpl for ToTimestampFunc {
         &self.signature
     }
 
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        Some(Self::new_with_config(config).into())
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
@@ -304,11 +344,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs {
-            args,
-            config_options,
-            ..
-        } = args;
+        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp function requires 1 or more arguments, got {}",
@@ -344,15 +380,11 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => {
-                let timezone =
-                    TimezoneResolver::from_config(&config_options.execution.time_zone);
-                to_timestamp_impl::<TimestampNanosecondType>(
-                    &args,
-                    "to_timestamp",
-                    &timezone,
-                )
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
+                &args,
+                "to_timestamp",
+                &self.timezone,
+            ),
             Decimal128(_, _) => {
                 match &args[0] {
                     ColumnarValue::Scalar(ScalarValue::Decimal128(
@@ -400,6 +432,10 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         &self.signature
     }
 
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        Some(Self::new_with_config(config).into())
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(return_type_for(&arg_types[0], Second))
     }
@@ -408,11 +444,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs {
-            args,
-            config_options,
-            ..
-        } = args;
+        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_seconds function requires 1 or more arguments, got {}",
@@ -430,15 +462,11 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
             Timestamp(_, Some(tz)) => args[0].cast_to(&Timestamp(Second, Some(tz)), None),
-            Utf8View | LargeUtf8 | Utf8 => {
-                let timezone =
-                    TimezoneResolver::from_config(&config_options.execution.time_zone);
-                to_timestamp_impl::<TimestampSecondType>(
-                    &args,
-                    "to_timestamp_seconds",
-                    &timezone,
-                )
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampSecondType>(
+                &args,
+                "to_timestamp_seconds",
+                &self.timezone,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {} for function to_timestamp_seconds",
@@ -465,6 +493,10 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         &self.signature
     }
 
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        Some(Self::new_with_config(config).into())
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(return_type_for(&arg_types[0], Millisecond))
     }
@@ -473,11 +505,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs {
-            args,
-            config_options,
-            ..
-        } = args;
+        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_millis function requires 1 or more arguments, got {}",
@@ -497,15 +525,11 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => {
-                let timezone =
-                    TimezoneResolver::from_config(&config_options.execution.time_zone);
-                to_timestamp_impl::<TimestampMillisecondType>(
-                    &args,
-                    "to_timestamp_millis",
-                    &timezone,
-                )
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMillisecondType>(
+                &args,
+                "to_timestamp_millis",
+                &self.timezone,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {} for function to_timestamp_millis",
@@ -532,6 +556,10 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         &self.signature
     }
 
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        Some(Self::new_with_config(config).into())
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(return_type_for(&arg_types[0], Microsecond))
     }
@@ -540,11 +568,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs {
-            args,
-            config_options,
-            ..
-        } = args;
+        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_micros function requires 1 or more arguments, got {}",
@@ -564,15 +588,11 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => {
-                let timezone =
-                    TimezoneResolver::from_config(&config_options.execution.time_zone);
-                to_timestamp_impl::<TimestampMicrosecondType>(
-                    &args,
-                    "to_timestamp_micros",
-                    &timezone,
-                )
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMicrosecondType>(
+                &args,
+                "to_timestamp_micros",
+                &self.timezone,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {} for function to_timestamp_micros",
@@ -599,6 +619,10 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         &self.signature
     }
 
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        Some(Self::new_with_config(config).into())
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
@@ -607,11 +631,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs {
-            args,
-            config_options,
-            ..
-        } = args;
+        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_nanos function requires 1 or more arguments, got {}",
@@ -631,15 +651,11 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => {
-                let timezone =
-                    TimezoneResolver::from_config(&config_options.execution.time_zone);
-                to_timestamp_impl::<TimestampNanosecondType>(
-                    &args,
-                    "to_timestamp_nanos",
-                    &timezone,
-                )
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
+                &args,
+                "to_timestamp_nanos",
+                &self.timezone,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {} for function to_timestamp_nanos",
@@ -665,7 +681,7 @@ fn return_type_for(arg: &DataType, unit: TimeUnit) -> DataType {
 fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     args: &[ColumnarValue],
     name: &str,
-    timezone: &TimezoneResolver,
+    timezone: &ConfiguredTimeZone,
 ) -> Result<ColumnarValue> {
     let factor = match T::UNIT {
         Second => 1_000_000_000,
@@ -708,7 +724,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::datetime::common::{
-        string_to_timestamp_nanos_formatted, ConfiguredTimeZone, TimezoneResolver,
+        string_to_timestamp_nanos_formatted, ConfiguredTimeZone,
     };
     use arrow::array::types::Int64Type;
     use arrow::array::{
@@ -725,13 +741,13 @@ mod tests {
     use super::*;
 
     fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let timezone = TimezoneResolver::utc();
+        let timezone = ConfiguredTimeZone::utc();
         to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp", &timezone)
     }
 
     /// to_timestamp_millis SQL function
     fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let timezone = TimezoneResolver::utc();
+        let timezone = ConfiguredTimeZone::utc();
         to_timestamp_impl::<TimestampMillisecondType>(
             args,
             "to_timestamp_millis",
@@ -741,7 +757,7 @@ mod tests {
 
     /// to_timestamp_micros SQL function
     fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let timezone = TimezoneResolver::utc();
+        let timezone = ConfiguredTimeZone::utc();
         to_timestamp_impl::<TimestampMicrosecondType>(
             args,
             "to_timestamp_micros",
@@ -751,7 +767,7 @@ mod tests {
 
     /// to_timestamp_nanos SQL function
     fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let timezone = TimezoneResolver::utc();
+        let timezone = ConfiguredTimeZone::utc();
         to_timestamp_impl::<TimestampNanosecondType>(
             args,
             "to_timestamp_nanos",
@@ -761,7 +777,7 @@ mod tests {
 
     /// to_timestamp_seconds SQL function
     fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let timezone = TimezoneResolver::utc();
+        let timezone = ConfiguredTimeZone::utc();
         to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds", &timezone)
     }
 
@@ -835,11 +851,10 @@ mod tests {
 
     #[test]
     fn to_timestamp_respects_execution_timezone() -> Result<()> {
-        let udf = ToTimestampFunc::new();
-        let field = Field::new("arg", Utf8, true).into();
-
         let mut options = ConfigOptions::default();
         options.execution.time_zone = "-05:00".into();
+        let udf = ToTimestampFunc::new_with_config(&options);
+        let field = Field::new("arg", Utf8, true).into();
 
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
@@ -848,7 +863,7 @@ mod tests {
             arg_fields: vec![field],
             number_rows: 1,
             return_field: Field::new("f", Timestamp(Nanosecond, None), true).into(),
-            config_options: Arc::new(options),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = udf.invoke_with_args(args)?;
@@ -865,14 +880,13 @@ mod tests {
 
     #[test]
     fn to_timestamp_invalid_execution_timezone_behavior() -> Result<()> {
-        let udf = ToTimestampFunc::new();
         let field: Arc<Field> = Field::new("arg", Utf8, true).into();
         let return_field: Arc<Field> =
             Field::new("f", Timestamp(Nanosecond, None), true).into();
 
         let mut options = ConfigOptions::default();
         options.execution.time_zone = "Invalid/Timezone".into();
-        let options = Arc::new(options);
+        let udf = ToTimestampFunc::new_with_config(&options);
 
         let explicit_args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
@@ -881,7 +895,7 @@ mod tests {
             arg_fields: vec![Arc::clone(&field)],
             number_rows: 1,
             return_field: Arc::clone(&return_field),
-            config_options: Arc::clone(&options),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let explicit_result = udf.invoke_with_args(explicit_args)?;
@@ -901,19 +915,23 @@ mod tests {
             arg_fields: vec![field],
             number_rows: 1,
             return_field,
-            config_options: options,
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
-        let err = udf
-            .invoke_with_args(naive_args)
-            .expect_err("expected timezone configuration error");
-        assert_contains!(err.to_string(), "Invalid execution timezone");
+        let naive_result = udf.invoke_with_args(naive_args)?;
+        let ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(value), None)) =
+            naive_result
+        else {
+            panic!("expected scalar timestamp");
+        };
+
+        let expected = string_to_timestamp_nanos_shim("2020-09-08T13:42:29Z")?;
+        assert_eq!(value, expected);
         Ok(())
     }
 
     #[test]
     fn to_timestamp_formats_invalid_execution_timezone_behavior() -> Result<()> {
-        let udf = ToTimestampFunc::new();
         let expr_field: Arc<Field> = Field::new("arg", Utf8, true).into();
         let format_field: Arc<Field> = Field::new("fmt", Utf8, true).into();
         let return_field: Arc<Field> =
@@ -921,7 +939,7 @@ mod tests {
 
         let mut options = ConfigOptions::default();
         options.execution.time_zone = "Invalid/Timezone".into();
-        let options = Arc::new(options);
+        let udf = ToTimestampFunc::new_with_config(&options);
 
         let make_args = |value: &str, format: &str| datafusion_expr::ScalarFunctionArgs {
             args: vec![
@@ -931,7 +949,7 @@ mod tests {
             arg_fields: vec![Arc::clone(&expr_field), Arc::clone(&format_field)],
             number_rows: 1,
             return_field: Arc::clone(&return_field),
-            config_options: Arc::clone(&options),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         for (value, format, expected_str) in [
@@ -986,20 +1004,27 @@ mod tests {
             arg_fields: vec![Arc::clone(&expr_field), Arc::clone(&format_field)],
             number_rows: 1,
             return_field: Arc::clone(&return_field),
-            config_options: Arc::clone(&options),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
-        let err = udf
-            .invoke_with_args(naive_args)
-            .expect_err("expected timezone configuration error");
-        assert_contains!(err.to_string(), "Invalid execution timezone");
+        let naive_result = udf.invoke_with_args(naive_args)?;
+        let ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(actual), None)) =
+            naive_result
+        else {
+            panic!("expected scalar timestamp");
+        };
+
+        let expected = string_to_timestamp_nanos_formatted(
+            "2020-09-08T13:42:29",
+            "%Y-%m-%dT%H:%M:%S",
+        )?;
+        assert_eq!(actual, expected);
         Ok(())
     }
 
     #[test]
     fn to_timestamp_formats_respect_timezone() -> Result<()> {
-        let timezone =
-            TimezoneResolver::from_timezone(ConfiguredTimeZone::parse("Asia/Tokyo")?);
+        let timezone = ConfiguredTimeZone::parse("Asia/Tokyo")?;
         let args = vec![
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 "03:59:00.123456789 05-17-2023".to_string(),
@@ -1028,8 +1053,7 @@ mod tests {
 
     #[test]
     fn to_timestamp_session_timezone_applied() -> Result<()> {
-        let timezone =
-            TimezoneResolver::from_timezone(ConfiguredTimeZone::parse("America/New_York")?);
+        let timezone = ConfiguredTimeZone::parse("America/New_York")?;
         let args = vec![
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 "2020-09-08 13-42-29".to_string(),
@@ -1058,23 +1082,8 @@ mod tests {
 
     #[test]
     fn to_timestamp_invalid_session_timezone_errors() {
-        let timezone = TimezoneResolver::from_config("Not/A_Zone");
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "2020-09-08 13-42-29".to_string(),
-            ))),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "%Y-%m-%d %H-%M-%S".to_string(),
-            ))),
-        ];
-
-        let err = to_timestamp_impl::<TimestampNanosecondType>(
-            &args,
-            "to_timestamp",
-            &timezone,
-        )
-        .expect_err("expected timezone configuration error");
-
+        let err =
+            ConfiguredTimeZone::parse("Not/A_Zone").expect_err("expected parse error");
         assert_contains!(err.to_string(), "Invalid execution timezone");
     }
 
@@ -1316,11 +1325,19 @@ mod tests {
     #[test]
     fn test_tz() {
         let udfs: Vec<Box<dyn ScalarUDFImpl>> = vec![
-            Box::new(ToTimestampFunc::new()),
-            Box::new(ToTimestampSecondsFunc::new()),
-            Box::new(ToTimestampMillisFunc::new()),
-            Box::new(ToTimestampNanosFunc::new()),
-            Box::new(ToTimestampSecondsFunc::new()),
+            Box::new(ToTimestampFunc::new_with_config(&ConfigOptions::default())),
+            Box::new(ToTimestampSecondsFunc::new_with_config(
+                &ConfigOptions::default(),
+            )),
+            Box::new(ToTimestampMillisFunc::new_with_config(
+                &ConfigOptions::default(),
+            )),
+            Box::new(ToTimestampNanosFunc::new_with_config(
+                &ConfigOptions::default(),
+            )),
+            Box::new(ToTimestampSecondsFunc::new_with_config(
+                &ConfigOptions::default(),
+            )),
         ];
 
         let mut nanos_builder = TimestampNanosecondArray::builder(2);
