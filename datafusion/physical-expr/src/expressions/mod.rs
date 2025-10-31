@@ -19,6 +19,7 @@
 
 #[macro_use]
 mod binary;
+mod bloom_filter_expr;
 mod case;
 mod cast;
 mod cast_column;
@@ -40,6 +41,7 @@ pub use crate::aggregate::stats::StatsType;
 pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, similar_to, BinaryExpr};
+pub use bloom_filter_expr::{BloomFilterBuilder, BloomFilterExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{cast, CastExpr};
 pub use cast_column::CastColumnExpr;

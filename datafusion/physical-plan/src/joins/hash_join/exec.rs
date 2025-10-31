@@ -26,7 +26,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBoundsAccumulator};
+use crate::joins::hash_join::shared_bounds::{
+    ColumnBounds, ColumnFilterData, SharedBoundsAccumulator,
+};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
@@ -53,6 +55,7 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
 };
+use parking_lot::Mutex;
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
@@ -72,13 +75,14 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::expressions::{lit, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::expressions::{
+    lit, BloomFilterBuilder, DynamicFilterPhysicalExpr,
+};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
-use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 const HASH_JOIN_SEED: RandomState =
@@ -102,8 +106,9 @@ pub(super) struct JoinLeftData {
     /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
     /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
     _reservation: MemoryReservation,
-    /// Bounds computed from the build side for dynamic filter pushdown
-    pub(super) bounds: Option<Vec<ColumnBounds>>,
+    /// Filter data (bounds + bloom filters) computed from the build side for dynamic filter pushdown.
+    /// Wrapped in Mutex<Option<>> to allow taking ownership when reporting to the accumulator.
+    pub(super) column_filters: Mutex<Option<Vec<ColumnFilterData>>>,
 }
 
 impl JoinLeftData {
@@ -115,7 +120,7 @@ impl JoinLeftData {
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
-        bounds: Option<Vec<ColumnBounds>>,
+        column_filters: Option<Vec<ColumnFilterData>>,
     ) -> Self {
         Self {
             hash_map,
@@ -124,7 +129,7 @@ impl JoinLeftData {
             visited_indices_bitmap,
             probe_threads_counter,
             _reservation: reservation,
-            bounds,
+            column_filters: Mutex::new(column_filters),
         }
     }
 
@@ -1207,14 +1212,14 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
-/// Accumulator for collecting min/max bounds from build-side data during hash join.
+/// Accumulator for collecting min/max bounds and bloom filters from build-side data during hash join.
 ///
 /// This struct encapsulates the logic for progressively computing column bounds
-/// (minimum and maximum values) for a specific join key expression as batches
+/// (minimum and maximum values) and bloom filters for a specific join key expression as batches
 /// are processed during the build phase of a hash join.
 ///
-/// The bounds are used for dynamic filter pushdown optimization, where filters
-/// based on the actual data ranges can be pushed down to the probe side to
+/// The bounds and bloom filters are used for dynamic filter pushdown optimization, where filters
+/// based on the actual data ranges and membership can be pushed down to the probe side to
 /// eliminate unnecessary data early.
 struct CollectLeftAccumulator {
     /// The physical expression to evaluate for each batch
@@ -1223,6 +1228,8 @@ struct CollectLeftAccumulator {
     min: MinAccumulator,
     /// Accumulator for tracking the maximum value across all batches
     max: MaxAccumulator,
+    /// Bloom filter builder for membership testing
+    bloom_filter: BloomFilterBuilder,
 }
 
 impl CollectLeftAccumulator {
@@ -1231,10 +1238,15 @@ impl CollectLeftAccumulator {
     /// # Arguments
     /// * `expr` - The physical expression to track bounds for
     /// * `schema` - The schema of the input data
+    /// * `random_state` - Random state for consistent hashing
     ///
     /// # Returns
     /// A new `CollectLeftAccumulator` instance configured for the expression's data type
-    fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Result<Self> {
+    fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+        random_state: RandomState,
+    ) -> Result<Self> {
         /// Recursively unwraps dictionary types to get the underlying value type.
         fn dictionary_value_type(data_type: &DataType) -> DataType {
             match data_type {
@@ -1249,17 +1261,23 @@ impl CollectLeftAccumulator {
             .data_type(schema)
             // Min/Max can operate on dictionary data but expect to be initialized with the underlying value type
             .map(|dt| dictionary_value_type(&dt))?;
+
+        // Create bloom filter with default parameters
+        // NDV (number of distinct values) = 1000, FPP (false positive probability) = 0.05 (5%)
+        let bloom_filter = BloomFilterBuilder::new(1000, 0.05, random_state)?;
+
         Ok(Self {
             expr,
             min: MinAccumulator::try_new(&data_type)?,
             max: MaxAccumulator::try_new(&data_type)?,
+            bloom_filter,
         })
     }
 
     /// Updates the accumulators with values from a new batch.
     ///
-    /// Evaluates the expression on the batch and updates both min and max
-    /// accumulators with the resulting values.
+    /// Evaluates the expression on the batch and updates min and max bounds.
+    /// Bloom filter population is deferred to Pass 2 to reuse hash computations.
     ///
     /// # Arguments
     /// * `batch` - The record batch to process
@@ -1270,20 +1288,20 @@ impl CollectLeftAccumulator {
         let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
         self.min.update_batch(std::slice::from_ref(&array))?;
         self.max.update_batch(std::slice::from_ref(&array))?;
+        // Bloom filter population deferred to Pass 2 to reuse hash table hashes
         Ok(())
     }
 
-    /// Finalizes the accumulation and returns the computed bounds.
+    /// Finalizes the accumulation and returns the computed filter data.
     ///
-    /// Consumes self to extract the final min and max values from the accumulators.
+    /// Consumes self to extract the final min and max values from the accumulators
+    /// and the bloom filter builder.
     ///
     /// # Returns
-    /// The `ColumnBounds` containing the minimum and maximum values observed
-    fn evaluate(mut self) -> Result<ColumnBounds> {
-        Ok(ColumnBounds::new(
-            self.min.evaluate()?,
-            self.max.evaluate()?,
-        ))
+    /// `ColumnFilterData` containing the bounds and bloom filter builder
+    fn evaluate(mut self) -> Result<ColumnFilterData> {
+        let bounds = ColumnBounds::new(self.min.evaluate()?, self.max.evaluate()?);
+        Ok(ColumnFilterData::new(bounds, self.bloom_filter))
     }
 }
 
@@ -1304,6 +1322,7 @@ impl BuildSideState {
         on_left: Vec<Arc<dyn PhysicalExpr>>,
         schema: &SchemaRef,
         should_compute_bounds: bool,
+        random_state: &RandomState,
     ) -> Result<Self> {
         Ok(Self {
             batches: Vec::new(),
@@ -1315,7 +1334,11 @@ impl BuildSideState {
                     on_left
                         .iter()
                         .map(|expr| {
-                            CollectLeftAccumulator::try_new(Arc::clone(expr), schema)
+                            CollectLeftAccumulator::try_new(
+                                Arc::clone(expr),
+                                schema,
+                                random_state.clone(),
+                            )
                         })
                         .collect::<Result<Vec<_>>>()
                 })
@@ -1374,6 +1397,7 @@ async fn collect_left_input(
         on_left.clone(),
         &schema,
         should_compute_bounds,
+        &random_state,
     )?;
 
     let state = left_stream
@@ -1407,7 +1431,7 @@ async fn collect_left_input(
         num_rows,
         metrics,
         mut reservation,
-        bounds_accumulators,
+        mut bounds_accumulators,
     } = state;
 
     // Estimation of memory size, required for hashtable, prior to allocation.
@@ -1449,6 +1473,14 @@ async fn collect_left_input(
             0,
             true,
         )?;
+
+        // Populate bloom filters with computed hashes to avoid redundant hash computation
+        if let Some(ref mut accumulators) = bounds_accumulators {
+            for accumulator in accumulators.iter_mut() {
+                accumulator.bloom_filter.insert_hashes(&hashes_buffer);
+            }
+        }
+
         offset += batch.num_rows();
     }
     // Merge all batches into a single batch, so we can directly index into the arrays
@@ -1475,14 +1507,14 @@ async fn collect_left_input(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Compute bounds for dynamic filter if enabled
-    let bounds = match bounds_accumulators {
+    // Compute filter data (bounds + bloom filters) for dynamic filter if enabled
+    let column_filters = match bounds_accumulators {
         Some(accumulators) if num_rows > 0 => {
-            let bounds = accumulators
+            let column_filters: Vec<_> = accumulators
                 .into_iter()
                 .map(CollectLeftAccumulator::evaluate)
                 .collect::<Result<Vec<_>>>()?;
-            Some(bounds)
+            Some(column_filters)
         }
         _ => None,
     };
@@ -1494,7 +1526,7 @@ async fn collect_left_input(
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,
-        bounds,
+        column_filters,
     );
 
     Ok(data)
