@@ -456,13 +456,10 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }
-            Expr::Literal(l, metadata) => {
-                let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
-                if let Some(metadata) = metadata {
-                    field = metadata.add_to_field(field);
-                }
-                Ok(Arc::new(field))
-            }
+            Expr::Literal(l, metadata) => Ok(Arc::new(
+                Field::new(&schema_name, l.data_type(), l.is_null())
+                    .with_field_metadata_opt(metadata.as_ref()),
+            )),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -564,8 +561,7 @@ impl ExprSchemable for Expr {
                 let new_fields = fields
                     .into_iter()
                     .zip(new_data_types)
-                    .map(|(f, d)| f.as_ref().clone().with_data_type(d))
-                    .map(Arc::new)
+                    .map(|(f, d)| f.retyped(d))
                     .collect::<Vec<FieldRef>>();
 
                 let arguments = args
@@ -585,12 +581,11 @@ impl ExprSchemable for Expr {
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
             Expr::Cast(Cast { expr, data_type }) => expr
                 .to_field(schema)
-                .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone()))
-                .map(Arc::new),
+                .map(|(_, f)| f.retyped(data_type.clone())),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
-            }) => Ok(field.as_ref().clone().with_name(&schema_name).into()),
+            }) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
