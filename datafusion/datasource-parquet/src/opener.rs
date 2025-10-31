@@ -545,11 +545,15 @@ impl FileOpener for ParquetOpener {
                     .add_matched(n_remaining_row_groups);
             }
 
-            let mut access_plan = row_groups.build();
+            // Prune by limit
+            if let Some(limit) = limit {
+                row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
+            }
 
             // --------------------------------------------------------
             // Step: prune pages from the kept row groups
             //
+            let mut access_plan = row_groups.build();
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well

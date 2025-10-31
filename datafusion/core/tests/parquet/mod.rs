@@ -182,6 +182,11 @@ impl TestOutput {
             .map(|(_pruned, matched)| matched)
     }
 
+    /// The number of row_groups fully matched by statistics
+    fn row_groups_fully_matched_statistics(&self) -> Option<usize> {
+        self.metric_value("row_groups_fully_matched_statistics")
+    }
+
     /// The number of row_groups pruned by statistics
     fn row_groups_pruned_statistics(&self) -> Option<usize> {
         self.pruning_metric("row_groups_pruned_statistics")
@@ -219,6 +224,11 @@ impl TestOutput {
             .map(|(pruned, _matched)| pruned)
     }
 
+    /// The number of row groups pruned by limit pruning
+    fn limit_pruned_row_groups(&self) -> Option<usize> {
+        self.metric_value("limit_pruned_row_groups")
+    }
+
     fn description(&self) -> String {
         format!(
             "Input:\n{}\nQuery:\n{}\nOutput:\n{}\nMetrics:\n{}",
@@ -232,20 +242,41 @@ impl TestOutput {
 /// and the appropriate scenario
 impl ContextWithParquet {
     async fn new(scenario: Scenario, unit: Unit) -> Self {
-        Self::with_config(scenario, unit, SessionConfig::new()).await
+        Self::with_config(scenario, unit, SessionConfig::new(), None, None).await
+    }
+
+    /// Set custom schema and batches for the test
+    pub async fn with_custom_data(
+        scenario: Scenario,
+        unit: Unit,
+        schema: Arc<Schema>,
+        batches: Vec<RecordBatch>,
+    ) -> Self {
+        Self::with_config(
+            scenario,
+            unit,
+            SessionConfig::new(),
+            Some(schema),
+            Some(batches),
+        )
+        .await
     }
 
     async fn with_config(
         scenario: Scenario,
         unit: Unit,
         mut config: SessionConfig,
+        custom_schema: Option<Arc<Schema>>,
+        custom_batches: Option<Vec<RecordBatch>>,
     ) -> Self {
         // Use a single partition for deterministic results no matter how many CPUs the host has
         config = config.with_target_partitions(1);
         let file = match unit {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
-                make_test_file_rg(scenario, row_per_group).await
+                config.options_mut().execution.parquet.pushdown_filters = true;
+                make_test_file_rg(scenario, row_per_group, custom_schema, custom_batches)
+                    .await
             }
             Unit::Page(row_per_page) => {
                 config = config.with_parquet_page_index_pruning(true);
@@ -1075,7 +1106,12 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
 }
 
 /// Create a test parquet file with various data types
-async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTempFile {
+async fn make_test_file_rg(
+    scenario: Scenario,
+    row_per_group: usize,
+    custom_schema: Option<Arc<Schema>>,
+    custom_batches: Option<Vec<RecordBatch>>,
+) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquet_pruning")
         .suffix(".parquet")
@@ -1088,8 +1124,14 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .set_statistics_enabled(EnabledStatistics::Page)
         .build();
 
-    let batches = create_data_batch(scenario);
-    let schema = batches[0].schema();
+    let (batches, schema) =
+        if let (Some(schema), Some(batches)) = (custom_schema, custom_batches) {
+            (batches, schema)
+        } else {
+            let batches = create_data_batch(scenario);
+            let schema = batches[0].schema();
+            (batches, schema)
+        };
 
     let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
 
