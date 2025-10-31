@@ -34,9 +34,10 @@ use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::cast::{
-    as_boolean_array, as_generic_binary_array, as_string_array, as_struct_array,
+    as_binary_view_array, as_boolean_array, as_generic_binary_array, as_string_array,
+    as_string_view_array, as_struct_array,
 };
-use datafusion_common::hash_utils::{create_hashes, HashValue};
+use datafusion_common::hash_utils::{create_hashes_from_arrays, HashValue};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
 };
@@ -46,8 +47,6 @@ use datafusion_physical_expr_common::datum::compare_with_eq;
 use ahash::RandomState;
 use datafusion_common::HashMap;
 use hashbrown::hash_map::RawEntryMut;
-#[cfg(test)]
-use itertools::Itertools;
 
 /// InList
 pub struct InListExpr {
@@ -168,8 +167,8 @@ impl Set for StructArraySet {
 
         // Compute hashes for all rows in the input array
         let mut input_hashes = vec![0u64; v.len()];
-        create_hashes(
-            &[Arc::new(v.clone()) as ArrayRef],
+        create_hashes_from_arrays(
+            &[v as &dyn Array],
             &self.hash_set.state,
             &mut input_hashes,
         )?;
@@ -260,7 +259,7 @@ fn make_struct_hash_set(array: &Arc<StructArray>) -> Result<ArrayHashSet> {
 
     // Compute hashes for all rows
     let mut row_hashes = vec![0u64; array.len()];
-    create_hashes(&[Arc::clone(array) as ArrayRef], &state, &mut row_hashes)?;
+    create_hashes_from_arrays(&[array.as_ref()], &state, &mut row_hashes)?;
 
     // Build hash set, deduplicating based on struct equality
     let insert_value = |idx: usize| {
@@ -321,6 +320,11 @@ where
             let hash_set = f(make_hash_set(array))?;
             Arc::new(ArraySet::new(array, hash_set))
         }
+        DataType::Utf8View => {
+            let array = as_string_view_array(array)?;
+            let hash_set = f(make_hash_set(array))?;
+            Arc::new(ArraySet::new(array, hash_set))
+        }
         DataType::Binary => {
             let array = as_generic_binary_array::<i32>(array)?;
             let hash_set = f(make_hash_set(array))?;
@@ -328,6 +332,11 @@ where
         }
         DataType::LargeBinary => {
             let array = as_generic_binary_array::<i64>(array)?;
+            let hash_set = f(make_hash_set(array))?;
+            Arc::new(ArraySet::new(array, hash_set))
+        }
+        DataType::BinaryView => {
+            let array = as_binary_view_array(array)?;
             let hash_set = f(make_hash_set(array))?;
             Arc::new(ArraySet::new(array, hash_set))
         }
@@ -617,11 +626,11 @@ pub fn in_list(
 /// The `array` should contain the list of values for the `IN` clause.
 /// The `negated` flag indicates whether this is an `IN` or `NOT IN` expression.
 ///
-/// The generated `InListExpr` will use the provided array as a static filter for efficient evaluation,
-/// bypassing the need to evaluate individual list expressions at runtime.
+/// The generated `InListExpr` will use the provided array as a static filter for efficient evaluation
+/// and the list of expressions will be constructed from the unique values in the array (with no guaranteed order).
 ///
 /// # Errors
-/// Returns an error if the array type is not supported for `InList` expressions.
+/// Returns an error if the array type is not supported for `InList` expressions or if we cannot build a hash based lookup.
 pub fn in_list_from_array(
     expr: Arc<dyn PhysicalExpr>,
     array: ArrayRef,
@@ -630,19 +639,33 @@ pub fn in_list_from_array(
     let mut list = Vec::new();
     let static_filter = make_set(array.as_ref(), |hash_set| {
         // If we are in tests sort the keys so we get a deterministic order for the list
-        #[cfg(test)]
-        let keys = hash_set.map.keys().sorted();
-        #[cfg(not(test))]
-        let keys = hash_set.map.keys();
-        list = keys
-            .map(|&i| {
-                let scalar = ScalarValue::try_from_array(&array, i)?;
-                Ok(crate::expressions::lit(scalar))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        // Use cfg(any(test, debug_assertions)) to cover both unit tests and integration tests
+        #[cfg(any(test, debug_assertions))]
+        {
+            use itertools::Itertools;
+            list = hash_set
+                .map
+                .keys()
+                .sorted()
+                .map(|&i| {
+                    let scalar = ScalarValue::try_from_array(&array, i)?;
+                    Ok(crate::expressions::lit(scalar))
+                })
+                .collect::<Result<Vec<_>>>()?;
+        }
+        #[cfg(not(any(test, debug_assertions)))]
+        {
+            list = hash_set
+                .map
+                .keys()
+                .map(|&i| {
+                    let scalar = ScalarValue::try_from_array(&array, i)?;
+                    Ok(crate::expressions::lit(scalar))
+                })
+                .collect::<Result<Vec<_>>>()?;
+        }
         Ok(hash_set)
-    })
-    .ok();
+    })?;
 
     // If make_set failed, build list from full array
     if list.is_empty() && array.len() > 0 {
@@ -658,7 +681,7 @@ pub fn in_list_from_array(
         expr,
         list,
         negated,
-        static_filter,
+        Some(static_filter),
     )))
 }
 
@@ -672,6 +695,7 @@ mod tests {
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use insta::assert_snapshot;
+    use itertools::Itertools;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 

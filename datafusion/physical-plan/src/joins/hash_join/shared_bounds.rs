@@ -123,7 +123,7 @@ fn create_membership_predicate(
                 )) as Arc<dyn PhysicalExpr>
             };
 
-            // Use in_list() helper to create InList with static_filter optimization (hash-based lookup)
+            // Use in_list_from_array() helper to create InList with static_filter optimization (hash-based lookup)
             in_list_from_array(expr, in_list_array, false)
         }
         // Use hash table lookup for large build sides
