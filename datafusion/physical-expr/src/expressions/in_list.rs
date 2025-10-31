@@ -294,7 +294,7 @@ fn make_struct_hash_set(array: &Arc<StructArray>) -> Result<ArrayHashSet> {
 }
 
 /// Creates a `Box<dyn Set>` for the given list of `IN` expressions and `batch`.
-/// Accepts a parameter `f` which allows access to the underlaying `ArrayHashSet`
+/// Accepts a parameter `f` which allows access to the underlying `ArrayHashSet`
 /// and is used by [`in_list_from_array`] to collect unique indices.
 fn make_set<F>(array: &dyn Array, mut f: F) -> Result<Arc<dyn Set>>
 where
@@ -668,7 +668,7 @@ pub fn in_list_from_array(
     })?;
 
     // If make_set failed, build list from full array
-    if list.is_empty() && array.len() > 0 {
+    if list.is_empty() && !array.is_empty() {
         list = (0..array.len())
             .map(|i| {
                 let scalar = ScalarValue::try_from_array(&array, i)?;
