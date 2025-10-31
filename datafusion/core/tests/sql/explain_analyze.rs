@@ -860,6 +860,21 @@ async fn parquet_explain_analyze() {
         &formatted,
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
     );
+
+    // The order of metrics is expected to be the same as the actual pruning order
+    // (file-> row-group -> page)
+    let i_file = formatted.find("files_ranges_pruned_statistics").unwrap();
+    let i_rowgroup_stat = formatted.find("row_groups_pruned_statistics").unwrap();
+    let i_rowgroup_bloomfilter =
+        formatted.find("row_groups_pruned_bloom_filter").unwrap();
+    let i_page = formatted.find("page_index_rows_pruned").unwrap();
+
+    assert!(
+        (i_file < i_rowgroup_stat)
+            && (i_rowgroup_stat < i_rowgroup_bloomfilter)
+            && (i_rowgroup_bloomfilter < i_page),
+            "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
+    );
 }
 
 // This test reproduces the behavior described in
