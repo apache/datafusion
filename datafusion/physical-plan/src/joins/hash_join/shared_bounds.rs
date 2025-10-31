@@ -21,6 +21,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{HashExpr, HashTableLookupExpr};
 use crate::joins::utils::JoinHashMapType;
 use crate::joins::PartitionMode;
@@ -28,13 +29,14 @@ use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 
 use ahash::RandomState;
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::array::ArrayRef;
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    lit, BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr,
+    in_list_from_array, lit, BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -65,19 +67,14 @@ impl ColumnBounds {
 /// This contains the min/max values computed from one partition's build-side data.
 #[derive(Debug, Clone)]
 pub(crate) struct PartitionBounds {
-    /// Partition identifier for debugging and determinism (not strictly necessary)
-    partition: usize,
     /// Min/max bounds for each join key column in this partition.
     /// Index corresponds to the join key expression index.
     column_bounds: Vec<ColumnBounds>,
 }
 
 impl PartitionBounds {
-    pub(crate) fn new(partition: usize, column_bounds: Vec<ColumnBounds>) -> Self {
-        Self {
-            partition,
-            column_bounds,
-        }
+    pub(crate) fn new(column_bounds: Vec<ColumnBounds>) -> Self {
+        Self { column_bounds }
     }
 
     pub(crate) fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
@@ -93,69 +90,63 @@ impl PartitionBounds {
 /// Supports both single-column and multi-column joins using struct expressions.
 fn create_membership_predicate(
     on_right: &[PhysicalExprRef],
-    hash_map: &Arc<dyn JoinHashMapType>,
-    inlist_values: Option<&Vec<ScalarValue>>,
+    pushdown: PushdownStrategy,
     random_state: &RandomState,
+    schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // Use InList expression for small build sides
-    if let Some(values) = inlist_values {
-        // Convert ScalarValues to literal expressions
-        let list_exprs: Vec<Arc<dyn PhysicalExpr>> = values
-            .iter()
-            .map(|v| lit(v.clone()) as Arc<dyn PhysicalExpr>)
-            .collect();
+    match pushdown {
+        // Use InList expression for small build sides
+        PushdownStrategy::InList(in_list_array) => {
+            // Build the expression to compare against
+            let expr = if on_right.len() == 1 {
+                // Single column: col IN (val1, val2, ...)
+                Arc::clone(&on_right[0])
+            } else {
+                let fields = build_struct_fields(
+                    on_right
+                        .iter()
+                        .map(|r| r.data_type(schema))
+                        .collect::<Result<Vec<_>>>()?
+                        .as_ref(),
+                )?;
 
-        // Build the expression to compare against
-        let expr = if on_right.len() == 1 {
-            // Single column: col IN (val1, val2, ...)
-            Arc::clone(&on_right[0])
-        } else {
-            // Multi-column: struct(col1, col2, ...) IN (struct_val1, struct_val2, ...)
-            // Create struct expression from columns
-            let struct_udf = struct_func();
+                // The return field name and the function field name don't really matter here.
+                let return_field =
+                    Arc::new(Field::new("struct", DataType::Struct(fields.into()), true));
 
-            // Extract field types from the first struct value in the InList
-            // This ensures the probe-side struct expression matches the build-side struct type
-            let fields: Fields =
-                if let Some(ScalarValue::Struct(first_struct)) = values.first() {
-                    first_struct.fields().clone()
-                } else {
-                    // Fallback: should not happen for multi-column joins
-                    return datafusion_common::internal_err!(
-                        "Multi-column InList should contain struct values"
-                    );
-                };
+                Arc::new(ScalarFunctionExpr::new(
+                    "struct",
+                    struct_func(),
+                    on_right.to_vec(),
+                    return_field,
+                    Arc::new(ConfigOptions::default()),
+                )) as Arc<dyn PhysicalExpr>
+            };
 
-            let return_field =
-                Arc::new(Field::new("struct", DataType::Struct(fields.into()), true));
-
-            Arc::new(ScalarFunctionExpr::new(
-                "struct",
-                struct_udf,
+            // Use in_list() helper to create InList with static_filter optimization (hash-based lookup)
+            in_list_from_array(expr, in_list_array, false)
+        }
+        // Use hash table lookup for large build sides
+        PushdownStrategy::HashTable(hash_map) => {
+            let lookup_hash_expr = Arc::new(HashExpr::new(
                 on_right.to_vec(),
-                return_field,
-                Arc::new(ConfigOptions::default()),
-            )) as Arc<dyn PhysicalExpr>
-        };
+                random_state.clone(),
+                "hash_join".to_string(),
+            )) as Arc<dyn PhysicalExpr>;
 
-        return Ok(Arc::new(InListExpr::new(
-            expr, list_exprs, false, // not negated
-            None,  // no static filter optimization
-        )));
+            Ok(Arc::new(HashTableLookupExpr::new(
+                lookup_hash_expr,
+                hash_map,
+                "hash_lookup".to_string(),
+            )) as Arc<dyn PhysicalExpr>)
+        }
+        // Empty partition - should not create a filter for this
+        PushdownStrategy::Empty => {
+            datafusion_common::internal_err!(
+                "Cannot create membership predicate for empty partition"
+            )
+        }
     }
-
-    // Use hash table lookup for large build sides
-    let lookup_hash_expr = Arc::new(HashExpr::new(
-        on_right.to_vec(),
-        random_state.clone(),
-        "hash_join".to_string(),
-    )) as Arc<dyn PhysicalExpr>;
-
-    Ok(Arc::new(HashTableLookupExpr::new(
-        lookup_hash_expr,
-        Arc::clone(hash_map),
-        "hash_lookup".to_string(),
-    )) as Arc<dyn PhysicalExpr>)
 }
 
 /// Coordinates build-side information collection across multiple partitions
@@ -189,8 +180,8 @@ fn create_membership_predicate(
 /// All fields use a single mutex to ensure correct coordination between concurrent
 /// partition executions.
 pub(crate) struct SharedBuildAccumulator {
-    /// Shared state protected by a single mutex to avoid ordering concerns
-    inner: Mutex<SharedBuildState>,
+    /// Build-side data protected by a single mutex to avoid ordering concerns
+    inner: Mutex<AccumulatedBuildData>,
     barrier: Barrier,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
@@ -199,34 +190,38 @@ pub(crate) struct SharedBuildAccumulator {
     /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
     /// Used for PartitionedHashLookupPhysicalExpr
     repartition_random_state: RandomState,
+    /// Schema of the probe (right) side for evaluating filter expressions
+    probe_schema: Arc<Schema>,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) enum PushdownStrategy {
     /// Use InList for small build sides (< 128MB)
-    InList(Vec<ScalarValue>),
+    InList(ArrayRef),
     /// Use hash table lookup for large build sides
-    UseHashTable,
+    HashTable(Arc<dyn JoinHashMapType>),
+    /// There was no data in this partition, do not build a dynamic filter for it
+    Empty,
 }
 
 /// Build-side data reported by a single partition
 pub(crate) enum PartitionBuildData {
     Partitioned {
         partition_id: usize,
-        hash_map: Arc<dyn JoinHashMapType>,
         pushdown: PushdownStrategy,
+        bounds: PartitionBounds,
     },
     CollectLeft {
-        hash_map: Arc<dyn JoinHashMapType>,
         pushdown: PushdownStrategy,
+        bounds: PartitionBounds,
     },
 }
 
 /// Per-partition accumulated data (Partitioned mode)
 #[derive(Clone)]
 struct PartitionData {
-    hash_map: Arc<dyn JoinHashMapType>,
+    bounds: PartitionBounds,
     pushdown: PushdownStrategy,
 }
 
@@ -236,18 +231,8 @@ enum AccumulatedBuildData {
         partitions: Vec<Option<PartitionData>>,
     },
     CollectLeft {
-        hash_map: Option<Arc<dyn JoinHashMapType>>,
-        pushdown: Option<PushdownStrategy>,
+        data: Option<PartitionData>,
     },
-}
-
-/// State protected by SharedBuildAccumulator's mutex
-struct SharedBuildState {
-    /// Bounds from completed partitions
-    /// Each element represents the column bounds computed by one partition.
-    bounds: Vec<PartitionBounds>,
-    /// Build-side data organized by partition mode
-    mode_data: AccumulatedBuildData,
 }
 
 impl SharedBuildAccumulator {
@@ -311,21 +296,18 @@ impl SharedBuildAccumulator {
                 partitions: vec![None; num_partitions],
             },
             PartitionMode::CollectLeft => AccumulatedBuildData::CollectLeft {
-                hash_map: None,
-                pushdown: None,
+                data: None,
             },
             PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
         };
 
         Self {
-            inner: Mutex::new(SharedBuildState {
-                bounds: Vec::with_capacity(expected_calls),
-                mode_data,
-            }),
+            inner: Mutex::new(mode_data),
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
             on_right,
             repartition_random_state,
+            probe_schema: right_child.schema(),
         }
     }
 
@@ -337,61 +319,35 @@ impl SharedBuildAccumulator {
     /// - Partitioned: CASE expression routing to per-partition filters
     ///
     /// # Arguments
-    /// * `data` - Build data including hash map and pushdown strategy
-    /// * `bounds` - Min/max bounds for this partition
+    /// * `data` - Build data including hash map, pushdown strategy, and bounds
     ///
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed or mode mismatch
-    pub(crate) async fn report_build_data(
-        &self,
-        data: PartitionBuildData,
-        bounds: Option<Vec<ColumnBounds>>,
-    ) -> Result<()> {
+    pub(crate) async fn report_build_data(&self, data: PartitionBuildData) -> Result<()> {
         // Store data in the accumulator
         {
             let mut guard = self.inner.lock();
 
-            match (data, &mut guard.mode_data) {
+            match (data, &mut *guard) {
                 // Partitioned mode
                 (
                     PartitionBuildData::Partitioned {
                         partition_id,
-                        hash_map,
                         pushdown,
+                        bounds,
                     },
                     AccumulatedBuildData::Partitioned { partitions },
                 ) => {
-                    partitions[partition_id] = Some(PartitionData { hash_map, pushdown });
-
-                    if let Some(b) = bounds {
-                        guard.bounds.push(PartitionBounds::new(partition_id, b));
-                    }
+                    partitions[partition_id] = Some(PartitionData { pushdown, bounds });
                 }
                 // CollectLeft mode (store once, deduplicate across partitions)
                 (
-                    PartitionBuildData::CollectLeft { hash_map, pushdown },
-                    AccumulatedBuildData::CollectLeft {
-                        hash_map: ref mut stored_map,
-                        pushdown: ref mut stored_pushdown,
-                    },
+                    PartitionBuildData::CollectLeft { pushdown, bounds },
+                    AccumulatedBuildData::CollectLeft { data },
                 ) => {
-                    if stored_map.is_none() {
-                        *stored_map = Some(hash_map);
-                        *stored_pushdown = Some(pushdown);
-                    }
-
-                    if let Some(b) = bounds {
-                        // Use partition 0 for the single hash table
-                        let should_push = if let Some(last_bound) = guard.bounds.last() {
-                            // Deduplicate - all partitions report the same data in CollectLeft
-                            last_bound.partition != 0
-                        } else {
-                            true
-                        };
-
-                        if should_push {
-                            guard.bounds.push(PartitionBounds::new(0, b));
-                        }
+                    // Deduplicate - all partitions report the same data in CollectLeft
+                    if data.is_none() {
+                        *data = Some(PartitionData { pushdown, bounds });
                     }
                 }
                 // Mismatched modes - should never happen
@@ -408,79 +364,67 @@ impl SharedBuildAccumulator {
             // All partitions have reported, so we can create and update the filter
             let inner = self.inner.lock();
 
-            match &inner.mode_data {
+            match &*inner {
                 // CollectLeft: Simple conjunction of bounds and membership check
-                AccumulatedBuildData::CollectLeft { hash_map, pushdown } => {
-                    if let Some(ref hash_map) = hash_map {
+                AccumulatedBuildData::CollectLeft { data } => {
+                    if let Some(partition_data) = data {
                         // Create membership predicate (InList for small build sides, hash lookup otherwise)
-                        let inlist_values = match pushdown.as_ref().unwrap() {
-                            PushdownStrategy::InList(values) => Some(values),
-                            PushdownStrategy::UseHashTable => None,
-                        };
-
                         let membership_expr = create_membership_predicate(
                             &self.on_right,
-                            hash_map,
-                            inlist_values,
+                            partition_data.pushdown.clone(),
                             &HASH_JOIN_SEED,
+                            self.probe_schema.as_ref(),
                         )?;
 
                         // Create bounds check expression (if bounds available)
                         let mut filter_expr = membership_expr;
 
-                        if let Some(partition_bounds) = inner.bounds.first() {
-                            let mut column_predicates = Vec::new();
+                        let mut column_predicates = Vec::new();
 
-                            for (col_idx, right_expr) in self.on_right.iter().enumerate()
+                        for (col_idx, right_expr) in self.on_right.iter().enumerate() {
+                            if let Some(column_bounds) =
+                                partition_data.bounds.get_column_bounds(col_idx)
                             {
-                                if let Some(column_bounds) =
-                                    partition_bounds.get_column_bounds(col_idx)
-                                {
-                                    // Create predicate: col >= min AND col <= max
-                                    let min_expr = Arc::new(BinaryExpr::new(
-                                        Arc::clone(right_expr),
-                                        Operator::GtEq,
-                                        lit(column_bounds.min.clone()),
-                                    ))
-                                        as Arc<dyn PhysicalExpr>;
-                                    let max_expr = Arc::new(BinaryExpr::new(
-                                        Arc::clone(right_expr),
-                                        Operator::LtEq,
-                                        lit(column_bounds.max.clone()),
-                                    ))
-                                        as Arc<dyn PhysicalExpr>;
-                                    let range_expr = Arc::new(BinaryExpr::new(
-                                        min_expr,
-                                        Operator::And,
-                                        max_expr,
-                                    ))
-                                        as Arc<dyn PhysicalExpr>;
-                                    column_predicates.push(range_expr);
-                                }
-                            }
-
-                            // Combine all column range predicates with AND
-                            if !column_predicates.is_empty() {
-                                let bounds_expr = column_predicates
-                                    .into_iter()
-                                    .reduce(|acc, pred| {
-                                        Arc::new(BinaryExpr::new(
-                                            acc,
-                                            Operator::And,
-                                            pred,
-                                        ))
-                                            as Arc<dyn PhysicalExpr>
-                                    })
-                                    .unwrap();
-
-                                // Combine bounds_expr AND membership_expr
-                                filter_expr = Arc::new(BinaryExpr::new(
-                                    bounds_expr,
-                                    Operator::And,
-                                    filter_expr,
+                                // Create predicate: col >= min AND col <= max
+                                let min_expr = Arc::new(BinaryExpr::new(
+                                    Arc::clone(right_expr),
+                                    Operator::GtEq,
+                                    lit(column_bounds.min.clone()),
                                 ))
                                     as Arc<dyn PhysicalExpr>;
+                                let max_expr = Arc::new(BinaryExpr::new(
+                                    Arc::clone(right_expr),
+                                    Operator::LtEq,
+                                    lit(column_bounds.max.clone()),
+                                ))
+                                    as Arc<dyn PhysicalExpr>;
+                                let range_expr = Arc::new(BinaryExpr::new(
+                                    min_expr,
+                                    Operator::And,
+                                    max_expr,
+                                ))
+                                    as Arc<dyn PhysicalExpr>;
+                                column_predicates.push(range_expr);
                             }
+                        }
+
+                        // Combine all column range predicates with AND
+                        if !column_predicates.is_empty() {
+                            let bounds_expr = column_predicates
+                                .into_iter()
+                                .reduce(|acc, pred| {
+                                    Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                                        as Arc<dyn PhysicalExpr>
+                                })
+                                .unwrap();
+
+                            // Combine bounds_expr AND membership_expr
+                            filter_expr = Arc::new(BinaryExpr::new(
+                                bounds_expr,
+                                Operator::And,
+                                filter_expr,
+                            ))
+                                as Arc<dyn PhysicalExpr>;
                         }
 
                         self.dynamic_filter.update(filter_expr)?;
@@ -529,20 +473,8 @@ impl SharedBuildAccumulator {
                                 partition_opt.as_ref().and_then(|partition| {
                                     // Skip empty partitions - they would always return false anyway
                                     match &partition.pushdown {
-                                        PushdownStrategy::InList(values)
-                                            if !values.is_empty() =>
-                                        {
-                                            Some((partition_id, partition))
-                                        }
-                                        PushdownStrategy::UseHashTable => {
-                                            // Check if hash table has any entries
-                                            if !partition.hash_map.is_empty() {
-                                                Some((partition_id, partition))
-                                            } else {
-                                                None // Omit empty partition
-                                            }
-                                        }
-                                        _ => None,
+                                        PushdownStrategy::Empty => None,
+                                        _ => Some((partition_id, partition)),
                                     }
                                 })
                             })
@@ -554,79 +486,68 @@ impl SharedBuildAccumulator {
                                 // THEN: Combine bounds check AND membership predicate
 
                                 // 1. Create membership predicate (InList for small build sides, hash lookup otherwise)
-                                let inlist_values = match &partition.pushdown {
-                                    PushdownStrategy::InList(values) => Some(values),
-                                    PushdownStrategy::UseHashTable => None,
-                                };
-
                                 let membership_expr = create_membership_predicate(
                                     &self.on_right,
-                                    &partition.hash_map,
-                                    inlist_values,
+                                    partition.pushdown.clone(),
                                     &HASH_JOIN_SEED,
+                                    self.probe_schema.as_ref(),
                                 )?;
 
                                 // 2. Create bounds check expression for this partition (if bounds available)
                                 let mut then_expr = membership_expr;
 
-                                if let Some(partition_bounds) = inner
-                                    .bounds
-                                    .iter()
-                                    .find(|pb| pb.partition == partition_id)
+                                let mut column_predicates = Vec::new();
+
+                                for (col_idx, right_expr) in
+                                    self.on_right.iter().enumerate()
                                 {
-                                    let mut column_predicates = Vec::new();
-
-                                    for (col_idx, right_expr) in
-                                        self.on_right.iter().enumerate()
+                                    if let Some(column_bounds) =
+                                        partition.bounds.get_column_bounds(col_idx)
                                     {
-                                        if let Some(column_bounds) =
-                                            partition_bounds.get_column_bounds(col_idx)
-                                        {
-                                            // Create predicate: col >= min AND col <= max
-                                            let min_expr = Arc::new(BinaryExpr::new(
-                                                Arc::clone(right_expr),
-                                                Operator::GtEq,
-                                                lit(column_bounds.min.clone()),
-                                            ))
-                                                as Arc<dyn PhysicalExpr>;
-                                            let max_expr = Arc::new(BinaryExpr::new(
-                                                Arc::clone(right_expr),
-                                                Operator::LtEq,
-                                                lit(column_bounds.max.clone()),
-                                            ))
-                                                as Arc<dyn PhysicalExpr>;
-                                            let range_expr = Arc::new(BinaryExpr::new(
-                                                min_expr,
-                                                Operator::And,
-                                                max_expr,
-                                            ))
-                                                as Arc<dyn PhysicalExpr>;
-                                            column_predicates.push(range_expr);
-                                        }
-                                    }
-
-                                    // Combine all column range predicates with AND
-                                    if !column_predicates.is_empty() {
-                                        let bounds_expr = column_predicates
-                                            .into_iter()
-                                            .reduce(|acc, pred| {
-                                                Arc::new(BinaryExpr::new(
-                                                    acc,
-                                                    Operator::And,
-                                                    pred,
-                                                ))
-                                                    as Arc<dyn PhysicalExpr>
-                                            })
-                                            .unwrap();
-
-                                        // Combine bounds_expr AND membership_expr
-                                        then_expr = Arc::new(BinaryExpr::new(
-                                            bounds_expr,
-                                            Operator::And,
-                                            then_expr,
+                                        // Create predicate: col >= min AND col <= max
+                                        let min_expr = Arc::new(BinaryExpr::new(
+                                            Arc::clone(right_expr),
+                                            Operator::GtEq,
+                                            lit(column_bounds.min.clone()),
                                         ))
                                             as Arc<dyn PhysicalExpr>;
+                                        let max_expr = Arc::new(BinaryExpr::new(
+                                            Arc::clone(right_expr),
+                                            Operator::LtEq,
+                                            lit(column_bounds.max.clone()),
+                                        ))
+                                            as Arc<dyn PhysicalExpr>;
+                                        let range_expr = Arc::new(BinaryExpr::new(
+                                            min_expr,
+                                            Operator::And,
+                                            max_expr,
+                                        ))
+                                            as Arc<dyn PhysicalExpr>;
+                                        column_predicates.push(range_expr);
                                     }
+                                }
+
+                                // Combine all column range predicates with AND
+                                if !column_predicates.is_empty() {
+                                    let bounds_expr = column_predicates
+                                        .into_iter()
+                                        .reduce(|acc, pred| {
+                                            Arc::new(BinaryExpr::new(
+                                                acc,
+                                                Operator::And,
+                                                pred,
+                                            ))
+                                                as Arc<dyn PhysicalExpr>
+                                        })
+                                        .unwrap();
+
+                                    // Combine bounds_expr AND membership_expr
+                                    then_expr = Arc::new(BinaryExpr::new(
+                                        bounds_expr,
+                                        Operator::And,
+                                        then_expr,
+                                    ))
+                                        as Arc<dyn PhysicalExpr>;
                                 }
 
                                 Ok((when_expr, then_expr))

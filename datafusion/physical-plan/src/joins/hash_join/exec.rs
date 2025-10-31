@@ -27,7 +27,9 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
-use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBuildAccumulator};
+use crate::joins::hash_join::shared_bounds::{
+    ColumnBounds, PushdownStrategy, SharedBuildAccumulator,
+};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
@@ -65,7 +67,6 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality, Result,
-    ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -109,7 +110,7 @@ pub(super) struct JoinLeftData {
     pub(super) bounds: Option<Vec<ColumnBounds>>,
     /// InList values for small build sides (alternative to hash map pushdown)
     /// Contains unique values from build side for filter pushdown as InList expressions
-    pub(super) inlist_values: Option<Vec<ScalarValue>>,
+    pub(super) membership: PushdownStrategy,
 }
 
 impl JoinLeftData {
@@ -122,7 +123,7 @@ impl JoinLeftData {
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
         bounds: Option<Vec<ColumnBounds>>,
-        inlist_values: Option<Vec<ScalarValue>>,
+        membership: PushdownStrategy,
     ) -> Self {
         Self {
             hash_map,
@@ -132,18 +133,13 @@ impl JoinLeftData {
             probe_threads_counter,
             _reservation: reservation,
             bounds,
-            inlist_values,
+            membership,
         }
     }
 
     /// return a reference to the hash map
     pub(super) fn hash_map(&self) -> &dyn JoinHashMapType {
         &*self.hash_map
-    }
-
-    /// return an Arc clone of the hash map for sharing
-    pub(super) fn hash_map_arc(&self) -> Arc<dyn JoinHashMapType> {
-        Arc::clone(&self.hash_map)
     }
 
     /// returns a reference to the build side batch
@@ -162,8 +158,8 @@ impl JoinLeftData {
     }
 
     /// returns a reference to the InList values for filter pushdown
-    pub(super) fn inlist_values(&self) -> Option<&Vec<ScalarValue>> {
-        self.inlist_values.as_ref()
+    pub(super) fn membership(&self) -> &PushdownStrategy {
+        &self.membership
     }
 
     /// Decrements the counter of running threads, and returns `true`
@@ -1520,15 +1516,23 @@ async fn collect_left_input(
         _ => None,
     };
 
-    // Try to build InList values for small build sides
-    let inlist_values = if num_rows > 0 {
-        build_struct_inlist_values(&left_values, max_inlist_size)?
-    } else {
-        None
-    };
-
     // Convert Box to Arc for sharing with SharedBuildAccumulator
     let hashmap_arc: Arc<dyn JoinHashMapType> = hashmap.into();
+
+    let membership = if num_rows == 0 {
+        PushdownStrategy::Empty
+    } else {
+        // If the build side is small enough we can use IN list pushdown.
+        // If it's too big we fall back to pushing down a reference to the hash table.
+        // See `PushdownStrategy` for more details.
+        if let Some(in_list_values) =
+            build_struct_inlist_values(&left_values, max_inlist_size)?
+        {
+            PushdownStrategy::InList(in_list_values)
+        } else {
+            PushdownStrategy::HashTable(Arc::clone(&hashmap_arc))
+        }
+    };
 
     let data = JoinLeftData::new(
         hashmap_arc,
@@ -1538,7 +1542,7 @@ async fn collect_left_input(
         AtomicUsize::new(probe_threads_count),
         reservation,
         bounds,
-        inlist_values,
+        membership,
     );
 
     Ok(data)

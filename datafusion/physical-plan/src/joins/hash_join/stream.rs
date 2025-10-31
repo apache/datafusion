@@ -25,7 +25,7 @@ use std::task::Poll;
 
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::shared_bounds::{
-    PartitionBuildData, PushdownStrategy, SharedBuildAccumulator,
+    PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
@@ -422,36 +422,31 @@ impl HashJoinStream {
                 PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
             };
 
-            // Report build-side data for dynamic filter pushdown
-            let hash_map = left_data.hash_map_arc();
-            let left_data_bounds = left_data.bounds.clone();
-
             // Determine pushdown strategy based on availability of InList values
-            let pushdown = if let Some(inlist) = left_data.inlist_values() {
-                PushdownStrategy::InList(inlist.clone())
-            } else {
-                PushdownStrategy::UseHashTable
-            };
+            let pushdown = left_data.membership().clone();
 
             // Construct the appropriate build data enum variant based on partition mode
             let build_data = match self.mode {
                 PartitionMode::Partitioned => PartitionBuildData::Partitioned {
                     partition_id: left_side_partition_id,
-                    hash_map,
                     pushdown,
+                    bounds: PartitionBounds::new(
+                        left_data.bounds.clone().unwrap_or_default(),
+                    ),
                 },
-                PartitionMode::CollectLeft => {
-                    PartitionBuildData::CollectLeft { hash_map, pushdown }
-                }
+                PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
+                    pushdown,
+                    bounds: PartitionBounds::new(
+                        left_data.bounds.clone().unwrap_or_default(),
+                    ),
+                },
                 PartitionMode::Auto => unreachable!(
                     "PartitionMode::Auto should not be present at execution time"
                 ),
             };
 
             self.build_waiter = Some(OnceFut::new(async move {
-                build_accumulator
-                    .report_build_data(build_data, left_data_bounds)
-                    .await
+                build_accumulator.report_build_data(build_data).await
             }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
         } else {

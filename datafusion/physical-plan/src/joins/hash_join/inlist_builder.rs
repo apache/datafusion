@@ -17,31 +17,47 @@
 
 //! Utilities for building InList expressions from hash join build side data
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{Field, FieldRef, Fields};
-use datafusion_common::{Result, ScalarValue};
+use arrow_schema::DataType;
+use datafusion_common::Result;
+
+pub(crate) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
+    data_types
+        .iter()
+        .enumerate()
+        .map(|(i, dt)| Ok(Field::new(format!("c{}", i), dt.clone(), false)))
+        .collect()
+}
 
 /// Builds InList values from join key column arrays.
 ///
-/// For single-column joins, creates a list: `[val1, val2, ...]`
-/// For multi-column joins, creates struct values: `[{c0:1, c1:2}, {c0:3, c1:4}, ...]`
+/// If `join_key_arrays` is:
+/// 1. A single array, let's say Int32, this will produce a flat
+/// InList expression where the lookup is expected to be scalar Int32 values,
+/// that is: this will produce `IN LIST (1, 2, 3)` expected to be used as `2 IN LIST (1, 2, 3)`.
+/// 2. An Int32 array and a Utf8 array, this will produce a Struct InList expression
+/// where the lookup is expected to be Struct values with two fields (Int32, Utf8),
+/// that is: this will produce `IN LIST ((1, "a"), (2, "b"))` expected to be used as `(2, "b") IN LIST ((1, "a"), (2, "b"))`.
+/// The field names of the struct are auto-generated as "c0", "c1", ... and should match the struct expression used in the join keys.
+///
+/// Note that this will not deduplicate values, that will happen later when building an InList expression from this array.
 ///
 /// Returns `None` if the estimated size exceeds `max_size_bytes`.
 /// Performs deduplication to ensure unique values only.
 pub fn build_struct_inlist_values(
     join_key_arrays: &[ArrayRef],
     max_size_bytes: usize,
-) -> Result<Option<Vec<ScalarValue>>> {
+) -> Result<Option<ArrayRef>> {
     if join_key_arrays.is_empty() {
-        return Ok(Some(vec![]));
+        return Ok(None);
     }
 
     let num_rows = join_key_arrays[0].len();
     if num_rows == 0 {
-        return Ok(Some(vec![]));
+        return Ok(None);
     }
 
     // Size check using built-in method
@@ -62,19 +78,12 @@ pub fn build_struct_inlist_values(
         Arc::clone(&join_key_arrays[0])
     } else {
         // Multi-column: build StructArray once from all columns
-        let fields: Fields = join_key_arrays
-            .iter()
-            .enumerate()
-            .map(|(i, arr)| {
-                Field::new(
-                    // Field names we're chosen to match the result of `SELECT ((1, 2), (3, 4))` etc.
-                    // But they really should not matter for join key matching
-                    format!("c{}", i),
-                    arr.data_type().clone(),
-                    arr.is_nullable(),
-                )
-            })
-            .collect();
+        let fields = build_struct_fields(
+            &join_key_arrays
+                .iter()
+                .map(|arr| arr.data_type().clone())
+                .collect::<Vec<_>>(),
+        )?;
 
         // Build field references with proper Arc wrapping
         let arrays_with_fields: Vec<(FieldRef, ArrayRef)> = fields
@@ -86,54 +95,24 @@ pub fn build_struct_inlist_values(
         Arc::new(StructArray::from(arrays_with_fields))
     };
 
-    // Extract unique ScalarValues row-by-row
-    let mut unique_values = HashSet::new();
-    let mut result = Vec::new();
-    let mut cumulative_size = 0;
-
-    for row_idx in 0..num_rows {
-        let scalar = ScalarValue::try_from_array(&source_array, row_idx)?;
-
-        // Only add if unique
-        if unique_values.insert(scalar.clone()) {
-            cumulative_size += scalar.size();
-
-            // Check size limit during deduplication
-            if cumulative_size > max_size_bytes {
-                return Ok(None);
-            }
-
-            result.push(scalar);
-        }
-    }
-
-    // Sort for deterministic results and better filter performance
-    result.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    Ok(Some(result))
+    Ok(Some(source_array))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{Int32Array, StringArray};
+    use arrow_schema::DataType;
     use std::sync::Arc;
 
     #[test]
-    fn test_build_single_column_inlist() {
+    fn test_build_single_column_inlist_array() {
         let array = Arc::new(Int32Array::from(vec![1, 2, 3, 2, 1])) as ArrayRef;
-        let result = build_struct_inlist_values(&[array], 1024 * 1024).unwrap();
+        let result = build_struct_inlist_values(&[array.clone()], 1024 * 1024)
+            .unwrap()
+            .unwrap();
 
-        assert!(result.is_some());
-        let values = result.unwrap();
-
-        // Should have 3 unique values
-        assert_eq!(values.len(), 3);
-
-        // Should be sorted
-        assert_eq!(values[0], ScalarValue::Int32(Some(1)));
-        assert_eq!(values[1], ScalarValue::Int32(Some(2)));
-        assert_eq!(values[2], ScalarValue::Int32(Some(3)));
+        assert!(array.eq(&result));
     }
 
     #[test]
@@ -142,18 +121,16 @@ mod tests {
         let array2 =
             Arc::new(StringArray::from(vec!["a", "b", "c", "b", "a"])) as ArrayRef;
 
-        let result = build_struct_inlist_values(&[array1, array2], 1024 * 1024).unwrap();
+        let result = build_struct_inlist_values(&[array1, array2], 1024 * 1024)
+            .unwrap()
+            .unwrap();
 
-        assert!(result.is_some());
-        let values = result.unwrap();
-
-        // Should have 3 unique tuples: (1,"a"), (2,"b"), (3,"c")
-        assert_eq!(values.len(), 3);
-
-        // All should be struct values
-        for value in &values {
-            assert!(matches!(value, ScalarValue::Struct(_)));
-        }
+        assert_eq!(
+            *result.data_type(),
+            DataType::Struct(
+                build_struct_fields(&[DataType::Int32, DataType::Utf8]).unwrap()
+            )
+        );
     }
 
     #[test]

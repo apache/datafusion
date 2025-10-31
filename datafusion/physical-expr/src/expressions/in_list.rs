@@ -474,6 +474,25 @@ pub fn in_list(
     )))
 }
 
+/// Create a new static InList expression from an array of values.
+///
+/// The `array` should contain the list of values for the `IN` clause.
+/// The `negated` flag indicates whether this is an `IN` or `NOT IN` expression.
+///
+/// The generated `InListExpr` will use the provided array as a static filter for efficient evaluation,
+/// bypassing the need to evaluate individual list expressions at runtime.
+///
+/// # Errors
+/// Returns an error if the array type is not supported for `InList` expressions.
+pub fn in_list_from_array(
+    expr: Arc<dyn PhysicalExpr>,
+    array: ArrayRef,
+    negated: bool,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let set = make_set(array.as_ref())?;
+    Ok(Arc::new(InListExpr::new(expr, vec![], negated, Some(set))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
