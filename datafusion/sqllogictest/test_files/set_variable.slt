@@ -244,3 +244,105 @@ SET TIME ZONE = 'Asia/Taipei2'
 
 statement error Arrow error: Parser error: Invalid timezone "Asia/Taipei2": failed to parse timezone
 SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+
+# reset variable restores default
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.batch_size = 1024
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 1024
+
+statement ok
+RESET datafusion.execution.batch_size
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 8192
+
+# reset variable with NULL default
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.parquet.max_predicate_cache_size = '123'
+
+query TT
+SHOW datafusion.execution.parquet.max_predicate_cache_size
+----
+datafusion.execution.parquet.max_predicate_cache_size 123
+
+statement ok
+RESET datafusion.execution.parquet.max_predicate_cache_size
+
+query TT
+SHOW datafusion.execution.parquet.max_predicate_cache_size
+----
+datafusion.execution.parquet.max_predicate_cache_size NULL
+
+# reset time zone via aliases
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET TIME ZONE = '+10:00'
+
+statement ok
+RESET TIME ZONE
+
+query TT
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone +00:00
+
+statement ok
+SET TIMEZONE = '-03:00'
+
+statement ok
+RESET TIMEZONE
+
+query TT
+SHOW TIMEZONE
+----
+datafusion.execution.time_zone +00:00
+
+statement ok
+SET TIME ZONE = '+09:00'
+
+statement ok
+RESET timezone
+
+query TT
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone +00:00
+
+# reset runtime variables
+statement ok
+SET datafusion.runtime.memory_limit = '1M'
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+SET datafusion.runtime.max_temp_directory_size = '1M'
+
+statement ok
+RESET datafusion.runtime.max_temp_directory_size
+
+statement ok
+SET datafusion.runtime.metadata_cache_limit = '1M'
+
+statement ok
+RESET datafusion.runtime.metadata_cache_limit
+
+statement ok
+SET datafusion.runtime.temp_directory = './'
+
+statement ok
+RESET datafusion.runtime.temp_directory
