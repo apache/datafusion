@@ -124,7 +124,7 @@ fn create_membership_predicate(
             };
 
             // Use in_list_from_array() helper to create InList with static_filter optimization (hash-based lookup)
-            Ok(Some(in_list_from_array(expr, in_list_array, false)?))
+            Ok(in_list_from_array(expr, in_list_array, false).ok())
         }
         // Use hash table lookup for large build sides
         PushdownStrategy::HashTable(hash_map) => {
@@ -531,7 +531,10 @@ impl SharedBuildAccumulator {
                             .collect::<Result<Vec<_>>>()?;
 
                         // Optimize for single partition: skip CASE expression entirely
-                        let filter_expr = if when_then_branches.len() == 1 {
+                        let filter_expr = if when_then_branches.is_empty() {
+                            // All partitions are empty: no rows can match
+                            lit(false)
+                        } else if when_then_branches.len() == 1 {
                             // Single partition: just use the condition directly
                             // since hash % 1 == 0 always, the WHEN 0 branch will always match
                             Arc::clone(&when_then_branches[0].1)

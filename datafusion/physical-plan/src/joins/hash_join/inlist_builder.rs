@@ -28,7 +28,7 @@ pub(super) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
     data_types
         .iter()
         .enumerate()
-        .map(|(i, dt)| Ok(Field::new(format!("c{i}"), dt.clone(), false)))
+        .map(|(i, dt)| Ok(Field::new(format!("c{i}"), dt.clone(), true)))
         .collect()
 }
 
