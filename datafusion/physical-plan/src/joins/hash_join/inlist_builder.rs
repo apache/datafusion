@@ -150,7 +150,6 @@ mod tests {
         let array = Arc::new(Int32Array::from(vec![] as Vec<i32>)) as ArrayRef;
         let result = build_struct_inlist_values(&[array], 1024).unwrap();
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), 0);
+        assert!(result.is_none());
     }
 }
