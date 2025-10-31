@@ -712,10 +712,12 @@ impl SessionContext {
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
-                self.set_variable(stmt).await
+                self.set_variable(stmt).await?;
+                self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::ResetVariable(stmt)) => {
-                self.reset_variable(stmt).await
+                self.reset_variable(stmt).await?;
+                self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
@@ -1073,7 +1075,7 @@ impl SessionContext {
         exec_err!("Schema '{schemaref}' doesn't exist.")
     }
 
-    async fn set_variable(&self, stmt: SetVariable) -> Result<DataFrame> {
+    async fn set_variable(&self, stmt: SetVariable) -> Result<()> {
         let SetVariable {
             variable, value, ..
         } = stmt;
@@ -1107,14 +1109,14 @@ impl SessionContext {
             drop(state);
         }
 
-        self.return_empty_dataframe()
+        Ok(())
     }
 
-    async fn reset_variable(&self, stmt: ResetVariable) -> Result<DataFrame> {
+    async fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
         let variable = stmt.variable;
         if variable.starts_with("datafusion.runtime.") {
             self.reset_runtime_variable(&variable)?;
-            return self.return_empty_dataframe();
+            return Ok(());
         }
 
         let mut state = self.state.write();
@@ -1137,7 +1139,7 @@ impl SessionContext {
         }
 
         drop(state);
-        self.return_empty_dataframe()
+        Ok(())
     }
 
     fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
