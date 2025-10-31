@@ -29,7 +29,7 @@ use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
 use hex;
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
@@ -1211,6 +1211,48 @@ impl ConfigOptions {
             return _config_err!("Could not find config namespace \"{prefix}\"");
         };
         e.0.set(key, value)
+    }
+
+    /// Reset a configuration option back to its default value
+    pub fn reset(&mut self, key: &str) -> Result<()> {
+        let Some((prefix, rest)) = key.split_once('.') else {
+            return _config_err!("could not find config namespace for key \"{key}\"");
+        };
+
+        if prefix != "datafusion" {
+            return _config_err!("Could not find config namespace \"{prefix}\"");
+        }
+
+        let entries = self.entries();
+        if !entries.iter().any(|entry| entry.key == key) {
+            return _config_err!("Config value \"{key}\" not found on ConfigOptions");
+        }
+
+        let mut skip_keys: HashSet<String> = HashSet::from([key.to_string()]);
+        if rest == "optimizer.enable_dynamic_filter_pushdown" {
+            skip_keys.insert(
+                "datafusion.optimizer.enable_topk_dynamic_filter_pushdown".to_string(),
+            );
+            skip_keys.insert(
+                "datafusion.optimizer.enable_join_dynamic_filter_pushdown".to_string(),
+            );
+        }
+
+        let mut new_options = ConfigOptions::default();
+        new_options.extensions = self.extensions.clone();
+
+        for entry in entries {
+            if skip_keys.contains(&entry.key) {
+                continue;
+            }
+
+            if let Some(value) = entry.value {
+                new_options.set(&entry.key, &value)?;
+            }
+        }
+
+        *self = new_options;
+        Ok(())
     }
 
     /// Create new [`ConfigOptions`], taking values from environment variables

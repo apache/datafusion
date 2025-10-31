@@ -45,8 +45,8 @@ use crate::{
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, SetVariable,
-        TableType, UNNAMED_TABLE,
+        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, ResetVariable,
+        SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -72,7 +72,9 @@ use datafusion_common::{
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
 };
+use datafusion_execution::cache::cache_manager::CacheManagerConfig as ExecutionCacheManagerConfig;
 pub use datafusion_execution::config::SessionConfig;
+use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -713,6 +715,9 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
+            LogicalPlan::Statement(Statement::ResetVariable(stmt)) => {
+                self.reset_variable(stmt).await
+            }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
                 input,
@@ -1106,6 +1111,36 @@ impl SessionContext {
         self.return_empty_dataframe()
     }
 
+    async fn reset_variable(&self, stmt: ResetVariable) -> Result<DataFrame> {
+        let variable = stmt.variable;
+        if variable.starts_with("datafusion.runtime.") {
+            self.reset_runtime_variable(&variable)?;
+            return self.return_empty_dataframe();
+        }
+
+        let mut state = self.state.write();
+        state.config_mut().options_mut().reset(&variable)?;
+
+        // Refresh UDFs to ensure configuration-dependent behavior updates
+        let config_options = state.config().options();
+        let udfs_to_update: Vec<_> = state
+            .scalar_functions()
+            .values()
+            .filter_map(|udf| {
+                udf.inner()
+                    .with_updated_config(config_options)
+                    .map(Arc::new)
+            })
+            .collect();
+
+        for udf in udfs_to_update {
+            state.register_udf(udf)?;
+        }
+
+        drop(state);
+        self.return_empty_dataframe()
+    }
+
     fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
         let key = variable.strip_prefix("datafusion.runtime.").unwrap();
 
@@ -1125,6 +1160,39 @@ impl SessionContext {
             "metadata_cache_limit" => {
                 let limit = Self::parse_memory_limit(value)?;
                 builder.with_metadata_cache_limit(limit)
+            }
+            _ => return plan_err!("Unknown runtime configuration: {variable}"),
+        };
+
+        *state = SessionStateBuilder::from(state.clone())
+            .with_runtime_env(Arc::new(builder.build()?))
+            .build();
+
+        Ok(())
+    }
+
+    fn reset_runtime_variable(&self, variable: &str) -> Result<()> {
+        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
+
+        let mut state = self.state.write();
+
+        let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
+        match key {
+            "memory_limit" => {
+                builder.memory_pool = None;
+            }
+            "max_temp_directory_size" => {
+                const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024;
+                builder =
+                    builder.with_max_temp_directory_size(DEFAULT_MAX_TEMP_DIRECTORY_SIZE);
+            }
+            "temp_directory" => {
+                builder.disk_manager_builder = Some(DiskManagerBuilder::default());
+            }
+            "metadata_cache_limit" => {
+                let default_limit =
+                    ExecutionCacheManagerConfig::default().metadata_cache_limit;
+                builder = builder.with_metadata_cache_limit(default_limit);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
