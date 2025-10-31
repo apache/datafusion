@@ -2170,8 +2170,7 @@ mod tests {
         let display_string = expr.to_string();
         assert!(
             display_string.contains("(SET)"),
-            "Expected display string to contain '(SET)' but got: {}",
-            display_string
+            "Expected display string to contain '(SET)' but got: {display_string}",
         );
 
         // Also verify for negated case
@@ -2180,8 +2179,7 @@ mod tests {
         let display_string_negated = expr_negated.to_string();
         assert!(
             display_string_negated.contains("(SET)"),
-            "Expected negated display string to contain '(SET)' but got: {}",
-            display_string_negated
+            "Expected negated display string to contain '(SET)' but got: {display_string_negated}",
         );
 
         Ok(())

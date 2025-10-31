@@ -24,7 +24,7 @@ use arrow::datatypes::{Field, FieldRef, Fields};
 use arrow_schema::DataType;
 use datafusion_common::Result;
 
-pub(crate) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
+pub(super) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
     data_types
         .iter()
         .enumerate()
@@ -47,7 +47,7 @@ pub(crate) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
 ///
 /// Returns `None` if the estimated size exceeds `max_size_bytes`.
 /// Performs deduplication to ensure unique values only.
-pub fn build_struct_inlist_values(
+pub(super) fn build_struct_inlist_values(
     join_key_arrays: &[ArrayRef],
     max_size_bytes: usize,
 ) -> Result<Option<ArrayRef>> {

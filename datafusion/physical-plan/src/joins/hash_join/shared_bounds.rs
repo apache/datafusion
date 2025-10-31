@@ -284,16 +284,9 @@ impl SharedBuildAccumulator {
             PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
         };
 
-        let num_partitions = match partition_mode {
-            PartitionMode::Partitioned => {
-                left_child.output_partitioning().partition_count()
-            }
-            _ => 0, // Not used for CollectLeft
-        };
-
         let mode_data = match partition_mode {
             PartitionMode::Partitioned => AccumulatedBuildData::Partitioned {
-                partitions: vec![None; num_partitions],
+                partitions: vec![None; left_child.output_partitioning().partition_count()],
             },
             PartitionMode::CollectLeft => AccumulatedBuildData::CollectLeft {
                 data: None,
