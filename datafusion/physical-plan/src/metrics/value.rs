@@ -750,11 +750,11 @@ impl MetricValue {
             Self::OutputBytes(_) => 2,
             // Other metrics
             Self::PruningMetrics { name, .. } => match name.as_ref() {
-                // The following metrics are all within `DataSourceExec` with parquet
-                // data source, and they're expected to display folloing a certain
-                // order.
-                // The order is the same as the actual pruning order: from
-                // coarse-grained to fine-grained pruning levels.
+                // The following metrics belong to `DataSourceExec` with a Parquet data source.
+                // They are displayed in a specific order that reflects the actual pruning process,
+                // from coarse-grained to fine-grained pruning levels.
+                //
+                // You may update these metrics as long as their relative order remains unchanged.
                 //
                 // Reference PR: <https://github.com/apache/datafusion/pull/18379>
                 "files_ranges_pruned_statistics" => 3,
