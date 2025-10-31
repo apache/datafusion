@@ -19,8 +19,8 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, PrimitiveBuilder};
 use arrow::array::timezone::Tz;
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, PrimitiveBuilder};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, date_part, DatePart};
 use arrow::datatypes::DataType::{
@@ -33,8 +33,8 @@ use arrow::datatypes::{
 };
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_primitive_array;
-use std::ops::Add;
 use datafusion_common::types::{logical_date, NativeType};
+use std::ops::Add;
 
 use datafusion_common::{
     cast::{
@@ -209,9 +209,15 @@ impl ScalarUDFImpl for DatePartFunc {
                 Err(_) => return exec_err!("Invalid timezone"),
             };
             match time_unit {
-                Nanosecond => adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?,
-                Microsecond => adjust_timestamp_array::<TimestampMicrosecondType>(&array, tz)?,
-                Millisecond => adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?,
+                Nanosecond => {
+                    adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?
+                }
+                Microsecond => {
+                    adjust_timestamp_array::<TimestampMicrosecondType>(&array, tz)?
+                }
+                Millisecond => {
+                    adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
+                }
                 Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
             }
         } else if let Timestamp(time_unit, None) = array.data_type() {
@@ -221,9 +227,15 @@ impl ScalarUDFImpl for DatePartFunc {
                 Err(_) => return exec_err!("Invalid timezone"),
             };
             match time_unit {
-                Nanosecond => adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?,
-                Microsecond => adjust_timestamp_array::<TimestampMicrosecondType>(&array, tz)?,
-                Millisecond => adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?,
+                Nanosecond => {
+                    adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?
+                }
+                Microsecond => {
+                    adjust_timestamp_array::<TimestampMicrosecondType>(&array, tz)?
+                }
+                Millisecond => {
+                    adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
+                }
                 Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
             }
         } else {
@@ -325,7 +337,10 @@ fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
     }
 }
 
-fn adjust_timestamp_array<T: ArrowTimestampType>(array: &ArrayRef, tz: Tz) -> Result<ArrayRef> {
+fn adjust_timestamp_array<T: ArrowTimestampType>(
+    array: &ArrayRef,
+    tz: Tz,
+) -> Result<ArrayRef> {
     let mut builder = PrimitiveBuilder::<T>::new();
     let primitive_array = as_primitive_array::<T>(array)?;
     for ts_opt in primitive_array.iter() {

@@ -15,8 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Tests for timezone-aware date_part functionality
-
+# Tests for timezone-aware extract SQL statement support.
 # Test with different timezone
 statement ok
 SET datafusion.execution.time_zone = '-03:00';
