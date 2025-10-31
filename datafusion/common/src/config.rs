@@ -29,7 +29,7 @@ use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
 use hex;
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
@@ -184,6 +184,31 @@ macro_rules! config_namespace {
                     #[allow(deprecated)]
                     self.$field_name.visit(v, key.as_str(), desc);
                 )*
+            }
+
+            fn reset(&mut self, key: &str) -> $crate::error::Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
+                    $(
+                        stringify!($field_name) => {
+                            #[allow(deprecated)]
+                            {
+                                if rem.is_empty() {
+                                    let default_value: $field_type = $default;
+                                    self.$field_name = default_value;
+                                    Ok(())
+                                } else {
+                                    self.$field_name.reset(rem)
+                                }
+                            }
+                        },
+                    )*
+                    _ => $crate::error::_config_err!(
+                        "Config value \"{}\" not found on {}",
+                        key,
+                        stringify!($struct_name)
+                    ),
+                }
             }
         }
         impl Default for $struct_name {
@@ -1223,36 +1248,67 @@ impl ConfigOptions {
             return _config_err!("Could not find config namespace \"{prefix}\"");
         }
 
-        let entries = self.entries();
-        if !entries.iter().any(|entry| entry.key == key) {
-            return _config_err!("Config value \"{key}\" not found on ConfigOptions");
-        }
-
-        let mut skip_keys: HashSet<String> = HashSet::from([key.to_string()]);
-        if rest == "optimizer.enable_dynamic_filter_pushdown" {
-            skip_keys.insert(
-                "datafusion.optimizer.enable_topk_dynamic_filter_pushdown".to_string(),
-            );
-            skip_keys.insert(
-                "datafusion.optimizer.enable_join_dynamic_filter_pushdown".to_string(),
-            );
-        }
-
-        let mut new_options = ConfigOptions::default();
-        new_options.extensions = self.extensions.clone();
-
-        for entry in entries {
-            if skip_keys.contains(&entry.key) {
-                continue;
+        let (section, rem) = rest.split_once('.').unwrap_or((rest, ""));
+        match section {
+            "catalog" => {
+                if rem.is_empty() {
+                    self.catalog = CatalogOptions::default();
+                    Ok(())
+                } else {
+                    self.catalog.reset(rem)
+                }
             }
-
-            if let Some(value) = entry.value {
-                new_options.set(&entry.key, &value)?;
+            "execution" => {
+                if rem.is_empty() {
+                    self.execution = ExecutionOptions::default();
+                    Ok(())
+                } else {
+                    self.execution.reset(rem)
+                }
             }
+            "optimizer" => {
+                if rem.is_empty() {
+                    self.optimizer = OptimizerOptions::default();
+                    Ok(())
+                } else if rem == "enable_dynamic_filter_pushdown" {
+                    let defaults = OptimizerOptions::default();
+                    self.optimizer.enable_dynamic_filter_pushdown =
+                        defaults.enable_dynamic_filter_pushdown;
+                    self.optimizer.enable_topk_dynamic_filter_pushdown =
+                        defaults.enable_topk_dynamic_filter_pushdown;
+                    self.optimizer.enable_join_dynamic_filter_pushdown =
+                        defaults.enable_join_dynamic_filter_pushdown;
+                    Ok(())
+                } else {
+                    self.optimizer.reset(rem)
+                }
+            }
+            "explain" => {
+                if rem.is_empty() {
+                    self.explain = ExplainOptions::default();
+                    Ok(())
+                } else {
+                    self.explain.reset(rem)
+                }
+            }
+            "sql_parser" => {
+                if rem.is_empty() {
+                    self.sql_parser = SqlParserOptions::default();
+                    Ok(())
+                } else {
+                    self.sql_parser.reset(rem)
+                }
+            }
+            "format" => {
+                if rem.is_empty() {
+                    self.format = FormatOptions::default();
+                    Ok(())
+                } else {
+                    self.format.reset(rem)
+                }
+            }
+            other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
-
-        *self = new_options;
-        Ok(())
     }
 
     /// Create new [`ConfigOptions`], taking values from environment variables
@@ -1519,6 +1575,14 @@ pub trait ConfigField {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str);
 
     fn set(&mut self, key: &str, value: &str) -> Result<()>;
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            _config_err!("Reset is not supported for this configuration field")
+        } else {
+            _config_err!("Config value \"{key}\" not found")
+        }
+    }
 }
 
 impl<F: ConfigField + Default> ConfigField for Option<F> {
@@ -1531,6 +1595,15 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         self.get_or_insert_with(Default::default).set(key, value)
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = Default::default();
+            Ok(())
+        } else {
+            self.get_or_insert_with(Default::default).reset(key)
+        }
     }
 }
 
@@ -1595,6 +1668,19 @@ macro_rules! config_field {
             fn set(&mut self, _: &str, $arg: &str) -> $crate::error::Result<()> {
                 *self = $transform;
                 Ok(())
+            }
+
+            fn reset(&mut self, key: &str) -> $crate::error::Result<()> {
+                if key.is_empty() {
+                    *self = <$t as Default>::default();
+                    Ok(())
+                } else {
+                    $crate::error::_config_err!(
+                        "Config value \"{}\" not found on {}",
+                        key,
+                        stringify!($t)
+                    )
+                }
             }
         }
     };
@@ -1903,6 +1989,45 @@ impl ConfigField for TableOptions {
                     ConfigFileType::PARQUET => self.parquet.set(rem, value),
                     ConfigFileType::CSV => self.csv.set(rem, value),
                     ConfigFileType::JSON => self.json.set(rem, value),
+                }
+            }
+            _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
+        }
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        match key {
+            "format" => {
+                let Some(format) = &self.current_format else {
+                    return _config_err!("Specify a format for TableOptions");
+                };
+                match format {
+                    #[cfg(feature = "parquet")]
+                    ConfigFileType::PARQUET => {
+                        if rem.is_empty() {
+                            self.parquet = TableParquetOptions::default();
+                            Ok(())
+                        } else {
+                            self.parquet.reset(rem)
+                        }
+                    }
+                    ConfigFileType::CSV => {
+                        if rem.is_empty() {
+                            self.csv = CsvOptions::default();
+                            Ok(())
+                        } else {
+                            self.csv.reset(rem)
+                        }
+                    }
+                    ConfigFileType::JSON => {
+                        if rem.is_empty() {
+                            self.json = JsonOptions::default();
+                            Ok(())
+                        } else {
+                            self.json.reset(rem)
+                        }
+                    }
                 }
             }
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
@@ -2273,6 +2398,31 @@ macro_rules! config_namespace_with_hashmap {
                 self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
+
+            fn reset(&mut self, key: &str) -> Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
+                    $(
+                        stringify!($field_name) => {
+                            #[allow(deprecated)]
+                            {
+                                if rem.is_empty() {
+                                    let default_value: $field_type = $default;
+                                    self.$field_name = default_value;
+                                    Ok(())
+                                } else {
+                                    self.$field_name.reset(rem)
+                                }
+                            }
+                        },
+                    )*
+                    _ => _config_err!(
+                        "Config value \"{}\" not found on {}",
+                        key,
+                        stringify!($struct_name)
+                    ),
+                }
+            }
         }
 
         impl Default for $struct_name {
@@ -2308,6 +2458,28 @@ macro_rules! config_namespace_with_hashmap {
                     #[allow(deprecated)]
                     col_options.$field_name.visit(v, key.as_str(), desc);
                     )*
+                }
+            }
+
+            fn reset(&mut self, key: &str) -> Result<()> {
+                let parts: Vec<&str> = key.splitn(2, "::").collect();
+                match parts.as_slice() {
+                    [inner_key, hashmap_key] => {
+                        if inner_key.is_empty() || hashmap_key.is_empty() {
+                            return _config_err!(
+                                "Invalid key provided, expected <field>::<column>, found '{key}'"
+                            );
+                        }
+
+                        if let Some(inner_value) = self.get_mut(*hashmap_key) {
+                            inner_value.reset(inner_key)?;
+                            if *inner_value == $struct_name::default() {
+                                self.remove(*hashmap_key);
+                            }
+                        }
+                        Ok(())
+                    }
+                    _ => _config_err!("Unrecognized key '{key}'."),
                 }
             }
         }
@@ -2443,6 +2615,61 @@ impl ConfigField for ConfigFileEncryptionProperties {
             }
             "aad_prefix_as_hex" => self.aad_prefix_as_hex.set(rem, value.as_ref()),
             "store_aad_prefix" => self.store_aad_prefix.set(rem, value.as_ref()),
+            _ => _config_err!(
+                "Config value \"{}\" not found on ConfigFileEncryptionProperties",
+                key
+            ),
+        }
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.contains("::") {
+            return self.column_encryption_properties.reset(key);
+        }
+
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        let defaults = ConfigFileEncryptionProperties::default();
+        match key {
+            "encrypt_footer" => {
+                if rem.is_empty() {
+                    self.encrypt_footer = defaults.encrypt_footer;
+                    Ok(())
+                } else {
+                    self.encrypt_footer.reset(rem)
+                }
+            }
+            "footer_key_as_hex" => {
+                if rem.is_empty() {
+                    self.footer_key_as_hex = defaults.footer_key_as_hex;
+                    Ok(())
+                } else {
+                    self.footer_key_as_hex.reset(rem)
+                }
+            }
+            "footer_key_metadata_as_hex" => {
+                if rem.is_empty() {
+                    self.footer_key_metadata_as_hex = defaults.footer_key_metadata_as_hex;
+                    Ok(())
+                } else {
+                    self.footer_key_metadata_as_hex.reset(rem)
+                }
+            }
+            "aad_prefix_as_hex" => {
+                if rem.is_empty() {
+                    self.aad_prefix_as_hex = defaults.aad_prefix_as_hex;
+                    Ok(())
+                } else {
+                    self.aad_prefix_as_hex.reset(rem)
+                }
+            }
+            "store_aad_prefix" => {
+                if rem.is_empty() {
+                    self.store_aad_prefix = defaults.store_aad_prefix;
+                    Ok(())
+                } else {
+                    self.store_aad_prefix.reset(rem)
+                }
+            }
             _ => _config_err!(
                 "Config value \"{}\" not found on ConfigFileEncryptionProperties",
                 key
@@ -2604,7 +2831,47 @@ impl ConfigField for ConfigFileDecryptionProperties {
                 self.footer_signature_verification.set(rem, value.as_ref())
             }
             _ => _config_err!(
-                "Config value \"{}\" not found on ConfigFileEncryptionProperties",
+                "Config value \"{}\" not found on ConfigFileDecryptionProperties",
+                key
+            ),
+        }
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.contains("::") {
+            return self.column_decryption_properties.reset(key);
+        }
+
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        let defaults = ConfigFileDecryptionProperties::default();
+        match key {
+            "footer_key_as_hex" => {
+                if rem.is_empty() {
+                    self.footer_key_as_hex = defaults.footer_key_as_hex;
+                    Ok(())
+                } else {
+                    self.footer_key_as_hex.reset(rem)
+                }
+            }
+            "aad_prefix_as_hex" => {
+                if rem.is_empty() {
+                    self.aad_prefix_as_hex = defaults.aad_prefix_as_hex;
+                    Ok(())
+                } else {
+                    self.aad_prefix_as_hex.reset(rem)
+                }
+            }
+            "footer_signature_verification" => {
+                if rem.is_empty() {
+                    self.footer_signature_verification =
+                        defaults.footer_signature_verification;
+                    Ok(())
+                } else {
+                    self.footer_signature_verification.reset(rem)
+                }
+            }
+            _ => _config_err!(
+                "Config value \"{}\" not found on ConfigFileDecryptionProperties",
                 key
             ),
         }
@@ -2694,6 +2961,15 @@ impl ConfigField for EncryptionFactoryOptions {
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         self.options.insert(key.to_owned(), value.to_owned());
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            self.options.clear();
+        } else {
+            self.options.remove(key);
+        }
         Ok(())
     }
 }
