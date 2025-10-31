@@ -69,14 +69,6 @@ html[data-theme="dark"] .dark-logo {
   margin-left: auto;
 }
 
-/* Ensure the logo is properly displayed */
-
-.navbar-brand {
-  height: auto;
-  width: auto;
-  padding: 0 2em;
-}
-
 /* This is the bootstrap CSS style for "table-striped". Since the theme does
 not yet provide an easy way to configure this globally, it easier to simply
 include this snippet here than updating each table in all rst files to
