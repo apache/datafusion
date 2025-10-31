@@ -19,6 +19,7 @@
 
 use crate::arrow::datatypes::{DataType, Field, FieldRef};
 use crate::metadata::FieldMetadata;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// DataFusion extension methods for Arrow [`DataType`]
@@ -64,7 +65,7 @@ impl DataTypeExt for DataType {
 /// DataFusion extension methods for Arrow [`Field`] and [`FieldRef`]
 pub trait FieldExt {
     /// Rename the field, returning a new Field with the given name
-    fn renamed(self, new_name: &str) -> Self;
+    fn renamed(self, new_name: Cow<'_, String>) -> Self;
 
     /// Retype the field with the given data type (this is different than
     /// [`Field::with_type`] as it tries to avoid copying if the data type is the
@@ -145,12 +146,12 @@ pub trait FieldExt {
 }
 
 impl FieldExt for Field {
-    fn renamed(self, new_name: &str) -> Self {
+    fn renamed(self, new_name: Cow<'_, String>) -> Self {
         // check before allocating a new field
-        if self.name() == new_name {
+        if self.name() == new_name.as_str() {
             self
         } else {
-            self.with_name(new_name)
+            self.with_name(new_name.into_owned())
         }
     }
 
@@ -189,11 +190,11 @@ impl FieldExt for Field {
 }
 
 impl FieldExt for Arc<Field> {
-    fn renamed(self, new_name: &str) -> Self {
-        if self.name() == new_name {
+    fn renamed(self, new_name: Cow<'_, String>) -> Self {
+        if self.name() == new_name.as_str() {
             self
         } else {
-            Arc::new(Arc::unwrap_or_clone(self).with_name(new_name))
+            Arc::new(Arc::unwrap_or_clone(self).with_name(new_name.into_owned()))
         }
     }
 

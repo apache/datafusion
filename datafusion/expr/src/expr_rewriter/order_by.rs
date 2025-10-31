@@ -80,7 +80,7 @@ fn rewrite_in_terms_of_projection(
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
             let (qualifier, field_name) = found.qualified_name();
-            let col = Expr::Column(Column::new(qualifier, field_name));
+            let col = Expr::Column(Column::new(qualifier, field_name.into_owned()));
             return Ok(Transformed::yes(col));
         }
 

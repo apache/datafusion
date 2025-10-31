@@ -17,6 +17,7 @@
 
 //! Logical Expressions: [`Expr`]
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
@@ -1475,15 +1476,19 @@ impl Expr {
     /// Used when the expression forms the output field of a certain plan.
     /// The result is the field's qualifier and field name in the plan's
     /// output schema. We can use this qualified name to reference the field.
-    pub fn qualified_name(&self) -> (Option<TableReference>, String) {
+    ///
+    /// Note returns a Cow for the name to avoid unnecessary allocations.
+    pub fn qualified_name(&self) -> (Option<TableReference>, Cow<'_, String>) {
         match self {
             Expr::Column(Column {
                 relation,
                 name,
                 spans: _,
-            }) => (relation.clone(), name.clone()),
-            Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
-            _ => (None, self.schema_name().to_string()),
+            }) => (relation.clone(), Cow::Borrowed(name)),
+            Expr::Alias(Alias { relation, name, .. }) => {
+                (relation.clone(), Cow::Borrowed(name))
+            }
+            _ => (None, Cow::Owned(self.schema_name().to_string())),
         }
     }
 

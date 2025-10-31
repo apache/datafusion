@@ -798,12 +798,12 @@ fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
     if let Expr::GroupingSet(groupings) = expr {
         for e in groupings.distinct_expr() {
             let (qualifier, field_name) = e.qualified_name();
-            let col = Column::new(qualifier, field_name);
+            let col = Column::new(qualifier, field_name.into_owned());
             result.push(Expr::Column(col))
         }
     } else {
         let (qualifier, field_name) = expr.qualified_name();
-        let col = Column::new(qualifier, field_name);
+        let col = Column::new(qualifier, field_name.into_owned());
         result.push(Expr::Column(col));
     }
 }

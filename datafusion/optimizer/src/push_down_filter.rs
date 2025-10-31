@@ -976,7 +976,7 @@ impl OptimizerRule for PushDownFilter {
                     .iter()
                     .map(|e| {
                         let (relation, name) = e.qualified_name();
-                        Column::new(relation, name)
+                        Column::new(relation, name.into_owned())
                     })
                     .collect::<HashSet<_>>();
 
@@ -1048,7 +1048,7 @@ impl OptimizerRule for PushDownFilter {
                         .iter()
                         .map(|c| {
                             let (relation, name) = c.qualified_name();
-                            Column::new(relation, name)
+                            Column::new(relation, name.into_owned())
                         })
                         .collect::<HashSet<_>>()
                 };
