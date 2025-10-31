@@ -26,7 +26,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBoundsAccumulator};
+use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBuildAccumulator};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
@@ -87,7 +87,8 @@ const HASH_JOIN_SEED: RandomState =
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
-    pub(super) hash_map: Box<dyn JoinHashMapType>,
+    /// Arc is used to allow sharing with SharedBuildAccumulator for hash map pushdown
+    pub(super) hash_map: Arc<dyn JoinHashMapType>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
@@ -109,7 +110,7 @@ pub(super) struct JoinLeftData {
 impl JoinLeftData {
     /// Create a new `JoinLeftData` from its parts
     pub(super) fn new(
-        hash_map: Box<dyn JoinHashMapType>,
+        hash_map: Arc<dyn JoinHashMapType>,
         batch: RecordBatch,
         values: Vec<ArrayRef>,
         visited_indices_bitmap: SharedBitmapBuilder,
@@ -131,6 +132,11 @@ impl JoinLeftData {
     /// return a reference to the hash map
     pub(super) fn hash_map(&self) -> &dyn JoinHashMapType {
         &*self.hash_map
+    }
+
+    /// return an Arc clone of the hash map for sharing
+    pub(super) fn hash_map_arc(&self) -> Arc<dyn JoinHashMapType> {
+        Arc::clone(&self.hash_map)
     }
 
     /// returns a reference to the build side batch
@@ -364,9 +370,9 @@ pub struct HashJoinExec {
 struct HashJoinExecDynamicFilter {
     /// Dynamic filter that we'll update with the results of the build side once that is done.
     filter: Arc<DynamicFilterPhysicalExpr>,
-    /// Bounds accumulator to keep track of the min/max bounds on the join keys for each partition.
+    /// Build accumulator to collect build-side information (hash maps and/or bounds) from each partition.
     /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
-    bounds_accumulator: OnceLock<Arc<SharedBoundsAccumulator>>,
+    build_accumulator: OnceLock<Arc<SharedBuildAccumulator>>,
 }
 
 impl fmt::Debug for HashJoinExec {
@@ -977,8 +983,10 @@ impl ExecutionPlan for HashJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // Initialize bounds_accumulator lazily with runtime partition counts (only if enabled)
-        let bounds_accumulator = enable_dynamic_filter_pushdown
+        // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
+        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
+        let repartition_random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
                     let filter = Arc::clone(&df.filter);
@@ -987,13 +995,14 @@ impl ExecutionPlan for HashJoinExec {
                         .iter()
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
-                    Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
-                        Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
+                    Some(Arc::clone(df.build_accumulator.get_or_init(|| {
+                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
                             filter,
                             on_right,
+                            repartition_random_state,
                         ))
                     })))
                 })
@@ -1036,7 +1045,7 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             vec![],
             self.right.output_ordering().is_some(),
-            bounds_accumulator,
+            build_accumulator,
             self.mode,
         )))
     }
@@ -1197,7 +1206,7 @@ impl ExecutionPlan for HashJoinExec {
                     cache: self.cache.clone(),
                     dynamic_filter: Some(HashJoinExecDynamicFilter {
                         filter: dynamic_filter,
-                        bounds_accumulator: OnceLock::new(),
+                        build_accumulator: OnceLock::new(),
                     }),
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
@@ -1346,7 +1355,7 @@ impl BuildSideState {
 /// When `should_compute_bounds` is true, this function computes the min/max bounds
 /// for each join key column but does NOT update the dynamic filter. Instead, the
 /// bounds are stored in the returned `JoinLeftData` and later coordinated by
-/// `SharedBoundsAccumulator` to ensure all partitions contribute their bounds
+/// `SharedBuildAccumulator` to ensure all partitions contribute their bounds
 /// before updating the filter exactly once.
 ///
 /// # Returns
@@ -1417,6 +1426,7 @@ async fn collect_left_input(
 
     // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
     // `u64` indice variant
+    // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
     let mut hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
         let estimated_hashtable_size =
             estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;
@@ -1487,8 +1497,11 @@ async fn collect_left_input(
         _ => None,
     };
 
+    // Convert Box to Arc for sharing with SharedBuildAccumulator
+    let hashmap_arc: Arc<dyn JoinHashMapType> = hashmap.into();
+
     let data = JoinLeftData::new(
-        hashmap,
+        hashmap_arc,
         single_batch,
         left_values.clone(),
         Mutex::new(visited_indices_bitmap),
