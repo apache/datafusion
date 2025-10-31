@@ -41,7 +41,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::aggregate::{AggregateFunctionExpr, INTERNAL_GROUPING_ID};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -260,10 +260,8 @@ impl PhysicalGroupBy {
                 .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _),
         );
         if !self.is_single() {
-            output_exprs.push(Arc::new(Column::new(
-                Aggregate::INTERNAL_GROUPING_ID,
-                self.expr.len(),
-            )) as _);
+            output_exprs
+                .push(Arc::new(Column::new(INTERNAL_GROUPING_ID, self.expr.len())) as _);
         }
         output_exprs
     }
@@ -300,7 +298,7 @@ impl PhysicalGroupBy {
         if !self.is_single() {
             fields.push(
                 Field::new(
-                    Aggregate::INTERNAL_GROUPING_ID,
+                    INTERNAL_GROUPING_ID,
                     Aggregate::grouping_id_type(self.expr.len()),
                     false,
                 )
@@ -323,15 +321,16 @@ impl PhysicalGroupBy {
     /// Returns the `PhysicalGroupBy` for a final aggregation if `self` is used for a partial
     /// aggregation.
     pub fn as_final(&self) -> PhysicalGroupBy {
-        let expr: Vec<_> =
-            self.output_exprs()
-                .into_iter()
-                .zip(
-                    self.expr.iter().map(|t| t.1.clone()).chain(std::iter::once(
-                        Aggregate::INTERNAL_GROUPING_ID.to_owned(),
-                    )),
-                )
-                .collect();
+        let expr: Vec<_> = self
+            .output_exprs()
+            .into_iter()
+            .zip(
+                self.expr
+                    .iter()
+                    .map(|t| t.1.clone())
+                    .chain(std::iter::once(INTERNAL_GROUPING_ID.to_owned())),
+            )
+            .collect();
         let num_exprs = expr.len();
         let groups = if self.expr.is_empty() {
             // No GROUP BY expressions - should have no groups
