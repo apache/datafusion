@@ -47,6 +47,77 @@ use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
 
+/// Represents the granularity for date truncation operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DateTruncGranularity {
+    Microsecond,
+    Millisecond,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Quarter,
+    Year,
+}
+
+impl DateTruncGranularity {
+    /// List of all supported granularity values
+    /// Cannot use HashMap here as it would require lazy_static or once_cell,
+    /// Rust does not support const HashMap yet.
+    const SUPPORTED_GRANULARITIES: &[&str] = &[
+        "microsecond",
+        "millisecond",
+        "second",
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month",
+        "quarter",
+        "year",
+    ];
+
+    /// Parse a granularity string into a DateTruncGranularity enum
+    fn from_str(s: &str) -> Result<Self> {
+        // Using match for O(1) lookup - compiler optimizes this into a jump table or perfect hash
+        match s.to_lowercase().as_str() {
+            "microsecond" => Ok(Self::Microsecond),
+            "millisecond" => Ok(Self::Millisecond),
+            "second" => Ok(Self::Second),
+            "minute" => Ok(Self::Minute),
+            "hour" => Ok(Self::Hour),
+            "day" => Ok(Self::Day),
+            "week" => Ok(Self::Week),
+            "month" => Ok(Self::Month),
+            "quarter" => Ok(Self::Quarter),
+            "year" => Ok(Self::Year),
+            _ => {
+                let supported = Self::SUPPORTED_GRANULARITIES.join(", ");
+                exec_err!(
+                    "Unsupported date_trunc granularity: '{s}'. Supported values are: {supported}"
+                )
+            }
+        }
+    }
+
+    /// Returns true if this granularity can be handled with simple arithmetic
+    /// (fine granularity: second, minute, millisecond, microsecond)
+    fn is_fine_granularity(&self) -> bool {
+        matches!(
+            self,
+            Self::Second | Self::Minute | Self::Millisecond | Self::Microsecond
+        )
+    }
+
+    /// Returns true if this granularity can be handled with simple arithmetic in UTC
+    /// (hour and day in addition to fine granularities)
+    fn is_fine_granularity_utc(&self) -> bool {
+        self.is_fine_granularity() || matches!(self, Self::Hour | Self::Day)
+    }
+}
+
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = "Truncates a timestamp value to a specified precision.",
@@ -172,7 +243,7 @@ impl ScalarUDFImpl for DateTruncFunc {
         let args = args.args;
         let (granularity, array) = (&args[0], &args[1]);
 
-        let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
+        let granularity_str = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
             granularity
         {
             v.to_lowercase()
@@ -183,54 +254,46 @@ impl ScalarUDFImpl for DateTruncFunc {
             return exec_err!("Granularity of `date_trunc` must be non-null scalar Utf8");
         };
 
+        let granularity = DateTruncGranularity::from_str(&granularity_str)?;
+
         fn process_array<T: ArrowTimestampType>(
             array: &dyn Array,
-            granularity: String,
+            granularity: DateTruncGranularity,
             tz_opt: &Option<Arc<str>>,
         ) -> Result<ColumnarValue> {
             let parsed_tz = parse_tz(tz_opt)?;
             let array = as_primitive_array::<T>(array)?;
 
-            // fast path for fine granularities
-            if matches!(
-                granularity.as_str(),
-                // For modern timezones, it's correct to truncate "minute" in this way.
-                // Both datafusion and arrow are ignoring historical timezone's non-minute granularity
-                // bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
-                "second" | "minute" | "millisecond" | "microsecond"
-            ) ||
+            // fast path for fine granularity
+            // For modern timezones, it's correct to truncate "minute" in this way.
+            // Both datafusion and arrow are ignoring historical timezone's non-minute granularity
+            // bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
             // In UTC, "hour" and "day" have uniform durations and can be truncated with simple arithmetic
-            (parsed_tz.is_none() && matches!(granularity.as_str(), "hour" | "day"))
+            if granularity.is_fine_granularity()
+                || (parsed_tz.is_none() && granularity.is_fine_granularity_utc())
             {
                 let result = general_date_trunc_array_fine_granularity(
                     T::UNIT,
                     array,
-                    granularity.as_str(),
+                    granularity,
                 )?;
                 return Ok(ColumnarValue::Array(result));
             }
 
             let array: PrimitiveArray<T> = array
-                .try_unary(|x| {
-                    general_date_trunc(T::UNIT, x, parsed_tz, granularity.as_str())
-                })?
+                .try_unary(|x| general_date_trunc(T::UNIT, x, parsed_tz, granularity))?
                 .with_timezone_opt(tz_opt.clone());
             Ok(ColumnarValue::Array(Arc::new(array)))
         }
 
         fn process_scalar<T: ArrowTimestampType>(
             v: &Option<i64>,
-            granularity: String,
+            granularity: DateTruncGranularity,
             tz_opt: &Option<Arc<str>>,
         ) -> Result<ColumnarValue> {
             let parsed_tz = parse_tz(tz_opt)?;
             let value = if let Some(v) = v {
-                Some(general_date_trunc(
-                    T::UNIT,
-                    *v,
-                    parsed_tz,
-                    granularity.as_str(),
-                )?)
+                Some(general_date_trunc(T::UNIT, *v, parsed_tz, granularity)?)
             } else {
                 None
             };
@@ -308,27 +371,30 @@ impl ScalarUDFImpl for DateTruncFunc {
     }
 }
 
-fn _date_trunc_coarse<T>(granularity: &str, value: Option<T>) -> Result<Option<T>>
+fn _date_trunc_coarse<T>(
+    granularity: DateTruncGranularity,
+    value: Option<T>,
+) -> Result<Option<T>>
 where
     T: Datelike + Timelike + Sub<Duration, Output = T> + Copy,
 {
     let value = match granularity {
-        "millisecond" => value,
-        "microsecond" => value,
-        "second" => value.and_then(|d| d.with_nanosecond(0)),
-        "minute" => value
+        DateTruncGranularity::Millisecond => value,
+        DateTruncGranularity::Microsecond => value,
+        DateTruncGranularity::Second => value.and_then(|d| d.with_nanosecond(0)),
+        DateTruncGranularity::Minute => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0)),
-        "hour" => value
+        DateTruncGranularity::Hour => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0)),
-        "day" => value
+        DateTruncGranularity::Day => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0)),
-        "week" => value
+        DateTruncGranularity::Week => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
@@ -336,29 +402,26 @@ where
             .map(|d| {
                 d - TimeDelta::try_seconds(60 * 60 * 24 * d.weekday() as i64).unwrap()
             }),
-        "month" => value
+        DateTruncGranularity::Month => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0)),
-        "quarter" => value
+        DateTruncGranularity::Quarter => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0))
             .and_then(|d| d.with_month(quarter_month(&d))),
-        "year" => value
+        DateTruncGranularity::Year => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0))
             .and_then(|d| d.with_month0(0)),
-        unsupported => {
-            return exec_err!("Unsupported date_trunc granularity: {unsupported}");
-        }
     };
     Ok(value)
 }
@@ -371,7 +434,7 @@ where
 }
 
 fn _date_trunc_coarse_with_tz(
-    granularity: &str,
+    granularity: DateTruncGranularity,
     value: Option<DateTime<Tz>>,
 ) -> Result<Option<i64>> {
     if let Some(value) = value {
@@ -413,7 +476,7 @@ fn _date_trunc_coarse_with_tz(
 }
 
 fn _date_trunc_coarse_without_tz(
-    granularity: &str,
+    granularity: DateTruncGranularity,
     value: Option<NaiveDateTime>,
 ) -> Result<Option<i64>> {
     let value = _date_trunc_coarse::<NaiveDateTime>(granularity, value)?;
@@ -424,7 +487,11 @@ fn _date_trunc_coarse_without_tz(
 /// epoch, for granularities greater than 1 second, in taking into
 /// account that some granularities are not uniform durations of time
 /// (e.g. months are not always the same lengths, leap seconds, etc)
-fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i64> {
+fn date_trunc_coarse(
+    granularity: DateTruncGranularity,
+    value: i64,
+    tz: Option<Tz>,
+) -> Result<i64> {
     let value = match tz {
         Some(tz) => {
             // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
@@ -454,30 +521,30 @@ fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i6
 fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     tu: TimeUnit,
     array: &PrimitiveArray<T>,
-    granularity: &str,
+    granularity: DateTruncGranularity,
 ) -> Result<ArrayRef> {
     let unit = match (tu, granularity) {
-        (Second, "minute") => NonZeroI64::new(60),
-        (Second, "hour") => NonZeroI64::new(3600),
-        (Second, "day") => NonZeroI64::new(86400),
+        (Second, DateTruncGranularity::Minute) => NonZeroI64::new(60),
+        (Second, DateTruncGranularity::Hour) => NonZeroI64::new(3600),
+        (Second, DateTruncGranularity::Day) => NonZeroI64::new(86400),
 
-        (Millisecond, "second") => NonZeroI64::new(1_000),
-        (Millisecond, "minute") => NonZeroI64::new(60_000),
-        (Millisecond, "hour") => NonZeroI64::new(3_600_000),
-        (Millisecond, "day") => NonZeroI64::new(86_400_000),
+        (Millisecond, DateTruncGranularity::Second) => NonZeroI64::new(1_000),
+        (Millisecond, DateTruncGranularity::Minute) => NonZeroI64::new(60_000),
+        (Millisecond, DateTruncGranularity::Hour) => NonZeroI64::new(3_600_000),
+        (Millisecond, DateTruncGranularity::Day) => NonZeroI64::new(86_400_000),
 
-        (Microsecond, "millisecond") => NonZeroI64::new(1_000),
-        (Microsecond, "second") => NonZeroI64::new(1_000_000),
-        (Microsecond, "minute") => NonZeroI64::new(60_000_000),
-        (Microsecond, "hour") => NonZeroI64::new(3_600_000_000),
-        (Microsecond, "day") => NonZeroI64::new(86_400_000_000),
+        (Microsecond, DateTruncGranularity::Millisecond) => NonZeroI64::new(1_000),
+        (Microsecond, DateTruncGranularity::Second) => NonZeroI64::new(1_000_000),
+        (Microsecond, DateTruncGranularity::Minute) => NonZeroI64::new(60_000_000),
+        (Microsecond, DateTruncGranularity::Hour) => NonZeroI64::new(3_600_000_000),
+        (Microsecond, DateTruncGranularity::Day) => NonZeroI64::new(86_400_000_000),
 
-        (Nanosecond, "microsecond") => NonZeroI64::new(1_000),
-        (Nanosecond, "millisecond") => NonZeroI64::new(1_000_000),
-        (Nanosecond, "second") => NonZeroI64::new(1_000_000_000),
-        (Nanosecond, "minute") => NonZeroI64::new(60_000_000_000),
-        (Nanosecond, "hour") => NonZeroI64::new(3_600_000_000_000),
-        (Nanosecond, "day") => NonZeroI64::new(86_400_000_000_000),
+        (Nanosecond, DateTruncGranularity::Microsecond) => NonZeroI64::new(1_000),
+        (Nanosecond, DateTruncGranularity::Millisecond) => NonZeroI64::new(1_000_000),
+        (Nanosecond, DateTruncGranularity::Second) => NonZeroI64::new(1_000_000_000),
+        (Nanosecond, DateTruncGranularity::Minute) => NonZeroI64::new(60_000_000_000),
+        (Nanosecond, DateTruncGranularity::Hour) => NonZeroI64::new(3_600_000_000_000),
+        (Nanosecond, DateTruncGranularity::Day) => NonZeroI64::new(86_400_000_000_000),
         _ => None,
     };
 
@@ -502,7 +569,7 @@ fn general_date_trunc(
     tu: TimeUnit,
     value: i64,
     tz: Option<Tz>,
-    granularity: &str,
+    granularity: DateTruncGranularity,
 ) -> Result<i64, DataFusionError> {
     let scale = match tu {
         Second => 1_000_000_000,
@@ -516,25 +583,29 @@ fn general_date_trunc(
 
     let result = match tu {
         Second => match granularity {
-            "minute" => nano / 1_000_000_000 / 60 * 60,
+            DateTruncGranularity::Minute => nano / 1_000_000_000 / 60 * 60,
             _ => nano / 1_000_000_000,
         },
         Millisecond => match granularity {
-            "minute" => nano / 1_000_000 / 1_000 / 60 * 1_000 * 60,
-            "second" => nano / 1_000_000 / 1_000 * 1_000,
+            DateTruncGranularity::Minute => nano / 1_000_000 / 1_000 / 60 * 1_000 * 60,
+            DateTruncGranularity::Second => nano / 1_000_000 / 1_000 * 1_000,
             _ => nano / 1_000_000,
         },
         Microsecond => match granularity {
-            "minute" => nano / 1_000 / 1_000_000 / 60 * 60 * 1_000_000,
-            "second" => nano / 1_000 / 1_000_000 * 1_000_000,
-            "millisecond" => nano / 1_000 / 1_000 * 1_000,
+            DateTruncGranularity::Minute => {
+                nano / 1_000 / 1_000_000 / 60 * 60 * 1_000_000
+            }
+            DateTruncGranularity::Second => nano / 1_000 / 1_000_000 * 1_000_000,
+            DateTruncGranularity::Millisecond => nano / 1_000 / 1_000 * 1_000,
             _ => nano / 1_000,
         },
         _ => match granularity {
-            "minute" => nano / 1_000_000_000 / 60 * 1_000_000_000 * 60,
-            "second" => nano / 1_000_000_000 * 1_000_000_000,
-            "millisecond" => nano / 1_000_000 * 1_000_000,
-            "microsecond" => nano / 1_000 * 1_000,
+            DateTruncGranularity::Minute => {
+                nano / 1_000_000_000 / 60 * 1_000_000_000 * 60
+            }
+            DateTruncGranularity::Second => nano / 1_000_000_000 * 1_000_000_000,
+            DateTruncGranularity::Millisecond => nano / 1_000_000 * 1_000_000,
+            DateTruncGranularity::Microsecond => nano / 1_000 * 1_000,
             _ => nano,
         },
     };
@@ -554,7 +625,9 @@ fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::datetime::date_trunc::{date_trunc_coarse, DateTruncFunc};
+    use crate::datetime::date_trunc::{
+        date_trunc_coarse, DateTruncFunc, DateTruncGranularity,
+    };
 
     use arrow::array::cast::as_primitive_array;
     use arrow::array::types::TimestampNanosecondType;
@@ -655,7 +728,8 @@ mod tests {
         cases.iter().for_each(|(original, granularity, expected)| {
             let left = string_to_timestamp_nanos(original).unwrap();
             let right = string_to_timestamp_nanos(expected).unwrap();
-            let result = date_trunc_coarse(granularity, left, None).unwrap();
+            let granularity_enum = DateTruncGranularity::from_str(granularity).unwrap();
+            let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         });
     }
