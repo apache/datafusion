@@ -387,6 +387,7 @@ mod tests {
     use crate::logical_plan::consumer::tests::test_consumer;
     use crate::logical_plan::consumer::{
         from_substrait_named_struct, from_substrait_type_without_names,
+        DefaultSubstraitConsumer,
     };
     use crate::logical_plan::producer::DefaultSubstraitProducer;
     use datafusion::arrow::datatypes::{Field, Fields, Schema, TimeUnit};
@@ -485,7 +486,12 @@ mod tests {
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
         let substrait = to_substrait_type(&mut producer, &dt, true)?;
-        let consumer = test_consumer();
+
+        // Get the extensions from the producer so the consumer can look up
+        // any registered user-defined types (like "null" or "f16")
+        let extensions = producer.get_extensions();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+
         let roundtrip_dt = from_substrait_type_without_names(&consumer, &substrait)?;
         assert_eq!(dt, roundtrip_dt);
         Ok(())
