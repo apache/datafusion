@@ -18,6 +18,7 @@
 //! [`DataTypeExt`] and [`FieldExt`] extension trait for working with DataTypes to Fields
 
 use crate::arrow::datatypes::{DataType, Field, FieldRef};
+use crate::metadata::FieldMetadata;
 use std::sync::Arc;
 
 /// DataFusion extension methods for Arrow [`DataType`]
@@ -64,6 +65,12 @@ impl DataTypeExt for DataType {
 pub trait FieldExt {
     /// Rename the field, returning a new Field with the given name
     fn renamed(self, new_name: &str) -> Self;
+
+    /// Add field metadata,
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self;
+
+    /// Add optional field metadata,
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self;
 
     /// Returns a new Field representing a List of this Field's DataType.
     ///
@@ -142,6 +149,18 @@ impl FieldExt for Field {
         }
     }
 
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self {
+        metadata.add_to_field(self)
+    }
+
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self {
+        if let Some(metadata) = metadata {
+            self.with_field_metadata(metadata)
+        } else {
+            self
+        }
+    }
+
     fn into_list(self) -> Self {
         DataType::List(Arc::new(self.into_list_item())).into_nullable_field()
     }
@@ -166,6 +185,18 @@ impl FieldExt for Arc<Field> {
             self
         } else {
             Arc::new(Arc::unwrap_or_clone(self).with_name(new_name))
+        }
+    }
+
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self {
+        metadata.add_to_field_ref(self)
+    }
+
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self {
+        if let Some(metadata) = metadata {
+            self.with_field_metadata(metadata)
+        } else {
+            self
         }
     }
 

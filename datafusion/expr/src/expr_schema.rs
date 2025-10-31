@@ -438,14 +438,15 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let field = expr.to_field(schema).map(|(_, f)| f.as_ref().clone())?;
-
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(Arc::new(combined_metadata.add_to_field(field)))
+                Ok(expr
+                    .to_field(schema)
+                    .map(|(_, f)| f)?
+                    .with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
@@ -453,7 +454,7 @@ impl ExprSchemable for Expr {
                 Ok(Arc::clone(field).renamed(&schema_name))
             }
             Expr::ScalarVariable(ty, _) => {
-                Ok(Arc::new(Field::new(schema_name, ty.clone(), true)))
+                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }
             Expr::Literal(l, metadata) => {
                 let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
@@ -608,7 +609,11 @@ impl ExprSchemable for Expr {
             ))),
         }?;
 
-        Ok((relation, field))
+        Ok((
+            relation,
+            // todo avoid this rename / use the name above
+            field.renamed(&schema_name),
+        ))
     }
 
     /// Wraps this expression in a cast to a target [arrow::datatypes::DataType].
