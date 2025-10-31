@@ -24,6 +24,8 @@ use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
+use datafusion_physical_expr::expressions::NotExpr;
+use datafusion_physical_expr::PhysicalExprSimplifier;
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
@@ -46,13 +48,19 @@ use parquet::{
 pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
+    /// which row groups are fully contained within the pruning predicate
+    is_fully_matched: Vec<bool>,
 }
 
 impl RowGroupAccessPlanFilter {
     /// Create a new `RowGroupPlanBuilder` for pruning out the groups to scan
     /// based on metadata and statistics
     pub fn new(access_plan: ParquetAccessPlan) -> Self {
-        Self { access_plan }
+        let num_row_groups = access_plan.len();
+        Self {
+            access_plan,
+            is_fully_matched: vec![false; num_row_groups],
+        }
     }
 
     /// Return true if there are no row groups
@@ -68,6 +76,49 @@ impl RowGroupAccessPlanFilter {
     /// Returns the inner access plan
     pub fn build(self) -> ParquetAccessPlan {
         self.access_plan
+    }
+
+    /// Returns the is_fully_matched vector
+    pub fn is_fully_matched(&self) -> &Vec<bool> {
+        &self.is_fully_matched
+    }
+
+    /// Prunes the access plan based on the limit and fully contained row groups.
+    pub fn prune_by_limit(
+        &mut self,
+        limit: usize,
+        rg_metadata: &[RowGroupMetaData],
+        metrics: &ParquetFileMetrics,
+    ) {
+        let mut fully_matched_row_group_indexes: Vec<usize> = Vec::new();
+        let mut fully_matched_rows_count: usize = 0;
+
+        // Iterate through the currently accessible row groups
+        for &idx in self.access_plan.row_group_indexes().iter() {
+            if self.is_fully_matched[idx] {
+                let row_group_row_count = rg_metadata[idx].num_rows() as usize;
+                fully_matched_row_group_indexes.push(idx);
+                fully_matched_rows_count += row_group_row_count;
+                if fully_matched_rows_count >= limit {
+                    break;
+                }
+            }
+        }
+
+        if fully_matched_rows_count >= limit {
+            let original_num_accessible_row_groups =
+                self.access_plan.row_group_indexes().len();
+            let new_num_accessible_row_groups = fully_matched_row_group_indexes.len();
+            let pruned_count = original_num_accessible_row_groups
+                .saturating_sub(new_num_accessible_row_groups);
+            metrics.limit_pruned_row_groups.add(pruned_count);
+
+            let mut new_access_plan = ParquetAccessPlan::new_none(rg_metadata.len());
+            for &idx in &fully_matched_row_group_indexes {
+                new_access_plan.scan(idx);
+            }
+            self.access_plan = new_access_plan;
+        }
     }
 
     /// Prune remaining row groups to only those  within the specified range.
@@ -135,13 +186,55 @@ impl RowGroupAccessPlanFilter {
         // try to prune the row groups in a single call
         match predicate.prune(&pruning_stats) {
             Ok(values) => {
-                // values[i] is false means the predicate could not be true for row group i
+                let mut fully_contained_candidates_original_idx: Vec<usize> = Vec::new();
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
                     if !value {
                         self.access_plan.skip(*idx);
                         metrics.row_groups_pruned_statistics.add_pruned(1);
                     } else {
                         metrics.row_groups_pruned_statistics.add_matched(1);
+                        fully_contained_candidates_original_idx.push(*idx);
+                        metrics.row_groups_matched_statistics.add(1);
+                    }
+                }
+
+                // Note: this part of code shouldn't be expensive with a limited number of row groups
+                // If we do find it's expensive, we can consider optimizing it further.
+                if !fully_contained_candidates_original_idx.is_empty() {
+                    // Use NotExpr to create the inverted predicate
+                    let inverted_expr =
+                        Arc::new(NotExpr::new(Arc::clone(predicate.orig_expr())));
+                    // Simplify the NOT expression (e.g., NOT(c1 = 0) -> c1 != 0)
+                    // before building the pruning predicate
+                    let mut simplifier = PhysicalExprSimplifier::new(arrow_schema);
+                    let inverted_expr = simplifier.simplify(inverted_expr).unwrap();
+                    if let Ok(inverted_predicate) = PruningPredicate::try_new(
+                        inverted_expr,
+                        Arc::clone(predicate.schema()),
+                    ) {
+                        let inverted_pruning_stats = RowGroupPruningStatistics {
+                            parquet_schema,
+                            row_group_metadatas: fully_contained_candidates_original_idx
+                                .iter()
+                                .map(|&i| &groups[i])
+                                .collect::<Vec<_>>(),
+                            arrow_schema,
+                        };
+
+                        if let Ok(inverted_values) =
+                            inverted_predicate.prune(&inverted_pruning_stats)
+                        {
+                            for (i, &original_row_group_idx) in
+                                fully_contained_candidates_original_idx.iter().enumerate()
+                            {
+                                // If the inverted predicate *also* prunes this row group (meaning inverted_values[i] is false),
+                                // it implies that *all* rows in this group satisfy the original predicate.
+                                if !inverted_values[i] {
+                                    self.is_fully_matched[original_row_group_idx] = true;
+                                    metrics.row_groups_fully_matched_statistics.add(1);
+                                }
+                            }
+                        }
                     }
                 }
             }
