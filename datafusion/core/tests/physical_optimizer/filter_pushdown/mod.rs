@@ -2076,7 +2076,7 @@ fn test_no_pushdown_grouping_sets_filter_on_missing_column() {
         .unwrap(),
     );
 
-    // Filter on column 'a' which is missing in the second grouping set, shoud not be pushed down
+    // Filter on column 'a' which is missing in the second grouping set, should not be pushed down
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
 
