@@ -3186,15 +3186,14 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "parquet")]
-    use crate::config::TableParquetOptions;
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions,
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileDecryptionProperties,
+        ConfigFileEncryptionProperties, ConfigFileType, ConfigOptions,
+        EncryptionFactoryOptions, ExecutionOptions, ExtensionOptions, Extensions,
+        OptimizerOptions, TableOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {
@@ -3267,6 +3266,163 @@ mod tests {
     }
 
     #[test]
+    fn reset_execution_option_returns_default() {
+        let mut options = ConfigOptions::default();
+        options
+            .set("datafusion.execution.batch_size", "1024")
+            .unwrap();
+        assert_eq!(options.execution.batch_size, 1024);
+
+        options
+            .reset("datafusion.execution.batch_size")
+            .expect("reset should succeed");
+
+        assert_eq!(
+            options.execution.batch_size,
+            ExecutionOptions::default().batch_size
+        );
+    }
+
+    #[test]
+    fn reset_optimizer_dynamic_filter_group_restores_defaults() {
+        let mut options = ConfigOptions::default();
+        options
+            .set(
+                "datafusion.optimizer.enable_dynamic_filter_pushdown",
+                "false",
+            )
+            .unwrap();
+        assert!(!options.optimizer.enable_dynamic_filter_pushdown);
+        assert!(!options.optimizer.enable_topk_dynamic_filter_pushdown);
+        assert!(!options.optimizer.enable_join_dynamic_filter_pushdown);
+
+        options
+            .reset("datafusion.optimizer.enable_dynamic_filter_pushdown")
+            .expect("reset should succeed");
+
+        let defaults = OptimizerOptions::default();
+        assert_eq!(
+            options.optimizer.enable_dynamic_filter_pushdown,
+            defaults.enable_dynamic_filter_pushdown
+        );
+        assert_eq!(
+            options.optimizer.enable_topk_dynamic_filter_pushdown,
+            defaults.enable_topk_dynamic_filter_pushdown
+        );
+        assert_eq!(
+            options.optimizer.enable_join_dynamic_filter_pushdown,
+            defaults.enable_join_dynamic_filter_pushdown
+        );
+    }
+
+    #[test]
+    fn reset_unknown_key_errors() {
+        let mut options = ConfigOptions::default();
+        let err = options.reset("datafusion.execution.not_a_setting");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn reset_table_options_csv_delimiter() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::CSV);
+        table_config.set("format.delimiter", ";").unwrap();
+        assert_eq!(table_config.csv.delimiter, b';');
+
+        table_config.reset("format.delimiter").unwrap();
+        assert_eq!(table_config.csv.delimiter, b',');
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn reset_parquet_column_specific_option() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        table_config
+            .set("format.bloom_filter_enabled::col1", "true")
+            .unwrap();
+        assert_eq!(
+            table_config.parquet.column_specific_options["col1"].bloom_filter_enabled,
+            Some(true)
+        );
+
+        table_config
+            .reset("format.bloom_filter_enabled::col1")
+            .unwrap();
+        assert!(table_config
+            .parquet
+            .column_specific_options
+            .get("col1")
+            .is_none());
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn reset_parquet_global_option() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        table_config
+            .set("format.skip_arrow_metadata", "true")
+            .unwrap();
+        assert!(table_config.parquet.global.skip_arrow_metadata);
+
+        table_config.reset("format.skip_arrow_metadata").unwrap();
+        assert!(!table_config.parquet.global.skip_arrow_metadata);
+    }
+
+    #[test]
+    fn reset_encryption_factory_options() {
+        let mut options = EncryptionFactoryOptions::default();
+        options.set("foo", "bar").unwrap();
+        assert_eq!(options.options.get("foo"), Some(&"bar".to_string()));
+
+        options.reset("foo").unwrap();
+        assert!(options.options.is_empty());
+
+        options.set("foo", "bar").unwrap();
+        options.reset("").unwrap();
+        assert!(options.options.is_empty());
+    }
+
+    #[test]
+    fn reset_file_encryption_properties() {
+        let mut props = ConfigFileEncryptionProperties::default();
+        props.set("footer_key_as_hex", "abcd").unwrap();
+        assert_eq!(props.footer_key_as_hex, "abcd");
+
+        props.set("column_key_as_hex::col1", "beef").unwrap();
+        assert_eq!(
+            props.column_encryption_properties["col1"].column_key_as_hex,
+            "beef"
+        );
+
+        props.reset("footer_key_as_hex").unwrap();
+        assert!(props.footer_key_as_hex.is_empty());
+
+        props.reset("column_key_as_hex::col1").unwrap();
+        assert!(props.column_encryption_properties.get("col1").is_none());
+    }
+
+    #[test]
+    fn reset_file_decryption_properties() {
+        let mut props = ConfigFileDecryptionProperties::default();
+        props.set("footer_key_as_hex", "abcd").unwrap();
+        assert_eq!(props.footer_key_as_hex, "abcd");
+
+        props.set("column_key_as_hex::col1", "beef").unwrap();
+        assert_eq!(
+            props.column_decryption_properties["col1"].column_key_as_hex,
+            "beef"
+        );
+
+        props.reset("footer_key_as_hex").unwrap();
+        assert!(props.footer_key_as_hex.is_empty());
+
+        props.reset("column_key_as_hex::col1").unwrap();
+        assert!(props.column_decryption_properties.get("col1").is_none());
+    }
+
+    #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::CSV);
@@ -3331,6 +3487,7 @@ mod tests {
         };
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
+        use std::sync::Arc;
 
         let footer_key = b"0123456789012345".to_vec(); // 128bit/16
         let column_names = vec!["double_field", "float_field"];
@@ -3448,6 +3605,8 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     #[test]
     fn parquet_encryption_factory_config() {
+        use crate::config::TableParquetOptions;
+
         let mut parquet_options = TableParquetOptions::default();
 
         assert_eq!(parquet_options.crypto.factory_id, None);
@@ -3492,6 +3651,8 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_parquet_options_config_entry() {
+        use crate::config::TableParquetOptions;
+
         let mut table_parquet_options = TableParquetOptions::new();
         table_parquet_options
             .set(
