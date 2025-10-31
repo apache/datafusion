@@ -267,7 +267,7 @@ datafusion.execution.sort_spill_reservation_bytes 10485760
 datafusion.execution.spill_compression uncompressed
 datafusion.execution.split_file_groups_by_statistics false
 datafusion.execution.target_partitions 7
-datafusion.execution.time_zone +00:00
+datafusion.execution.time_zone NULL
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false
 datafusion.explain.analyze_level dev
 datafusion.explain.format indent
@@ -387,7 +387,7 @@ datafusion.execution.sort_spill_reservation_bytes 10485760 Specifies the reserve
 datafusion.execution.spill_compression uncompressed Sets the compression codec used when spilling data to disk. Since datafusion writes spill files using the Arrow IPC Stream format, only codecs supported by the Arrow IPC Stream Writer are allowed. Valid values are: uncompressed, lz4_frame, zstd. Note: lz4_frame offers faster (de)compression, but typically results in larger spill files. In contrast, zstd achieves higher compression ratios at the cost of slower (de)compression speed.
 datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate sorts by packing & sorting files with non-overlapping statistics into the same file groups. Currently experimental
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
-datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
+datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
 datafusion.explain.analyze_level dev Verbosity level for "EXPLAIN ANALYZE". Default is "dev" "summary" shows common metrics for high-level insights. "dev" provides deep operator-level introspection for developers.
 datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format.
@@ -459,14 +459,14 @@ datafusion.execution.batch_size 8192 Default batch size while creating new batch
 query TT
 SHOW TIME ZONE
 ----
-datafusion.execution.time_zone +00:00
+datafusion.execution.time_zone NULL
 
 # show_timezone_default_utc
 # https://github.com/apache/datafusion/issues/3255
 query TT
 SHOW TIMEZONE
 ----
-datafusion.execution.time_zone +00:00
+datafusion.execution.time_zone NULL
 
 
 # show_time_zone_default_utc_verbose
@@ -474,14 +474,14 @@ datafusion.execution.time_zone +00:00
 query TTT
 SHOW TIME ZONE VERBOSE
 ----
-datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
+datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
 
 # show_timezone_default_utc
 # https://github.com/apache/datafusion/issues/3255
 query TTT
 SHOW TIMEZONE VERBOSE
 ----
-datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
+datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
 
 
 # show empty verbose

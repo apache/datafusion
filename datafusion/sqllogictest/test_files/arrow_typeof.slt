@@ -67,7 +67,7 @@ Timestamp(ns)
 query T
 SELECT arrow_typeof(now())
 ----
-Timestamp(ns, "+00:00")
+Timestamp(ns)
 
 # arrow_typeof_timestamp_date32(
 query T

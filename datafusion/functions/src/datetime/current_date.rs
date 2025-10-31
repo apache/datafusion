@@ -108,7 +108,14 @@ impl ScalarUDFImpl for CurrentDateFunc {
         let days = info
             .execution_props()
             .config_options()
-            .and_then(|config| config.execution.time_zone.parse::<Tz>().ok())
+            .and_then(|config| {
+                config
+                    .execution
+                    .time_zone
+                    .as_ref()
+                    .map(|tz| tz.parse::<Tz>().ok())
+            })
+            .flatten()
             .map_or_else(
                 || datetime_to_days(&now_ts),
                 |tz| {
