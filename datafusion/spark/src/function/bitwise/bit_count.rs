@@ -156,7 +156,8 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 // Here’s the equivalent Rust implementation of the bitCount function (similar to Apache Spark's bitCount for LongType)
-// https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/bitwiseExpressions.scala#L243
+// Spark: https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/bitwiseExpressions.scala#L243
+// Java impl: https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/lang/Long.java#L1584
 fn bit_count(i: i64) -> i32 {
     let mut u = i as u64;
     u = u - ((u >> 1) & 0x5555555555555555);
