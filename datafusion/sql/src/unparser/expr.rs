@@ -2169,12 +2169,15 @@ mod tests {
                 r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
-                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                Expr::ScalarVariable(
+                    Int8.into_nullable_field_ref(),
+                    vec![String::from("@a")],
+                ),
                 r#"@a"#,
             ),
             (
                 Expr::ScalarVariable(
-                    Int8,
+                    Int8.into_nullable_field_ref(),
                     vec![String::from("@root"), String::from("foo")],
                 ),
                 r#"@root.foo"#,

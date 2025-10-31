@@ -316,7 +316,7 @@ pub enum Expr {
     /// A named reference to a qualified field in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
-    ScalarVariable(DataType, Vec<String>),
+    ScalarVariable(FieldRef, Vec<String>),
     /// A constant value along with associated [`FieldMetadata`].
     Literal(ScalarValue, Option<FieldMetadata>),
     /// A binary expression such as "age > 21"
@@ -2529,8 +2529,8 @@ impl HashNode for Expr {
             Expr::Column(column) => {
                 column.hash(state);
             }
-            Expr::ScalarVariable(data_type, name) => {
-                data_type.hash(state);
+            Expr::ScalarVariable(field, name) => {
+                field.hash(state);
                 name.hash(state);
             }
             Expr::Literal(scalar_value, _) => {
