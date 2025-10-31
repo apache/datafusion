@@ -260,7 +260,7 @@ fn insufficient_capacity_err(
     additional: usize,
     available: usize,
 ) -> DataFusionError {
-    resources_datafusion_err!("Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total pool", 
+    resources_datafusion_err!("Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total pool",
     human_readable_size(additional), reservation.registration.consumer.name, human_readable_size(reservation.size), human_readable_size(available))
 }
 
