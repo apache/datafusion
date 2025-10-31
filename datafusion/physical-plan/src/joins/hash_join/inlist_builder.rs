@@ -108,9 +108,10 @@ mod tests {
     #[test]
     fn test_build_single_column_inlist_array() {
         let array = Arc::new(Int32Array::from(vec![1, 2, 3, 2, 1])) as ArrayRef;
-        let result = build_struct_inlist_values(std::slice::from_ref(&array), 1024 * 1024)
-            .unwrap()
-            .unwrap();
+        let result =
+            build_struct_inlist_values(std::slice::from_ref(&array), 1024 * 1024)
+                .unwrap()
+                .unwrap();
 
         assert!(array.eq(&result));
     }

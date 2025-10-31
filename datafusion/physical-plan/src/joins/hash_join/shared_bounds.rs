@@ -554,13 +554,19 @@ impl SharedBuildAccumulator {
                             })
                             .collect::<Result<Vec<_>>>()?;
 
-                        // Create CASE expression
-                        let filter_expr = Arc::new(CaseExpr::try_new(
-                            Some(modulo_expr),
-                            when_then_branches,
-                            Some(lit(false)), // ELSE false
-                        )?)
-                            as Arc<dyn PhysicalExpr>;
+                        // Optimize for single partition: skip CASE expression entirely
+                        let filter_expr = if when_then_branches.len() == 1 {
+                            // Single partition: just use the condition directly
+                            // since hash % 1 == 0 always, the WHEN 0 branch will always match
+                            Arc::clone(&when_then_branches[0].1)
+                        } else {
+                            // Multiple partitions: create CASE expression
+                            Arc::new(CaseExpr::try_new(
+                                Some(modulo_expr),
+                                when_then_branches,
+                                Some(lit(false)), // ELSE false
+                            )?) as Arc<dyn PhysicalExpr>
+                        };
 
                         self.dynamic_filter.update(filter_expr)?;
                     }

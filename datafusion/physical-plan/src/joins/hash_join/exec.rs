@@ -1475,10 +1475,7 @@ async fn collect_left_input(
 
     let left_values = on_left
         .iter()
-        .map(|c| {
-            c.evaluate(&batch)?
-                .into_array(batch.num_rows())
-        })
+        .map(|c| c.evaluate(&batch)?.into_array(batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
 
     // Compute bounds for dynamic filter if enabled

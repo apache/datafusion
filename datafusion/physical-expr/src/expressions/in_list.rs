@@ -34,9 +34,9 @@ use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::cast::{
-    as_boolean_array, as_generic_binary_array, as_string_array,
+    as_boolean_array, as_generic_binary_array, as_string_array, as_struct_array,
 };
-use datafusion_common::hash_utils::HashValue;
+use datafusion_common::hash_utils::{create_hashes, HashValue};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
 };
@@ -46,6 +46,8 @@ use datafusion_physical_expr_common::datum::compare_with_eq;
 use ahash::RandomState;
 use datafusion_common::HashMap;
 use hashbrown::hash_map::RawEntryMut;
+#[cfg(test)]
+use itertools::Itertools;
 
 /// InList
 pub struct InListExpr {
@@ -143,6 +145,76 @@ where
     }
 }
 
+/// Specialized Set implementation for StructArray
+struct StructArraySet {
+    array: Arc<StructArray>,
+    hash_set: ArrayHashSet,
+}
+
+impl Set for StructArraySet {
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        // Handle dictionary arrays
+        downcast_dictionary_array! {
+            v => {
+                let values_contains = self.contains(v.values().as_ref(), negated)?;
+                let result = take(&values_contains, v.keys(), None)?;
+                return Ok(downcast_array(result.as_ref()))
+            }
+            _ => {}
+        }
+
+        let v = as_struct_array(v)?;
+        let has_nulls = self.array.null_count() != 0;
+
+        // Compute hashes for all rows in the input array
+        let mut input_hashes = vec![0u64; v.len()];
+        create_hashes(
+            &[Arc::new(v.clone()) as ArrayRef],
+            &self.hash_set.state,
+            &mut input_hashes,
+        )?;
+
+        // Check each row for membership
+        let result: BooleanArray = (0..v.len())
+            .map(|i| {
+                // Handle null rows
+                if v.is_null(i) {
+                    return None;
+                }
+
+                let hash = input_hashes[i];
+                let input_row = v.slice(i, 1);
+
+                // Look up in hash map with equality check
+                let contains = self
+                    .hash_set
+                    .map
+                    .raw_entry()
+                    .from_hash(hash, |&idx| {
+                        let set_row = self.array.slice(idx, 1);
+                        match compare_with_eq(&set_row, &input_row, true) {
+                            Ok(result) => result.value(0),
+                            Err(_) => false,
+                        }
+                    })
+                    .is_some();
+
+                match contains {
+                    true => Some(!negated),
+                    false if has_nulls => None,
+                    false => Some(negated),
+                }
+            })
+            .collect();
+
+        Ok(result)
+    }
+
+    fn has_nulls(&self) -> bool {
+        self.array.null_count() != 0
+    }
+}
+
 /// Computes an [`ArrayHashSet`] for the provided [`Array`] if there
 /// are nulls present or there are more than the configured number of
 /// elements.
@@ -180,29 +252,93 @@ where
     ArrayHashSet { state, map }
 }
 
-/// Creates a `Box<dyn Set>` for the given list of `IN` expressions and `batch`
-fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
+/// Computes an [`ArrayHashSet`] for the provided [`StructArray`]
+fn make_struct_hash_set(array: &Arc<StructArray>) -> Result<ArrayHashSet> {
+    let state = RandomState::new();
+    let mut map: HashMap<usize, (), ()> =
+        HashMap::with_capacity_and_hasher(array.len(), ());
+
+    // Compute hashes for all rows
+    let mut row_hashes = vec![0u64; array.len()];
+    create_hashes(&[Arc::clone(array) as ArrayRef], &state, &mut row_hashes)?;
+
+    // Build hash set, deduplicating based on struct equality
+    let insert_value = |idx: usize| {
+        let hash = row_hashes[idx];
+        if let RawEntryMut::Vacant(v) =
+            map.raw_entry_mut().from_hash(hash, |&existing_idx| {
+                // Compare the two struct rows for equality
+                // Use slice to get single-row arrays for comparison
+                let existing_row = array.slice(existing_idx, 1);
+                let current_row = array.slice(idx, 1);
+
+                // Use compare_op_for_nested for struct equality
+                match compare_with_eq(&existing_row, &current_row, true) {
+                    Ok(result) => result.value(0),
+                    Err(_) => false,
+                }
+            })
+        {
+            v.insert_with_hasher(hash, idx, (), |&x| row_hashes[x]);
+        }
+    };
+
+    match array.nulls() {
+        Some(nulls) => {
+            BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                .for_each(insert_value)
+        }
+        None => (0..array.len()).for_each(insert_value),
+    }
+
+    Ok(ArrayHashSet { state, map })
+}
+
+/// Creates a `Box<dyn Set>` for the given list of `IN` expressions and `batch`.
+/// Accepts a parameter `f` which allows access to the underlaying `ArrayHashSet`
+/// and is used by [`in_list_from_array`] to collect unique indices.
+fn make_set<F>(array: &dyn Array, mut f: F) -> Result<Arc<dyn Set>>
+where
+    F: FnMut(ArrayHashSet) -> Result<ArrayHashSet>,
+{
     Ok(downcast_primitive_array! {
-        array => Arc::new(ArraySet::new(array, make_hash_set(array))),
+        array => {
+            let hash_set = f(make_hash_set(array))?;
+            Arc::new(ArraySet::new(array, hash_set))
+        },
         DataType::Boolean => {
             let array = as_boolean_array(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            let hash_set = f(make_hash_set(array))?;
+            Arc::new(ArraySet::new(array, hash_set))
         },
         DataType::Utf8 => {
             let array = as_string_array(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            let hash_set = f(make_hash_set(array))?;
+            Arc::new(ArraySet::new(array, hash_set))
         }
         DataType::LargeUtf8 => {
             let array = as_largestring_array(array);
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            let hash_set = f(make_hash_set(array))?;
+            Arc::new(ArraySet::new(array, hash_set))
         }
         DataType::Binary => {
             let array = as_generic_binary_array::<i32>(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            let hash_set = f(make_hash_set(array))?;
+            Arc::new(ArraySet::new(array, hash_set))
         }
         DataType::LargeBinary => {
             let array = as_generic_binary_array::<i64>(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            let hash_set = f(make_hash_set(array))?;
+            Arc::new(ArraySet::new(array, hash_set))
+        }
+        DataType::Struct(_) => {
+            let array = as_struct_array(array)?;
+            let array_arc = Arc::new(array.clone());
+            let hash_set = f(make_struct_hash_set(&array_arc)?)?;
+            Arc::new(StructArraySet {
+                array: array_arc,
+                hash_set,
+            })
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
         d => return not_impl_err!("DataType::{d} not supported in InList")
@@ -236,7 +372,9 @@ fn try_cast_static_filter_to_set(
     schema: &Schema,
 ) -> Result<Arc<dyn Set>> {
     let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
-    make_set(evaluate_list(list, &batch)?.as_ref())
+    make_set(evaluate_list(list, &batch)?.as_ref(), |hash_set| {
+        Ok(hash_set)
+    })
 }
 
 /// Custom equality check function which is used with [`ArrayHashSet`] for existence check.
@@ -489,8 +627,39 @@ pub fn in_list_from_array(
     array: ArrayRef,
     negated: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let set = make_set(array.as_ref())?;
-    Ok(Arc::new(InListExpr::new(expr, vec![], negated, Some(set))))
+    let mut list = Vec::new();
+    let static_filter = make_set(array.as_ref(), |hash_set| {
+        // If we are in tests sort the keys so we get a deterministic order for the list
+        #[cfg(test)]
+        let keys = hash_set.map.keys().sorted();
+        #[cfg(not(test))]
+        let keys = hash_set.map.keys();
+        list = keys
+            .map(|&i| {
+                let scalar = ScalarValue::try_from_array(&array, i)?;
+                Ok(crate::expressions::lit(scalar))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(hash_set)
+    })
+    .ok();
+
+    // If make_set failed, build list from full array
+    if list.is_empty() && array.len() > 0 {
+        list = (0..array.len())
+            .map(|i| {
+                let scalar = ScalarValue::try_from_array(&array, i)?;
+                Ok(crate::expressions::lit(scalar))
+            })
+            .collect::<Result<Vec<_>>>()?;
+    }
+
+    Ok(Arc::new(InListExpr::new(
+        expr,
+        list,
+        negated,
+        static_filter,
+    )))
 }
 
 #[cfg(test)]
@@ -498,11 +667,11 @@ mod tests {
     use super::*;
     use crate::expressions;
     use crate::expressions::{col, lit, try_cast};
+    use arrow::buffer::NullBuffer;
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use insta::assert_snapshot;
-    use itertools::Itertools as _;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 
@@ -548,7 +717,18 @@ mod tests {
             })
     }
 
-    // applies the in_list expr to an input batch and list
+    /// Test helper macro that evaluates an IN LIST expression with automatic type casting.
+    ///
+    /// # Parameters
+    /// - `$BATCH`: The `RecordBatch` containing the input data to evaluate against
+    /// - `$LIST`: A `Vec<Arc<dyn PhysicalExpr>>` of literal expressions representing the IN list values
+    /// - `$NEGATED`: A `&bool` indicating whether this is a NOT IN operation (true) or IN operation (false)
+    /// - `$EXPECTED`: A `Vec<Option<bool>>` representing the expected boolean results for each row
+    /// - `$COL`: An `Arc<dyn PhysicalExpr>` representing the column expression to evaluate
+    /// - `$SCHEMA`: A `&Schema` reference for the input batch
+    ///
+    /// This macro first applies type casting to the column and list expressions to ensure
+    /// type compatibility, then delegates to `in_list_raw!` to perform the evaluation and assertion.
     macro_rules! in_list {
         ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
             let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
@@ -563,7 +743,19 @@ mod tests {
         }};
     }
 
-    // applies the in_list expr to an input batch and list without cast
+    /// Test helper macro that evaluates an IN LIST expression without automatic type casting.
+    ///
+    /// # Parameters
+    /// - `$BATCH`: The `RecordBatch` containing the input data to evaluate against
+    /// - `$LIST`: A `Vec<Arc<dyn PhysicalExpr>>` of literal expressions representing the IN list values
+    /// - `$NEGATED`: A `&bool` indicating whether this is a NOT IN operation (true) or IN operation (false)
+    /// - `$EXPECTED`: A `Vec<Option<bool>>` representing the expected boolean results for each row
+    /// - `$COL`: An `Arc<dyn PhysicalExpr>` representing the column expression to evaluate
+    /// - `$SCHEMA`: A `&Schema` reference for the input batch
+    ///
+    /// This macro creates an IN LIST expression, evaluates it against the batch, converts the result
+    /// to a `BooleanArray`, and asserts that it matches the expected output. Use this when the column
+    /// and list expressions are already the correct types and don't require casting.
     macro_rules! in_list_raw {
         ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
             let expr = in_list($COL, $LIST, $NEGATED, $SCHEMA).unwrap();
@@ -1531,6 +1723,443 @@ mod tests {
         let display_string = expr.to_string();
         assert_snapshot!(sql_string, @"a NOT IN (a, b, NULL)");
         assert_snapshot!(display_string, @"a@0 NOT IN (SET) ([a, b, NULL])");
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_struct() -> Result<()> {
+        // Create schema with a struct column
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Struct(struct_fields.clone()),
+            true,
+        )]);
+
+        // Create test data: array of structs
+        let x_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let y_array = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let struct_array =
+            StructArray::new(struct_fields.clone(), vec![x_array, y_array], None);
+
+        let col_a = col("a", &schema)?;
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(struct_array)])?;
+
+        // Create literal structs for the IN list
+        // Struct {x: 1, y: "a"}
+        let struct1 = ScalarValue::Struct(Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["a"])),
+            ],
+            None,
+        )));
+
+        // Struct {x: 3, y: "c"}
+        let struct3 = ScalarValue::Struct(Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![3])),
+                Arc::new(StringArray::from(vec!["c"])),
+            ],
+            None,
+        )));
+
+        // Test: a IN ({1, "a"}, {3, "c"})
+        let list = vec![lit(struct1.clone()), lit(struct3.clone())];
+        in_list_raw!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), Some(false), Some(true)],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // Test: a NOT IN ({1, "a"}, {3, "c"})
+        in_list_raw!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), Some(false)],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_struct_with_nulls() -> Result<()> {
+        // Create schema with a struct column
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Struct(struct_fields.clone()),
+            true,
+        )]);
+
+        // Create test data with a null struct
+        let x_array = Arc::new(Int32Array::from(vec![1, 2]));
+        let y_array = Arc::new(StringArray::from(vec!["a", "b"]));
+        let struct_array = StructArray::new(
+            struct_fields.clone(),
+            vec![x_array, y_array],
+            Some(NullBuffer::from(vec![true, false])),
+        );
+
+        let col_a = col("a", &schema)?;
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(struct_array)])?;
+
+        // Create literal struct for the IN list
+        let struct1 = ScalarValue::Struct(Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["a"])),
+            ],
+            None,
+        )));
+
+        // Test: a IN ({1, "a"})
+        let list = vec![lit(struct1.clone())];
+        in_list_raw!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // Test: a NOT IN ({1, "a"})
+        in_list_raw!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_struct_with_null_in_list() -> Result<()> {
+        // Create schema with a struct column
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Struct(struct_fields.clone()),
+            true,
+        )]);
+
+        // Create test data
+        let x_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let y_array = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let struct_array =
+            StructArray::new(struct_fields.clone(), vec![x_array, y_array], None);
+
+        let col_a = col("a", &schema)?;
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(struct_array)])?;
+
+        // Create literal structs including a NULL
+        let struct1 = ScalarValue::Struct(Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["a"])),
+            ],
+            None,
+        )));
+
+        let null_struct = ScalarValue::Struct(Arc::new(StructArray::new_null(
+            struct_fields.clone(),
+            1,
+        )));
+
+        // Test: a IN ({1, "a"}, NULL)
+        let list = vec![lit(struct1), lit(null_struct.clone())];
+        in_list_raw!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // Test: a NOT IN ({1, "a"}, NULL)
+        in_list_raw!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_nested_struct() -> Result<()> {
+        // Create nested struct schema
+        let inner_struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let outer_struct_fields = Fields::from(vec![
+            Field::new(
+                "inner",
+                DataType::Struct(inner_struct_fields.clone()),
+                false,
+            ),
+            Field::new("c", DataType::Int32, false),
+        ]);
+        let schema = Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(outer_struct_fields.clone()),
+            true,
+        )]);
+
+        // Create test data with nested structs
+        let inner1 = Arc::new(StructArray::new(
+            inner_struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["x", "y"])),
+            ],
+            None,
+        ));
+        let c_array = Arc::new(Int32Array::from(vec![10, 20]));
+        let outer_array =
+            StructArray::new(outer_struct_fields.clone(), vec![inner1, c_array], None);
+
+        let col_x = col("x", &schema)?;
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(outer_array)])?;
+
+        // Create a nested struct literal matching the first row
+        let inner_match = Arc::new(StructArray::new(
+            inner_struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["x"])),
+            ],
+            None,
+        ));
+        let outer_match = ScalarValue::Struct(Arc::new(StructArray::new(
+            outer_struct_fields.clone(),
+            vec![inner_match, Arc::new(Int32Array::from(vec![10]))],
+            None,
+        )));
+
+        // Test: x IN ({{1, "x"}, 10})
+        let list = vec![lit(outer_match)];
+        in_list_raw!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), Some(false)],
+            Arc::clone(&col_x),
+            &schema
+        );
+
+        // Test: x NOT IN ({{1, "x"}, 10})
+        in_list_raw!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true)],
+            Arc::clone(&col_x),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_from_array_deduplication() -> Result<()> {
+        // Test that in_list_from_array deduplicates values
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let col_a = col("a", &schema)?;
+
+        // Create array with duplicates: [1, 2, 2, 3, 1, 4]
+        let array = Arc::new(Int64Array::from(vec![1, 2, 2, 3, 1, 4])) as ArrayRef;
+
+        // Create InListExpr from array
+        let expr = in_list_from_array(Arc::clone(&col_a), array, false)?;
+
+        // Downcast to InListExpr to check the list
+        let in_list_expr = expr
+            .as_any()
+            .downcast_ref::<InListExpr>()
+            .expect("Expected InListExpr");
+
+        // Verify that the list has only 4 unique values (1, 2, 3, 4)
+        assert_eq!(in_list_expr.list().len(), 4);
+
+        // Create test data
+        let a = Int64Array::from(vec![Some(1), Some(2), Some(3), Some(4), Some(5), None]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // Evaluate the expression
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result)?;
+
+        // Expected: 1,2,3,4 are in list, 5 is not, null stays null
+        let expected = BooleanArray::from(vec![
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+        ]);
+        assert_eq!(result, &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_from_array_with_nulls() -> Result<()> {
+        // Test that in_list_from_array handles nulls correctly
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let col_a = col("a", &schema)?;
+
+        // Create array with a null: [1, 2, NULL, 3]
+        let array =
+            Arc::new(Int64Array::from(vec![Some(1), Some(2), None, Some(3)])) as ArrayRef;
+
+        // Create InListExpr from array (negated=false)
+        let expr = in_list_from_array(Arc::clone(&col_a), array, false)?;
+
+        // Create test data
+        let a = Int64Array::from(vec![Some(1), Some(2), Some(3), Some(4), None]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // Evaluate the expression
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result)?;
+
+        // When the IN list contains NULL:
+        // - Values in the list (1,2,3) -> true
+        // - Values not in the list (4) -> NULL (because NULL might match)
+        // - NULL input -> NULL
+        let expected = BooleanArray::from(vec![
+            Some(true), // 1 is in list
+            Some(true), // 2 is in list
+            Some(true), // 3 is in list
+            None,       // 4 not in list, but list has NULL
+            None,       // NULL input
+        ]);
+        assert_eq!(result, &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_from_array_struct() -> Result<()> {
+        // Test that in_list_from_array works with struct arrays
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
+        ]);
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Struct(struct_fields.clone()),
+            true,
+        )]);
+
+        // Create array of structs with duplicates: [{1,"a"}, {2,"b"}, {1,"a"}]
+        let x_array = Arc::new(Int32Array::from(vec![1, 2, 1]));
+        let y_array = Arc::new(StringArray::from(vec!["a", "b", "a"]));
+        let struct_array = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![x_array, y_array],
+            None,
+        )) as ArrayRef;
+
+        let col_a = col("a", &schema)?;
+
+        // Create InListExpr from struct array
+        let expr = in_list_from_array(Arc::clone(&col_a), struct_array, false)?;
+
+        // Downcast to check deduplication
+        let in_list_expr = expr
+            .as_any()
+            .downcast_ref::<InListExpr>()
+            .expect("Expected InListExpr");
+
+        // Should have only 2 unique structs
+        assert_eq!(in_list_expr.list().len(), 2);
+
+        // Create test data
+        let x_test = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let y_test = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let struct_test = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![x_test, y_test],
+            None,
+        ));
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![struct_test])?;
+
+        // Evaluate the expression
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result)?;
+
+        // {1,"a"} and {2,"b"} are in list, {3,"c"} is not
+        let expected = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
+        assert_eq!(result, &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_from_array_has_static_filter() -> Result<()> {
+        // Test that in_list_from_array creates a static filter
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let col_a = col("a", &schema)?;
+
+        // Create array
+        let array = Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef;
+
+        // Create InListExpr from array
+        let expr = in_list_from_array(Arc::clone(&col_a), array, false)?;
+
+        // Verify that static filter was created by checking display string contains "(SET)"
+        let display_string = expr.to_string();
+        assert!(
+            display_string.contains("(SET)"),
+            "Expected display string to contain '(SET)' but got: {}",
+            display_string
+        );
+
+        // Also verify for negated case
+        let array2 = Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef;
+        let expr_negated = in_list_from_array(Arc::clone(&col_a), array2, true)?;
+        let display_string_negated = expr_negated.to_string();
+        assert!(
+            display_string_negated.contains("(SET)"),
+            "Expected negated display string to contain '(SET)' but got: {}",
+            display_string_negated
+        );
+
         Ok(())
     }
 }
