@@ -1042,8 +1042,8 @@ impl ExecutionPlan for AggregateExec {
         // grouping columns, because such filters determine which groups to compute, not
         // *how* to compute them. Each group's aggregate values (SUM, COUNT, etc.) are
         // calculated from the same input rows regardless of whether we filter before or
-        // after grouping - filtering before just eliminates entire groups early. This
-        // optimization is NOT safe for filters on aggregated columns (like filtering on
+        // after grouping - filtering before just eliminates entire groups early.
+        // This optimization is NOT safe for filters on aggregated columns (like filtering on
         // the result of SUM or COUNT), as those require computing all groups first.
 
         // Check if all filter columns are in the grouping columns
@@ -1057,7 +1057,7 @@ impl ExecutionPlan for AggregateExec {
             .flat_map(|(expr, _)| collect_columns(expr))
             .collect();
 
-        if !filter_columns.is_subset(&grouping_columns) {
+        if !grouping_columns.is_empty() && !filter_columns.is_subset(&grouping_columns) {
             // Filters reference non-grouping columns - not safe to push through
             let unsupported_filters: Vec<_> = parent_filters
                 .into_iter()

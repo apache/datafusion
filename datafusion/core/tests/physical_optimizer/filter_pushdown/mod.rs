@@ -2022,7 +2022,7 @@ async fn test_no_pushdown_aggregate_filter_on_non_grouping_column() {
         Ok:
           - FilterExec: count[count]@1 > 5
           -   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=true
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     "
     );
 }
