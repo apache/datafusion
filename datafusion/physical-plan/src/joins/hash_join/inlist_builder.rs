@@ -45,10 +45,13 @@ pub fn build_struct_inlist_values(
     }
 
     // Size check using built-in method
+    // This is not 1:1 with the actual size of ScalarValues, but it is a good approximation
+    // and at this point is basically "free" to compute since we have the arrays already.
     let estimated_size = join_key_arrays
         .iter()
         .map(|arr| arr.get_array_memory_size())
         .sum::<usize>();
+
     if estimated_size > max_size_bytes {
         return Ok(None);
     }
@@ -64,6 +67,8 @@ pub fn build_struct_inlist_values(
             .enumerate()
             .map(|(i, arr)| {
                 Field::new(
+                    // Field names we're chosen to match the result of `SELECT ((1, 2), (3, 4))` etc.
+                    // But they really should not matter for join key matching
                     format!("c{}", i),
                     arr.data_type().clone(),
                     arr.is_nullable(),

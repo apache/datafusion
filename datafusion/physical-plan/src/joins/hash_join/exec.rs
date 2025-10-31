@@ -965,6 +965,11 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_size,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -983,6 +988,11 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_size,
                 ))
             }
             PartitionMode::Auto => {
@@ -1383,6 +1393,7 @@ async fn collect_left_input(
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
     should_compute_bounds: bool,
+    max_inlist_size: usize,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1510,10 +1521,8 @@ async fn collect_left_input(
     };
 
     // Try to build InList values for small build sides
-    // Default to 128MB limit (can be made configurable later)
-    const MAX_INLIST_PUSHDOWN_BYTES: usize = 128 * 1024 * 1024;
     let inlist_values = if num_rows > 0 {
-        build_struct_inlist_values(&left_values, MAX_INLIST_PUSHDOWN_BYTES)?
+        build_struct_inlist_values(&left_values, max_inlist_size)?
     } else {
         None
     };

@@ -526,9 +526,23 @@ impl SharedBuildAccumulator {
                             .iter()
                             .enumerate()
                             .filter_map(|(partition_id, partition_opt)| {
-                                partition_opt
-                                    .as_ref()
-                                    .map(|partition| (partition_id, partition))
+                                partition_opt.as_ref().and_then(|partition| {
+                                    // Skip empty partitions - they would always return false anyway
+                                    match &partition.pushdown {
+                                        PushdownStrategy::InList(values) if !values.is_empty() => {
+                                            Some((partition_id, partition))
+                                        }
+                                        PushdownStrategy::UseHashTable => {
+                                            // Check if hash table has any entries
+                                            if !partition.hash_map.is_empty() {
+                                                Some((partition_id, partition))
+                                            } else {
+                                                None  // Omit empty partition
+                                            }
+                                        }
+                                        _ => None,
+                                    }
+                                })
                             })
                             .map(|(partition_id, partition)| -> Result<_> {
                                 // WHEN partition_id

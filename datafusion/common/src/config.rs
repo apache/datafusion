@@ -955,6 +955,18 @@ config_namespace! {
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
+        /// Maximum size in bytes for the build side of a hash join to be pushed down
+        /// as an InList expression for dynamic filtering. Build sides larger than this
+        /// will use hash table lookups instead. Set to 0 to always use hash table lookups.
+        /// InList pushdown can be more efficient for small build sides because it can trigger
+        /// statistics pruning as well as use any bloom filters present on the scan side
+        /// if the build side is small enough (currently hardcode to ~ 20 items in Parquet pruning logic).
+        /// InList expressions are also more transparent and easier to serialize over the network in
+        /// distributed uses of DataFusion.
+        /// On the other hand InList pushdown requires making a copy of the data and thus adds some overhead
+        /// to the build side and uses more memory.
+        pub hash_join_inlist_pushdown_max_size: usize, default = 128 * 1024 * 1024
+
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
