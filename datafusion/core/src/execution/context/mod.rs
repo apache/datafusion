@@ -72,7 +72,6 @@ use datafusion_common::{
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
 };
-use datafusion_execution::cache::cache_manager::CacheManagerConfig as ExecutionCacheManagerConfig;
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::registry::SerializerRegistry;
