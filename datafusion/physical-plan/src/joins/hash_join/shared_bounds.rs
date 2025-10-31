@@ -134,13 +134,11 @@ fn create_membership_predicate(
                 "hash_join".to_string(),
             )) as Arc<dyn PhysicalExpr>;
 
-            Ok(Some(
-                Arc::new(HashTableLookupExpr::new(
+            Ok(Some(Arc::new(HashTableLookupExpr::new(
                 lookup_hash_expr,
                 hash_map,
                 "hash_lookup".to_string(),
-            )) as Arc<dyn PhysicalExpr>
-            ))
+            )) as Arc<dyn PhysicalExpr>))
         }
         // Empty partition - should not create a filter for this
         PushdownStrategy::Empty => Ok(None),
@@ -170,11 +168,8 @@ fn create_bounds_predicate(
                 Operator::LtEq,
                 lit(column_bounds.max.clone()),
             )) as Arc<dyn PhysicalExpr>;
-            let range_expr = Arc::new(BinaryExpr::new(
-                min_expr,
-                Operator::And,
-                max_expr,
-            )) as Arc<dyn PhysicalExpr>;
+            let range_expr = Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
+                as Arc<dyn PhysicalExpr>;
             column_predicates.push(range_expr);
         }
     }
@@ -415,8 +410,10 @@ impl SharedBuildAccumulator {
                         )?;
 
                         // Create bounds check expression (if bounds available)
-                        let bounds_expr =
-                            create_bounds_predicate(&self.on_right, &partition_data.bounds);
+                        let bounds_expr = create_bounds_predicate(
+                            &self.on_right,
+                            &partition_data.bounds,
+                        );
 
                         // Combine membership and bounds expressions
                         let filter_expr = match (membership_expr, bounds_expr) {
@@ -426,7 +423,8 @@ impl SharedBuildAccumulator {
                                     bounds,
                                     Operator::And,
                                     membership,
-                                )) as Arc<dyn PhysicalExpr>
+                                ))
+                                    as Arc<dyn PhysicalExpr>
                             }
                             (Some(membership), None) => membership,
                             (None, Some(bounds)) => bounds,
@@ -503,8 +501,10 @@ impl SharedBuildAccumulator {
                                 )?;
 
                                 // 2. Create bounds check expression for this partition (if bounds available)
-                                let bounds_expr =
-                                    create_bounds_predicate(&self.on_right, &partition.bounds);
+                                let bounds_expr = create_bounds_predicate(
+                                    &self.on_right,
+                                    &partition.bounds,
+                                );
 
                                 // 3. Combine membership and bounds expressions
                                 let then_expr = match (membership_expr, bounds_expr) {
@@ -514,7 +514,8 @@ impl SharedBuildAccumulator {
                                             bounds,
                                             Operator::And,
                                             membership,
-                                        )) as Arc<dyn PhysicalExpr>
+                                        ))
+                                            as Arc<dyn PhysicalExpr>
                                     }
                                     (Some(membership), None) => membership,
                                     (None, Some(bounds)) => bounds,
