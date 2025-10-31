@@ -526,11 +526,23 @@ SELECT MAP { 'a': 1, 'b': 3 };
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT MAP { 'a': 1, 2: 3 };
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
-# ----
-# a
+# accessing map with non-string key
+query T
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
+----
+a
+
+# accessing map with string key
+query I
+SELECT MAP { 'a': 1, 'b': 2, 'c': 3 }['a'];
+----
+1
+
+# accessing map with non-string key in case expression
+query I
+SELECT (CASE WHEN 1 > 0 THEN MAP {'x': 100} ELSE MAP {'y': 200} END)['x']; 
+----
+100
 
 # TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
 # query ?
@@ -538,11 +550,11 @@ SELECT MAP { 'a': 1, 2: 3 };
 # ----
 # 1
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
-# ----
-# 33
+# accessing map with non-string key
+query I
+SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
+----
+33
 
 ## cardinality
 
