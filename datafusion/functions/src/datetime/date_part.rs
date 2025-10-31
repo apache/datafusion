@@ -19,14 +19,21 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, PrimitiveBuilder};
+use arrow::array::timezone::Tz;
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, date_part, DatePart};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use arrow::datatypes::{
+    ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
+use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
+use datafusion_common::cast::as_primitive_array;
+use std::ops::Add;
 use datafusion_common::types::{logical_date, NativeType};
 
 use datafusion_common::{
@@ -36,7 +43,7 @@ use datafusion_common::{
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
     },
-    exec_err, internal_err, not_impl_err,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err,
     types::logical_string,
     utils::take_function_args,
     Result, ScalarValue,
@@ -56,7 +63,7 @@ use datafusion_macros::user_doc;
     argument(
         name = "part",
         description = r#"Part of the date to return. The following date parts are supported:
-        
+
     - year
     - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
     - month
@@ -173,6 +180,7 @@ impl ScalarUDFImpl for DatePartFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let config = &args.config_options;
         let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
@@ -191,6 +199,35 @@ impl ScalarUDFImpl for DatePartFunc {
         let array = match array {
             ColumnarValue::Array(array) => Arc::clone(&array),
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
+        };
+
+        // Adjust timestamps for timezone-aware extraction
+        let array = if let Timestamp(time_unit, Some(tz_str)) = array.data_type() {
+            // For timezone-aware timestamps, extract in their own timezone
+            let tz = match tz_str.parse::<Tz>() {
+                Ok(tz) => tz,
+                Err(_) => return exec_err!("Invalid timezone"),
+            };
+            match time_unit {
+                Nanosecond => adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?,
+                Microsecond => adjust_timestamp_array::<TimestampMicrosecondType>(&array, tz)?,
+                Millisecond => adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?,
+                Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
+            }
+        } else if let Timestamp(time_unit, None) = array.data_type() {
+            // For naive timestamps, interpret in session timezone
+            let tz = match config.execution.time_zone.parse::<Tz>() {
+                Ok(tz) => tz,
+                Err(_) => return exec_err!("Invalid timezone"),
+            };
+            match time_unit {
+                Nanosecond => adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?,
+                Microsecond => adjust_timestamp_array::<TimestampMicrosecondType>(&array, tz)?,
+                Millisecond => adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?,
+                Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
+            }
+        } else {
+            array
         };
 
         let part_trim = part_normalization(&part);
@@ -238,6 +275,69 @@ impl ScalarUDFImpl for DatePartFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+    fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
+    where
+        F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,
+    {
+        match converter(ts) {
+            MappedLocalTime::Ambiguous(earliest, latest) => exec_err!(
+                "Ambiguous timestamp. Do you mean {:?} or {:?}",
+                earliest,
+                latest
+            ),
+            MappedLocalTime::None => exec_err!(
+                "The local time does not exist because there is a gap in the local time."
+            ),
+            MappedLocalTime::Single(date_time) => Ok(date_time),
+        }
+    }
+
+    let date_time = match T::UNIT {
+        Nanosecond => Utc.timestamp_nanos(ts),
+        Microsecond => convert_timestamp(ts, |ts| Utc.timestamp_micros(ts))?,
+        Millisecond => convert_timestamp(ts, |ts| Utc.timestamp_millis_opt(ts))?,
+        Second => convert_timestamp(ts, |ts| Utc.timestamp_opt(ts, 0))?,
+    };
+
+    let offset_seconds: i64 = tz
+        .offset_from_utc_datetime(&date_time.naive_utc())
+        .fix()
+        .local_minus_utc() as i64;
+
+    let adjusted_date_time = date_time.add(
+        TimeDelta::try_seconds(offset_seconds)
+            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
+    );
+
+    // convert back to i64
+    match T::UNIT {
+        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(|| {
+            internal_datafusion_err!(
+                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
+            )
+        }),
+        Microsecond => Ok(adjusted_date_time.timestamp_micros()),
+        Millisecond => Ok(adjusted_date_time.timestamp_millis()),
+        Second => Ok(adjusted_date_time.timestamp()),
+    }
+}
+
+fn adjust_timestamp_array<T: ArrowTimestampType>(array: &ArrayRef, tz: Tz) -> Result<ArrayRef> {
+    let mut builder = PrimitiveBuilder::<T>::new();
+    let primitive_array = as_primitive_array::<T>(array)?;
+    for ts_opt in primitive_array.iter() {
+        match ts_opt {
+            None => builder.append_null(),
+            Some(ts) => {
+                let adjusted_ts = adjust_to_local_time::<T>(ts, tz)?;
+                builder.append_value(adjusted_ts);
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 fn is_epoch(part: &str) -> bool {
