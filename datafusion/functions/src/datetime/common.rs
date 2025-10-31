@@ -205,17 +205,60 @@ fn timestamp_to_naive(value: i64) -> Result<NaiveDateTime> {
         .map(|dt| dt.naive_utc())
 }
 
+/// Detects whether a timestamp string contains explicit timezone information.
+///
+/// This function performs a single-pass scan to check for:
+/// 1. RFC3339-compatible format (via Arrow's parser)
+/// 2. Timezone offset markers (e.g., `+05:00`, `-0800`, `+05`)
+/// 3. Trailing 'Z' or 'z' suffix (UTC indicator)
+/// 4. Named timezone identifiers (e.g., `UTC`, `America/New_York`)
+///
+/// # Performance Considerations
+/// This function is called for every string value during timestamp parsing.
+/// The implementation uses a single-pass byte-level scan for efficiency.
+///
+/// # Examples
+/// ```ignore
+/// assert!(has_explicit_timezone("2020-09-08T13:42:29Z"));
+/// assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00"));
+/// assert!(has_explicit_timezone("2020-09-08T13:42:29 UTC"));
+/// assert!(!has_explicit_timezone("2020-09-08T13:42:29"));
+/// ```
 fn has_explicit_timezone(value: &str) -> bool {
-    if DateTime::parse_from_rfc3339(value).is_ok() {
+    // Fast path: try RFC3339 parsing first
+    if has_rfc3339_timezone(value) {
         return true;
     }
 
+    // Single-pass scan for offset markers and named timezones
+    has_offset_marker(value) || has_named_timezone(value)
+}
+
+/// Checks if the string is a valid RFC3339 timestamp with timezone.
+#[inline]
+fn has_rfc3339_timezone(value: &str) -> bool {
+    DateTime::parse_from_rfc3339(value).is_ok()
+}
+
+/// Detects UTC indicator ('Z' or 'z') or numeric timezone offsets.
+///
+/// Recognizes patterns like:
+/// - `2020-09-08T13:42:29Z` (trailing Z)
+/// - `2020-09-08T13:42:29+05:00` (offset with colons)
+/// - `2020-09-08T13:42:29+0500` (offset without colons)
+/// - `2020-09-08T13:42:29+05` (two-digit offset)
+///
+/// Avoids false positives from:
+/// - Scientific notation (e.g., `1.5e+10`)
+/// - Date separators (e.g., `05-17-2023`)
+fn has_offset_marker(value: &str) -> bool {
     let bytes = value.as_bytes();
     let len = bytes.len();
 
     let mut i = 0;
     while i < len {
         match bytes[i] as char {
+            // Check for trailing 'Z' (UTC indicator)
             'Z' | 'z' => {
                 if i > 0 && bytes[i - 1].is_ascii_digit() {
                     let next = i + 1;
@@ -225,7 +268,9 @@ fn has_explicit_timezone(value: &str) -> bool {
                 }
                 i += 1;
             }
+            // Check for timezone offset (+/-HHMM or +/-HH:MM)
             '+' | '-' => {
+                // Skip scientific notation (e.g., 1.5e+10)
                 if i > 0 {
                     let prev = bytes[i - 1] as char;
                     if prev == 'e' || prev == 'E' {
@@ -234,133 +279,149 @@ fn has_explicit_timezone(value: &str) -> bool {
                     }
                 }
 
-                let mut j = i + 1;
-                let mut digit_count = 0;
-                while j < len && bytes[j].is_ascii_digit() {
-                    digit_count += 1;
-                    j += 1;
-                }
-
-                let mut valid = false;
-                if j < len && bytes[j] == b':' {
-                    let mut sections = 0;
-                    while j < len && bytes[j] == b':' {
-                        j += 1;
-                        let mut digits = 0;
-                        while j < len && bytes[j].is_ascii_digit() {
-                            digits += 1;
-                            j += 1;
-                        }
-                        if digits != 2 {
-                            sections = 0;
-                            break;
-                        }
-                        sections += 1;
-                    }
-                    if sections > 0 {
-                        valid = true;
-                    }
-                } else if digit_count == 4 || digit_count == 6 {
-                    if i > 0 {
-                        let prev = bytes[i - 1];
-                        if matches!(prev, b'T' | b't' | b' ' | b'\t') {
-                            valid = true;
-                        } else if prev.is_ascii_digit() {
-                            // When following a digit, check if there's a colon before this position
-                            // to ensure it's after a time component (e.g., "13:42:29+0500")
-                            // and not a date separator (e.g., "2020-09-08" or "05-17-2023")
-                            // Check that there's no dash in the previous 4 characters,
-                            // which would indicate a date pattern like "05-17-2023"
-                            let has_colon_before = bytes[..i].contains(&b':');
-                            let lookback_start = i.saturating_sub(4);
-                            let no_dash_nearby = !bytes[lookback_start..i]
-                                .iter()
-                                .any(|&b| b == b'-' || b == b'/');
-                            let no_dash_after = j >= len || bytes[j] != b'-';
-                            if has_colon_before
-                                && i >= 2
-                                && bytes[i - 2].is_ascii_digit()
-                                && no_dash_nearby
-                                && no_dash_after
-                            {
-                                valid = true;
-                            }
-                        }
-                    }
-                } else if digit_count == 2 && i > 0 {
-                    let prev = bytes[i - 1];
-                    if matches!(prev, b'T' | b't' | b' ' | b'\t') {
-                        valid = true;
-                    } else if prev.is_ascii_digit() {
-                        // When following a digit, check if there's a colon before this position
-                        // to ensure it's after a time component (e.g., "13:42:29+05")
-                        // and not a date separator (e.g., "2020-09-08" or "05-17")
-                        // Check that there's no dash in the previous 4 characters,
-                        // which would indicate a date pattern like "05-17"
-                        let has_colon_before = bytes[..i].contains(&b':');
-                        let lookback_start = i.saturating_sub(4);
-                        let no_dash_nearby = !bytes[lookback_start..i]
-                            .iter()
-                            .any(|&b| b == b'-' || b == b'/');
-                        let no_dash_after = j >= len || bytes[j] != b'-';
-                        if has_colon_before
-                            && i >= 2
-                            && bytes[i - 2].is_ascii_digit()
-                            && no_dash_nearby
-                            && no_dash_after
-                        {
-                            valid = true;
-                        }
-                    }
-                }
-
-                if valid
-                    && (j == len
-                        || bytes[j].is_ascii_whitespace()
-                        || matches!(bytes[j], b',' | b'.' | b':' | b';'))
-                {
+                if is_valid_offset_at(bytes, i, len) {
                     return true;
                 }
 
-                i = j;
+                // Skip past digits to continue scanning
+                i += 1;
+                while i < len && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
             }
             _ => i += 1,
         }
     }
 
-    fn matches_timezone(token: &str) -> bool {
-        if token.is_empty() {
-            return false;
-        }
+    false
+}
 
-        if token.eq_ignore_ascii_case("utc") || token.eq_ignore_ascii_case("gmt") {
-            return true;
-        }
+/// Checks if position `i` starts a valid timezone offset.
+///
+/// Returns true for patterns like:
+/// - `+05:00` or `-03:30` (with colons)
+/// - `+0500` or `-0800` (4-digit without colons)
+/// - `+053045` (6-digit with seconds)
+/// - `+05` or `-08` (2-digit)
+fn is_valid_offset_at(bytes: &[u8], i: usize, len: usize) -> bool {
+    let mut j = i + 1;
+    let mut digit_count = 0;
 
-        if Tz::from_str(token).is_ok() {
-            return true;
-        }
-
-        let trimmed =
-            token.trim_end_matches(|c: char| c == '+' || c == '-' || c.is_ascii_digit());
-        if trimmed.len() != token.len()
-            && trimmed.chars().any(|c| c.is_ascii_alphabetic())
-            && matches_timezone(trimmed)
-        {
-            return true;
-        }
-
-        false
+    // Count consecutive digits after +/-
+    while j < len && bytes[j].is_ascii_digit() {
+        digit_count += 1;
+        j += 1;
     }
 
-    let mut start = 0;
-    while start < len {
-        while start < len
-            && !matches!(
-                bytes[start],
-                b'A'..=b'Z' | b'a'..=b'z' | b'/' | b'_' | b'-' | b'+' | b'0'..=b'9'
-            )
+    // Check for offset with colons (e.g., +05:00 or +05:00:45)
+    if j < len && bytes[j] == b':' {
+        return is_colon_separated_offset(bytes, j, len);
+    }
+
+    // Check for offset without colons
+    match digit_count {
+        2 | 4 | 6 => is_context_valid_for_offset(bytes, i, j, len),
+        _ => false,
+    }
+}
+
+/// Validates colon-separated offset format (e.g., +05:00 or +05:00:45).
+fn is_colon_separated_offset(bytes: &[u8], mut pos: usize, len: usize) -> bool {
+    let mut sections = 0;
+
+    while pos < len && bytes[pos] == b':' {
+        pos += 1;
+        let mut digits = 0;
+        while pos < len && bytes[pos].is_ascii_digit() {
+            digits += 1;
+            pos += 1;
+        }
+        if digits != 2 {
+            return false;
+        }
+        sections += 1;
+    }
+
+    sections > 0
+        && (pos == len
+            || bytes[pos].is_ascii_whitespace()
+            || matches!(bytes[pos], b',' | b'.' | b':' | b';'))
+}
+
+/// Checks if the context around an offset marker is valid.
+///
+/// Ensures the offset follows a time component (not a date separator).
+/// For example:
+/// - Valid: `13:42:29+0500` (follows time with colon)
+/// - Invalid: `05-17+2023` (part of date, no preceding colon)
+fn is_context_valid_for_offset(bytes: &[u8], i: usize, j: usize, len: usize) -> bool {
+    if i == 0 {
+        return false;
+    }
+
+    let prev = bytes[i - 1];
+
+    // Valid after T, t, space, or tab separators
+    if matches!(prev, b'T' | b't' | b' ' | b'\t') {
+        return is_followed_by_delimiter(bytes, j, len);
+    }
+
+    // When following a digit, must be part of a time (not date)
+    if prev.is_ascii_digit() {
+        let has_colon_before = bytes[..i].contains(&b':');
+        let no_date_separator = !has_recent_dash_or_slash(bytes, i);
+        let no_dash_after = j >= len || bytes[j] != b'-';
+
+        if has_colon_before
+            && i >= 2
+            && bytes[i - 2].is_ascii_digit()
+            && no_date_separator
+            && no_dash_after
         {
+            return is_followed_by_delimiter(bytes, j, len);
+        }
+    }
+
+    false
+}
+
+/// Checks if there's a dash or slash in the 4 characters before position `i`.
+///
+/// This helps distinguish time offsets from date separators.
+/// For example, in `05-17-2023`, the `-` is a date separator, not an offset.
+#[inline]
+fn has_recent_dash_or_slash(bytes: &[u8], i: usize) -> bool {
+    let lookback_start = i.saturating_sub(4);
+    bytes[lookback_start..i]
+        .iter()
+        .any(|&b| b == b'-' || b == b'/')
+}
+
+/// Checks if position `j` is followed by a valid delimiter or end of string.
+#[inline]
+fn is_followed_by_delimiter(bytes: &[u8], j: usize, len: usize) -> bool {
+    j == len
+        || bytes[j].is_ascii_whitespace()
+        || matches!(bytes[j], b',' | b'.' | b':' | b';')
+}
+
+/// Scans for named timezone identifiers (e.g., `UTC`, `GMT`, `America/New_York`).
+///
+/// This performs a token-based scan looking for:
+/// - Common abbreviations: `UTC`, `GMT`
+/// - IANA timezone names: `America/New_York`, `Europe/London`
+///
+/// The scan looks for timezone tokens anywhere in the string, as some formats
+/// place timezone names at the beginning or end (e.g., `UTC 2024-01-01` or
+/// `2024-01-01 America/New_York`).
+fn has_named_timezone(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let len = bytes.len();
+    let mut start = 0;
+
+    while start < len {
+        // Skip non-token characters
+        while start < len && !is_token_char(bytes[start]) {
             start += 1;
         }
 
@@ -368,30 +429,28 @@ fn has_explicit_timezone(value: &str) -> bool {
             break;
         }
 
+        // Extract token
         let mut end = start;
         let mut has_alpha = false;
-        while end < len
-            && matches!(
-                bytes[end],
-                b'A'..=b'Z' | b'a'..=b'z' | b'/' | b'_' | b'-' | b'+' | b'0'..=b'9'
-            )
-        {
+        while end < len && is_token_char(bytes[end]) {
             if bytes[end].is_ascii_alphabetic() {
                 has_alpha = true;
             }
             end += 1;
         }
 
+        // Check if token (or suffix) is a timezone
         if has_alpha {
             let token = &value[start..end];
-            if matches_timezone(token) {
+            if is_timezone_name(token) {
                 return true;
             }
 
+            // Check suffixes (e.g., "PST" in "12:00PST")
             for (offset, ch) in token.char_indices().skip(1) {
                 if ch.is_ascii_alphabetic() {
                     let candidate = &token[offset..];
-                    if matches_timezone(candidate) {
+                    if is_timezone_name(candidate) {
                         return true;
                     }
                 }
@@ -399,6 +458,46 @@ fn has_explicit_timezone(value: &str) -> bool {
         }
 
         start = end;
+    }
+
+    false
+}
+
+/// Returns true if the byte can be part of a timezone token.
+#[inline]
+fn is_token_char(b: u8) -> bool {
+    matches!(
+        b,
+        b'A'..=b'Z' | b'a'..=b'z' | b'/' | b'_' | b'-' | b'+' | b'0'..=b'9'
+    )
+}
+
+/// Checks if a token is a recognized timezone name.
+///
+/// Recognizes:
+/// - Common abbreviations: `UTC`, `GMT`
+/// - IANA timezone database names (via `Tz::from_str`)
+/// - Timezone names with trailing offset info (e.g., `PST+8`)
+fn is_timezone_name(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+
+    // Check common abbreviations
+    if token.eq_ignore_ascii_case("utc") || token.eq_ignore_ascii_case("gmt") {
+        return true;
+    }
+
+    // Check IANA timezone database
+    if Tz::from_str(token).is_ok() {
+        return true;
+    }
+
+    // Handle timezone names with trailing offset (e.g., "PST+8")
+    let trimmed =
+        token.trim_end_matches(|c: char| c == '+' || c == '-' || c.is_ascii_digit());
+    if trimmed.len() != token.len() && trimmed.chars().any(|c| c.is_ascii_alphabetic()) {
+        return is_timezone_name(trimmed);
     }
 
     false
