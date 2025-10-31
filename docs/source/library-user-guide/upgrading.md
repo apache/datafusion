@@ -40,6 +40,12 @@ The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
 
 [`1.87.0`]: https://releases.rs/docs/1.87.0/
 
+### `MSRV` updated to 1.88.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.88.0`].
+
+[`1.88.0`]: https://releases.rs/docs/1.88.0/
+
 ### `FunctionRegistry` exposes two additional methods
 
 `FunctionRegistry` exposes two additional methods `udafs` and `udwfs` which expose set of registered user defined aggregation and window function names. To upgrade implement methods returning set of registered function names:
