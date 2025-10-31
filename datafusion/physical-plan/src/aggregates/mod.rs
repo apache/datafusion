@@ -1046,9 +1046,6 @@ impl ExecutionPlan for AggregateExec {
         // This optimization is NOT safe for filters on aggregated columns (like filtering on
         // the result of SUM or COUNT), as those require computing all groups first.
 
-        let filter_columns: HashSet<_> =
-            parent_filters.iter().flat_map(collect_columns).collect();
-
         let grouping_columns: HashSet<_> = self
             .group_by
             .expr()
@@ -1056,50 +1053,63 @@ impl ExecutionPlan for AggregateExec {
             .flat_map(|(expr, _)| collect_columns(expr))
             .collect();
 
-        // Check if filters reference non-grouping columns
-        if !grouping_columns.is_empty() && !filter_columns.is_subset(&grouping_columns) {
-            let unsupported_filters = parent_filters
-                .into_iter()
-                .map(PushedDownPredicate::unsupported)
-                .collect();
-            return Ok(FilterDescription::new().with_child(ChildFilterDescription {
-                parent_filters: unsupported_filters,
-                self_filters: vec![],
-            }));
-        }
+        // Analyze each filter separately to determine if it can be pushed down
+        let mut safe_filters = Vec::new();
+        let mut unsafe_filters = Vec::new();
 
-        // For GROUPING SETS, verify filtered columns appear in all grouping sets
-        if self.group_by.groups().len() > 1 {
-            let filter_column_indices: HashSet<usize> = filter_columns
-                .iter()
-                .filter_map(|filter_col| {
-                    self.group_by
-                        .expr()
-                        .iter()
-                        .position(|(expr, _)| collect_columns(expr).contains(filter_col))
-                })
-                .collect();
+        for filter in parent_filters {
+            let filter_columns: HashSet<_> =
+                collect_columns(&filter).into_iter().collect();
 
-            // Check if any filtered column is missing from any grouping set
-            let has_missing_column = self.group_by.groups().iter().any(|null_mask| {
-                filter_column_indices
-                    .iter()
-                    .any(|&idx| null_mask.get(idx) == Some(&true))
-            });
+            // Check if this filter references non-grouping columns
+            let references_non_grouping = !grouping_columns.is_empty()
+                && !filter_columns.is_subset(&grouping_columns);
 
-            if has_missing_column {
-                let unsupported_filters = parent_filters
-                    .into_iter()
-                    .map(PushedDownPredicate::unsupported)
-                    .collect();
-                return Ok(FilterDescription::new().with_child(ChildFilterDescription {
-                    parent_filters: unsupported_filters,
-                    self_filters: vec![],
-                }));
+            if references_non_grouping {
+                unsafe_filters.push(filter);
+                continue;
             }
+
+            // For GROUPING SETS, verify this filter's columns appear in all grouping sets
+            if self.group_by.groups().len() > 1 {
+                let filter_column_indices: HashSet<usize> = filter_columns
+                    .iter()
+                    .filter_map(|filter_col| {
+                        self.group_by.expr().iter().position(|(expr, _)| {
+                            collect_columns(expr).contains(filter_col)
+                        })
+                    })
+                    .collect();
+
+                // Check if any of this filter's columns are missing from any grouping set
+                let has_missing_column = self.group_by.groups().iter().any(|null_mask| {
+                    filter_column_indices
+                        .iter()
+                        .any(|&idx| null_mask.get(idx) == Some(&true))
+                });
+
+                if has_missing_column {
+                    unsafe_filters.push(filter);
+                    continue;
+                }
+            }
+
+            // This filter is safe to push down
+            safe_filters.push(filter);
         }
 
-        FilterDescription::from_children(parent_filters, &self.children())
+        // Build child filter description with both safe and unsafe filters
+        let child = self.children()[0];
+        let mut child_desc = ChildFilterDescription::from_child(&safe_filters, child)?;
+
+        // Add unsafe filters as unsupported
+        child_desc.parent_filters.extend(
+            unsafe_filters
+                .into_iter()
+                .map(PushedDownPredicate::unsupported),
+        );
+
+        Ok(FilterDescription::new().with_child(child_desc))
     }
 }
 
