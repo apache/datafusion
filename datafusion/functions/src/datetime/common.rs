@@ -174,6 +174,33 @@ fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
     FixedOffset::east_opt(total_seconds)
 }
 
+/// Converts a local datetime result to a UTC timestamp in nanoseconds.
+///
+/// # DST Transition Behavior
+///
+/// This function handles daylight saving time (DST) transitions by returning an error
+/// when the local time is ambiguous or invalid:
+///
+/// ## Ambiguous Times (Fall Back)
+/// When clocks "fall back" (e.g., 2:00 AM becomes 1:00 AM), times in the repeated hour
+/// exist twice. For example, in America/New_York on 2024-11-03:
+/// - `2024-11-03 01:30:00` occurs both at UTC 05:30 (EDT) and UTC 06:30 (EST)
+///
+/// DataFusion returns an error rather than silently choosing one interpretation,
+/// ensuring users are aware of the ambiguity.
+///
+/// ## Invalid Times (Spring Forward)
+/// When clocks "spring forward" (e.g., 2:00 AM becomes 3:00 AM), times in the skipped hour
+/// don't exist. For example, in America/New_York on 2024-03-10:
+/// - `2024-03-10 02:30:00` never occurred (clocks jumped from 02:00 to 03:00)
+///
+/// DataFusion returns an error for these non-existent times.
+///
+/// ## Workarounds
+/// To avoid ambiguity errors:
+/// 1. Use timestamps with explicit timezone offsets (e.g., `2024-11-03 01:30:00-05:00`)
+/// 2. Convert to UTC before processing
+/// 3. Use a timezone without DST (e.g., UTC, `America/Phoenix`)
 fn local_datetime_to_timestamp<T: TimeZone>(
     result: LocalResult<DateTime<T>>,
     tz_repr: &str,
