@@ -34,12 +34,6 @@ to version `57.0.0`, including several dependent crates such as `prost`,
 `tonic`, `pyo3`, and `substrait`. . See the [release
 notes](https://github.com/apache/arrow-rs/releases/tag/57.0.0) for more details.
 
-### `MSRV` updated to 1.87.0
-
-The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
-
-[`1.87.0`]: https://releases.rs/docs/1.87.0/
-
 ### `MSRV` updated to 1.88.0
 
 The Minimum Supported Rust Version (MSRV) has been updated to [`1.88.0`].
