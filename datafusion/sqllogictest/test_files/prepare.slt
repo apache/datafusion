@@ -204,9 +204,11 @@ EXECUTE my_plan6(20.0);
 statement error Cast error: Cannot cast string 'foo' to value of Int32 type
 EXECUTE my_plan6('foo');
 
-# TODO: support non-literal expressions
-statement error Unsupported parameter type
-EXECUTE my_plan6(10 + 20);
+# support non-literal expressions
+query II
+EXECUTE my_plan6(10 + 10);
+----
+1 20
 
 statement ok
 DEALLOCATE my_plan6;
