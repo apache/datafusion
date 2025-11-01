@@ -18,9 +18,8 @@
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
 use arrow::array::{
-    cast::AsArray, Array, ArrayRef, ArrowNativeTypeOp, Capacities, GenericListArray,
-    GenericListViewArray, Int64Array, MutableArrayData, NullArray, NullBufferBuilder,
-    OffsetSizeTrait,
+    cast::AsArray, Array, ArrayRef, Capacities, GenericListArray, GenericListViewArray,
+    Int64Array, MutableArrayData, NullArray, NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -529,6 +528,81 @@ where
     }
 }
 
+/// Describes how to realize a single row's slice once the bounds and stride
+/// have been normalized.
+enum SlicePlan<O: OffsetSizeTrait> {
+    /// No values should be produced.
+    Empty,
+    /// A contiguous run starting at `start` (relative to the row) with `len`
+    /// elements can be copied in one go.
+    Contiguous { start: O, len: O },
+    /// Arbitrary positions (already relative to the row) must be copied in
+    /// sequence.
+    Indices(Vec<O>),
+}
+
+fn compute_slice_plan<O: OffsetSizeTrait>(
+    len: O,
+    from_raw: i64,
+    to_raw: i64,
+    stride_raw: Option<i64>,
+) -> Result<SlicePlan<O>>
+where
+    i64: TryInto<O>,
+{
+    if len == O::usize_as(0) {
+        return Ok(SlicePlan::Empty);
+    }
+
+    let from_index = adjusted_from_index::<O>(from_raw, len)?;
+    let to_index = adjusted_to_index::<O>(to_raw, len)?;
+
+    let (Some(from), Some(to)) = (from_index, to_index) else {
+        return Ok(SlicePlan::Empty);
+    };
+
+    let stride_value = stride_raw.unwrap_or(1);
+    if stride_value == 0 {
+        return exec_err!(
+            "array_slice got invalid stride: {:?}, it cannot be 0",
+            stride_value
+        );
+    }
+
+    if (from < to && stride_value.is_negative())
+        || (from > to && stride_value.is_positive())
+    {
+        return Ok(SlicePlan::Empty);
+    }
+
+    let stride: O = stride_value.try_into().map_err(|_| {
+        internal_datafusion_err!("array_slice got invalid stride: {}", stride_value)
+    })?;
+
+    if from <= to && stride_value.is_positive() {
+        if stride_value == 1 {
+            let len = to - from + O::usize_as(1);
+            Ok(SlicePlan::Contiguous { start: from, len })
+        } else {
+            let mut indices = Vec::new();
+            let mut index = from;
+            while index <= to {
+                indices.push(index);
+                index += stride;
+            }
+            Ok(SlicePlan::Indices(indices))
+        }
+    } else {
+        let mut indices = Vec::new();
+        let mut index = from;
+        while index >= to {
+            indices.push(index);
+            index += stride;
+        }
+        Ok(SlicePlan::Indices(indices))
+    }
+}
+
 fn general_array_slice<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     from_array: &Int64Array,
@@ -544,6 +618,9 @@ where
 
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+    // We have the slice syntax compatible with DuckDB v0.8.1.
+    // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
 
     let mut offsets = vec![O::usize_as(0)];
     let mut null_builder = NullBufferBuilder::new(array.len());
@@ -571,72 +648,32 @@ where
             continue;
         }
 
-        let from_index = adjusted_from_index::<O>(from_array.value(row_index), len)?;
-        let to_index = adjusted_to_index::<O>(to_array.value(row_index), len)?;
+        let slice_plan = compute_slice_plan::<O>(
+            len,
+            from_array.value(row_index),
+            to_array.value(row_index),
+            stride.map(|s| s.value(row_index)),
+        )?;
 
-        if let (Some(from), Some(to)) = (from_index, to_index) {
-            let stride = stride.map(|s| s.value(row_index));
-            // Default stride is 1 if not provided
-            let stride = stride.unwrap_or(1);
-            if stride.is_zero() {
-                return exec_err!(
-                    "array_slice got invalid stride: {:?}, it cannot be 0",
-                    stride
-                );
-            } else if (from < to && stride.is_negative())
-                || (from > to && stride.is_positive())
-            {
-                // return empty array
-                offsets.push(offsets[row_index]);
-                continue;
+        match slice_plan {
+            SlicePlan::Empty => offsets.push(offsets[row_index]),
+            SlicePlan::Contiguous {
+                start: rel_start,
+                len: slice_len,
+            } => {
+                let start_index = (start + rel_start).to_usize().unwrap();
+                let end_index = (start + rel_start + slice_len).to_usize().unwrap();
+                mutable.extend(0, start_index, end_index);
+                offsets.push(offsets[row_index] + slice_len);
             }
-
-            let stride: O = stride.try_into().map_err(|_| {
-                internal_datafusion_err!("array_slice got invalid stride: {}", stride)
-            })?;
-
-            if from <= to && stride > O::zero() {
-                assert!(start + to <= end);
-                if stride.eq(&O::one()) {
-                    // stride is default to 1
-                    mutable.extend(
-                        0,
-                        (start + from).to_usize().unwrap(),
-                        (start + to + O::usize_as(1)).to_usize().unwrap(),
-                    );
-                    offsets.push(offsets[row_index] + (to - from + O::usize_as(1)));
-                    continue;
+            SlicePlan::Indices(indices) => {
+                let count = indices.len();
+                for rel_index in indices {
+                    let absolute_index = (start + rel_index).to_usize().unwrap();
+                    mutable.extend(0, absolute_index, absolute_index + 1);
                 }
-                let mut index = start + from;
-                let mut cnt = 0;
-                while index <= start + to {
-                    mutable.extend(
-                        0,
-                        index.to_usize().unwrap(),
-                        index.to_usize().unwrap() + 1,
-                    );
-                    index += stride;
-                    cnt += 1;
-                }
-                offsets.push(offsets[row_index] + O::usize_as(cnt));
-            } else {
-                let mut index = start + from;
-                let mut cnt = 0;
-                while index >= start + to {
-                    mutable.extend(
-                        0,
-                        index.to_usize().unwrap(),
-                        index.to_usize().unwrap() + 1,
-                    );
-                    index += stride;
-                    cnt += 1;
-                }
-                // invalid range, return empty array
-                offsets.push(offsets[row_index] + O::usize_as(cnt));
+                offsets.push(offsets[row_index] + O::usize_as(count));
             }
-        } else {
-            // invalid range, return empty array
-            offsets.push(offsets[row_index]);
         }
     }
 
@@ -666,12 +703,15 @@ where
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
+    // We must build `offsets` and `sizes` buffers manually as ListView does not enforce
+    // monotonically increasing offsets.
     let mut offsets = Vec::with_capacity(array.len());
     let mut sizes = Vec::with_capacity(array.len());
     let mut current_offset = O::usize_as(0);
     let mut null_builder = NullBufferBuilder::new(array.len());
 
     for row_index in 0..array.len() {
+        // Propagate NULL semantics: any NULL input yields a NULL output slot.
         if array.is_null(row_index)
             || from_array.is_null(row_index)
             || to_array.is_null(row_index)
@@ -692,79 +732,47 @@ where
             continue;
         }
 
-        let from_index = adjusted_from_index::<O>(from_array.value(row_index), len)?;
-        let to_index = adjusted_to_index::<O>(to_array.value(row_index), len)?;
+        let slice_plan = compute_slice_plan::<O>(
+            len,
+            from_array.value(row_index),
+            to_array.value(row_index),
+            stride.map(|s| s.value(row_index)),
+        )?;
 
-        if let (Some(from), Some(to)) = (from_index, to_index) {
-            let stride_value = stride.map(|s| s.value(row_index)).unwrap_or(1);
-            if stride_value.is_zero() {
-                return exec_err!(
-                    "array_slice got invalid stride: {:?}, it cannot be 0",
-                    stride_value
-                );
-            } else if (from < to && stride_value.is_negative())
-                || (from > to && stride_value.is_positive())
-            {
+        let start = array.value_offset(row_index);
+        match slice_plan {
+            SlicePlan::Empty => {
                 offsets.push(current_offset);
                 sizes.push(O::usize_as(0));
-                continue;
             }
-
-            let stride: O = stride_value.try_into().map_err(|_| {
-                internal_datafusion_err!("array_slice got invalid stride: {}", stride_value)
-            })?;
-
-            let start = array.value_offset(row_index);
-            if from <= to && stride > O::zero() {
-                if stride == O::one() {
-                    let start_index = (start + from).to_usize().unwrap();
-                    let end_index =
-                        (start + to + O::usize_as(1)).to_usize().unwrap();
-                    mutable.extend(0, start_index, end_index);
-                    let length = to - from + O::usize_as(1);
-                    offsets.push(current_offset);
-                    sizes.push(length);
-                    current_offset = current_offset + length;
-                    continue;
+            SlicePlan::Contiguous {
+                start: rel_start,
+                len: slice_len,
+            } => {
+                let start_index = (start + rel_start).to_usize().unwrap();
+                let end_index = (start + rel_start + slice_len).to_usize().unwrap();
+                mutable.extend(0, start_index, end_index);
+                offsets.push(current_offset);
+                sizes.push(slice_len);
+                current_offset += slice_len;
+            }
+            SlicePlan::Indices(indices) => {
+                let count = indices.len();
+                for rel_index in indices {
+                    let absolute_index = (start + rel_index).to_usize().unwrap();
+                    mutable.extend(0, absolute_index, absolute_index + 1);
                 }
-
-                let mut index = start + from;
-                let mut cnt = 0usize;
-                let end_index = start + to;
-                while index <= end_index {
-                    let idx = index.to_usize().unwrap();
-                    mutable.extend(0, idx, idx + 1);
-                    index += stride;
-                    cnt += 1;
-                }
-                let length = O::usize_as(cnt);
+                let length = O::usize_as(count);
                 offsets.push(current_offset);
                 sizes.push(length);
-                current_offset = current_offset + length;
-            } else {
-                let mut index = start + from;
-                let mut cnt = 0usize;
-                let end_index = start + to;
-                while index >= end_index {
-                    let idx = index.to_usize().unwrap();
-                    mutable.extend(0, idx, idx + 1);
-                    index += stride;
-                    cnt += 1;
-                }
-                let length = O::usize_as(cnt);
-                offsets.push(current_offset);
-                sizes.push(length);
-                current_offset = current_offset + length;
+                current_offset += length;
             }
-        } else {
-            offsets.push(current_offset);
-            sizes.push(O::usize_as(0));
         }
     }
 
     let data = mutable.freeze();
     let field = match array.data_type() {
-        ListView(field) | LargeListView(field) => field.clone(),
+        ListView(field) | LargeListView(field) => Arc::clone(field),
         other => {
             return Err(internal_datafusion_err!(
                 "array_slice got unexpected data type: {}",
@@ -1194,8 +1202,12 @@ mod tests {
         let from = Int64Array::from(vec![2, 1]);
         let to = Int64Array::from(vec![3, 2]);
 
-        let result =
-            general_list_view_array_slice::<i32>(&array, &from, &to, None::<&Int64Array>)?;
+        let result = general_list_view_array_slice::<i32>(
+            &array,
+            &from,
+            &to,
+            None::<&Int64Array>,
+        )?;
         let result = result.as_ref().as_list_view::<i32>();
 
         assert_eq!(list_view_values(result), vec![vec![2, 3], vec![4, 5]]);
@@ -1214,8 +1226,12 @@ mod tests {
         let from = Int64Array::from(vec![1, 1]);
         let to = Int64Array::from(vec![2, 2]);
 
-        let result =
-            general_list_view_array_slice::<i32>(&array, &from, &to, None::<&Int64Array>)?;
+        let result = general_list_view_array_slice::<i32>(
+            &array,
+            &from,
+            &to,
+            None::<&Int64Array>,
+        )?;
         let result = result.as_ref().as_list_view::<i32>();
 
         assert_eq!(list_view_values(result), vec![vec![4, 5], vec![1, 2]]);
