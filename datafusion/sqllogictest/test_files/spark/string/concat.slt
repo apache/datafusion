@@ -46,3 +46,43 @@ SELECT concat(a, b, c) from (select 'a' a, 'b' b, 'c' c union all select null a,
 ----
 abc
 NULL
+
+# Test array concatenation
+query ?
+SELECT concat([1, 2], [3, 4]);
+----
+[1, 2, 3, 4]
+
+query ?
+SELECT concat([1, 2], [3, 4], [5, 6]);
+----
+[1, 2, 3, 4, 5, 6]
+
+# Test array concatenation with nulls
+query ?
+SELECT concat([1, 2], NULL, [3, 4]);
+----
+[1, 2, 3, 4]
+
+# Test array concatenation with empty arrays
+query ?
+SELECT concat([], [1, 2]);
+----
+[1, 2]
+
+query ?
+SELECT concat([1, 2], []);
+----
+[1, 2]
+
+# Test concatenation of all null arrays should return empty array
+query ?
+SELECT concat(CAST(NULL AS INT[]), CAST(NULL AS INT[]));
+----
+[]
+
+# Test string arrays
+query ?
+SELECT concat(['a', 'b'], ['c', 'd']);
+----
+[a, b, c, d]
