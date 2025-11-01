@@ -22,17 +22,16 @@ use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::{provider_as_source, ViewTable};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::logical_plan::{LogicalPlan, Values};
+use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{
-    Aggregate, AggregateUDF, EmptyRelation, Expr, LogicalPlanBuilder, UNNAMED_TABLE,
+    col, Aggregate, AggregateUDF, EmptyRelation, Expr, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_plan::collect;
 use insta::assert_snapshot;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -40,27 +39,18 @@ use std::sync::Arc;
 #[tokio::test]
 async fn count_only_nulls() -> Result<()> {
     // Input: VALUES (NULL), (NULL), (NULL) AS _(col)
-    let input_schema = Arc::new(DFSchema::from_unqualified_fields(
-        vec![Field::new("col", DataType::Null, true)].into(),
-        HashMap::new(),
-    )?);
-    let input = Arc::new(LogicalPlan::Values(Values {
-        schema: input_schema,
-        values: vec![
-            vec![Expr::Literal(ScalarValue::Null, None)],
-            vec![Expr::Literal(ScalarValue::Null, None)],
-            vec![Expr::Literal(ScalarValue::Null, None)],
-        ],
-    }));
-    let input_col_ref = Expr::Column(Column {
-        relation: None,
-        name: "col".to_string(),
-        spans: Spans::new(),
-    });
+    let input = LogicalPlanBuilder::values(vec![
+        vec![Expr::Literal(ScalarValue::Null, None)],
+        vec![Expr::Literal(ScalarValue::Null, None)],
+        vec![Expr::Literal(ScalarValue::Null, None)],
+    ])?
+    .project(vec![col("column1").alias("col")])?
+    .build()?;
+    let input_col_ref = col("col");
 
     // Aggregation: count(col) AS count
     let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
-        input,
+        input.into(),
         vec![],
         vec![Expr::AggregateFunction(AggregateFunction {
             func: Arc::new(AggregateUDF::new_from_impl(Count::new())),
