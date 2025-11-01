@@ -3158,7 +3158,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
     let plan = df.explain(false, false)?.collect().await?;
     Ok(pretty_format_batches(&plan)?
         .to_string()
-        .replace(&testdata_clean, "{testdata}"))
+        .replace(testdata_clean, "{testdata}"))
 }
 
 #[tokio::test]
