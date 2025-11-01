@@ -691,11 +691,11 @@ select
 ----
 08:09:10.123456789 13:14:15.123456 13:14:15.123 13:14:15
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64\(ns\) type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64\(ns\) type
 SELECT TIME 'not a time' as time;
 
 # invalid time
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64\(ns\) type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64\(ns\) type
 SELECT TIME '24:01:02' as time;
 
 # invalid timezone
@@ -1686,6 +1686,30 @@ query P
 SELECT DATE_TRUNC('second', '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
+
+# DATE_TRUNC handling of times before the unix epoch (issue 18334)
+query PPPPPPPPPPP
+SELECT
+    d,
+    DATE_TRUNC('year', d),
+    DATE_TRUNC('quarter', d),
+    DATE_TRUNC('month', d),
+    DATE_TRUNC('week', d),
+    DATE_TRUNC('day', d),
+    DATE_TRUNC('hour', d),
+    DATE_TRUNC('minute', d),
+    DATE_TRUNC('second', d),
+    DATE_TRUNC('millisecond', d),
+    DATE_TRUNC('microsecond', d),
+FROM (VALUES
+    (TIMESTAMP '1900-06-15 07:09:00'),
+    (TIMESTAMP '1970-01-01 00:00:00'),
+    (TIMESTAMP '2024-12-31 23:39:01.123456789')
+) AS t(d);
+----
+1900-06-15T07:09:00 1900-01-01T00:00:00 1900-04-01T00:00:00 1900-06-01T00:00:00 1900-06-11T00:00:00 1900-06-15T00:00:00 1900-06-15T07:00:00 1900-06-15T07:09:00 1900-06-15T07:09:00 1900-06-15T07:09:00 1900-06-15T07:09:00
+1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1969-12-29T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00
+2024-12-31T23:39:01.123456789 2024-01-01T00:00:00 2024-10-01T00:00:00 2024-12-01T00:00:00 2024-12-30T00:00:00 2024-12-31T00:00:00 2024-12-31T23:00:00 2024-12-31T23:39:00 2024-12-31T23:39:01 2024-12-31T23:39:01.123 2024-12-31T23:39:01.123456
 
 # Test that interval can add a timestamp
 query P
@@ -3247,7 +3271,7 @@ statement error The to_local_time function can only accept Timestamp as the arg 
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone
-statement error DataFusion error: Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
 select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/timezone');
 
 # valid query
