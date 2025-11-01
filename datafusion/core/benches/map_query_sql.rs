@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
@@ -33,8 +34,15 @@ mod data_utils;
 
 fn build_keys(rng: &mut ThreadRng) -> Vec<String> {
     let mut keys = vec![];
-    for _ in 0..1000 {
-        keys.push(rng.random_range(0..9999).to_string());
+    let mut seen = HashSet::with_capacity(1000);
+    // Generate unique keys by tracking seen keys
+    while keys.len() < 1000 {
+        let key = rng.random_range(0..9999).to_string();
+        if seen.insert(key.clone()) {
+            // Only push if it's a new unique key
+            keys.push(key);
+        }
+        // If key was already in set, skip it and generate another
     }
     keys
 }
