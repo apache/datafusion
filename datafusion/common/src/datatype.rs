@@ -18,6 +18,8 @@
 //! [`DataTypeExt`] and [`FieldExt`] extension trait for working with DataTypes to Fields
 
 use crate::arrow::datatypes::{DataType, Field, FieldRef};
+use crate::metadata::FieldMetadata;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// DataFusion extension methods for Arrow [`DataType`]
@@ -62,6 +64,20 @@ impl DataTypeExt for DataType {
 
 /// DataFusion extension methods for Arrow [`Field`] and [`FieldRef`]
 pub trait FieldExt {
+    /// Rename the field, returning a new Field with the given name
+    fn renamed(self, new_name: Cow<'_, String>) -> Self;
+
+    /// Retype the field with the given data type (this is different than
+    /// [`Field::with_type`] as it tries to avoid copying if the data type is the
+    /// same for [`FieldRefs`])
+    fn retyped(self, new_data_type: DataType) -> Self;
+
+    /// Add field metadata,
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self;
+
+    /// Add optional field metadata,
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self;
+
     /// Returns a new Field representing a List of this Field's DataType.
     ///
     /// For example if input represents an `Int32`, the return value will
@@ -130,6 +146,31 @@ pub trait FieldExt {
 }
 
 impl FieldExt for Field {
+    fn renamed(self, new_name: Cow<'_, String>) -> Self {
+        // check before allocating a new field
+        if self.name() == new_name.as_str() {
+            self
+        } else {
+            self.with_name(new_name.into_owned())
+        }
+    }
+
+    fn retyped(self, new_data_type: DataType) -> Self {
+        self.with_data_type(new_data_type)
+    }
+
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self {
+        metadata.add_to_field(self)
+    }
+
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self {
+        if let Some(metadata) = metadata {
+            self.with_field_metadata(metadata)
+        } else {
+            self
+        }
+    }
+
     fn into_list(self) -> Self {
         DataType::List(Arc::new(self.into_list_item())).into_nullable_field()
     }
@@ -149,6 +190,34 @@ impl FieldExt for Field {
 }
 
 impl FieldExt for Arc<Field> {
+    fn renamed(self, new_name: Cow<'_, String>) -> Self {
+        if self.name() == new_name.as_str() {
+            self
+        } else {
+            Arc::new(Arc::unwrap_or_clone(self).with_name(new_name.into_owned()))
+        }
+    }
+
+    fn retyped(self, new_data_type: DataType) -> Self {
+        if self.data_type() == &new_data_type {
+            self
+        } else {
+            Arc::new(Arc::unwrap_or_clone(self).with_data_type(new_data_type))
+        }
+    }
+
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self {
+        metadata.add_to_field_ref(self)
+    }
+
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self {
+        if let Some(metadata) = metadata {
+            self.with_field_metadata(metadata)
+        } else {
+            self
+        }
+    }
+
     fn into_list(self) -> Self {
         DataType::List(self.into_list_item())
             .into_nullable_field()

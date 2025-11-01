@@ -325,6 +325,8 @@ impl NamePreserver {
     pub fn save(&self, expr: &Expr) -> SavedName {
         if self.use_alias {
             let (relation, name) = expr.qualified_name();
+            // TODO could potentially avoid allocation here by storing Cow reference directly in SavedName
+            let name = name.to_string();
             SavedName::Saved { relation, name }
         } else {
             SavedName::None
@@ -338,7 +340,7 @@ impl SavedName {
         match self {
             SavedName::Saved { relation, name } => {
                 let (new_relation, new_name) = expr.qualified_name();
-                if new_relation != relation || new_name != name {
+                if new_relation != relation || new_name.as_str() != name {
                     expr.alias_qualified(relation, name)
                 } else {
                     expr

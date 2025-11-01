@@ -28,6 +28,7 @@ use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
@@ -429,7 +430,7 @@ impl ExprSchemable for Expr {
         schema: &dyn ExprSchema,
     ) -> Result<(Option<TableReference>, Arc<Field>)> {
         let (relation, schema_name) = self.qualified_name();
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let field = match self {
             Expr::Alias(Alias {
                 expr,
@@ -437,30 +438,29 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let field = expr.to_field(schema).map(|(_, f)| f.as_ref().clone())?;
-
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(Arc::new(combined_metadata.add_to_field(field)))
+                expr.to_field(schema)
+                    .map(|(_, f)| f.renamed(schema_name))?
+                    .with_field_metadata(&combined_metadata)
             }
-            Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
-            Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
+            Expr::Negative(expr) => {
+                expr.to_field(schema).map(|(_, f)| f.renamed(schema_name))?
+            }
+            Expr::Column(c) => Arc::clone(schema.field_from_column(c)?).renamed(schema_name),
             Expr::OuterReferenceColumn(field, _) => {
-                Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
+                Arc::clone(field).renamed(schema_name)
             }
             Expr::ScalarVariable(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
+                Arc::new(Field::new(schema_name.into_owned(), ty.clone(), true))
             }
-            Expr::Literal(l, metadata) => {
-                let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
-                if let Some(metadata) = metadata {
-                    field = metadata.add_to_field(field);
-                }
-                Ok(Arc::new(field))
-            }
+            Expr::Literal(l, metadata) => Arc::new(
+                Field::new(schema_name.into_owned(), l.data_type(), l.is_null())
+                    .with_field_metadata_opt(metadata.as_ref()),
+            ),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -469,11 +469,13 @@ impl ExprSchemable for Expr {
             | Expr::IsNotTrue(_)
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
-            | Expr::Exists { .. } => {
-                Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
-            }
+            | Expr::Exists { .. } => Arc::new(Field::new(
+                schema_name.into_owned(),
+                DataType::Boolean,
+                false,
+            )),
             Expr::ScalarSubquery(subquery) => {
-                Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
+                Arc::clone(&subquery.subquery.schema().fields()[0]).renamed(schema_name)
             }
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
@@ -485,18 +487,18 @@ impl ExprSchemable for Expr {
                 let mut coercer = BinaryTypeCoercer::new(&lhs_type, op, &rhs_type);
                 coercer.set_lhs_spans(left.spans().cloned().unwrap_or_default());
                 coercer.set_rhs_spans(right.spans().cloned().unwrap_or_default());
-                Ok(Arc::new(Field::new(
-                    &schema_name,
+                Arc::new(Field::new(
+                    schema_name.into_owned(),
                     coercer.get_result_type()?,
                     lhs_nullable || rhs_nullable,
-                )))
+                ))
             }
             Expr::WindowFunction(window_function) => {
                 let (dt, nullable) = self.data_type_and_nullable_with_window_function(
                     schema,
                     window_function,
                 )?;
-                Ok(Arc::new(Field::new(&schema_name, dt, nullable)))
+                Arc::new(Field::new(schema_name.into_owned(), dt, nullable))
             }
             Expr::AggregateFunction(aggregate_function) => {
                 let AggregateFunction {
@@ -533,7 +535,7 @@ impl ExprSchemable for Expr {
                     .into_iter()
                     .collect::<Vec<_>>();
 
-                func.return_field(&new_fields)
+                func.return_field(&new_fields)?.renamed(schema_name)
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let (arg_types, fields): (Vec<DataType>, Vec<Arc<Field>>) = args
@@ -562,8 +564,7 @@ impl ExprSchemable for Expr {
                 let new_fields = fields
                     .into_iter()
                     .zip(new_data_types)
-                    .map(|(f, d)| f.as_ref().clone().with_data_type(d))
-                    .map(Arc::new)
+                    .map(|(f, d)| f.retyped(d))
                     .collect::<Vec<FieldRef>>();
 
                 let arguments = args
@@ -578,17 +579,18 @@ impl ExprSchemable for Expr {
                     scalar_arguments: &arguments,
                 };
 
-                func.return_field_from_args(args)
+                func.return_field_from_args(args)?.renamed(schema_name)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
             Expr::Cast(Cast { expr, data_type }) => expr
                 .to_field(schema)
-                .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone()))
-                .map(Arc::new),
+                .map(|(_, f)| f)?
+                .retyped(data_type.clone())
+                .renamed(schema_name),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
-            }) => Ok(field.as_ref().clone().with_name(&schema_name).into()),
+            }) => Arc::clone(field).renamed(schema_name),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -600,17 +602,14 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_) => Ok(Arc::new(Field::new(
-                &schema_name,
+            | Expr::Unnest(_) => Arc::new(Field::new(
+                schema_name.into_owned(),
                 self.get_type(schema)?,
                 self.nullable(schema)?,
-            ))),
-        }?;
+            )),
+        };
 
-        Ok((
-            relation,
-            Arc::new(field.as_ref().clone().with_name(schema_name)),
-        ))
+        Ok((relation, field))
     }
 
     /// Wraps this expression in a cast to a target [arrow::datatypes::DataType].
@@ -965,25 +964,25 @@ mod tests {
 
     #[derive(Debug)]
     struct MockExprSchema {
-        field: Field,
+        field: FieldRef,
         error_on_nullable: bool,
     }
 
     impl MockExprSchema {
         fn new() -> Self {
             Self {
-                field: Field::new("mock_field", DataType::Null, false),
+                field: Arc::new(Field::new("mock_field", DataType::Null, false)),
                 error_on_nullable: false,
             }
         }
 
         fn with_nullable(mut self, nullable: bool) -> Self {
-            self.field = self.field.with_nullable(nullable);
+            Arc::make_mut(&mut self.field).set_nullable(nullable);
             self
         }
 
         fn with_data_type(mut self, data_type: DataType) -> Self {
-            self.field = self.field.with_data_type(data_type);
+            Arc::make_mut(&mut self.field).set_data_type(data_type);
             self
         }
 
@@ -993,7 +992,8 @@ mod tests {
         }
 
         fn with_metadata(mut self, metadata: FieldMetadata) -> Self {
-            self.field = metadata.add_to_field(self.field);
+            self.field =
+                Arc::new(metadata.add_to_field(Arc::unwrap_or_clone(self.field)));
             self
         }
     }
@@ -1007,7 +1007,7 @@ mod tests {
             }
         }
 
-        fn field_from_column(&self, _col: &Column) -> Result<&Field> {
+        fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
             Ok(&self.field)
         }
     }
