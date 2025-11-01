@@ -1360,7 +1360,7 @@ pub(crate) mod tests {
             Arc::clone(col_b_new),
         )) as Arc<dyn PhysicalExpr>;
 
-        let test_cases = vec![
+        let test_cases = [
             // ---------- TEST CASE 1 ------------
             (
                 // orderings

@@ -42,8 +42,8 @@ impl DynTreeNode for dyn ExecutionPlan {
 /// A node context object beneficial for writing optimizer rules.
 /// This context encapsulating an [`ExecutionPlan`] node with a payload.
 ///
-/// Since each wrapped node has it's children within both the [`PlanContext.plan.children()`],
-/// as well as separately within the [`PlanContext.children`] (which are child nodes wrapped in the context),
+/// Since each wrapped node has it's children within both the `PlanContext.plan.children()`,
+/// as well as separately within the `PlanContext.children` (which are child nodes wrapped in the context),
 /// it's important to keep these child plans in sync when performing mutations.
 ///
 /// Since there are two ways to access child plans directly -— it's recommended
@@ -69,7 +69,7 @@ impl<T> PlanContext<T> {
         }
     }
 
-    /// Update the [`PlanContext.plan.children()`] from the [`PlanContext.children`],
+    /// Update the `PlanContext.plan.children()` from the `PlanContext.children`,
     /// if the `PlanContext.children` have been changed.
     pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| Arc::clone(&c.plan)).collect();

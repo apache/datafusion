@@ -58,7 +58,7 @@ fn project_orderings_random() -> Result<()> {
             Operator::Plus,
             col("b", &test_schema)?,
         )) as Arc<dyn PhysicalExpr>;
-        let proj_exprs = vec![
+        let proj_exprs = [
             (col("a", &test_schema)?, "a_new"),
             (col("b", &test_schema)?, "b_new"),
             (col("c", &test_schema)?, "c_new"),
@@ -132,7 +132,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             Operator::Plus,
             col("b", &test_schema)?,
         )) as Arc<dyn PhysicalExpr>;
-        let proj_exprs = vec![
+        let proj_exprs = [
             (col("a", &test_schema)?, "a_new"),
             (col("b", &test_schema)?, "b_new"),
             (col("c", &test_schema)?, "c_new"),

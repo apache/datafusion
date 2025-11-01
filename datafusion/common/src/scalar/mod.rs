@@ -8693,7 +8693,7 @@ mod tests {
             ])),
             true,
         ));
-        let scalars = vec![
+        let scalars = [
             ScalarValue::try_new_null(&DataType::List(Arc::clone(&field_ref))).unwrap(),
             ScalarValue::try_new_null(&DataType::LargeList(Arc::clone(&field_ref)))
                 .unwrap(),

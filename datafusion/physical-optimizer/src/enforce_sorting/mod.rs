@@ -91,7 +91,7 @@ impl EnforceSorting {
 /// via its children.
 pub type PlanWithCorrespondingSort = PlanContext<bool>;
 
-/// For a given node, update the [`PlanContext.data`] attribute.
+/// For a given node, update the `PlanContext.data` attribute.
 ///
 /// If the node is a `SortExec`, or any of the node's children are a `SortExec`,
 /// then set the attribute to true.

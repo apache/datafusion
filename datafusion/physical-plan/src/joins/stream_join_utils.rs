@@ -286,7 +286,7 @@ pub fn map_origin_col_to_filter_col(
 ///    the [`convert_filter_columns`] function.
 /// 5. Searches for the converted filter expression in the filter expression using the
 ///    [`check_filter_expr_contains_sort_information`] function.
-/// 6. If an exact match is found, returns the converted filter expression as [`Some(Arc<dyn PhysicalExpr>)`].
+/// 6. If an exact match is found, returns the converted filter expression as `Some(Arc<dyn PhysicalExpr>)`.
 /// 7. If all columns are not included or an exact match is not found, returns [`None`].
 ///
 /// Examples:

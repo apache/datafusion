@@ -434,7 +434,7 @@ mod test {
             vec![Some("tableC".into()), Some("tableC".into())],
             vec!["f", "ff"],
         );
-        let schemas = vec![schema_c, schema_f, schema_b, schema_a];
+        let schemas = [schema_c, schema_f, schema_b, schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
         let normalized_expr =

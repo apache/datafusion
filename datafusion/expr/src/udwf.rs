@@ -355,7 +355,7 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// optimizations manually for specific UDFs.
     ///
     /// Example:
-    /// [`advanced_udwf.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs>
+    /// `advanced_udwf.rs`: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs>
     ///
     /// # Returns
     /// [None] if simplify is not defined or,

@@ -743,7 +743,7 @@ mod tests {
 
     #[test]
     fn test_date_bin_timezones() {
-        let cases = vec![
+        let cases = [
             (
                 vec![
                     "2020-09-08T00:00:00Z",
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn test_date_bin_single() {
-        let cases = vec![
+        let cases = [
             (
                 (
                     TimeDelta::try_minutes(15),

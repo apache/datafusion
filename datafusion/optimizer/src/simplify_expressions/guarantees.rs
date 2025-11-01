@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn test_null_handling() {
         // IsNull / IsNotNull can be rewritten to true / false
-        let guarantees = vec![
+        let guarantees = [
             // Note: AlwaysNull case handled by test_column_single_value test,
             // since it's a special case of a column with a single value.
             (
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_inequalities_non_null_unbounded() {
-        let guarantees = vec![
+        let guarantees = [
             // y ∈ [2021-01-01, ∞) (not null)
             (
                 col("x"),
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_inequalities_maybe_null() {
-        let guarantees = vec![
+        let guarantees = [
             // x ∈ ("abc", "def"]? (maybe null)
             (
                 col("x"),
@@ -411,7 +411,7 @@ mod tests {
         ];
 
         for scalar in scalars {
-            let guarantees = vec![(col("x"), NullableInterval::from(scalar.clone()))];
+            let guarantees = [(col("x"), NullableInterval::from(scalar.clone()))];
             let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
             let output = col("x").rewrite(&mut rewriter).data().unwrap();
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_in_list() {
-        let guarantees = vec![
+        let guarantees = [
             // x ∈ [1, 10] (not null)
             (
                 col("x"),

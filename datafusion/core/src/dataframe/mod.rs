@@ -983,7 +983,7 @@ impl DataFrame {
         }));
 
         //collect recordBatch
-        let describe_record_batch = vec![
+        let describe_record_batch = [
             // count aggregation
             self.clone().aggregate(
                 vec![],

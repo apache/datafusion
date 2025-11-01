@@ -736,7 +736,7 @@ mod tests {
 
     #[test]
     fn test_date_trunc_timezones() {
-        let cases = vec![
+        let cases = [
             (
                 vec![
                     "2020-09-08T00:00:00Z",
@@ -909,7 +909,7 @@ mod tests {
 
     #[test]
     fn test_date_trunc_hour_timezones() {
-        let cases = vec![
+        let cases = [
             (
                 vec![
                     "2020-09-08T00:30:00Z",

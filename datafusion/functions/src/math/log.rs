@@ -720,7 +720,7 @@ mod tests {
     #[test]
     fn test_log_output_ordering() {
         // [Unordered, Ascending, Descending, Literal]
-        let orders = vec![
+        let orders = [
             ExprProperties::new_unknown(),
             ExprProperties::new_unknown().with_order(SortProperties::Ordered(
                 SortOptions {
@@ -755,7 +755,7 @@ mod tests {
                 results.push(result);
             }
         }
-        let expected = vec![
+        let expected = [
             // base: Unordered
             SortProperties::Unordered,
             SortProperties::Unordered,
