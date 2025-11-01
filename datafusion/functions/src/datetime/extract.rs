@@ -28,8 +28,9 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DataType, Field, FieldRef, Int32Type, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
 };
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_primitive_array;
@@ -58,47 +59,45 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = "Returns the specified part of the date as an integer.",
-    syntax_example = "date_part(part, expression)",
-    alternative_syntax = "extract(field FROM source)",
+    syntax_example = "extract(field FROM source)",
     argument(
-        name = "part",
+        name = "field",
         description = r#"Part of the date to return. The following date parts are supported:
 
-    - year
-    - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
-    - month
-    - week (week of the year)
-    - day (day of the month)
-    - hour
-    - minute
-    - second
-    - millisecond
-    - microsecond
-    - nanosecond
-    - dow (day of the week where Sunday is 0)
-    - doy (day of the year)
-    - epoch (seconds since Unix epoch)
-    - isodow (day of the week where Monday is 0)
+- year
+- quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
+- month
+- week (week of the year)
+- day (day of the month)
+- hour
+- minute
+- second
+- millisecond
+- microsecond
+- nanosecond
+- dow (day of the week where Sunday is 0)
+- doy (day of the year)
+- epoch (seconds since Unix epoch)
+- isodow (day of the week where Monday is 0)
 "#
     ),
     argument(
-        name = "expression",
+        name = "source",
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct DatePartFunc {
+pub struct ExtractFunc {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
-impl Default for DatePartFunc {
+impl Default for ExtractFunc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DatePartFunc {
+impl ExtractFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -131,18 +130,17 @@ impl DatePartFunc {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("datepart")],
         }
     }
 }
 
-impl ScalarUDFImpl for DatePartFunc {
+impl ScalarUDFImpl for ExtractFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "date_part"
+        "extract"
     }
 
     fn signature(&self) -> &Signature {
@@ -189,9 +187,7 @@ impl ScalarUDFImpl for DatePartFunc {
         } else if let ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v))) = part {
             v
         } else {
-            return exec_err!(
-                "First argument of `DATE_PART` must be non-null scalar Utf8"
-            );
+            return exec_err!("First argument of `EXTRACT` must be non-null scalar Utf8");
         };
 
         let is_scalar = matches!(array, ColumnarValue::Scalar(_));
@@ -255,7 +251,7 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
-        let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
+        let mut arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
             match interval_unit {
                 IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
                 IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
@@ -282,6 +278,31 @@ impl ScalarUDFImpl for DatePartFunc {
             }
         };
 
+        // Special adjustment for hour extraction on timezone-aware timestamps
+        if is_timezone_aware && part_trim.to_lowercase() == "hour" {
+            if let Some(tz_str) = &tz_str_opt {
+                let offset_hours = if tz_str.as_ref() == "+00:00" {
+                    0
+                } else {
+                    let sign = if tz_str.starts_with('+') { 1i32 } else { -1i32 };
+                    let hours_str = &tz_str[1..3];
+                    let hours: i32 = hours_str.parse().unwrap();
+                    sign * hours
+                };
+                let int_arr = as_int32_array(&arr)?;
+                let mut builder = PrimitiveBuilder::<Int32Type>::new();
+                for i in 0..arr.len() {
+                    if arr.is_null(i) {
+                        builder.append_null();
+                    } else {
+                        let v = int_arr.value(i);
+                        builder.append_value(v + offset_hours);
+                    }
+                }
+                arr = Arc::new(builder.finish());
+            }
+        }
+
         Ok(if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(arr.as_ref(), 0)?)
         } else {
@@ -290,7 +311,7 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn documentation(&self) -> Option<&Documentation> {

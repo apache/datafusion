@@ -90,7 +90,7 @@ FROM test_table t
 GROUP BY 1
 ----
 logical_plan
-01)Projection: Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60), count(Int64(1))
+01)Projection: Boolean(true) AS NOT extract(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60), count(Int64(1))
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: t
 04)------TableScan: test_table projection=[]

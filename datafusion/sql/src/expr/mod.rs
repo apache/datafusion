@@ -25,6 +25,7 @@ use sqlparser::ast::{
     ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript, TrimWhereField,
     TypedString, Value, ValueWithSpan,
 };
+use std::sync::Arc;
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
@@ -298,12 +299,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new(
-                Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?
+            }) => {
+                let string_value = value.into_string().unwrap();
+                let mut cast_data_type = self
+                    .convert_data_type_to_field(&data_type)?
                     .data_type()
-                    .clone(),
-            ))),
+                    .clone();
+                if let DataType::Timestamp(time_unit, None) = &cast_data_type {
+                    if let Some(tz) = extract_tz_from_string(&string_value) {
+                        cast_data_type =
+                            DataType::Timestamp(*time_unit, Some(Arc::from(tz)));
+                    }
+                }
+                Ok(Expr::Cast(Cast::new(
+                    Box::new(lit(string_value)),
+                    cast_data_type,
+                )))
+            }
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
@@ -1093,11 +1105,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             // index can be a name, in which case it is a named field access
                             match index {
                                 SQLExpr::Value(ValueWithSpan {
-                                    value:
-                                        Value::SingleQuotedString(s)
-                                        | Value::DoubleQuotedString(s),
-                                    span: _,
-                                }) => Ok(Some(GetFieldAccess::NamedStructField {
+                                                   value:
+                                                   Value::SingleQuotedString(s)
+                                                   | Value::DoubleQuotedString(s),
+                                                   span: _,
+                                               }) => Ok(Some(GetFieldAccess::NamedStructField {
                                     name: ScalarValue::from(s),
                                 })),
                                 SQLExpr::JsonAccess { .. } => {
@@ -1161,9 +1173,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 AccessExpr::Dot(expr) => match expr {
                     SQLExpr::Value(ValueWithSpan {
-                        value: Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-                        span    : _
-                    }) => Ok(Some(GetFieldAccess::NamedStructField {
+                                       value: Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+                                       span    : _
+                                   }) => Ok(Some(GetFieldAccess::NamedStructField {
                         name: ScalarValue::from(s),
                     })),
                     _ => {
@@ -1192,6 +1204,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
                 )
             })
+    }
+}
+
+fn extract_tz_from_string(s: &str) -> Option<String> {
+    if let Some(pos) = s.rfind(|c| ['+', '-'].contains(&c)) {
+        let tz_str = &s[pos..];
+        if tz_str.len() == 6 && tz_str.chars().nth(3) == Some(':') {
+            Some(tz_str.to_string())
+        } else {
+            None
+        }
+    } else if s.ends_with('Z') {
+        Some("+00:00".to_string())
+    } else {
+        None
     }
 }
 

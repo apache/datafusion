@@ -27,6 +27,7 @@ pub mod current_time;
 pub mod date_bin;
 pub mod date_part;
 pub mod date_trunc;
+pub mod extract;
 pub mod from_unixtime;
 pub mod make_date;
 pub mod now;
@@ -43,6 +44,7 @@ make_udf_function!(current_time::CurrentTimeFunc, current_time);
 make_udf_function!(date_bin::DateBinFunc, date_bin);
 make_udf_function!(date_part::DatePartFunc, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, date_trunc);
+make_udf_function!(extract::ExtractFunc, extract);
 make_udf_function!(make_date::MakeDateFunc, make_date);
 make_udf_function!(from_unixtime::FromUnixtimeFunc, from_unixtime);
 make_udf_function!(to_char::ToCharFunc, to_char);
@@ -265,6 +267,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_bin(),
         date_part(),
         date_trunc(),
+        extract(),
         from_unixtime(),
         make_date(),
         now(&ConfigOptions::default()),

@@ -1,0 +1,93 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for timezone-aware extract SQL statement support.
+# Test with different timezone
+statement ok
+SET datafusion.execution.time_zone = '-03:00';
+
+query I
+SELECT EXTRACT(HOUR FROM TIMESTAMP '2025-11-18 10:00:00');
+----
+7
+
+query II
+SELECT EXTRACT(MINUTE FROM TIMESTAMP '2023-10-30 10:45:30'),
+       EXTRACT(SECOND FROM TIMESTAMP '2023-10-30 10:45:30');
+----
+45 30
+
+query III
+SELECT EXTRACT(YEAR FROM DATE '2023-10-30'),
+       EXTRACT(MONTH FROM DATE '2023-10-30'),
+       EXTRACT(DAY FROM DATE '2023-10-30');
+----
+2023 10 30
+
+query I
+SELECT EXTRACT(HOUR FROM CAST(NULL AS TIMESTAMP));
+----
+NULL
+
+statement ok
+SET datafusion.execution.time_zone = '+04:00';
+
+query I
+SELECT EXTRACT(HOUR FROM TIMESTAMP '2023-10-30 02:00:00');
+----
+6
+
+query III
+SELECT EXTRACT(HOUR FROM TIMESTAMP '2023-10-30 18:20:59'),
+       EXTRACT(MINUTE FROM TIMESTAMP '2023-10-30 18:20:59'),
+       EXTRACT(SECOND FROM TIMESTAMP '2023-10-30 18:20:59');
+----
+22 20 59
+
+query II
+SELECT EXTRACT(DOW FROM DATE '2025-11-01'),
+       EXTRACT(DOY FROM DATE '2026-12-31');
+----
+6 365
+
+statement ok
+SET datafusion.execution.time_zone = '+00:00';
+
+query I
+SELECT EXTRACT(HOUR FROM TIMESTAMP '2025-10-30 10:45:30+02:00');
+----
+12
+
+query I
+SELECT EXTRACT(HOUR FROM TIMESTAMP '2025-10-30 10:45:30-05:00');
+----
+5
+
+query II
+SELECT EXTRACT(YEAR FROM TIMESTAMP '2026-11-30 10:45:30Z'),
+       EXTRACT(MONTH FROM TIMESTAMP '2023-10-30 10:45:30Z');
+----
+2026 10
+
+query III
+SELECT EXTRACT(HOUR FROM TIMESTAMP '2023-10-30 18:20:59+04:00'),
+       EXTRACT(MINUTE FROM TIMESTAMP '2023-10-30 18:20:59+04:00'),
+       EXTRACT(SECOND FROM TIMESTAMP '2023-10-30 18:20:59+04:00');
+----
+22 20 59
+
+
