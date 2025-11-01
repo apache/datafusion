@@ -3004,23 +3004,13 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r#"
-    +---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                                                                                                              |
-    +---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Aggregate: groupBy=[[id]], aggr=[[]]                                                                                                                                                                              |
-    |               |   Union                                                                                                                                                                                                           |
-    |               |     TableScan: sorted projection=[id]                                                                                                                                                                             |
-    |               |     Sort: unsorted.id ASC NULLS LAST                                                                                                                                                                              |
-    |               |       TableScan: unsorted projection=[id]                                                                                                                                                                         |
-    | physical_plan | AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                        |
-    |               |   SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                             |
-    |               |     CoalescePartitionsExec                                                                                                                                                                                        |
-    |               |       AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]                                                                                                                                                      |
-    |               |         UnionExec                                                                                                                                                                                                 |
-    |               |           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet |
-    |               |           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                        |
-    |               |                                                                                                                                                                                                                   |
-    +---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+      SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+        CoalescePartitionsExec
+          AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+            UnionExec
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
     "#);
     Ok(())
 }
@@ -3033,23 +3023,13 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r#"
-    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                                                                                                            |
-    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Aggregate: groupBy=[[id]], aggr=[[]]                                                                                                                                                                            |
-    |               |   Union                                                                                                                                                                                                         |
-    |               |     TableScan: sorted projection=[id]                                                                                                                                                                           |
-    |               |     Sort: unsorted.id ASC NULLS LAST                                                                                                                                                                            |
-    |               |       TableScan: unsorted projection=[id]                                                                                                                                                                       |
-    | physical_plan | AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                      |
-    |               |   SortPreservingMergeExec: [id@0 ASC NULLS LAST]                                                                                                                                                                |
-    |               |     AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                |
-    |               |       UnionExec                                                                                                                                                                                                 |
-    |               |         DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet |
-    |               |         SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                     |
-    |               |           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                      |
-    |               |                                                                                                                                                                                                                 |
-    +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+      SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+          UnionExec
+            DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+            SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
     "#);
 
     // 💥 Doesn't pass, and generates this plan:
@@ -3155,10 +3135,16 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
     let testdata_clean = Path::new(&testdata).canonicalize()?.display().to_string();
     let testdata_clean = testdata_clean.strip_prefix("/").unwrap_or(&testdata_clean);
 
-    let plan = df.explain(false, false)?.collect().await?;
-    Ok(pretty_format_batches(&plan)?
+    // Use displayable() rather than explain().collect() to avoid table formatting issues. We need
+    // to replace machine-specific paths with variable lengths, which breaks table alignment and
+    // causes snapshot mismatches.
+    let physical_plan = df.create_physical_plan().await?;
+    let displayable_plan = displayable(physical_plan.as_ref())
+        .indent(true)
         .to_string()
-        .replace(testdata_clean, "{testdata}"))
+        .replace(testdata_clean, "{testdata}");
+
+    Ok(displayable_plan)
 }
 
 #[tokio::test]
