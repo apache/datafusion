@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::datatypes::{DataType, TimeUnit};
-use std::sync::Arc;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
@@ -25,6 +24,7 @@ use sqlparser::ast::{
     DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
     StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
 };
+use std::sync::Arc;
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
@@ -295,17 +295,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             SQLExpr::TypedString(TypedString {
-                                     data_type,
-                                     value,
-                                     uses_odbc_syntax: _,
-                                 }) => {
+                data_type,
+                value,
+                uses_odbc_syntax: _,
+            }) => {
                 let string_value = value.into_string().unwrap();
-                let mut cast_data_type = self.convert_data_type_to_field(&data_type)?
+                let mut cast_data_type = self
+                    .convert_data_type_to_field(&data_type)?
                     .data_type()
                     .clone();
                 if let DataType::Timestamp(time_unit, None) = &cast_data_type {
                     if let Some(tz) = extract_tz_from_string(&string_value) {
-                        cast_data_type = DataType::Timestamp(*time_unit, Some(Arc::from(tz)));
+                        cast_data_type =
+                            DataType::Timestamp(*time_unit, Some(Arc::from(tz)));
                     }
                 }
                 Ok(Expr::Cast(Cast::new(
@@ -564,9 +566,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?),
                 match *time_zone {
                     SQLExpr::Value(ValueWithSpan {
-                                       value: Value::SingleQuotedString(s),
-                                       span: _,
-                                   }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
+                        value: Value::SingleQuotedString(s),
+                        span: _,
+                    }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
                     _ => {
                         return not_impl_err!(
                             "Unsupported ast node in sqltorel: {time_zone:?}"
@@ -990,13 +992,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // to align with postgres / duckdb semantics
         let expr = match dt.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, tz)
-            if expr.get_type(schema)? == DataType::Int64 =>
-                {
-                    Expr::Cast(Cast::new(
-                        Box::new(expr),
-                        DataType::Timestamp(TimeUnit::Second, tz.clone()),
-                    ))
-                }
+                if expr.get_type(schema)? == DataType::Int64 =>
+            {
+                Expr::Cast(Cast::new(
+                    Box::new(expr),
+                    DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                ))
+            }
             _ => expr,
         };
 

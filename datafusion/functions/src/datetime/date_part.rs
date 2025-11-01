@@ -27,7 +27,10 @@ use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType};
+use arrow::datatypes::{
+    ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{logical_date, NativeType};
@@ -280,8 +283,6 @@ impl ScalarUDFImpl for DatePartFunc {
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
         };
-
-
 
         Ok(if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(arr.as_ref(), 0)?)
