@@ -645,12 +645,18 @@ impl LogicalPlan {
                     .iter()
                     .zip(new_plan.schema().fields())
                     .map(|((table_ref, old_field), new_field)| {
-                        let field = old_field
-                            .as_ref()
-                            .clone()
-                            .with_data_type(new_field.data_type().clone())
-                            .with_nullable(new_field.is_nullable());
-                        (table_ref.cloned(), Arc::new(field))
+                        // `old_field`'s data type is unknown but `new_field`'s is known
+                        if old_field.data_type().is_null()
+                            && !new_field.data_type().is_null()
+                        {
+                            let field = old_field
+                                .as_ref()
+                                .clone()
+                                .with_data_type(new_field.data_type().clone());
+                            (table_ref.cloned(), Arc::new(field))
+                        } else {
+                            (table_ref.cloned(), Arc::clone(old_field))
+                        }
                     })
                     .collect::<Vec<_>>();
 
@@ -659,6 +665,7 @@ impl LogicalPlan {
                     schema.metadata().clone(),
                 )?
                 .with_functional_dependencies(schema.functional_dependencies().clone())?;
+
                 Ok(LogicalPlan::Values(Values {
                     schema: Arc::new(schema),
                     values,
@@ -4900,10 +4907,10 @@ mod tests {
 
         // replaced
         assert_snapshot!(plan.display_indent_schema(), @r#"
-        Projection: t.a, t.b, t.c, t.d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int32;N]
-          SubqueryAlias: t [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int32;N]
-            Projection: column1 AS a, column2 AS b, column3 AS c, column4 AS d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int32;N]
-              Values: (Int32(1), Int32(1) AS $1, Utf8("s") AS $2, Int32(3) + Int32(4) AS $3 + $4) [column1:Int32;N, column2:Int32;N, column3:Utf8;N, column4:Int32;N]
+        Projection: t.a, t.b, t.c, t.d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
+          SubqueryAlias: t [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
+            Projection: column1 AS a, column2 AS b, column3 AS c, column4 AS d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
+              Values: (Int32(1), Int32(1) AS $1, Utf8("s") AS $2, Int32(3) + Int32(4) AS $3 + $4) [column1:Int32;N, column2:Int32;N, column3:Utf8;N, column4:Int64;N]
         "#);
     }
 
