@@ -19,15 +19,23 @@
 extern crate criterion;
 extern crate arrow;
 
+use std::sync::Arc;
+
 use crate::criterion::Criterion;
+use arrow::{
+    array::{Int32Array, ListViewArray},
+    buffer::ScalarBuffer,
+    datatypes::{DataType, Field},
+};
 use datafusion_expr::lit;
-use datafusion_functions_nested::expr_fn::{array_replace_all, make_array};
+use datafusion_functions_nested::{
+    expr_fn::{array_replace_all, make_array},
+    reverse::array_reverse_inner,
+};
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Construct large arrays for benchmarking
-
-    let array_len = 100000000;
-
+    let array_len = 100000;
     let array = (0..array_len).map(|_| lit(2_i64)).collect::<Vec<_>>();
     let list_array = make_array(vec![make_array(array); 3]);
     let from_array = make_array(vec![lit(2_i64); 3]);
@@ -36,7 +44,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     let expected_array = list_array.clone();
 
     // Benchmark array functions
-
     c.bench_function("array_replace", |b| {
         b.iter(|| {
             assert_eq!(
@@ -48,6 +55,24 @@ fn criterion_benchmark(c: &mut Criterion) {
                 *criterion::black_box(&expected_array)
             )
         })
+    });
+
+    // Construct a large list view array
+    let step_size: usize = 1000;
+    let offsets: Vec<i32> = (0..array_len as i32)
+        .step_by(step_size.try_into().unwrap())
+        .collect();
+    let sizes: Vec<i32> = vec![step_size as i32; array_len / step_size as usize];
+    let values = (0..array_len as i32).collect::<Vec<i32>>();
+    let list_view_array = ListViewArray::new(
+        Arc::new(Field::new("a", DataType::Int32, false)),
+        ScalarBuffer::from(offsets),
+        ScalarBuffer::from(sizes),
+        Arc::new(Int32Array::from(values)),
+        None,
+    );
+    c.bench_function("array_reverse", |b| {
+        b.iter(|| array_reverse_inner(&[Arc::new(list_view_array.clone())]))
     });
 }
 
