@@ -1193,7 +1193,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 }
 
 fn extract_tz_from_string(s: &str) -> Option<String> {
-    if let Some(pos) = s.rfind(|c| c == '+' || c == '-') {
+    if let Some(pos) = s.rfind(|c| ['+', '-'].contains(&c)) {
         let tz_str = &s[pos..];
         if tz_str.len() == 6 && tz_str.chars().nth(3) == Some(':') {
             Some(tz_str.to_string())

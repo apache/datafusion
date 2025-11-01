@@ -2387,6 +2387,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [date_trunc](#date_trunc)
 - [datepart](#datepart)
 - [datetrunc](#datetrunc)
+- [extract](#extract)
 - [from_unixtime](#from_unixtime)
 - [make_date](#make_date)
 - [now](#now)
@@ -2569,6 +2570,36 @@ _Alias of [date_part](#date_part)._
 ### `datetrunc`
 
 _Alias of [date_trunc](#date_trunc)._
+
+### `extract`
+
+Returns the specified part of the date as an integer.
+
+```sql
+extract(field FROM source)
+```
+
+#### Arguments
+
+- **field**: Part of the date to return. The following date parts are supported:
+
+- year
+- quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
+- month
+- week (week of the year)
+- day (day of the month)
+- hour
+- minute
+- second
+- millisecond
+- microsecond
+- nanosecond
+- dow (day of the week where Sunday is 0)
+- doy (day of the year)
+- epoch (seconds since Unix epoch)
+- isodow (day of the week where Monday is 0)
+
+- **source**: Time expression to operate on. Can be a constant, column, or function.
 
 ### `from_unixtime`
 

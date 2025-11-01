@@ -202,7 +202,7 @@ impl ScalarUDFImpl for DatePartFunc {
         };
 
         let (is_timezone_aware, tz_str_opt) = match array.data_type() {
-            Timestamp(_, Some(tz_str)) => (true, Some(tz_str.clone())),
+            Timestamp(_, Some(tz_str)) => (true, Some(Arc::clone(tz_str))),
             _ => (false, None),
         };
 
@@ -226,7 +226,6 @@ impl ScalarUDFImpl for DatePartFunc {
                         adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
                     }
                     Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
-                    _ => array,
                 },
                 _ => array,
             }
@@ -247,7 +246,6 @@ impl ScalarUDFImpl for DatePartFunc {
                     adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
                 }
                 Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
-                _ => array,
             }
         } else {
             array
@@ -257,7 +255,7 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
-        let mut arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
+        let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
             match interval_unit {
                 IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
                 IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,

@@ -198,7 +198,7 @@ impl ScalarUDFImpl for ExtractFunc {
         };
 
         let (is_timezone_aware, tz_str_opt) = match array.data_type() {
-            Timestamp(_, Some(tz_str)) => (true, Some(tz_str.clone())),
+            Timestamp(_, Some(tz_str)) => (true, Some(Arc::clone(tz_str))),
             _ => (false, None),
         };
 
@@ -222,7 +222,6 @@ impl ScalarUDFImpl for ExtractFunc {
                         adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
                     }
                     Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
-                    _ => array,
                 },
                 _ => array,
             }
@@ -243,7 +242,6 @@ impl ScalarUDFImpl for ExtractFunc {
                     adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
                 }
                 Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
-                _ => array,
             }
         } else {
             array

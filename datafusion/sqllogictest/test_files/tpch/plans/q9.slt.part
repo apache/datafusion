@@ -56,7 +56,7 @@ logical_plan
 02)--Projection: profit.nation, profit.o_year, sum(profit.amount) AS sum_profit
 03)----Aggregate: groupBy=[[profit.nation, profit.o_year]], aggr=[[sum(profit.amount)]]
 04)------SubqueryAlias: profit
-05)--------Projection: nation.n_name AS nation, date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) - partsupp.ps_supplycost * lineitem.l_quantity AS amount
+05)--------Projection: nation.n_name AS nation, extract(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) - partsupp.ps_supplycost * lineitem.l_quantity AS amount
 06)----------Inner Join: supplier.s_nationkey = nation.n_nationkey
 07)------------Projection: lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, partsupp.ps_supplycost, orders.o_orderdate
 08)--------------Inner Join: lineitem.l_orderkey = orders.o_orderkey
@@ -82,7 +82,7 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([nation@0, o_year@1], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[nation@0 as nation, o_year@1 as o_year], aggr=[sum(profit.amount)]
-08)--------------ProjectionExec: expr=[n_name@5 as nation, date_part(YEAR, o_orderdate@4) as o_year, l_extendedprice@1 * (Some(1),20,0 - l_discount@2) - ps_supplycost@3 * l_quantity@0 as amount]
+08)--------------ProjectionExec: expr=[n_name@5 as nation, extract(YEAR, o_orderdate@4) as o_year, l_extendedprice@1 * (Some(1),20,0 - l_discount@2) - ps_supplycost@3 * l_quantity@0 as amount]
 09)----------------CoalesceBatchesExec: target_batch_size=8192
 10)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)], projection=[l_quantity@0, l_extendedprice@1, l_discount@2, ps_supplycost@4, o_orderdate@5, n_name@7]
 11)--------------------CoalesceBatchesExec: target_batch_size=8192
