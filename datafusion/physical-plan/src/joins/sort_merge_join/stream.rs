@@ -604,7 +604,7 @@ impl Stream for SortMergeJoinStream {
                                             // Append filtered batch to the output buffer
                                             self.output = concat_batches(
                                                 &self.schema(),
-                                                vec![&self.output, &out_filtered_batch],
+                                                [&self.output, &out_filtered_batch],
                                             )?;
 
                                             // Send to output if the output buffer surpassed the `batch_size`
