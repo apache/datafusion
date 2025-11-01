@@ -183,6 +183,11 @@ testcontainers-modules = { version = "0.13" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
 
+# Temporary override: pull apache-avro from upstream to include unreleased fixes.
+# TODO: remove once the next version of apache-avro is published to crates.io and includes commit 3b202c5.
+[patch.crates-io]
+apache-avro = { git = "https://github.com/apache/avro-rs", rev = "3b202c58f12bd1217eccf8a0028e4176ee4aadf9" }
+
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"

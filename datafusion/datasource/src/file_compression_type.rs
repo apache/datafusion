@@ -48,7 +48,7 @@ use tokio::io::AsyncWrite;
 #[cfg(feature = "compression")]
 use tokio_util::io::{ReaderStream, StreamReader};
 #[cfg(feature = "compression")]
-use xz2::read::XzDecoder;
+use liblzma::read::XzDecoder;
 #[cfg(feature = "compression")]
 use zstd::Decoder as ZstdDecoder;
 
