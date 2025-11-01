@@ -36,7 +36,8 @@ pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
 pub use value::{
-    Count, Gauge, MetricValue, PruningMetrics, ScopedTimerGuard, Time, Timestamp,
+    Count, Gauge, MetricValue, PruningMetrics, RatioMetrics, ScopedTimerGuard, Time,
+    Timestamp,
 };
 
 /// Something that tracks a value of interest (metric) of a DataFusion
@@ -304,6 +305,7 @@ impl MetricsSet {
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
             MetricValue::PruningMetrics { name, .. } => name == metric_name,
+            MetricValue::Ratio { name, .. } => name == metric_name,
             MetricValue::Custom { .. } => false,
         })
     }
