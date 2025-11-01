@@ -27,14 +27,14 @@ use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
     Like, NullTreatment, Placeholder, ScalarFunction, Unnest,
 };
-use datafusion_expr::WriteOp;
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, Expr, JoinConstraint,
     JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition,
 };
+use datafusion_expr::{Subquery, WriteOp};
 
-use crate::protobuf::RecursionUnnestOption;
+use crate::logical_plan::AsLogicalPlan;
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -48,6 +48,7 @@ use crate::protobuf::{
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
     ToProtoError as Error,
 };
+use crate::protobuf::{OuterReferenceColumn, RecursionUnnestOption};
 
 use super::LogicalExtensionCodec;
 
@@ -576,13 +577,30 @@ pub fn serialize_expr(
                 qualifier: qualifier.to_owned().map(|x| x.into()),
             })),
         },
-        Expr::ScalarSubquery(_)
-        | Expr::InSubquery(_)
-        | Expr::Exists { .. }
-        | Expr::OuterReferenceColumn { .. } => {
-            // we would need to add logical plan operators to datafusion.proto to support this
-            // see discussion in https://github.com/apache/datafusion/issues/2565
-            return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
+        Expr::ScalarSubquery(Subquery {
+            subquery,
+            outer_ref_columns,
+            spans: _,
+        }) => protobuf::LogicalExprNode {
+            expr_type: Some(ExprType::ScalarSubquery(Box::new(
+                protobuf::ScalarSubquery {
+                    subquery: Some(Box::new(
+                        protobuf::LogicalPlanNode::try_from_logical_plan(subquery, codec)
+                            .map_err(|e| Error::General(format!("Proto serialization error: Failed to serialize Scalar Subquery: {e}")))?,
+                    )),
+                    outer_ref_columns: serialize_exprs(outer_ref_columns, codec)?,
+                },
+            ))),
+        },
+        Expr::OuterReferenceColumn(field, column) => {
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::OuterReferenceColumn(OuterReferenceColumn{
+                    field: Some(field.as_ref().try_into()?), column: Some(column.into())
+                }))
+            }
+        }
+        Expr::InSubquery(_) | Expr::Exists { .. } => {
+            return Err(Error::NotImplemented("Proto serialization error: Expr::InSubquery(_) | Expr::Exists { .. } not supported".to_string()));
         }
         Expr::GroupingSet(GroupingSet::Cube(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Cube(CubeNode {
