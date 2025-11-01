@@ -530,116 +530,6 @@ fn is_timezone_name(token: &str) -> bool {
     false
 }
 
-#[cfg(test)]
-mod tests {
-    use super::has_explicit_timezone;
-
-    #[test]
-    fn detects_timezone_token_outside_tail() {
-        assert!(has_explicit_timezone("UTC 2024-01-01 12:00:00"));
-        assert!(has_explicit_timezone("2020-09-08T13:42:29UTC"));
-        assert!(has_explicit_timezone("America/New_York 2020-09-08"));
-    }
-
-    #[test]
-    fn detects_offsets_without_colons() {
-        // ISO-8601 formats with offsets (no colons)
-        assert!(has_explicit_timezone("2020-09-08T13:42:29+0500"));
-        assert!(has_explicit_timezone("2020-09-08T13:42:29-0330"));
-        assert!(has_explicit_timezone("2020-09-08T13:42:29+05"));
-        assert!(has_explicit_timezone("2020-09-08T13:42:29-08"));
-
-        // 4-digit offsets
-        assert!(has_explicit_timezone("2024-01-01T12:00:00+0000"));
-        assert!(has_explicit_timezone("2024-01-01T12:00:00-1200"));
-
-        // 6-digit offsets (with seconds)
-        assert!(has_explicit_timezone("2024-01-01T12:00:00+053045"));
-        assert!(has_explicit_timezone("2024-01-01T12:00:00-123045"));
-
-        // Lowercase 't' separator
-        assert!(has_explicit_timezone("2020-09-08t13:42:29+0500"));
-        assert!(has_explicit_timezone("2020-09-08t13:42:29-0330"));
-    }
-
-    #[test]
-    fn detects_offsets_with_colons() {
-        assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00"));
-        assert!(has_explicit_timezone("2020-09-08T13:42:29-03:30"));
-        assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00:45"));
-    }
-
-    #[test]
-    fn detects_z_suffix() {
-        assert!(has_explicit_timezone("2020-09-08T13:42:29Z"));
-        assert!(has_explicit_timezone("2020-09-08T13:42:29z"));
-    }
-
-    #[test]
-    fn rejects_naive_timestamps() {
-        assert!(!has_explicit_timezone("2020-09-08T13:42:29"));
-        assert!(!has_explicit_timezone("2020-09-08 13:42:29"));
-        assert!(!has_explicit_timezone("2024-01-01 12:00:00"));
-
-        // Date formats with dashes that could be confused with offsets
-        assert!(!has_explicit_timezone("03:59:00.123456789 05-17-2023"));
-        assert!(!has_explicit_timezone("12:00:00 01-02-2024"));
-    }
-
-    #[test]
-    fn rejects_scientific_notation() {
-        // Should not treat scientific notation as timezone offset
-        assert!(!has_explicit_timezone("1.5e+10"));
-        assert!(!has_explicit_timezone("2.3E-05"));
-    }
-
-    #[test]
-    fn test_offset_without_colon_parsing() {
-        use super::{
-            string_to_timestamp_nanos_shim, string_to_timestamp_nanos_with_timezone,
-        };
-        use crate::datetime::common::ConfiguredTimeZone;
-
-        // Test the exact case from the issue: 2020-09-08T13:42:29+0500
-        // This should parse correctly as having an explicit offset
-        let utc_tz = ConfiguredTimeZone::parse("UTC").unwrap();
-        let result_utc =
-            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+0500")
-                .unwrap();
-
-        // Parse the equivalent RFC3339 format with colon to get the expected value
-        let expected =
-            string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
-        assert_eq!(result_utc, expected);
-
-        // Test with America/New_York timezone - should NOT double-adjust
-        // Because the timestamp has an explicit timezone, the session timezone should be ignored
-        let ny_tz = ConfiguredTimeZone::parse("America/New_York").unwrap();
-        let result_ny =
-            string_to_timestamp_nanos_with_timezone(&ny_tz, "2020-09-08T13:42:29+0500")
-                .unwrap();
-
-        // The result should be the same as UTC because the timestamp has an explicit timezone
-        assert_eq!(result_ny, expected);
-
-        // Test other offset formats without colons
-        let result2 =
-            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29-0330")
-                .unwrap();
-        let expected2 =
-            string_to_timestamp_nanos_shim("2020-09-08T13:42:29-03:30").unwrap();
-        assert_eq!(result2, expected2);
-
-        // Test 2-digit offsets
-        let result3 =
-            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+05")
-                .unwrap();
-        let expected3 =
-            string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
-        assert_eq!(result3, expected3);
-    }
-}
-
 pub(crate) fn string_to_timestamp_nanos_with_timezone(
     timezone: &ConfiguredTimeZone,
     s: &str,
@@ -1068,4 +958,114 @@ where
 {
     // first map is the iterator, second is for the `Option<_>`
     array.iter().map(|x| x.map(&op).transpose()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_explicit_timezone;
+
+    #[test]
+    fn detects_timezone_token_outside_tail() {
+        assert!(has_explicit_timezone("UTC 2024-01-01 12:00:00"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29UTC"));
+        assert!(has_explicit_timezone("America/New_York 2020-09-08"));
+    }
+
+    #[test]
+    fn detects_offsets_without_colons() {
+        // ISO-8601 formats with offsets (no colons)
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+0500"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-0330"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-08"));
+
+        // 4-digit offsets
+        assert!(has_explicit_timezone("2024-01-01T12:00:00+0000"));
+        assert!(has_explicit_timezone("2024-01-01T12:00:00-1200"));
+
+        // 6-digit offsets (with seconds)
+        assert!(has_explicit_timezone("2024-01-01T12:00:00+053045"));
+        assert!(has_explicit_timezone("2024-01-01T12:00:00-123045"));
+
+        // Lowercase 't' separator
+        assert!(has_explicit_timezone("2020-09-08t13:42:29+0500"));
+        assert!(has_explicit_timezone("2020-09-08t13:42:29-0330"));
+    }
+
+    #[test]
+    fn detects_offsets_with_colons() {
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-03:30"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00:45"));
+    }
+
+    #[test]
+    fn detects_z_suffix() {
+        assert!(has_explicit_timezone("2020-09-08T13:42:29Z"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29z"));
+    }
+
+    #[test]
+    fn rejects_naive_timestamps() {
+        assert!(!has_explicit_timezone("2020-09-08T13:42:29"));
+        assert!(!has_explicit_timezone("2020-09-08 13:42:29"));
+        assert!(!has_explicit_timezone("2024-01-01 12:00:00"));
+
+        // Date formats with dashes that could be confused with offsets
+        assert!(!has_explicit_timezone("03:59:00.123456789 05-17-2023"));
+        assert!(!has_explicit_timezone("12:00:00 01-02-2024"));
+    }
+
+    #[test]
+    fn rejects_scientific_notation() {
+        // Should not treat scientific notation as timezone offset
+        assert!(!has_explicit_timezone("1.5e+10"));
+        assert!(!has_explicit_timezone("2.3E-05"));
+    }
+
+    #[test]
+    fn test_offset_without_colon_parsing() {
+        use super::{
+            string_to_timestamp_nanos_shim, string_to_timestamp_nanos_with_timezone,
+        };
+        use crate::datetime::common::ConfiguredTimeZone;
+
+        // Test the exact case from the issue: 2020-09-08T13:42:29+0500
+        // This should parse correctly as having an explicit offset
+        let utc_tz = ConfiguredTimeZone::parse("UTC").unwrap();
+        let result_utc =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+0500")
+                .unwrap();
+
+        // Parse the equivalent RFC3339 format with colon to get the expected value
+        let expected =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
+        assert_eq!(result_utc, expected);
+
+        // Test with America/New_York timezone - should NOT double-adjust
+        // Because the timestamp has an explicit timezone, the session timezone should be ignored
+        let ny_tz = ConfiguredTimeZone::parse("America/New_York").unwrap();
+        let result_ny =
+            string_to_timestamp_nanos_with_timezone(&ny_tz, "2020-09-08T13:42:29+0500")
+                .unwrap();
+
+        // The result should be the same as UTC because the timestamp has an explicit timezone
+        assert_eq!(result_ny, expected);
+
+        // Test other offset formats without colons
+        let result2 =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29-0330")
+                .unwrap();
+        let expected2 =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29-03:30").unwrap();
+        assert_eq!(result2, expected2);
+
+        // Test 2-digit offsets
+        let result3 =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+05")
+                .unwrap();
+        let expected3 =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
+        assert_eq!(result3, expected3);
+    }
 }
