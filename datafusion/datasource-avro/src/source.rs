@@ -20,9 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::avro_to_arrow::Reader as AvroReader;
-
 use arrow::datatypes::SchemaRef;
+use arrow_avro::reader::{Reader, ReaderBuilder};
+use arrow_avro::schema::AvroSchema;
 use datafusion_common::error::Result;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
@@ -40,7 +40,7 @@ use object_store::ObjectStore;
 pub struct AvroSource {
     schema: Option<SchemaRef>,
     batch_size: Option<usize>,
-    projection: Option<Vec<String>>,
+    file_projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
@@ -52,13 +52,26 @@ impl AvroSource {
         Self::default()
     }
 
-    fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
-        AvroReader::try_new(
-            reader,
-            Arc::clone(self.schema.as_ref().expect("Schema must set before open")),
-            self.batch_size.expect("Batch size must set before open"),
-            self.projection.clone(),
-        )
+    fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
+        let schema = self
+            .schema
+            .as_ref()
+            .expect("Schema must set before open")
+            .as_ref();
+
+        let projected_schema = if let Some(projection) = &self.file_projection {
+            &schema.project(projection)?
+        } else {
+            schema
+        };
+
+        let avro_schema = AvroSchema::try_from(projected_schema)?;
+
+        ReaderBuilder::new()
+            .with_reader_schema(avro_schema) // Used for projection on read.
+            .with_batch_size(self.batch_size.expect("Batch size must set before open"))
+            .build(reader)
+            .map_err(Into::into)
     }
 }
 
@@ -100,7 +113,7 @@ impl FileSource for AvroSource {
 
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.projection = config.projected_file_column_names();
+        conf.file_projection = config.file_column_projection_indices();
         Arc::new(conf)
     }
 
@@ -146,6 +159,7 @@ impl FileSource for AvroSource {
 
 mod private {
     use super::*;
+    use std::io::BufReader;
 
     use bytes::Buf;
     use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
@@ -167,14 +181,14 @@ mod private {
                     .await?;
                 match r.payload {
                     GetResultPayload::File(file, _) => {
-                        let reader = config.open(file)?;
+                        let reader = config.open(BufReader::new(file))?;
                         Ok(futures::stream::iter(reader)
                             .map(|r| r.map_err(Into::into))
                             .boxed())
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
-                        let reader = config.open(bytes.reader())?;
+                        let reader = config.open(BufReader::new(bytes.reader()))?;
                         Ok(futures::stream::iter(reader)
                             .map(|r| r.map_err(Into::into))
                             .boxed())

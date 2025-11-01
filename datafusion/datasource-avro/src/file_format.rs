@@ -16,7 +16,7 @@
 // under the License.
 
 //! Apache Avro [`FileFormat`] abstractions
-
+// todo - Check if it can be replaced with arrow-avro
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
