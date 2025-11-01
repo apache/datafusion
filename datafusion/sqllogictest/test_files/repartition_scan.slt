@@ -96,7 +96,7 @@ EXPLAIN SELECT column1 FROM parquet_table WHERE column1 <> 42 ORDER BY column1;
 logical_plan
 01)Sort: parquet_table.column1 ASC NULLS LAST
 02)--Filter: parquet_table.column1 != Int32(42)
-03)----TableScan: parquet_table projection=[column1], partial_filters=[parquet_table.column1 != Int32(42)]
+03)----TableScan: parquet_table projection=[column1], partial_filters=[parquet_table.column1 != Int32(42)] preferred_ordering=[parquet_table.column1 ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
 02)--SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -133,7 +133,7 @@ EXPLAIN SELECT column1 FROM parquet_table_with_order WHERE column1 <> 42 ORDER B
 logical_plan
 01)Sort: parquet_table_with_order.column1 ASC NULLS LAST
 02)--Filter: parquet_table_with_order.column1 != Int32(42)
-03)----TableScan: parquet_table_with_order projection=[column1], partial_filters=[parquet_table_with_order.column1 != Int32(42)]
+03)----TableScan: parquet_table_with_order projection=[column1], partial_filters=[parquet_table_with_order.column1 != Int32(42)] preferred_ordering=[parquet_table_with_order.column1 ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
