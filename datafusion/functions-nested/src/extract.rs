@@ -530,8 +530,9 @@ where
     }
 }
 
-/// Describes how to realize a single row's slice once the bounds and stride
-/// have been normalized.
+/// Internal plan describing how to materialize a single row's slice after
+/// the slice bounds/stride have been normalized. Both list layouts consume
+/// this to drive their copy logic.
 enum SlicePlan<O: OffsetSizeTrait> {
     /// No values should be produced.
     Empty,
@@ -543,6 +544,7 @@ enum SlicePlan<O: OffsetSizeTrait> {
     Indices(Vec<O>),
 }
 
+/// Produces a [`SlicePlan`] for the given logical slice parameters.
 fn compute_slice_plan<O: OffsetSizeTrait>(
     len: O,
     from_raw: i64,
