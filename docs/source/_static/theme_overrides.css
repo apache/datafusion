@@ -29,7 +29,6 @@
   --pst-color-h2: var(--color-text-base);
   /* Use softer blue from bootstrap's default info color */
   --pst-color-info: 23, 162, 184;
-  --pst-header-height: 0px;
 }
 
 code {
@@ -40,16 +39,34 @@ code {
   text-align: center;
 }
 
-/* Display appropriate logo for dark and light mode */
-.light-logo { display: inline; }
-.dark-logo { display: none; }
+/* Limit both light and dark mode logos in the navbar */
+.logo__image {
+  height: 32px;
+  width: auto;     
+  max-height: 2.5rem;
+}
 
-@media (prefers-color-scheme: dark) {
-  .light-logo { display: none; }
-  .dark-logo { 
-    display: inline; 
-    background-color: transparent !important;
-  }
+/* Display appropriate logo for dark and light mode */
+.light-logo {
+  display: inline;
+}
+
+.dark-logo {
+  display: none;
+}
+
+html[data-theme="dark"] .light-logo {
+  display: none;
+}
+
+html[data-theme="dark"] .dark-logo {
+  display: inline;
+  background-color: transparent !important;
+}
+
+/* Align search bar & theme switch right */
+.navbar-header-items__end {
+  margin-left: auto;
 }
 
 /* Ensure the logo is properly displayed */

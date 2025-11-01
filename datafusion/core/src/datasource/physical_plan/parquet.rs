@@ -65,7 +65,7 @@ mod tests {
     use datafusion_physical_plan::analyze::AnalyzeExec;
     use datafusion_physical_plan::collect;
     use datafusion_physical_plan::metrics::{
-        ExecutionPlanMetricsSet, MetricType, MetricsSet,
+        ExecutionPlanMetricsSet, MetricType, MetricValue, MetricsSet,
     };
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -1175,8 +1175,10 @@ mod tests {
         // There are 4 rows pruned in each of batch2, batch3, and
         // batch4 for a total of 12. batch1 had no pruning as c2 was
         // filled in as null
-        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 12);
-        assert_eq!(get_value(&metrics, "page_index_rows_matched"), 6);
+        let (page_index_pruned, page_index_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_pruned, 12);
+        assert_eq!(page_index_matched, 6);
     }
 
     #[tokio::test]
@@ -1776,8 +1778,10 @@ mod tests {
             | 5   |
             +-----+
         "###);
-        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 4);
-        assert_eq!(get_value(&metrics, "page_index_rows_matched"), 2);
+        let (page_index_pruned, page_index_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_pruned, 4);
+        assert_eq!(page_index_matched, 2);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
@@ -1866,8 +1870,10 @@ mod tests {
         assert_contains!(&explain, "predicate=c1@0 != bar");
 
         // there's a single row group, but we can check that it matched
-        // if no pruning was done this would be 0 instead of 1
-        assert_contains!(&explain, "row_groups_matched_statistics=1");
+        assert_contains!(
+            &explain,
+            "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+        );
 
         // check the projection
         assert_contains!(&explain, "projection=[c1]");
@@ -1898,8 +1904,10 @@ mod tests {
 
         // When both matched and pruned are 0, it means that the pruning predicate
         // was not used at all.
-        assert_contains!(&explain, "row_groups_matched_statistics=0");
-        assert_contains!(&explain, "row_groups_pruned_statistics=0");
+        assert_contains!(
+            &explain,
+            "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+        );
 
         // But pushdown predicate should be present
         assert_contains!(
@@ -1952,12 +1960,31 @@ mod tests {
     /// Panics if no such metric.
     fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
         match metrics.sum_by_name(metric_name) {
-            Some(v) => v.as_usize(),
+            Some(v) => match v {
+                MetricValue::PruningMetrics {
+                    pruning_metrics, ..
+                } => pruning_metrics.pruned(),
+                _ => v.as_usize(),
+            },
             _ => {
                 panic!(
                     "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
                 );
             }
+        }
+    }
+
+    fn get_pruning_metric(metrics: &MetricsSet, metric_name: &str) -> (usize, usize) {
+        match metrics.sum_by_name(metric_name) {
+            Some(MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            }) => (pruning_metrics.pruned(), pruning_metrics.matched()),
+            Some(_) => panic!(
+                "Metric '{metric_name}' is not a pruning metric in\n\n{metrics:#?}"
+            ),
+            None => panic!(
+                "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+            ),
         }
     }
 

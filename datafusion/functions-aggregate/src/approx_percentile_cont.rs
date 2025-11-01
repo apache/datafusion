@@ -187,9 +187,9 @@ impl ApproxPercentileCont {
             None
         };
 
-        let data_type = args.exprs[0].data_type(args.schema)?;
+        let data_type = args.expr_fields[0].data_type();
         let accumulator: ApproxPercentileAccumulator = match data_type {
-            t @ (DataType::UInt8
+            DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
@@ -198,12 +198,11 @@ impl ApproxPercentileCont {
             | DataType::Int32
             | DataType::Int64
             | DataType::Float32
-            | DataType::Float64) => {
+            | DataType::Float64 => {
                 if let Some(max_size) = tdigest_max_size {
-                    ApproxPercentileAccumulator::new_with_max_size(percentile, t, max_size)
-                }else{
-                    ApproxPercentileAccumulator::new(percentile, t)
-
+                    ApproxPercentileAccumulator::new_with_max_size(percentile, data_type.clone(), max_size)
+                } else {
+                    ApproxPercentileAccumulator::new(percentile, data_type.clone())
                 }
             }
             other => {
