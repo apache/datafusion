@@ -3460,11 +3460,11 @@ mod tests {
         // 0 -> (0, 1)
         // 1 -> (0, 2)
         // The equality check will make sure only hashes[0] maps to 0 and hashes[1] maps to 1
-        hashmap_left.insert_unique(hashes[0], (hashes[0], 1), |(h, _)| *h);
-        hashmap_left.insert_unique(hashes[0], (hashes[0], 2), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 0, 1), |(h, _, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 1, 1), |(h, _, _)| *h);
 
-        hashmap_left.insert_unique(hashes[1], (hashes[1], 1), |(h, _)| *h);
-        hashmap_left.insert_unique(hashes[1], (hashes[1], 2), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 2, 1), |(h, _, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 3, 1), |(h, _, _)| *h);
 
         let next = vec![2, 0];
 
@@ -3527,10 +3527,10 @@ mod tests {
             hashes_buff,
         )?;
 
-        hashmap_left.insert_unique(hashes[0], (hashes[0], 1u32), |(h, _)| *h);
-        hashmap_left.insert_unique(hashes[0], (hashes[0], 2u32), |(h, _)| *h);
-        hashmap_left.insert_unique(hashes[1], (hashes[1], 1u32), |(h, _)| *h);
-        hashmap_left.insert_unique(hashes[1], (hashes[1], 2u32), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 0usize, 1), |(h, _, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 1, 1), |(h, _, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 2, 1), |(h, _, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 3, 1), |(h, _, _)| *h);
 
         let next: Vec<u32> = vec![2, 0];
 

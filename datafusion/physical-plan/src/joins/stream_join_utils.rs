@@ -134,7 +134,7 @@ impl JoinHashMapType for PruningJoinHashMap {
 /// ```
 pub struct PruningJoinHashMap {
     /// Stores hash value to last row index
-    pub map: HashTable<(u64, u64)>,
+    pub map: HashTable<(u64, usize, u32)>,
     /// Stores indices in chained list data structure
     pub next: VecDeque<u64>,
 }
@@ -174,7 +174,7 @@ impl PruningJoinHashMap {
         if capacity > scale_factor * self.map.len() {
             let new_capacity = (capacity * (scale_factor - 1)) / scale_factor;
             // Resize the map with the new capacity.
-            self.map.shrink_to(new_capacity, |(hash, _)| *hash)
+            self.map.shrink_to(new_capacity, |(hash, _, _)| *hash)
         }
     }
 
@@ -202,7 +202,7 @@ impl PruningJoinHashMap {
     pub(crate) fn prune_hash_values(
         &mut self,
         prune_length: usize,
-        deleting_offset: u64,
+        _deleting_offset: u64,
         shrink_factor: usize,
     ) {
         // Remove elements from the list based on the pruning length.
@@ -212,15 +212,16 @@ impl PruningJoinHashMap {
         let removable_keys = self
             .map
             .iter()
-            .filter_map(|(hash, tail_index)| {
-                (*tail_index < prune_length as u64 + deleting_offset).then_some(*hash)
+            .filter_map(|(_hash, _tail_index, _)| {
+                todo!("Implement")
+                // (*tail_index  < prune_length as u64 + deleting_offset).then_some(*hash)
             })
             .collect::<Vec<_>>();
 
         // Remove the keys from the map.
         removable_keys.into_iter().for_each(|hash_value| {
             self.map
-                .find_entry(hash_value, |(hash, _)| hash_value == *hash)
+                .find_entry(hash_value, |(hash, _, _)| hash_value == *hash)
                 .unwrap()
                 .remove();
         });
@@ -1126,8 +1127,8 @@ pub mod tests {
         for hash_value in 0..data_size {
             join_hash_map.map.insert_unique(
                 hash_value,
-                (hash_value, hash_value),
-                |(hash, _)| *hash,
+                (hash_value, hash_value as usize, 1),
+                |(hash, _, _)| *hash,
             );
         }
 
@@ -1138,7 +1139,7 @@ pub mod tests {
         for hash_value in 0..deleted_part {
             join_hash_map
                 .map
-                .find_entry(hash_value, |(hash, _)| hash_value == *hash)
+                .find_entry(hash_value, |(hash, _, _)| hash_value == *hash)
                 .unwrap()
                 .remove();
         }
