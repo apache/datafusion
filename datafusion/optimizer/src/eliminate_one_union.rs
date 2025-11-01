@@ -106,12 +106,12 @@ mod tests {
     #[test]
     fn eliminate_one_union() -> Result<()> {
         let table_plan = coerce_plan_expr_for_schema(
-            table_scan(Some("table"), &schema(), None)?.build()?,
+            table_scan(Some("table"), &schema(), None)?.build_arc()?,
             &schema().to_dfschema()?,
         )?;
         let schema = Arc::clone(table_plan.schema());
         let single_union_plan = LogicalPlan::Union(Union {
-            inputs: vec![Arc::new(table_plan)],
+            inputs: vec![table_plan],
             schema,
         });
 

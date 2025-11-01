@@ -903,7 +903,7 @@ mod test {
 
         // A filter on "a" should not exclude any rows even if it matches the data
         let expr = col("a").eq(lit(1));
-        let predicate = logical2physical(&expr, &schema);
+        let predicate = logical2physical(&expr, Arc::clone(&schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -912,7 +912,7 @@ mod test {
 
         // A filter on `b = 5.0` should exclude all rows
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
-        let predicate = logical2physical(&expr, &schema);
+        let predicate = logical2physical(&expr, Arc::clone(&schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -978,7 +978,8 @@ mod test {
         let expr = col("part").eq(lit(1));
         // Mark the expression as dynamic even if it's not to force partition pruning to happen
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
-        let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
+        let predicate =
+            make_dynamic_expr(logical2physical(&expr, Arc::clone(&table_schema)));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -989,7 +990,7 @@ mod test {
         let expr = col("part").eq(lit(2));
         // Mark the expression as dynamic even if it's not to force partition pruning to happen
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
-        let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
+        let predicate = make_dynamic_expr(logical2physical(&expr, table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1065,7 +1066,7 @@ mod test {
 
         // Filter should match the partition value and file statistics
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, Arc::clone(&table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1074,7 +1075,7 @@ mod test {
 
         // Should prune based on partition value but not file statistics
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, Arc::clone(&table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1083,7 +1084,7 @@ mod test {
 
         // Should prune based on file statistics but not partition value
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(7.0)));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, Arc::clone(&table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1092,7 +1093,7 @@ mod test {
 
         // Should prune based on both partition value and file statistics
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7.0)));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, table_schema);
         let opener = make_opener(predicate);
         let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1157,7 +1158,7 @@ mod test {
 
         // Filter should match the partition value and data value
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(1)));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, Arc::clone(&table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1166,7 +1167,7 @@ mod test {
 
         // Filter should match the partition value but not the data value
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(3)));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, Arc::clone(&table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1175,7 +1176,7 @@ mod test {
 
         // Filter should not match the partition value but match the data value
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(1)));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, Arc::clone(&table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1184,7 +1185,7 @@ mod test {
 
         // Filter should not match the partition value or the data value
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(3)));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, table_schema);
         let opener = make_opener(predicate);
         let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1249,7 +1250,7 @@ mod test {
 
         // Filter should NOT match the stats but the file is never attempted to be pruned because the filters are not dynamic
         let expr = col("part").eq(lit(2));
-        let predicate = logical2physical(&expr, &table_schema);
+        let predicate = logical2physical(&expr, Arc::clone(&table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1257,7 +1258,7 @@ mod test {
         assert_eq!(num_rows, 3);
 
         // If we make the filter dynamic, it should prune
-        let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
+        let predicate = make_dynamic_expr(logical2physical(&expr, table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
@@ -1396,7 +1397,8 @@ mod test {
             max_predicate_cache_size: None,
         };
 
-        let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);
+        let predicate =
+            logical2physical(&col("a").eq(lit(1u64)), Arc::clone(&table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let batches = collect_batches(stream).await;
