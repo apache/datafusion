@@ -278,11 +278,11 @@ pub fn update_from_iter<'a, T>(
 
     let mut next_index = 0;
 
-    let unique_count = items.windows(2)
-        .filter(|item| item[0].0 != item[1].0)
-        .count();
+    // let unique_count = items.windows(2)
+    //     .filter(|item| item[0].0 != item[1].0)
+    //     .count();
 
-    map.shrink_to(unique_count, |&(hash, _, _)| hash);
+    // map.shrink_to(unique_count, |&(hash, _, _)| hash);
 
     let mut prev_entry = map.insert_unique(
         prev_hash,
