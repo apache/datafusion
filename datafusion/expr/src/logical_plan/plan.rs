@@ -633,8 +633,36 @@ impl LogicalPlan {
             LogicalPlan::Dml(_) => Ok(self),
             LogicalPlan::Copy(_) => Ok(self),
             LogicalPlan::Values(Values { schema, values }) => {
-                // todo it isn't clear why the schema is not recomputed here
-                Ok(LogicalPlan::Values(Values { schema, values }))
+                // Using `values` alone cannot compute correct schema for the plan. For example:
+                //   Projection: col_1, col_2
+                //     Values: (Float32(1), Float32(10)), (Float32(100), Float32(10))
+                //
+                // Thus, we need to recompute a new schema from `values` and retain some
+                // information from the original schema.
+                let new_plan = LogicalPlanBuilder::values(values.clone())?.build()?;
+
+                let qualified_fields = schema
+                    .iter()
+                    .zip(new_plan.schema().fields())
+                    .map(|((table_ref, old_field), new_field)| {
+                        let field = old_field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(new_field.data_type().clone())
+                            .with_nullable(new_field.is_nullable());
+                        (table_ref.cloned(), Arc::new(field))
+                    })
+                    .collect::<Vec<_>>();
+
+                let schema = DFSchema::new_with_metadata(
+                    qualified_fields,
+                    schema.metadata().clone(),
+                )?
+                .with_functional_dependencies(schema.functional_dependencies().clone())?;
+                Ok(LogicalPlan::Values(Values {
+                    schema: Arc::new(schema),
+                    values,
+                }))
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
@@ -1474,13 +1502,7 @@ impl LogicalPlan {
             })?
             // always recompute the schema to ensure the changed in the schema's field should be
             // poplulated to the plan's parent
-            .map_data(|plan| plan.recompute_schema())?
-            .map_data(|plan| match plan {
-                LogicalPlan::Values(Values { values, schema: _ }) => {
-                    LogicalPlanBuilder::values(values)?.build()
-                }
-                _ => Ok(plan),
-            })
+            .map_data(|plan| plan.recompute_schema())
         })
         .map(|res| res.data)
     }
