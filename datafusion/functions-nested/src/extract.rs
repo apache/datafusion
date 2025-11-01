@@ -18,8 +18,8 @@
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
 use arrow::array::{
-    cast::AsArray, Array, ArrayRef, Capacities, GenericListArray, GenericListViewArray,
-    Int64Array, MutableArrayData, NullArray, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, Capacities, GenericListArray, GenericListViewArray, Int64Array,
+    MutableArrayData, NullArray, NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -27,9 +27,11 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, LargeListView, List, ListView, Null},
     Field,
 };
-use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
+use datafusion_common::cast::{
+    as_int64_array, as_large_list_view_array, as_list_view_array,
+};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
@@ -450,11 +452,11 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_array_slice::<i64>(array, from_array, to_array, stride)
         }
         ListView(_) => {
-            let array = args[0].as_ref().as_list_view::<i32>();
+            let array = as_list_view_array(&args[0])?;
             general_list_view_array_slice::<i32>(array, from_array, to_array, stride)
         }
         LargeListView(_) => {
-            let array = args[0].as_ref().as_list_view::<i64>();
+            let array = as_large_list_view_array(&args[0])?;
             general_list_view_array_slice::<i64>(array, from_array, to_array, stride)
         }
         _ => exec_err!("array_slice does not support type: {}", array_data_type),
