@@ -633,8 +633,36 @@ impl LogicalPlan {
             LogicalPlan::Dml(_) => Ok(self),
             LogicalPlan::Copy(_) => Ok(self),
             LogicalPlan::Values(Values { schema, values }) => {
-                // todo it isn't clear why the schema is not recomputed here
-                Ok(LogicalPlan::Values(Values { schema, values }))
+                // Using `values` alone cannot compute correct schema for the plan. For example:
+                //   Projection: col_1, col_2
+                //     Values: (Float32(1), Float32(10)), (Float32(100), Float32(10))
+                //
+                // Thus, we need to recompute a new schema from `values` and retain some
+                // information from the original schema.
+                let new_plan = LogicalPlanBuilder::values(values.clone())?.build()?;
+
+                let qualified_fields = schema
+                    .iter()
+                    .zip(new_plan.schema().fields())
+                    .map(|((table_ref, old_field), new_field)| {
+                        let field = old_field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(new_field.data_type().clone())
+                            .with_nullable(new_field.is_nullable());
+                        (table_ref.cloned(), Arc::new(field))
+                    })
+                    .collect::<Vec<_>>();
+
+                let schema = DFSchema::new_with_metadata(
+                    qualified_fields,
+                    schema.metadata().clone(),
+                )?
+                .with_functional_dependencies(schema.functional_dependencies().clone())?;
+                Ok(LogicalPlan::Values(Values {
+                    schema: Arc::new(schema),
+                    values,
+                }))
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
@@ -1471,7 +1499,10 @@ impl LogicalPlan {
                     // Preserve name to avoid breaking column references to this expression
                     Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
                 }
-            })
+            })?
+            // always recompute the schema to ensure the changed in the schema's field should be
+            // poplulated to the plan's parent
+            .map_data(|plan| plan.recompute_schema())
         })
         .map(|res| res.data)
     }
@@ -4247,6 +4278,7 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
+    use crate::select_expr::SelectExpr;
     use crate::test::function_stub::{count, count_udaf};
     use crate::{
         binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
@@ -4823,6 +4855,85 @@ mod tests {
             .clone()
             .with_param_values(param_values)
             .expect_err("prepared field metadata mismatch unexpectedly succeeded");
+    }
+
+    #[test]
+    fn test_replace_placeholder_values_relation_valid_schema() {
+        // SELECT a, b, c, d FROM (VALUES (1), ($1), ($2), ($3 + $4)) AS t(a, b, c, d);
+        let plan = LogicalPlanBuilder::values(vec![vec![
+            lit(1),
+            placeholder("$1"),
+            placeholder("$2"),
+            binary_expr(placeholder("$3"), Operator::Plus, placeholder("$4")),
+        ]])
+        .unwrap()
+        .project(vec![
+            col("column1").alias("a"),
+            col("column2").alias("b"),
+            col("column3").alias("c"),
+            col("column4").alias("d"),
+        ])
+        .unwrap()
+        .alias("t")
+        .unwrap()
+        .project(vec![col("a"), col("b"), col("c"), col("d")])
+        .unwrap()
+        .build()
+        .unwrap();
+
+        // original
+        assert_snapshot!(plan.display_indent_schema(), @r"
+        Projection: t.a, t.b, t.c, t.d [a:Int32;N, b:Null;N, c:Null;N, d:Int64;N]
+          SubqueryAlias: t [a:Int32;N, b:Null;N, c:Null;N, d:Int64;N]
+            Projection: column1 AS a, column2 AS b, column3 AS c, column4 AS d [a:Int32;N, b:Null;N, c:Null;N, d:Int64;N]
+              Values: (Int32(1), $1, $2, $3 + $4) [column1:Int32;N, column2:Null;N, column3:Null;N, column4:Int64;N]
+        ");
+
+        let plan = plan
+            .with_param_values(vec![
+                ScalarValue::from(1i32),
+                ScalarValue::from("s"),
+                ScalarValue::from(3),
+                ScalarValue::from(4),
+            ])
+            .unwrap();
+
+        // replaced
+        assert_snapshot!(plan.display_indent_schema(), @r#"
+        Projection: t.a, t.b, t.c, t.d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int32;N]
+          SubqueryAlias: t [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int32;N]
+            Projection: column1 AS a, column2 AS b, column3 AS c, column4 AS d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int32;N]
+              Values: (Int32(1), Int32(1) AS $1, Utf8("s") AS $2, Int32(3) + Int32(4) AS $3 + $4) [column1:Int32;N, column2:Int32;N, column3:Utf8;N, column4:Int32;N]
+        "#);
+    }
+
+    #[test]
+    fn test_replace_placeholder_empty_relation_valid_schema() {
+        // SELECT $1, $2;
+        let plan = LogicalPlanBuilder::empty(false)
+            .project(vec![
+                SelectExpr::from(placeholder("$1")),
+                SelectExpr::from(placeholder("$2")),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // original
+        assert_snapshot!(plan.display_indent_schema(), @r"
+        Projection: $1, $2 [$1:Null;N, $2:Null;N]
+          EmptyRelation: rows=0 []
+        ");
+
+        let plan = plan
+            .with_param_values(vec![ScalarValue::from(1i32), ScalarValue::from("s")])
+            .unwrap();
+
+        // replaced
+        assert_snapshot!(plan.display_indent_schema(), @r#"
+        Projection: Int32(1) AS $1, Utf8("s") AS $2 [$1:Int32, $2:Utf8]
+          EmptyRelation: rows=0 []
+        "#);
     }
 
     #[test]
