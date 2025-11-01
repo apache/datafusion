@@ -137,7 +137,13 @@ impl WindowShift {
                     TypeSignature::Any(3),
                 ],
                 Volatility::Immutable,
-            ),
+            )
+            .with_parameter_names(vec![
+                "expr".to_string(),
+                "offset".to_string(),
+                "default".to_string(),
+            ])
+            .expect("valid parameter names for lead/lag"),
             kind,
         }
     }

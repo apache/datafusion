@@ -1047,6 +1047,48 @@ The output will be like:
 ...
 ```
 
+### Named Arguments for Window UDFs
+
+Window UDFs also support named arguments, allowing you to pass arguments by parameter name:
+
+```sql
+SELECT my_window_func(expr => col1, offset => 2) OVER (ORDER BY id) FROM table;
+```
+
+To add named argument support to your Window UDF, use `.with_parameter_names()` when creating the signature:
+
+```rust
+use arrow::datatypes::DataType;
+use datafusion_expr::{Signature, Volatility};
+
+impl MyWindowUDF {
+    fn new() -> Self {
+        Self {
+            signature: Signature::uniform(
+                2,
+                vec![DataType::Float64],
+                Volatility::Immutable
+            )
+            .with_parameter_names(vec![
+                "expr".to_string(),
+                "offset".to_string()
+            ])
+            .expect("valid parameter names"),
+        }
+    }
+}
+```
+
+Once registered, users can call your window function with named arguments in any order:
+
+```sql
+-- All equivalent
+SELECT my_window_func(col1, 2) OVER (ORDER BY id) FROM table;
+SELECT my_window_func(expr => col1, offset => 2) OVER (ORDER BY id) FROM table;
+SELECT my_window_func(offset => 2, expr => col1) OVER (ORDER BY id) FROM table;
+SELECT my_window_func(col1, offset => 2) OVER (ORDER BY id) FROM table;
+```
+
 ## Adding an Aggregate UDF
 
 Aggregate UDFs are functions that take a group of rows and return a single value. These are akin to SQL's `SUM` or
@@ -1369,6 +1411,60 @@ async fn main() -> Result<()> {
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+
+### Named Arguments for Aggregate UDFs
+
+Aggregate UDFs also support PostgreSQL-style named arguments, allowing you to pass arguments by parameter name:
+
+```sql
+SELECT my_aggregate(expr => col1, weight => col2) FROM table;
+```
+
+To add named argument support to your Aggregate UDF, use `.with_parameter_names()` when creating the signature:
+
+```rust
+use arrow::datatypes::DataType;
+use datafusion_expr::{Signature, Volatility, AggregateUDFImpl};
+
+#[derive(Debug)]
+struct MyAggregateFunction {
+    signature: Signature,
+}
+
+impl MyAggregateFunction {
+    fn new() -> Self {
+        Self {
+            signature: Signature::uniform(
+                2,
+                vec![DataType::Float64],
+                Volatility::Immutable
+            )
+            .with_parameter_names(vec![
+                "expr".to_string(),
+                "weight".to_string()
+            ])
+            .expect("valid parameter names"),
+        }
+    }
+}
+
+impl AggregateUDFImpl for MyAggregateFunction {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn name(&self) -> &str { "my_aggregate" }
+    fn signature(&self) -> &Signature { &self.signature }
+    // ... other required methods
+}
+```
+
+Once registered, users can call your aggregate function with named arguments in any order:
+
+```sql
+-- All equivalent
+SELECT my_aggregate(col1, col2) FROM table;
+SELECT my_aggregate(expr => col1, weight => col2) FROM table;
+SELECT my_aggregate(weight => col2, expr => col1) FROM table;
+SELECT my_aggregate(col1, weight => col2) FROM table;
+```
 
 ## Adding a Table UDF
 
