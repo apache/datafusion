@@ -341,7 +341,6 @@ fn filter_array(
 /// │└─────────┘│  │    2    │                             │    D    │
 /// └───────────┘  └─────────┘                             └─────────┘
 ///    values        indices                                  result
-///
 /// ```
 fn merge(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
     #[cfg(debug_assertions)]
