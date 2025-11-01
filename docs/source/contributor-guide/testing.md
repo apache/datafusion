@@ -132,6 +132,8 @@ tested in the same way using the [doc_comment] crate. See the end of
 
 ## Benchmarks
 
+For comprehensive information about all available benchmarks in DataFusion, see the dedicated {doc}`benchmarking` page.
+
 ### Criterion Benchmarks
 
 [Criterion](https://docs.rs/criterion/latest/criterion/index.html) is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.
