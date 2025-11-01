@@ -148,7 +148,7 @@ fn make_lazy_exec_with_range(
     let generator: Arc<RwLock<dyn LazyBatchGenerator>> = Arc::new(RwLock::new(gen));
 
     // Create a LazyMemoryExec with one partition using our generator
-    let mut exec = LazyMemoryExec::try_new(schema, vec![generator]).unwrap();
+    let mut exec = LazyMemoryExec::try_new(schema, None, vec![generator]).unwrap();
 
     exec.add_ordering(vec![PhysicalSortExpr::new(
         Arc::new(Column::new(column_name, 0)),
