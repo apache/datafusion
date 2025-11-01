@@ -316,7 +316,7 @@ select arrow_cast(interval '30 minutes', 'Duration(Second)');
 ----
 0 days 0 hours 30 mins 0 secs
 
-query error DataFusion error: This feature is not implemented: Unsupported CAST from Utf8 to Duration\(s\)
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*This feature is not implemented: Unsupported CAST from Utf8 to Duration\(s\)
 select arrow_cast('30 minutes', 'Duration(Second)');
 
 
@@ -337,7 +337,7 @@ select arrow_cast(timestamp '2000-01-01T00:00:00Z', 'Timestamp(Nanosecond, Some(
 ----
 2000-01-01T00:00:00+08:00
 
-statement error DataFusion error: Arrow error: Parser error: Invalid timezone "\+25:00": failed to parse timezone
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Parser error: Invalid timezone "\+25:00": failed to parse timezone
 select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+25:00" ))');
 
 
@@ -406,7 +406,7 @@ select arrow_cast([1], 'FixedSizeList(1, Int64)');
 ----
 [1]
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast to FixedSizeList\(4\): value at index 0 has length 3
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast to FixedSizeList\(4\): value at index 0 has length 3
 select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(4, Int64)');
 
 query ?
