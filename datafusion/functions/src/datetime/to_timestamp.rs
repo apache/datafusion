@@ -220,7 +220,7 @@ impl Default for ToTimestampFunc {
 }
 
 impl ToTimestampFunc {
-    #[deprecated(note = "use new_with_config instead")]
+    #[deprecated(since = "50.3.0", note = "use new_with_config instead")]
     pub fn new() -> Self {
         Self::new_with_config(&ConfigOptions::default())
     }
@@ -240,7 +240,7 @@ impl Default for ToTimestampSecondsFunc {
 }
 
 impl ToTimestampSecondsFunc {
-    #[deprecated(note = "use new_with_config instead")]
+    #[deprecated(since = "50.3.0", note = "use new_with_config instead")]
     pub fn new() -> Self {
         Self::new_with_config(&ConfigOptions::default())
     }
@@ -260,7 +260,7 @@ impl Default for ToTimestampMillisFunc {
 }
 
 impl ToTimestampMillisFunc {
-    #[deprecated(note = "use new_with_config instead")]
+    #[deprecated(since = "50.3.0", note = "use new_with_config instead")]
     pub fn new() -> Self {
         Self::new_with_config(&ConfigOptions::default())
     }
@@ -280,7 +280,7 @@ impl Default for ToTimestampMicrosFunc {
 }
 
 impl ToTimestampMicrosFunc {
-    #[deprecated(note = "use new_with_config instead")]
+    #[deprecated(since = "50.3.0", note = "use new_with_config instead")]
     pub fn new() -> Self {
         Self::new_with_config(&ConfigOptions::default())
     }
@@ -300,7 +300,7 @@ impl Default for ToTimestampNanosFunc {
 }
 
 impl ToTimestampNanosFunc {
-    #[deprecated(note = "use new_with_config instead")]
+    #[deprecated(since = "50.3.0", note = "use new_with_config instead")]
     pub fn new() -> Self {
         Self::new_with_config(&ConfigOptions::default())
     }
