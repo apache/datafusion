@@ -235,7 +235,7 @@ impl TableProvider for DefaultValueTableProvider {
             &df_schema,
         )?;
 
-        let parquet_source = ParquetSource::default()
+        let parquet_source = ParquetSource::new(schema.clone())
             .with_predicate(filter)
             .with_pushdown_filters(true);
 

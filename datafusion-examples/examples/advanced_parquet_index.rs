@@ -492,7 +492,7 @@ impl TableProvider for IndexTableProvider {
                 .with_file(indexed_file);
 
         let file_source = Arc::new(
-            ParquetSource::default()
+            ParquetSource::new(schema.clone())
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
                 .with_predicate(predicate)

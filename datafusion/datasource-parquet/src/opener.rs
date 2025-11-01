@@ -270,7 +270,7 @@ impl FileOpener for ParquetOpener {
                         let partition_values = partition_fields
                             .iter()
                             .cloned()
-                            .zip(partitioned_file.partition_values)
+                            .zip(partitioned_file.partition_values.clone())
                             .collect_vec();
                         let expr = expr_adapter_factory
                             .create(

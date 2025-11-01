@@ -34,7 +34,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
-use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile};
+use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile, TableSchema};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
@@ -512,7 +512,7 @@ pub fn parse_protobuf_file_scan_config(
     let table_partition_cols = proto
         .table_partition_cols
         .iter()
-        .map(|col| Ok(schema.field_with_name(col)?.clone()))
+        .map(|col| Ok(Arc::new(schema.field_with_name(col)?.clone())))
         .collect::<Result<Vec<_>>>()?;
 
     // Remove partition columns from the schema after recreating table_partition_cols
@@ -541,13 +541,14 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.extend(LexOrdering::new(sort_exprs));
     }
 
-    let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+    let table_schema = TableSchema::new(file_schema, table_partition_cols);
+
+    let config = FileScanConfigBuilder::new(object_store_url, table_schema, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_projection_indices(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
-        .with_table_partition_cols(table_partition_cols)
         .with_output_ordering(output_ordering)
         .with_batch_size(proto.batch_size.map(|s| s as usize))
         .build();

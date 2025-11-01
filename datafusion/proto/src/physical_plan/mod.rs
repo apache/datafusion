@@ -23,7 +23,8 @@ use self::to_proto::{serialize_partitioning, serialize_physical_expr};
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches,
+    parse_physical_window_expr, parse_protobuf_file_scan_config,
+    parse_protobuf_file_scan_schema, parse_record_batches,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
@@ -42,6 +43,7 @@ use crate::{convert_required, into_required};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{IntervalMonthDayNanoType, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
+use datafusion_common::config::CsvOptions;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
 };
@@ -612,14 +614,20 @@ impl protobuf::PhysicalPlanNode {
             None
         };
 
+        // Parse schema first so we can use it to create CsvSource
+        let schema = parse_protobuf_file_scan_schema(scan.base_conf.as_ref().unwrap())?;
+
+        let csv_options = CsvOptions {
+            has_header: Some(scan.has_header),
+            delimiter: str_to_byte(&scan.delimiter, "delimiter")?,
+            quote: str_to_byte(&scan.quote, "quote")?,
+            ..Default::default()
+        };
         let source = Arc::new(
-            CsvSource::new(
-                scan.has_header,
-                str_to_byte(&scan.delimiter, "delimiter")?,
-                0,
-            )
-            .with_escape(escape)
-            .with_comment(comment),
+            CsvSource::new(schema)
+                .with_csv_options(csv_options)
+                .with_escape(escape)
+                .with_comment(comment),
         );
 
         let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(
@@ -695,7 +703,12 @@ impl protobuf::PhysicalPlanNode {
             if let Some(table_options) = scan.parquet_options.as_ref() {
                 options = table_options.try_into()?;
             }
-            let mut source = ParquetSource::new(options);
+
+            // Parse schema first so we can use it to create ParquetSource
+            let schema = parse_protobuf_file_scan_schema(base_conf)?;
+
+            let mut source =
+                ParquetSource::new(schema).with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
@@ -717,16 +730,18 @@ impl protobuf::PhysicalPlanNode {
         &self,
         scan: &protobuf::AvroScanExecNode,
         ctx: &TaskContext,
-
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "avro")]
         {
+            let schema = from_proto::parse_protobuf_file_scan_schema(
+                scan.base_conf.as_ref().unwrap(),
+            )?;
             let conf = parse_protobuf_file_scan_config(
                 scan.base_conf.as_ref().unwrap(),
                 ctx,
                 extension_codec,
-                Arc::new(AvroSource::new()),
+                Arc::new(AvroSource::new(schema)),
             )?;
             Ok(DataSourceExec::from_data_source(conf))
         }

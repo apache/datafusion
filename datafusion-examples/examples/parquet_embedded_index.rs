@@ -426,7 +426,9 @@ impl TableProvider for DistinctIndexTable {
 
         // Build ParquetSource to actually read the files
         let url = ObjectStoreUrl::parse("file://")?;
-        let source = Arc::new(ParquetSource::default().with_enable_page_index(true));
+        let source = Arc::new(
+            ParquetSource::new(self.schema.clone()).with_enable_page_index(true),
+        );
         let mut builder = FileScanConfigBuilder::new(url, self.schema.clone(), source);
         for file in files_to_scan {
             let path = self.dir.join(file);

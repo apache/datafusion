@@ -33,6 +33,7 @@ use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::metrics::MetricType;
+use datafusion_datasource::TableSchema;
 use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -883,7 +884,11 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let mut options = TableParquetOptions::new();
     options.global.pushdown_filters = true;
 
-    let file_source = Arc::new(ParquetSource::new(options).with_predicate(predicate));
+    let file_source = Arc::new(
+        ParquetSource::new(Arc::clone(&file_schema))
+            .with_table_parquet_options(options)
+            .with_predicate(predicate),
+    );
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -914,19 +919,23 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let file_source = Arc::new(ParquetSource::default());
+    let table_schema = TableSchema::new(
+        schema.clone(),
+        vec![Arc::new(Field::new(
+            "part".to_string(),
+            wrap_partition_type_in_dict(DataType::Int16),
+            false,
+        ))],
+    );
+
+    let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
-        schema,
+        table_schema,
         file_source,
     )
     .with_projection_indices(Some(vec![0, 1]))
     .with_file_group(FileGroup::new(vec![file_group]))
-    .with_table_partition_cols(vec![Field::new(
-        "part".to_string(),
-        wrap_partition_type_in_dict(DataType::Int16),
-        false,
-    )])
     .with_newlines_in_values(false)
     .build();
 
@@ -942,8 +951,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         inner: Arc::new(Column::new("col", 1)),
     });
 
-    let file_source =
-        Arc::new(ParquetSource::default().with_predicate(custom_predicate_expr));
+    let file_source = Arc::new(
+        ParquetSource::new(Arc::clone(&file_schema))
+            .with_predicate(custom_predicate_expr),
+    );
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -1803,7 +1814,8 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let statistics = Statistics::new_unknown(&schema);
 
-    let file_source = ParquetSource::default().with_statistics(statistics.clone());
+    let file_source =
+        ParquetSource::new(Arc::clone(&schema)).with_statistics(statistics.clone());
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         schema.clone(),

@@ -22,7 +22,6 @@ use crate::{
 
 use std::sync::Arc;
 
-use crate::TableSchema;
 use arrow::datatypes::Schema;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
@@ -64,10 +63,6 @@ impl FileSource for MockSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
-    fn with_schema(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 

@@ -37,6 +37,7 @@ use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
@@ -230,7 +231,7 @@ fn parquet_exec_multiple_sorted(
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(schema())),
     )
     .with_file_groups(vec![
         FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
@@ -250,7 +251,15 @@ fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> 
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
-        Arc::new(CsvSource::new(false, b',', b'"')),
+        {
+            let options = CsvOptions {
+                has_header: Some(false),
+                delimiter: b',',
+                quote: b'"',
+                ..Default::default()
+            };
+            Arc::new(CsvSource::new(schema()).with_csv_options(options))
+        },
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
@@ -268,7 +277,15 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
-        Arc::new(CsvSource::new(false, b',', b'"')),
+        {
+            let options = CsvOptions {
+                has_header: Some(false),
+                delimiter: b',',
+                quote: b'"',
+                ..Default::default()
+            };
+            Arc::new(CsvSource::new(schema()).with_csv_options(options))
+        },
     )
     .with_file_groups(vec![
         FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
@@ -2694,7 +2711,15 @@ fn parallelization_compressed_csv() -> Result<()> {
                 FileScanConfigBuilder::new(
                     ObjectStoreUrl::parse("test:///").unwrap(),
                     schema(),
-                    Arc::new(CsvSource::new(false, b',', b'"')),
+                    {
+                        let options = CsvOptions {
+                            has_header: Some(false),
+                            delimiter: b',',
+                            quote: b'"',
+                            ..Default::default()
+                        };
+                        Arc::new(CsvSource::new(schema()).with_csv_options(options))
+                    },
                 )
                 .with_file(PartitionedFile::new("x".to_string(), 100))
                 .with_file_compression_type(compression_type)

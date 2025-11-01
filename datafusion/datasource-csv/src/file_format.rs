@@ -48,6 +48,7 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
 use datafusion_datasource::write::BatchSerializer;
+use datafusion_datasource::TableSchema;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -434,18 +435,15 @@ impl FileFormat for CsvFormat {
             .newlines_in_values
             .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
+        let file_schema = Arc::clone(conf.file_schema());
+
         let conf_builder = FileScanConfigBuilder::from(conf)
             .with_file_compression_type(self.options.compression.into())
             .with_newlines_in_values(newlines_in_values);
 
-        let truncated_rows = self.options.truncated_rows.unwrap_or(false);
-        let source = Arc::new(
-            CsvSource::new(has_header, self.options.delimiter, self.options.quote)
-                .with_escape(self.options.escape)
-                .with_terminator(self.options.terminator)
-                .with_comment(self.options.comment)
-                .with_truncate_rows(truncated_rows),
-        );
+        let mut csv_options = self.options.clone();
+        csv_options.has_header = Some(has_header);
+        let source = Arc::new(CsvSource::new(file_schema).with_csv_options(csv_options));
 
         let config = conf_builder.with_source(source).build();
 
@@ -489,8 +487,12 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(CsvSource::default())
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+        let mut csv_options = self.options.clone();
+        if csv_options.has_header.is_none() {
+            csv_options.has_header = Some(true);
+        }
+        Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options))
     }
 }
 

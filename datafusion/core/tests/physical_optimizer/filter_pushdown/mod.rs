@@ -860,7 +860,7 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
     ];
 
     // Create a source that supports all batches
-    let source = Arc::new(TestSource::new(true, batches));
+    let source = Arc::new(TestSource::new(schema(), true, batches));
 
     let base_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test://").unwrap(),

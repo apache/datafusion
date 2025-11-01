@@ -32,7 +32,6 @@ use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     as_file_source, calculate_range, ListingTableUrl, PartitionedFile, RangeCalculation,
-    TableSchema,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -123,9 +122,6 @@ impl FileSource for JsonSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projected_statistics = Some(statistics);
