@@ -145,17 +145,8 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 13
-    - LIST (with delimiter) prefix=data
-    - LIST (with delimiter) prefix=data/a=1
-    - LIST (with delimiter) prefix=data/a=2
-    - LIST (with delimiter) prefix=data/a=3
-    - LIST (with delimiter) prefix=data/a=1/b=10
-    - LIST (with delimiter) prefix=data/a=2/b=20
-    - LIST (with delimiter) prefix=data/a=3/b=30
-    - LIST (with delimiter) prefix=data/a=1/b=10/c=100
-    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
-    - LIST (with delimiter) prefix=data/a=3/b=30/c=300
+    Total Requests: 4
+    - LIST prefix=data
     - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     - GET  (opts) path=data/a=3/b=30/c=300/file_3.csv
@@ -174,10 +165,8 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 4
-    - LIST (with delimiter) prefix=data/a=2
-    - LIST (with delimiter) prefix=data/a=2/b=20
-    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
+    Total Requests: 2
+    - LIST prefix=data
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     "
     );
@@ -194,17 +183,8 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 11
-    - LIST (with delimiter) prefix=data
-    - LIST (with delimiter) prefix=data/a=1
-    - LIST (with delimiter) prefix=data/a=2
-    - LIST (with delimiter) prefix=data/a=3
-    - LIST (with delimiter) prefix=data/a=1/b=10
-    - LIST (with delimiter) prefix=data/a=2/b=20
-    - LIST (with delimiter) prefix=data/a=3/b=30
-    - LIST (with delimiter) prefix=data/a=1/b=10/c=100
-    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
-    - LIST (with delimiter) prefix=data/a=3/b=30/c=300
+    Total Requests: 2
+    - LIST prefix=data
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     "
     );
@@ -221,17 +201,8 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 11
-    - LIST (with delimiter) prefix=data
-    - LIST (with delimiter) prefix=data/a=1
-    - LIST (with delimiter) prefix=data/a=2
-    - LIST (with delimiter) prefix=data/a=3
-    - LIST (with delimiter) prefix=data/a=1/b=10
-    - LIST (with delimiter) prefix=data/a=2/b=20
-    - LIST (with delimiter) prefix=data/a=3/b=30
-    - LIST (with delimiter) prefix=data/a=1/b=10/c=100
-    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
-    - LIST (with delimiter) prefix=data/a=3/b=30/c=300
+    Total Requests: 2
+    - LIST prefix=data
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     "
     );
@@ -248,9 +219,8 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 3
-    - LIST (with delimiter) prefix=data/a=2/b=20
-    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
+    Total Requests: 2
+    - LIST prefix=data
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     "
     );
@@ -267,17 +237,8 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 11
-    - LIST (with delimiter) prefix=data
-    - LIST (with delimiter) prefix=data/a=1
-    - LIST (with delimiter) prefix=data/a=2
-    - LIST (with delimiter) prefix=data/a=3
-    - LIST (with delimiter) prefix=data/a=1/b=10
-    - LIST (with delimiter) prefix=data/a=2/b=20
-    - LIST (with delimiter) prefix=data/a=3/b=30
-    - LIST (with delimiter) prefix=data/a=1/b=10/c=100
-    - LIST (with delimiter) prefix=data/a=2/b=20/c=200
-    - LIST (with delimiter) prefix=data/a=3/b=30/c=300
+    Total Requests: 2
+    - LIST prefix=data
     - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
     "
     );
