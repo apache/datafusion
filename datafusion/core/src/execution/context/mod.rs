@@ -63,7 +63,7 @@ use datafusion_catalog::MemoryCatalogProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},

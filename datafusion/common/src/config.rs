@@ -1155,52 +1155,9 @@ impl ConfigField for ConfigOptions {
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
         self.format.visit(v, "datafusion.format", "");
     }
-}
-
-impl ConfigOptions {
-    /// Creates a new [`ConfigOptions`] with default values
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set extensions to provided value
-    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions = extensions;
-        self
-    }
-
-    /// Set a configuration option
-    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, key)) = key.split_once('.') else {
-            return _config_err!("could not find config namespace for key \"{key}\"");
-        };
-
-        if prefix == "datafusion" {
-            if key == "optimizer.enable_dynamic_filter_pushdown" {
-                let bool_value = value.parse::<bool>().map_err(|e| {
-                    DataFusionError::Configuration(format!(
-                        "Failed to parse '{value}' as bool: {e}",
-                    ))
-                })?;
-
-                {
-                    self.optimizer.enable_dynamic_filter_pushdown = bool_value;
-                    self.optimizer.enable_topk_dynamic_filter_pushdown = bool_value;
-                    self.optimizer.enable_join_dynamic_filter_pushdown = bool_value;
-                }
-                return Ok(());
-            }
-            return ConfigField::set(self, key, value);
-        }
-
-        let Some(e) = self.extensions.0.get_mut(prefix) else {
-            return _config_err!("Could not find config namespace \"{prefix}\"");
-        };
-        e.0.set(key, value)
-    }
 
     /// Reset a configuration option back to its default value
-    pub fn reset(&mut self, key: &str) -> Result<()> {
+    fn reset(&mut self, key: &str) -> Result<()> {
         let Some((prefix, rest)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
@@ -1270,6 +1227,49 @@ impl ConfigOptions {
             }
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
+    }
+}
+
+impl ConfigOptions {
+    /// Creates a new [`ConfigOptions`] with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set extensions to provided value
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
+    /// Set a configuration option
+    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let Some((prefix, key)) = key.split_once('.') else {
+            return _config_err!("could not find config namespace for key \"{key}\"");
+        };
+
+        if prefix == "datafusion" {
+            if key == "optimizer.enable_dynamic_filter_pushdown" {
+                let bool_value = value.parse::<bool>().map_err(|e| {
+                    DataFusionError::Configuration(format!(
+                        "Failed to parse '{value}' as bool: {e}",
+                    ))
+                })?;
+
+                {
+                    self.optimizer.enable_dynamic_filter_pushdown = bool_value;
+                    self.optimizer.enable_topk_dynamic_filter_pushdown = bool_value;
+                    self.optimizer.enable_join_dynamic_filter_pushdown = bool_value;
+                }
+                return Ok(());
+            }
+            return ConfigField::set(self, key, value);
+        }
+
+        let Some(e) = self.extensions.0.get_mut(prefix) else {
+            return _config_err!("Could not find config namespace \"{prefix}\"");
+        };
+        e.0.set(key, value)
     }
 
     /// Create new [`ConfigOptions`], taking values from environment variables
