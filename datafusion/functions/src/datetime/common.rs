@@ -67,23 +67,24 @@ impl ConfiguredTimeZone {
         }
     }
 
-    pub(crate) fn parse(tz: &str) -> Result<Self> {
-        if tz.trim().is_empty() {
-            return Ok(Self::utc());
+    pub(crate) fn parse(tz: &str) -> Result<Option<Self>> {
+        let tz = tz.trim();
+        if tz.is_empty() {
+            return Ok(None);
         }
 
         if let Ok(named) = Tz::from_str(tz) {
-            return Ok(Self {
+            return Ok(Some(Self {
                 repr: Arc::from(tz),
                 zone: ConfiguredZone::Named(named),
-            });
+            }));
         }
 
         if let Some(offset) = parse_fixed_offset(tz) {
-            return Ok(Self {
+            return Ok(Some(Self {
                 repr: Arc::from(tz),
                 zone: ConfiguredZone::Offset(offset),
-            });
+            }));
         }
 
         Err(exec_datafusion_err!(
@@ -92,7 +93,10 @@ impl ConfiguredTimeZone {
     }
 
     pub(crate) fn from_config(config: &ConfigOptions) -> Self {
-        Self::parse(&config.execution.time_zone).unwrap_or_else(|_| Self::utc())
+        match Self::parse(&config.execution.time_zone) {
+            Ok(Some(tz)) => tz,
+            _ => Self::utc(),
+        }
     }
 
     fn timestamp_from_naive(&self, naive: &NaiveDateTime) -> Result<i64> {
@@ -962,7 +966,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::has_explicit_timezone;
+    use super::{has_explicit_timezone, ConfiguredTimeZone};
+    use datafusion_common::config::ConfigOptions;
+
+    #[test]
+    fn parse_empty_timezone_returns_none() {
+        assert!(ConfiguredTimeZone::parse("   ").unwrap().is_none());
+    }
+
+    #[test]
+    fn from_config_blank_timezone_defaults_to_utc() {
+        let mut config = ConfigOptions::default();
+        config.execution.time_zone.clear();
+
+        let timezone = ConfiguredTimeZone::from_config(&config);
+        assert_eq!(timezone, ConfiguredTimeZone::utc());
+    }
 
     #[test]
     fn detects_timezone_token_outside_tail() {
@@ -1028,11 +1047,12 @@ mod tests {
         use super::{
             string_to_timestamp_nanos_shim, string_to_timestamp_nanos_with_timezone,
         };
-        use crate::datetime::common::ConfiguredTimeZone;
 
         // Test the exact case from the issue: 2020-09-08T13:42:29+0500
         // This should parse correctly as having an explicit offset
-        let utc_tz = ConfiguredTimeZone::parse("UTC").unwrap();
+        let utc_tz = ConfiguredTimeZone::parse("UTC")
+            .unwrap()
+            .expect("UTC should parse");
         let result_utc =
             string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+0500")
                 .unwrap();
@@ -1044,7 +1064,9 @@ mod tests {
 
         // Test with America/New_York timezone - should NOT double-adjust
         // Because the timestamp has an explicit timezone, the session timezone should be ignored
-        let ny_tz = ConfiguredTimeZone::parse("America/New_York").unwrap();
+        let ny_tz = ConfiguredTimeZone::parse("America/New_York")
+            .unwrap()
+            .expect("America/New_York should parse");
         let result_ny =
             string_to_timestamp_nanos_with_timezone(&ny_tz, "2020-09-08T13:42:29+0500")
                 .unwrap();

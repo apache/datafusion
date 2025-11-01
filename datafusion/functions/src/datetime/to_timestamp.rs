@@ -1024,7 +1024,8 @@ mod tests {
 
     #[test]
     fn to_timestamp_formats_respect_timezone() -> Result<()> {
-        let timezone = ConfiguredTimeZone::parse("Asia/Tokyo")?;
+        let timezone =
+            ConfiguredTimeZone::parse("Asia/Tokyo")?.expect("Asia/Tokyo should parse");
         let args = vec![
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 "03:59:00.123456789 05-17-2023".to_string(),
@@ -1053,7 +1054,8 @@ mod tests {
 
     #[test]
     fn to_timestamp_session_timezone_applied() -> Result<()> {
-        let timezone = ConfiguredTimeZone::parse("America/New_York")?;
+        let timezone = ConfiguredTimeZone::parse("America/New_York")?
+            .expect("America/New_York should parse");
         let args = vec![
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 "2020-09-08 13-42-29".to_string(),
