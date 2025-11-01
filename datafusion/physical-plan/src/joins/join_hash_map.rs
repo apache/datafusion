@@ -358,24 +358,6 @@ where
     let mut input_indices = Vec::with_capacity(limit);
     let mut match_indices = Vec::with_capacity(limit);
 
-    // Calculate initial `hash_values` index before iterating
-    let to_skip = match offset {
-        // None `initial_next_idx` indicates that `initial_idx` processing has'n been started
-        (idx, None) => idx,
-        // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
-        // previous iteration, and it should be skipped
-        (idx, Some(0)) => idx + 1,
-        // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
-        // to start with the next index
-        (idx, Some(_next_idx)) => {
-            // TODO: handle remaining matches for initial index
-            let hash = hash_values[idx];
-            if let Some(&(_, _offset, _length)) = map.find(hash, |(h, _, _)| hash == *h) {
-                
-            }
-            idx + 1
-        }
-    };
     // Check if hashmap consists of unique values
     // If so, we can skip the chain traversal
     if map.len() == next_chain.len() {
@@ -396,7 +378,30 @@ where
         return (input_indices, match_indices, next_off);
     }
 
+
     let mut remaining_output = limit;
+
+    // Calculate initial `hash_values` index before iterating
+    let to_skip = match offset {
+        // None `initial_next_idx` indicates that `initial_idx` processing has not been started
+        (idx, None) => idx,
+        // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
+        // previous iteration, and it should be skipped
+        (idx, Some(0)) => idx + 1,
+        // Otherwise, process remaining offsets
+        (idx, Some(len)) => {
+            let hash = hash_values[idx];
+            if let Some(&(_, offset, length)) = map.find(hash, |(h, _, _)| hash == *h) {
+                let start = offset + len as usize;
+                for i in start..offset + length as usize {
+                    input_indices.push(idx as u32);
+                    match_indices.push(next_chain[i].into());
+                    remaining_output -= 1;
+                }
+            }
+            idx + 1
+        }
+    };
 
     let mut row_idx = to_skip;
 
@@ -415,7 +420,6 @@ where
                 input_indices.push(row_idx as u32);
                 match_indices.push(next_chain[i].into());
                 remaining_output -= 1;
-                
             }
         }
         row_idx += 1;
