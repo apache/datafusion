@@ -18,7 +18,6 @@
 //! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
 use arrow::datatypes::DataType;
-use datafusion_common::ExprSchema;
 use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
@@ -177,9 +176,7 @@ impl ExprPlanner for FieldAccessPlanner {
                         )),
                     )),
                     // special case for map access with
-                    Expr::Column(ref c)
-                        if matches!(schema.data_type(c)?, DataType::Map(_, _)) =>
-                    {
+                    _ if matches!(expr.get_type(schema)?, DataType::Map(_, _)) => {
                         Ok(PlannerResult::Planned(Expr::ScalarFunction(
                             ScalarFunction::new_udf(
                                 get_field_inner(),

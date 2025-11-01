@@ -156,7 +156,6 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 ///       ├──────────────────┤  
 ///     5 │       400        │
 ///       └──────────────────┘     
-///
 /// ```
 ///
 /// ## Existence Joins (Semi, Anti, Mark)
