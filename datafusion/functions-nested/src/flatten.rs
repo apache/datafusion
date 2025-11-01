@@ -191,7 +191,7 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                     Ok(Arc::new(flattened_array) as ArrayRef)
                 }
                 LargeList(_) => {
-                    let (inner_field, inner_offsets, inner_values, _) = // _ instead of nulls?
+                    let (inner_field, inner_offsets, inner_values, _) =
                         as_large_list_array(&values)?.clone().into_parts();
                     let offsets =
                         get_offsets_for_flatten::<i64, i64>(inner_offsets, offsets);
