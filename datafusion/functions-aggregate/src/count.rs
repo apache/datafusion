@@ -113,8 +113,8 @@ pub fn count_all() -> Expr {
 /// // create `count(*)` OVER ... window function expression
 /// let expr = count_all_window();
 /// assert_eq!(
-///   expr.schema_name().to_string(),
-///   "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+///     expr.schema_name().to_string(),
+///     "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// );
 /// // if you need to refer to this column, use the `schema_name` function
 /// let expr = col(expr.schema_name().to_string());
