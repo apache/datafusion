@@ -47,6 +47,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
 use regex::Regex;
@@ -945,6 +946,7 @@ struct ScalarFunctionWrapper {
     expr: Expr,
     signature: Signature,
     return_type: DataType,
+    defaults: Vec<Option<Expr>>,
 }
 
 impl ScalarUDFImpl for ScalarFunctionWrapper {
@@ -973,7 +975,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         args: Vec<Expr>,
         _info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        let replacement = Self::replacement(&self.expr, &args)?;
+        let replacement = Self::replacement(&self.expr, &args, &self.defaults)?;
 
         Ok(ExprSimplifyResult::Simplified(replacement))
     }
@@ -981,7 +983,11 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
 impl ScalarFunctionWrapper {
     // replaces placeholders with actual arguments
-    fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
+    fn replacement(
+        expr: &Expr,
+        args: &[Expr],
+        defaults: &[Option<Expr>],
+    ) -> Result<Expr> {
         let result = expr.clone().transform(|e| {
             let r = match e {
                 Expr::Placeholder(placeholder) => {
@@ -990,10 +996,13 @@ impl ScalarFunctionWrapper {
                     if placeholder_position < args.len() {
                         Transformed::yes(args[placeholder_position].clone())
                     } else {
-                        exec_err!(
-                            "Function argument {} not provided, argument missing!",
-                            placeholder.id
-                        )?
+                        match defaults[placeholder_position] {
+                            Some(ref default) => Transformed::yes(default.clone()),
+                            None => exec_err!(
+                                "Function argument {} not provided, argument missing!",
+                                placeholder.id
+                            )?,
+                        }
                     }
                 }
                 _ => Transformed::no(e),
@@ -1021,6 +1030,32 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
     type Error = DataFusionError;
 
     fn try_from(definition: CreateFunction) -> std::result::Result<Self, Self::Error> {
+        let args = definition.args.unwrap_or_default();
+        let defaults: Vec<Option<Expr>> =
+            args.iter().map(|a| a.default_expr.clone()).collect();
+        let signature: Signature = match defaults.iter().position(|v| v.is_some()) {
+            Some(pos) => {
+                let mut type_signatures: Vec<TypeSignature> = vec![];
+                // Generate all valid signatures
+                for n in pos..defaults.len() + 1 {
+                    if n == 0 {
+                        type_signatures.push(TypeSignature::Nullary)
+                    } else {
+                        type_signatures.push(TypeSignature::Exact(
+                            args.iter().take(n).map(|a| a.data_type.clone()).collect(),
+                        ))
+                    }
+                }
+                Signature::one_of(
+                    type_signatures,
+                    definition.params.behavior.unwrap_or(Volatility::Volatile),
+                )
+            }
+            None => Signature::exact(
+                args.iter().map(|a| a.data_type.clone()).collect(),
+                definition.params.behavior.unwrap_or(Volatility::Volatile),
+            ),
+        };
         Ok(Self {
             name: definition.name,
             expr: definition
@@ -1030,15 +1065,8 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
             return_type: definition
                 .return_type
                 .expect("Return type has to be defined!"),
-            signature: Signature::exact(
-                definition
-                    .args
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|a| a.data_type)
-                    .collect(),
-                definition.params.behavior.unwrap_or(Volatility::Volatile),
-            ),
+            signature,
+            defaults,
         })
     }
 }
@@ -1109,6 +1137,115 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     "#;
     assert!(ctx.sql(bad_definition_sql).await.is_err());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement_named_arguments() -> Result<()> {
+    let function_factory = Arc::new(CustomFunctionFactory::default());
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
+
+    let sql = r#"
+    CREATE FUNCTION better_add(a DOUBLE, b DOUBLE)
+        RETURNS DOUBLE
+        RETURN $a + $b
+    "#;
+
+    assert!(ctx.sql(sql).await.is_ok());
+
+    let result = ctx
+        .sql("select better_add(2.0, 2.0)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+-----------------------------------+",
+            "| better_add(Float64(2),Float64(2)) |",
+            "+-----------------------------------+",
+            "| 4.0                               |",
+            "+-----------------------------------+",
+        ],
+        &result
+    );
+
+    // cannot mix named and positional style
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(DOUBLE, b DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 $b
+    "#;
+    assert!(ctx.sql(bad_expression_sql).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement_default_arguments() -> Result<()> {
+    let function_factory = Arc::new(CustomFunctionFactory::default());
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
+
+    let sql = r#"
+    CREATE FUNCTION better_add(a DOUBLE DEFAULT 2.0, b DOUBLE DEFAULT 2.0)
+        RETURNS DOUBLE
+        RETURN $a + $b
+    "#;
+
+    assert!(ctx.sql(sql).await.is_ok());
+
+    // Check all function arity supported
+    let result = ctx.sql("select better_add()").await?.collect().await?;
+
+    assert_batches_eq!(
+        &[
+            "+--------------+",
+            "| better_add() |",
+            "+--------------+",
+            "| 4.0          |",
+            "+--------------+",
+        ],
+        &result
+    );
+
+    let result = ctx.sql("select better_add(2.0)").await?.collect().await?;
+
+    assert_batches_eq!(
+        &[
+            "+------------------------+",
+            "| better_add(Float64(2)) |",
+            "+------------------------+",
+            "| 4.0                    |",
+            "+------------------------+",
+        ],
+        &result
+    );
+
+    let result = ctx
+        .sql("select better_add(2.0, 2.0)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+-----------------------------------+",
+            "| better_add(Float64(2),Float64(2)) |",
+            "+-----------------------------------+",
+            "| 4.0                               |",
+            "+-----------------------------------+",
+        ],
+        &result
+    );
+
+    assert!(ctx.sql("select better_add(2.0, 2.0, 2.0)").await.is_err());
+
+    // non-default argument cannot follow default argument
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(a DOUBLE DEFAULT 2.0, b DOUBLE)
+        RETURNS DOUBLE
+        RETURN $a $b
+    "#;
+    assert!(ctx.sql(bad_expression_sql).await.is_err());
     Ok(())
 }
 

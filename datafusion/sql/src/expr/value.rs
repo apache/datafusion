@@ -123,8 +123,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return if param_data_types.is_empty() {
                     Ok(Expr::Placeholder(Placeholder::new_with_field(param, None)))
                 } else {
-                    // when PREPARE Statement, param_data_types length is always 0
-                    plan_err!("Invalid placeholder, not a number: {param}")
+                    // FIXME: This branch is shared by params from PREPARE and CREATE FUNCTION, but
+                    // only CREATE FUNCTION currently supports named params. For now, we rewrite
+                    // these to positional params.
+                    let named_param_pos = param_data_types
+                        .iter()
+                        .position(|v| v.name() == &param[1..]);
+                    match named_param_pos {
+                        Some(pos) => Ok(Expr::Placeholder(Placeholder::new_with_field(
+                            format!("${}", pos + 1),
+                            param_data_types.get(pos).cloned(),
+                        ))),
+                        None => plan_err!("Invalid placeholder: {param}"),
+                    }
                 };
             }
         };
