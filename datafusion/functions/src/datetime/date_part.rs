@@ -27,10 +27,7 @@ use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{
-    ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-};
+use arrow::datatypes::{ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType};
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{logical_date, NativeType};
@@ -201,24 +198,34 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        // Adjust timestamps for timezone-aware extraction
-        let array = if let Timestamp(time_unit, Some(tz_str)) = array.data_type() {
+        let (is_timezone_aware, tz_str_opt) = match array.data_type() {
+            Timestamp(_, Some(tz_str)) => (true, Some(tz_str.clone())),
+            _ => (false, None),
+        };
+
+        // Adjust timestamps for extraction
+        let array = if is_timezone_aware {
             // For timezone-aware timestamps, extract in their own timezone
+            let tz_str = tz_str_opt.as_ref().unwrap();
             let tz = match tz_str.parse::<Tz>() {
                 Ok(tz) => tz,
                 Err(_) => return exec_err!("Invalid timezone"),
             };
-            match time_unit {
-                Nanosecond => {
-                    adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?
-                }
-                Microsecond => {
-                    adjust_timestamp_array::<TimestampMicrosecondType>(&array, tz)?
-                }
-                Millisecond => {
-                    adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
-                }
-                Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
+            match array.data_type() {
+                Timestamp(time_unit, _) => match time_unit {
+                    Nanosecond => {
+                        adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?
+                    }
+                    Microsecond => {
+                        adjust_timestamp_array::<TimestampMicrosecondType>(&array, tz)?
+                    }
+                    Millisecond => {
+                        adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
+                    }
+                    Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
+                    _ => array,
+                },
+                _ => array,
             }
         } else if let Timestamp(time_unit, None) = array.data_type() {
             // For naive timestamps, interpret in session timezone
@@ -237,6 +244,7 @@ impl ScalarUDFImpl for DatePartFunc {
                     adjust_timestamp_array::<TimestampMillisecondType>(&array, tz)?
                 }
                 Second => adjust_timestamp_array::<TimestampSecondType>(&array, tz)?,
+                _ => array,
             }
         } else {
             array
@@ -246,7 +254,7 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
-        let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
+        let mut arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
             match interval_unit {
                 IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
                 IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
@@ -272,6 +280,8 @@ impl ScalarUDFImpl for DatePartFunc {
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
         };
+
+
 
         Ok(if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(arr.as_ref(), 0)?)

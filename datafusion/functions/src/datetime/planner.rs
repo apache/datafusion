@@ -29,7 +29,7 @@ impl ExprPlanner for DatetimeFunctionPlanner {
         args: Vec<Expr>,
     ) -> datafusion_common::Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
-            ScalarFunction::new_udf(crate::datetime::date_part(), args),
+            ScalarFunction::new_udf(crate::datetime::extract(), args),
         )))
     }
 }

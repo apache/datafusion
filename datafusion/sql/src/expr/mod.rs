@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, TimeUnit};
+use std::sync::Arc;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
@@ -294,15 +295,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             SQLExpr::TypedString(TypedString {
-                data_type,
-                value,
-                uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new(
-                Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?
+                                     data_type,
+                                     value,
+                                     uses_odbc_syntax: _,
+                                 }) => {
+                let string_value = value.into_string().unwrap();
+                let mut cast_data_type = self.convert_data_type_to_field(&data_type)?
                     .data_type()
-                    .clone(),
-            ))),
+                    .clone();
+                if let DataType::Timestamp(time_unit, None) = &cast_data_type {
+                    if let Some(tz) = extract_tz_from_string(&string_value) {
+                        cast_data_type = DataType::Timestamp(*time_unit, Some(Arc::from(tz)));
+                    }
+                }
+                Ok(Expr::Cast(Cast::new(
+                    Box::new(lit(string_value)),
+                    cast_data_type,
+                )))
+            }
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
@@ -554,9 +564,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?),
                 match *time_zone {
                     SQLExpr::Value(ValueWithSpan {
-                        value: Value::SingleQuotedString(s),
-                        span: _,
-                    }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
+                                       value: Value::SingleQuotedString(s),
+                                       span: _,
+                                   }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
                     _ => {
                         return not_impl_err!(
                             "Unsupported ast node in sqltorel: {time_zone:?}"
@@ -980,13 +990,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // to align with postgres / duckdb semantics
         let expr = match dt.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, tz)
-                if expr.get_type(schema)? == DataType::Int64 =>
-            {
-                Expr::Cast(Cast::new(
-                    Box::new(expr),
-                    DataType::Timestamp(TimeUnit::Second, tz.clone()),
-                ))
-            }
+            if expr.get_type(schema)? == DataType::Int64 =>
+                {
+                    Expr::Cast(Cast::new(
+                        Box::new(expr),
+                        DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                    ))
+                }
             _ => expr,
         };
 
@@ -1078,11 +1088,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             // index can be a name, in which case it is a named field access
                             match index {
                                 SQLExpr::Value(ValueWithSpan {
-                                    value:
-                                        Value::SingleQuotedString(s)
-                                        | Value::DoubleQuotedString(s),
-                                    span: _,
-                                }) => Ok(Some(GetFieldAccess::NamedStructField {
+                                                   value:
+                                                   Value::SingleQuotedString(s)
+                                                   | Value::DoubleQuotedString(s),
+                                                   span: _,
+                                               }) => Ok(Some(GetFieldAccess::NamedStructField {
                                     name: ScalarValue::from(s),
                                 })),
                                 SQLExpr::JsonAccess { .. } => {
@@ -1146,9 +1156,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 AccessExpr::Dot(expr) => match expr {
                     SQLExpr::Value(ValueWithSpan {
-                        value: Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-                        span    : _
-                    }) => Ok(Some(GetFieldAccess::NamedStructField {
+                                       value: Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+                                       span    : _
+                                   }) => Ok(Some(GetFieldAccess::NamedStructField {
                         name: ScalarValue::from(s),
                     })),
                     _ => {
@@ -1177,6 +1187,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
                 )
             })
+    }
+}
+
+fn extract_tz_from_string(s: &str) -> Option<String> {
+    if let Some(pos) = s.rfind(|c| c == '+' || c == '-') {
+        let tz_str = &s[pos..];
+        if tz_str.len() == 6 && tz_str.chars().nth(3) == Some(':') {
+            Some(tz_str.to_string())
+        } else {
+            None
+        }
+    } else if s.ends_with('Z') {
+        Some("+00:00".to_string())
+    } else {
+        None
     }
 }
 
