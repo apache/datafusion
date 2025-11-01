@@ -361,7 +361,8 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 
 #[tokio::test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true() -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true(
+) -> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r"
@@ -386,7 +387,8 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
 
 #[tokio::test]
 // Test with `repartition_sorts` disabled, causing a full resort of the data
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false() -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false(
+) -> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
@@ -409,7 +411,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(repartition_sorts: bool) -> Result<String> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
+    repartition_sorts: bool,
+) -> Result<String> {
     let schema = create_test_schema()?;
 
     // Source 1, will be sorted explicitly (on `nullable_col`)
@@ -430,7 +434,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(reparti
         col("nullable_col", &schema)?,
         Some(SortOptions::new(false, true)),
     )]
-        .into();
+    .into();
     let physical_plan = Arc::new(OutputRequirementExec::new(
         coalesced,
         Some(OrderingRequirements::new(requirement)),
@@ -438,7 +442,8 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(reparti
         None,
     ));
 
-    let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(repartition_sorts);
+    let test =
+        EnforceSortingTest::new(physical_plan).with_repartition_sorts(repartition_sorts);
     Ok(test.run())
 }
 

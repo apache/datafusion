@@ -2999,7 +2999,8 @@ async fn test_count_wildcard_on_window() -> Result<()> {
 
 #[tokio::test]
 // Test with `repartition_sorts` disabled, causing a full resort of the data
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false() -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false(
+) -> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r#"
@@ -3027,7 +3028,8 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
 #[ignore] // See https://github.com/apache/datafusion/issues/18380
 #[tokio::test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true() -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true(
+) -> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r#"
@@ -3096,10 +3098,12 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     // ...
     // +------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
-        Ok(())
+    Ok(())
 }
 
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(repartition_sorts: bool) -> Result<String> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
+    repartition_sorts: bool,
+) -> Result<String> {
     let config = SessionConfig::default()
         .with_target_partitions(1)
         .with_repartition_sorts(repartition_sorts);
@@ -3114,15 +3118,15 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(reparti
         ParquetReadOptions::default()
             .file_sort_order(vec![vec![col("id").sort(true, false)]]),
     )
-        .await?;
+    .await?;
 
     // Register "unsorted" table
     ctx.register_parquet(
         "unsorted",
         &format!("{testdata}/alltypes_tiny_pages.parquet"),
-        ParquetReadOptions::default()
+        ParquetReadOptions::default(),
     )
-        .await?;
+    .await?;
 
     let source_sorted = ctx
         .table("sorted")
@@ -3138,8 +3142,8 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(reparti
         .select(vec![col("id")])
         .unwrap();
 
-    let source_unsorted_resorted = source_unsorted
-        .sort(vec![col("id").sort(true, false)])?;
+    let source_unsorted_resorted =
+        source_unsorted.sort(vec![col("id").sort(true, false)])?;
 
     let union = source_sorted.union(source_unsorted_resorted)?;
 
@@ -3152,7 +3156,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(reparti
     let testdata_clean = testdata_clean.strip_prefix("/").unwrap_or(&testdata_clean);
 
     let plan = df.explain(false, false)?.collect().await?;
-    Ok(pretty_format_batches(&plan)?.to_string().replace(&testdata_clean, "{testdata}"))
+    Ok(pretty_format_batches(&plan)?
+        .to_string()
+        .replace(&testdata_clean, "{testdata}"))
 }
 
 #[tokio::test]
