@@ -341,7 +341,6 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// representation.
     ///
     /// See the [`fmt_sql`] function for an example of printing `PhysicalExpr`s as SQL.
-    ///
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
 
     /// Take a snapshot of this `PhysicalExpr`, if it is dynamic.

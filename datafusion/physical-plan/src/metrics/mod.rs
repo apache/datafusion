@@ -47,24 +47,23 @@ pub use value::{
 /// [`ExecutionPlanMetricsSet`].
 ///
 /// ```
-///  use datafusion_physical_plan::metrics::*;
+/// use datafusion_physical_plan::metrics::*;
 ///
-///  let metrics = ExecutionPlanMetricsSet::new();
-///  assert!(metrics.clone_inner().output_rows().is_none());
+/// let metrics = ExecutionPlanMetricsSet::new();
+/// assert!(metrics.clone_inner().output_rows().is_none());
 ///
-///  // Create a counter to increment using the MetricBuilder
-///  let partition = 1;
-///  let output_rows = MetricBuilder::new(&metrics)
-///      .output_rows(partition);
+/// // Create a counter to increment using the MetricBuilder
+/// let partition = 1;
+/// let output_rows = MetricBuilder::new(&metrics).output_rows(partition);
 ///
-///  // Counter can be incremented
-///  output_rows.add(13);
+/// // Counter can be incremented
+/// output_rows.add(13);
 ///
-///  // The value can be retrieved directly:
-///  assert_eq!(output_rows.value(), 13);
+/// // The value can be retrieved directly:
+/// assert_eq!(output_rows.value(), 13);
 ///
-///  // As well as from the metrics set
-///  assert_eq!(metrics.clone_inner().output_rows(), Some(13));
+/// // As well as from the metrics set
+/// assert_eq!(metrics.clone_inner().output_rows(), Some(13));
 /// ```
 ///
 /// [`ExecutionPlan`]: super::ExecutionPlan
