@@ -38,7 +38,7 @@ use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 
-use crate::utils::Hashable;
+use crate::utils::GenericDistinctBuffer;
 
 #[derive(Debug)]
 pub struct PrimitiveDistinctCountAccumulator<T>
@@ -124,88 +124,42 @@ where
 }
 
 #[derive(Debug)]
-pub struct FloatDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send,
-{
-    values: HashSet<Hashable<T::Native>, RandomState>,
+pub struct FloatDistinctCountAccumulator<T: ArrowPrimitiveType> {
+    values: GenericDistinctBuffer<T>,
 }
 
-impl<T> FloatDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send,
-{
+impl<T: ArrowPrimitiveType> FloatDistinctCountAccumulator<T> {
     pub fn new() -> Self {
         Self {
-            values: HashSet::default(),
+            values: GenericDistinctBuffer::new(T::DATA_TYPE),
         }
     }
 }
 
-impl<T> Default for FloatDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send,
-{
+impl<T: ArrowPrimitiveType> Default for FloatDistinctCountAccumulator<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> Accumulator for FloatDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send + Debug,
-{
+impl<T: ArrowPrimitiveType + Debug> Accumulator for FloatDistinctCountAccumulator<T> {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
-        let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
-            self.values.iter().map(|v| v.0),
-        )) as ArrayRef;
-        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
+        self.values.state()
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let arr = as_primitive_array::<T>(&values[0])?;
-        arr.iter().for_each(|value| {
-            if let Some(value) = value {
-                self.values.insert(Hashable(value));
-            }
-        });
-
-        Ok(())
+        self.values.update_batch(values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-        assert_eq!(
-            states.len(),
-            1,
-            "count_distinct states must be single array"
-        );
-
-        let arr = as_list_array(&states[0])?;
-        arr.iter().try_for_each(|maybe_list| {
-            if let Some(list) = maybe_list {
-                let list = as_primitive_array::<T>(&list)?;
-                self.values
-                    .extend(list.values().iter().map(|v| Hashable(*v)));
-            };
-            Ok(())
-        })
+        self.values.merge_batch(states)
     }
 
     fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
+        Ok(ScalarValue::Int64(Some(self.values.values.len() as i64)))
     }
 
     fn size(&self) -> usize {
-        let num_elements = self.values.len();
-        let fixed_size = size_of_val(self) + size_of_val(&self.values);
-
-        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+        size_of_val(self) + self.values.size()
     }
 }
