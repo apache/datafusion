@@ -632,8 +632,9 @@ impl LogicalPlan {
             }) => Projection::try_new(expr, input).map(LogicalPlan::Projection),
             LogicalPlan::Dml(_) => Ok(self),
             LogicalPlan::Copy(_) => Ok(self),
-            LogicalPlan::Values(Values { schema: _, values }) => {
-                LogicalPlanBuilder::values(values)?.build()
+            LogicalPlan::Values(Values { schema, values }) => {
+                // todo it isn't clear why the schema is not recomputed here
+                Ok(LogicalPlan::Values(Values { schema, values }))
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
@@ -1473,7 +1474,13 @@ impl LogicalPlan {
             })?
             // always recompute the schema to ensure the changed in the schema's field should be
             // poplulated to the plan's parent
-            .map_data(|plan| plan.recompute_schema())
+            .map_data(|plan| plan.recompute_schema())?
+            .map_data(|plan| match plan {
+                LogicalPlan::Values(Values { values, schema: _ }) => {
+                    LogicalPlanBuilder::values(values)?.build()
+                }
+                _ => Ok(plan),
+            })
         })
         .map(|res| res.data)
     }
