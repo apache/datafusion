@@ -1456,7 +1456,11 @@ async fn collect_left_input(
     for batch in batches_iter.clone() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
-        // SAFETY: We just created the Arc and have exclusive ownership at this point
+        // SAFETY: We have exclusive ownership of the hashmap Arc at this point because:
+        // 1. We just created it above (lines 1437-1449)
+        // 2. It has not been cloned or shared with any other code yet
+        // 3. This is the only reference to it in this scope
+        // Therefore Arc::get_mut is guaranteed to succeed.
         let hashmap_mut = Arc::get_mut(&mut hashmap)
             .expect("Exclusive ownership of hashmap at this point");
         update_hash(
@@ -1961,19 +1965,12 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
-        let expected_batch_count = if cfg!(not(feature = "force_hash_collisions")) {
-            // Expected number of hash table matches = 3
-            // in case batch_size is 1 - additional empty batch for remaining 3-2 row
-            let mut expected_batch_count = div_ceil(3, batch_size);
-            if batch_size == 1 {
-                expected_batch_count += 1;
-            }
-            expected_batch_count
-        } else {
-            // With hash collisions enabled, all records will match each other
-            // and filtered later.
-            div_ceil(9, batch_size)
-        };
+        // Expected number of hash table matches = 3
+        // in case batch_size is 1 - additional empty batch for remaining 3-2 row
+        let mut expected_batch_count = div_ceil(3, batch_size);
+        if batch_size == 1 {
+            expected_batch_count += 1;
+        }
 
         assert_eq!(batches.len(), expected_batch_count);
 
@@ -2041,19 +2038,12 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
-        let expected_batch_count = if cfg!(not(feature = "force_hash_collisions")) {
-            // Expected number of hash table matches = 3
-            // in case batch_size is 1 - additional empty batch for remaining 3-2 row
-            let mut expected_batch_count = div_ceil(3, batch_size);
-            if batch_size == 1 {
-                expected_batch_count += 1;
-            }
-            expected_batch_count
-        } else {
-            // With hash collisions enabled, all records will match each other
-            // and filtered later.
-            div_ceil(9, batch_size)
-        };
+        // Expected number of hash table matches = 3
+        // in case batch_size is 1 - additional empty batch for remaining 3-2 row
+        let mut expected_batch_count = div_ceil(3, batch_size);
+        if batch_size == 1 {
+            expected_batch_count += 1;
+        }
 
         assert_eq!(batches.len(), expected_batch_count);
 
@@ -2178,19 +2168,12 @@ mod tests {
         let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
-        let expected_batch_count = if cfg!(not(feature = "force_hash_collisions")) {
-            // Expected number of hash table matches for first right batch = 1
-            // and additional empty batch for non-joined 20-6-80
-            let mut expected_batch_count = div_ceil(1, batch_size);
-            if batch_size == 1 {
-                expected_batch_count += 1;
-            }
-            expected_batch_count
-        } else {
-            // With hash collisions enabled, all records will match each other
-            // and filtered later.
-            div_ceil(6, batch_size)
-        };
+        // Expected number of hash table matches for first right batch = 1
+        // and additional empty batch for non-joined 20-6-80
+        let mut expected_batch_count = div_ceil(1, batch_size);
+        if batch_size == 1 {
+            expected_batch_count += 1;
+        }
         assert_eq!(batches.len(), expected_batch_count);
 
         // Inner join output is expected to preserve both inputs order
@@ -2208,14 +2191,8 @@ mod tests {
         let stream = join.execute(1, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
-        let expected_batch_count = if cfg!(not(feature = "force_hash_collisions")) {
-            // Expected number of hash table matches for second right batch = 2
-            div_ceil(2, batch_size)
-        } else {
-            // With hash collisions enabled, all records will match each other
-            // and filtered later.
-            div_ceil(3, batch_size)
-        };
+        // Expected number of hash table matches for second right batch = 2
+        let expected_batch_count = div_ceil(2, batch_size);
         assert_eq!(batches.len(), expected_batch_count);
 
         // Inner join output is expected to preserve both inputs order
