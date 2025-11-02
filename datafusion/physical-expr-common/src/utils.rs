@@ -93,6 +93,13 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 }
 
 /// Evaluates expressions against a record batch.
+/// This will convert the resulting ColumnarValues to ArrayRefs,
+/// duplicating any ScalarValues that may have been returned.
+/// This function does not perform any checks that the resulting arrays
+/// have the same length as the record batch.
+// NOTE: This means that this should not be called on expressions that may return
+// arrays of different lengths (e.g. filtering/flattening etc).
+// Also, consider avoiding this if your code can use optimizations for ScalarValues.
 #[inline]
 pub fn evaluate_expressions_to_arrays(
     exprs: &[Arc<dyn PhysicalExpr>],
