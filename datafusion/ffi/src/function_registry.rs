@@ -28,17 +28,19 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use log::warn;
 use std::collections::HashSet;
+use std::sync::Weak;
 use std::{ffi::c_void, sync::Arc};
 
 /// A stable struct for sharing [`FunctionRegistry`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
-pub struct FFI_FunctionRegistry {
-    pub udfs: unsafe extern "C" fn(&Self) -> RVec<RString>,
-    pub udafs: unsafe extern "C" fn(&Self) -> RVec<RString>,
-    pub udwfs: unsafe extern "C" fn(&Self) -> RVec<RString>,
+pub struct FFI_WeakFunctionRegistry {
+    pub udfs: unsafe extern "C" fn(&Self) -> RResult<RVec<RString>, RString>,
+    pub udafs: unsafe extern "C" fn(&Self) -> RResult<RVec<RString>, RString>,
+    pub udwfs: unsafe extern "C" fn(&Self) -> RResult<RVec<RString>, RString>,
 
     pub udf:
         unsafe extern "C" fn(&Self, name: RString) -> RResult<FFI_ScalarUDF, RString>,
@@ -58,74 +60,86 @@ pub struct FFI_FunctionRegistry {
     pub version: unsafe extern "C" fn() -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the plan.
-    /// A [`ForeignFunctionRegistry`] should never attempt to access this data.
+    /// A [`ForeignWeakFunctionRegistry`] should never attempt to access this data.
     pub private_data: *mut c_void,
 }
 
-unsafe impl Send for FFI_FunctionRegistry {}
-unsafe impl Sync for FFI_FunctionRegistry {}
+unsafe impl Send for FFI_WeakFunctionRegistry {}
+unsafe impl Sync for FFI_WeakFunctionRegistry {}
 
 struct RegistryPrivateData {
-    registry: Arc<dyn FunctionRegistry + Send>,
+    registry: Weak<dyn FunctionRegistry + Send>,
 }
 
-impl FFI_FunctionRegistry {
-    unsafe fn inner(&self) -> &Arc<dyn FunctionRegistry + Send> {
+impl FFI_WeakFunctionRegistry {
+    unsafe fn inner(&self) -> Result<Arc<dyn FunctionRegistry + Send>, RString> {
         let private_data = self.private_data as *const RegistryPrivateData;
-        &(*private_data).registry
+        (*private_data).registry.upgrade().ok_or_else(|| "Unable to access FunctionRegistry via FFI. Ensure owning object has not gone out of scope.".into())
     }
 }
 
-unsafe extern "C" fn udfs_fn_wrapper(registry: &FFI_FunctionRegistry) -> RVec<RString> {
-    let udfs = registry.inner().udfs();
-    udfs.into_iter().map(|s| s.into()).collect()
+unsafe extern "C" fn udfs_fn_wrapper(
+    registry: &FFI_WeakFunctionRegistry,
+) -> RResult<RVec<RString>, RString> {
+    let inner = rresult_return!(registry.inner());
+    let udfs = inner.udfs().into_iter().map(|s| s.into()).collect();
+    RResult::ROk(udfs)
 }
-unsafe extern "C" fn udafs_fn_wrapper(registry: &FFI_FunctionRegistry) -> RVec<RString> {
-    let udafs = registry.inner().udafs();
-    udafs.into_iter().map(|s| s.into()).collect()
+unsafe extern "C" fn udafs_fn_wrapper(
+    registry: &FFI_WeakFunctionRegistry,
+) -> RResult<RVec<RString>, RString> {
+    let inner = rresult_return!(registry.inner());
+    let udafs = inner.udafs().into_iter().map(|s| s.into()).collect();
+    RResult::ROk(udafs)
 }
-unsafe extern "C" fn udwfs_fn_wrapper(registry: &FFI_FunctionRegistry) -> RVec<RString> {
-    let udwfs = registry.inner().udwfs();
-    udwfs.into_iter().map(|s| s.into()).collect()
+unsafe extern "C" fn udwfs_fn_wrapper(
+    registry: &FFI_WeakFunctionRegistry,
+) -> RResult<RVec<RString>, RString> {
+    let inner = rresult_return!(registry.inner());
+    let udwfs = inner.udwfs().into_iter().map(|s| s.into()).collect();
+    RResult::ROk(udwfs)
 }
 
 unsafe extern "C" fn udf_fn_wrapper(
-    registry: &FFI_FunctionRegistry,
+    registry: &FFI_WeakFunctionRegistry,
     name: RString,
 ) -> RResult<FFI_ScalarUDF, RString> {
-    let udf = rresult_return!(registry.inner().udf(name.as_str()));
+    let inner = rresult_return!(registry.inner());
+    let udf = rresult_return!(inner.udf(name.as_str()));
     RResult::ROk(FFI_ScalarUDF::from(udf))
 }
 unsafe extern "C" fn udaf_fn_wrapper(
-    registry: &FFI_FunctionRegistry,
+    registry: &FFI_WeakFunctionRegistry,
     name: RString,
 ) -> RResult<FFI_AggregateUDF, RString> {
-    let udaf = rresult_return!(registry.inner().udaf(name.as_str()));
+    let inner = rresult_return!(registry.inner());
+    let udaf = rresult_return!(inner.udaf(name.as_str()));
     RResult::ROk(FFI_AggregateUDF::from(udaf))
 }
 unsafe extern "C" fn udwf_fn_wrapper(
-    registry: &FFI_FunctionRegistry,
+    registry: &FFI_WeakFunctionRegistry,
     name: RString,
 ) -> RResult<FFI_WindowUDF, RString> {
-    let udwf = rresult_return!(registry.inner().udwf(name.as_str()));
+    let inner = rresult_return!(registry.inner());
+    let udwf = rresult_return!(inner.udwf(name.as_str()));
     RResult::ROk(FFI_WindowUDF::from(udwf))
 }
 
-unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_FunctionRegistry) {
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_WeakFunctionRegistry) {
     let private_data = Box::from_raw(provider.private_data as *mut RegistryPrivateData);
     drop(private_data);
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
-    provider: &FFI_FunctionRegistry,
-) -> FFI_FunctionRegistry {
+    provider: &FFI_WeakFunctionRegistry,
+) -> FFI_WeakFunctionRegistry {
     let old_private_data = provider.private_data as *const RegistryPrivateData;
 
     let private_data = Box::into_raw(Box::new(RegistryPrivateData {
-        registry: Arc::clone(&(*old_private_data).registry),
+        registry: Weak::clone(&(*old_private_data).registry),
     })) as *mut c_void;
 
-    FFI_FunctionRegistry {
+    FFI_WeakFunctionRegistry {
         udfs: udfs_fn_wrapper,
         udafs: udafs_fn_wrapper,
         udwfs: udwfs_fn_wrapper,
@@ -141,15 +155,16 @@ unsafe extern "C" fn clone_fn_wrapper(
     }
 }
 
-impl Drop for FFI_FunctionRegistry {
+impl Drop for FFI_WeakFunctionRegistry {
     fn drop(&mut self) {
         unsafe { (self.release)(self) }
     }
 }
 
-impl FFI_FunctionRegistry {
-    /// Creates a new [`FFI_FunctionRegistry`].
+impl FFI_WeakFunctionRegistry {
+    /// Creates a new [`FFI_WeakFunctionRegistry`].
     pub fn new(registry: Arc<dyn FunctionRegistry + Send>) -> Self {
+        let registry = Arc::downgrade(&registry);
         let private_data = Box::new(RegistryPrivateData { registry });
 
         Self {
@@ -174,40 +189,55 @@ impl FFI_FunctionRegistry {
 /// defined on this struct must only use the stable functions provided in
 /// FFI_FunctionRegistry to interact with the foreign table provider.
 #[derive(Debug)]
-pub struct ForeignFunctionRegistry(FFI_FunctionRegistry);
+pub struct ForeignWeakFunctionRegistry(FFI_WeakFunctionRegistry);
 
-unsafe impl Send for ForeignFunctionRegistry {}
-unsafe impl Sync for ForeignFunctionRegistry {}
+unsafe impl Send for ForeignWeakFunctionRegistry {}
+unsafe impl Sync for ForeignWeakFunctionRegistry {}
 
-impl From<&FFI_FunctionRegistry> for ForeignFunctionRegistry {
-    fn from(provider: &FFI_FunctionRegistry) -> Self {
+impl From<&FFI_WeakFunctionRegistry> for ForeignWeakFunctionRegistry {
+    fn from(provider: &FFI_WeakFunctionRegistry) -> Self {
         Self(provider.clone())
     }
 }
 
-impl Clone for FFI_FunctionRegistry {
+impl Clone for FFI_WeakFunctionRegistry {
     fn clone(&self) -> Self {
         unsafe { (self.clone)(self) }
     }
 }
 
-impl FunctionRegistry for ForeignFunctionRegistry {
+impl FunctionRegistry for ForeignWeakFunctionRegistry {
     fn udfs(&self) -> HashSet<String> {
         let udfs = unsafe { (self.0.udfs)(&self.0) };
-
-        udfs.into_iter().map(String::from).collect()
+        match udfs {
+            RResult::ROk(udfs) => udfs.into_iter().map(String::from).collect(),
+            RResult::RErr(err) => {
+                warn!("{err}");
+                HashSet::with_capacity(0)
+            }
+        }
     }
 
     fn udafs(&self) -> HashSet<String> {
         let udafs = unsafe { (self.0.udafs)(&self.0) };
-
-        udafs.into_iter().map(String::from).collect()
+        match udafs {
+            RResult::ROk(udafs) => udafs.into_iter().map(String::from).collect(),
+            RResult::RErr(err) => {
+                warn!("{err}");
+                HashSet::with_capacity(0)
+            }
+        }
     }
 
     fn udwfs(&self) -> HashSet<String> {
         let udwfs = unsafe { (self.0.udwfs)(&self.0) };
-
-        udwfs.into_iter().map(String::from).collect()
+        match udwfs {
+            RResult::ROk(udwfs) => udwfs.into_iter().map(String::from).collect(),
+            RResult::RErr(err) => {
+                warn!("{err}");
+                HashSet::with_capacity(0)
+            }
+        }
     }
 
     fn udf(&self, name: &str) -> datafusion_common::Result<Arc<ScalarUDF>> {

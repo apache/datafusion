@@ -17,9 +17,11 @@
 
 use crate::expr::expr_properties::FFI_SortOptions;
 use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
+use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
-use datafusion::physical_expr::PhysicalSortExpr;
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_common::{exec_datafusion_err, DataFusionError};
 use std::sync::Arc;
 
 #[repr(C)]
@@ -45,5 +47,27 @@ impl From<&FFI_PhysicalSortExpr> for PhysicalSortExpr {
         let options = SortOptions::from(&value.options);
 
         Self { expr, options }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, StableAbi)]
+#[allow(non_camel_case_types)]
+pub struct FFI_LexOrdering {
+    pub expr: RVec<FFI_PhysicalSortExpr>,
+}
+
+impl From<&LexOrdering> for FFI_LexOrdering {
+    fn from(value: &LexOrdering) -> Self {
+        let expr = value.iter().map(FFI_PhysicalSortExpr::from).collect();
+        FFI_LexOrdering { expr }
+    }
+}
+
+impl TryFrom<&FFI_LexOrdering> for LexOrdering {
+    type Error = DataFusionError;
+    fn try_from(value: &FFI_LexOrdering) -> Result<Self, Self::Error> {
+        LexOrdering::new(value.expr.iter().map(PhysicalSortExpr::from))
+            .ok_or(exec_datafusion_err!("FFI_LexOrdering was empty"))
     }
 }

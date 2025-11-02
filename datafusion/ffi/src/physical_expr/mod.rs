@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod sort;
+pub mod partitioning;
+pub mod sort;
 
 use crate::arrow_wrappers::WrappedArray;
 use crate::expr::columnar_value::FFI_ColumnarValue;
