@@ -633,8 +633,43 @@ impl LogicalPlan {
             LogicalPlan::Dml(_) => Ok(self),
             LogicalPlan::Copy(_) => Ok(self),
             LogicalPlan::Values(Values { schema, values }) => {
-                // todo it isn't clear why the schema is not recomputed here
-                Ok(LogicalPlan::Values(Values { schema, values }))
+                // Using `values` alone cannot compute correct schema for the plan. For example:
+                //   Projection: col_1, col_2
+                //     Values: (Float32(1), Float32(10)), (Float32(100), Float32(10))
+                //
+                // Thus, we need to recompute a new schema from `values` and retain some
+                // information from the original schema.
+                let new_plan = LogicalPlanBuilder::values(values.clone())?.build()?;
+
+                let qualified_fields = schema
+                    .iter()
+                    .zip(new_plan.schema().fields())
+                    .map(|((table_ref, old_field), new_field)| {
+                        // `old_field`'s data type is unknown but `new_field`'s is known
+                        if old_field.data_type().is_null()
+                            && !new_field.data_type().is_null()
+                        {
+                            let field = old_field
+                                .as_ref()
+                                .clone()
+                                .with_data_type(new_field.data_type().clone());
+                            (table_ref.cloned(), Arc::new(field))
+                        } else {
+                            (table_ref.cloned(), Arc::clone(old_field))
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                let schema = DFSchema::new_with_metadata(
+                    qualified_fields,
+                    schema.metadata().clone(),
+                )?
+                .with_functional_dependencies(schema.functional_dependencies().clone())?;
+
+                Ok(LogicalPlan::Values(Values {
+                    schema: Arc::new(schema),
+                    values,
+                }))
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
@@ -1449,7 +1484,7 @@ impl LogicalPlan {
         self.transform_up_with_subqueries(|plan| {
             let schema = Arc::clone(plan.schema());
             let name_preserver = NamePreserver::new(&plan);
-            let transformed_plan = plan.map_expressions(|e| {
+            plan.map_expressions(|e| {
                 let (e, has_placeholder) = e.infer_placeholder_types(&schema)?;
                 if !has_placeholder {
                     // Performance optimization:
@@ -1471,82 +1506,10 @@ impl LogicalPlan {
                     // Preserve name to avoid breaking column references to this expression
                     Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
                 }
-            })?;
-
+            })?
             // always recompute the schema to ensure the changed in the schema's field should be
             // poplulated to the plan's parent
-            let transformed_plan =
-                transformed_plan.map_data(|plan| plan.recompute_schema())?;
-
-            // Recalculate schema's type after replacing param,
-            // this only works with `LogicalPlan::Values`.
-            if transformed_plan.transformed {
-                let LogicalPlan::Values(Values { schema, values }) =
-                    transformed_plan.data
-                else {
-                    return Ok(transformed_plan);
-                };
-
-                // Fields that were updated with placeholder's values but their
-                // data type were still unknown in the plan's schema
-                let mut new_fields = HashMap::new();
-                for value in &values {
-                    for (i, e) in value.iter().enumerate() {
-                        // schema's type is unknown ..
-                        if schema.field(i).data_type().is_null() {
-                            let (_, new_field) = e.to_field(&schema)?;
-                            // .. but the field in the expr is known.
-                            if !new_field.data_type().is_null() {
-                                new_fields.insert(i, new_field);
-                            }
-                        }
-                    }
-                }
-
-                // No fields to update
-                if new_fields.is_empty() {
-                    return Ok(Transformed::yes(LogicalPlan::Values(Values {
-                        schema: Arc::clone(&schema),
-                        values,
-                    })));
-                }
-
-                let qualified_fields = schema
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (qualifier, field))| match new_fields.get(&i) {
-                        Some(new_field) => {
-                            let updated_field = schema
-                                .field(i)
-                                .clone()
-                                .with_data_type(new_field.data_type().clone())
-                                .with_nullable(new_field.is_nullable());
-                            (qualifier.cloned(), Arc::new(updated_field))
-                        }
-                        None => (qualifier.cloned(), Arc::clone(field)),
-                    })
-                    .collect();
-
-                let schema = DFSchema::new_with_metadata(
-                    qualified_fields,
-                    schema.metadata().clone(),
-                )?
-                .with_functional_dependencies(schema.functional_dependencies().clone())?;
-
-                return Ok(Transformed::yes(LogicalPlan::Values(Values {
-                    schema: Arc::new(schema),
-                    values,
-                })));
-            }
-
-            Ok(transformed_plan)
-
-            // TODO: add more comments to this
-            // - simplify this
-            // - find alternative
-            // - split out function
-            // - refine usage `need_update_schema`
-            // - check empty relation
+            .map_data(|plan| plan.recompute_schema())
         })
         .map(|res| res.data)
     }
@@ -4944,10 +4907,10 @@ mod tests {
 
         // replaced
         assert_snapshot!(plan.display_indent_schema(), @r#"
-        Projection: t.a, t.b, t.c, t.d [a:Int32;N, b:Int32, c:Utf8, d:Int64;N]
-          SubqueryAlias: t [a:Int32;N, b:Int32, c:Utf8, d:Int64;N]
-            Projection: column1 AS a, column2 AS b, column3 AS c, column4 AS d [a:Int32;N, b:Int32, c:Utf8, d:Int64;N]
-              Values: (Int32(1), Int32(1) AS $1, Utf8("s") AS $2, Int32(3) + Int32(4) AS $3 + $4) [column1:Int32;N, column2:Int32, column3:Utf8, column4:Int64;N]
+        Projection: t.a, t.b, t.c, t.d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
+          SubqueryAlias: t [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
+            Projection: column1 AS a, column2 AS b, column3 AS c, column4 AS d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
+              Values: (Int32(1), Int32(1) AS $1, Utf8("s") AS $2, Int32(3) + Int32(4) AS $3 + $4) [column1:Int32;N, column2:Int32;N, column3:Utf8;N, column4:Int64;N]
         "#);
     }
 
