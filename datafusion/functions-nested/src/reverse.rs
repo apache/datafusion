@@ -202,7 +202,7 @@ fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     let offsets = array.offsets();
     let values = array.values();
     let sizes = array.sizes();
-    let nulls = array.nulls();
+
     // Construct indices, sizes and offsets for the reversed array by iterating over
     // the list view array in the logical order, and reversing the order of the elements.
     // We end up with a list view array where the elements are in order,
@@ -214,12 +214,10 @@ fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     new_offsets.push(O::zero());
     for (i, offset) in offsets.iter().enumerate() {
         // If this array is null, we set the new array to null with size 0 and continue
-        if let Some(nulls) = nulls {
-            if nulls.is_null(i) {
-                new_sizes.push(O::zero());
-                new_offsets.push(new_offsets[i]);
-                continue;
-            }
+        if array.is_null(i) {
+            new_sizes.push(O::zero());
+            new_offsets.push(new_offsets[i]);
+            continue;
         }
 
         // Each array is located at [offset, offset + size), so we collect indices in the reverse order
