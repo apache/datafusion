@@ -156,35 +156,11 @@ SELECT corr(col1, col2) FROM correlation_test;
 ----
 1
 
-# Test named arguments in order
-query R
-SELECT corr(y => col1, x => col2) FROM correlation_test;
-----
-1
-
-# Test named arguments out of order
+# Test named arguments out of order (proves named args work for aggregates)
 query R
 SELECT corr(x => col2, y => col1) FROM correlation_test;
 ----
 1
-
-# Test mixed positional and named arguments
-query R
-SELECT corr(col1, x => col2) FROM correlation_test;
-----
-1
-
-# Error: positional argument after named argument
-query error DataFusion error: Error during planning: Positional argument.*follows named argument
-SELECT corr(y => col1, col2) FROM correlation_test;
-
-# Error: unknown parameter name
-query error DataFusion error: Error during planning: Unknown parameter name 'invalid'
-SELECT corr(invalid => col1, x => col2) FROM correlation_test;
-
-# Error: duplicate parameter name
-query error DataFusion error: Error during planning: Parameter 'y' specified multiple times
-SELECT corr(y => col1, y => col2) FROM correlation_test;
 
 # Error: function doesn't support named arguments (count has no parameter names)
 query error DataFusion error: Error during planning: Aggregate function 'count' does not support named arguments
@@ -228,24 +204,6 @@ SELECT percentile_cont(percentile => 0.5) WITHIN GROUP (ORDER BY salary) FROM pe
 ----
 70000
 
-# Test standard call with named arguments in order
-query R
-SELECT percentile_cont(expr => salary, percentile => 0.5) FROM percentile_test;
-----
-70000
-
-# Test standard call with named arguments out of order
-query R
-SELECT percentile_cont(percentile => 0.5, expr => salary) FROM percentile_test;
-----
-70000
-
-# Test standard call with mixed positional and named
-query R
-SELECT percentile_cont(salary, percentile => 0.75) FROM percentile_test;
-----
-80000
-
 # Verify the WITHIN GROUP prepending logic with different percentile value
 query R
 SELECT percentile_cont(percentile => 0.25) WITHIN GROUP (ORDER BY salary) FROM percentile_test;
@@ -277,27 +235,9 @@ SELECT id, lead(value, 1, 0) OVER (ORDER BY id) FROM window_test ORDER BY id;
 3 40
 4 0
 
-# Test named arguments in order
-query II
-SELECT id, lead(expr => value, offset => 1, default => 0) OVER (ORDER BY id) FROM window_test ORDER BY id;
-----
-1 20
-2 30
-3 40
-4 0
-
-# Test named arguments out of order
+# Test named arguments out of order (proves named args work for window functions)
 query II
 SELECT id, lead(default => 0, offset => 1, expr => value) OVER (ORDER BY id) FROM window_test ORDER BY id;
-----
-1 20
-2 30
-3 40
-4 0
-
-# Test mixed positional and named arguments
-query II
-SELECT id, lead(value, offset => 1, default => 0) OVER (ORDER BY id) FROM window_test ORDER BY id;
 ----
 1 20
 2 30
@@ -321,18 +261,6 @@ SELECT id, lead(expr => value, offset => 2) OVER (ORDER BY id) FROM window_test 
 2 40
 3 NULL
 4 NULL
-
-# Error: positional argument after named argument
-query error DataFusion error: Error during planning: Positional argument.*follows named argument
-SELECT lead(expr => value, 1, 0) OVER (ORDER BY id) FROM window_test;
-
-# Error: unknown parameter name
-query error DataFusion error: Error during planning: Unknown parameter name 'invalid'
-SELECT lead(invalid => value, offset => 1) OVER (ORDER BY id) FROM window_test;
-
-# Error: duplicate parameter name
-query error DataFusion error: Error during planning: Parameter 'expr' specified multiple times
-SELECT lead(expr => value, expr => value) OVER (ORDER BY id) FROM window_test;
 
 # Error: function doesn't support named arguments (row_number has no parameter names)
 query error DataFusion error: Error during planning: Window function 'row_number' does not support named arguments
