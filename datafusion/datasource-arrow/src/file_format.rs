@@ -23,8 +23,10 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
+use arrow::array::{RecordBatch, RecordBatchReader};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
@@ -459,6 +461,29 @@ async fn collect_at_least_n_bytes(
         ))?;
     }
     Ok(buf)
+}
+
+/// Creates a [`RecordBatchReader`] for Arrow IPC formatted data from a
+/// [`Read`] and [`Seek`] reader. Detects whether `reader`'s format
+/// is IPC file or IPC stream using the `ARROW1` magic number.
+pub fn try_new_record_batch_reader<R: Read + Seek + Send + 'static>(
+    mut reader: R,
+    projection: Option<Vec<usize>>,
+) -> Result<Box<dyn RecordBatchReader<Item = Result<RecordBatch, ArrowError>> + Send>> {
+    let stream_position = reader.stream_position()?;
+    let mut buffer = [0; 6];
+    if reader.read(&mut buffer)? < 6 {
+        return Err(ArrowError::ParseError(
+            "Unexpected end of byte stream for Arrow IPC file".to_string(),
+        ))?;
+    }
+    reader.seek(SeekFrom::Start(stream_position))?;
+
+    if buffer == ARROW_MAGIC {
+        return Ok(Box::new(FileReader::try_new(reader, projection)?));
+    }
+
+    Ok(Box::new(StreamReader::try_new(reader, projection)?))
 }
 
 #[cfg(test)]

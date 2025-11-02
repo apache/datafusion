@@ -37,6 +37,8 @@ use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
+use crate::try_new_record_batch_reader;
+
 /// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
 #[derive(Clone, Default)]
@@ -136,22 +138,22 @@ impl FileOpener for ArrowOpener {
                     match r.payload {
                         #[cfg(not(target_arch = "wasm32"))]
                         GetResultPayload::File(file, _) => {
-                            let arrow_reader = arrow::ipc::reader::FileReader::try_new(
-                                file, projection,
-                            )?;
-                            Ok(futures::stream::iter(arrow_reader)
-                                .map(|r| r.map_err(Into::into))
-                                .boxed())
+                            Ok(futures::stream::iter(try_new_record_batch_reader(
+                                file.try_clone()?,
+                                projection.clone(),
+                            )?)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
                         }
                         GetResultPayload::Stream(_) => {
                             let bytes = r.bytes().await?;
                             let cursor = std::io::Cursor::new(bytes);
-                            let arrow_reader = arrow::ipc::reader::FileReader::try_new(
-                                cursor, projection,
-                            )?;
-                            Ok(futures::stream::iter(arrow_reader)
-                                .map(|r| r.map_err(Into::into))
-                                .boxed())
+                            Ok(futures::stream::iter(try_new_record_batch_reader(
+                                cursor,
+                                projection.clone(),
+                            )?)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
                         }
                     }
                 }
@@ -257,5 +259,59 @@ impl FileOpener for ArrowOpener {
                 }
             }
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, io::Read};
+
+    use arrow_ipc::reader::{FileReader, StreamReader};
+    use bytes::Bytes;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_execution::object_store::ObjectStoreUrl;
+    use object_store::memory::InMemory;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_file_opener_with_ipc_file() -> Result<()> {
+        for filename in ["example.arrow", "example_stream.arrow"] {
+            let path = format!("tests/data/{}", filename);
+            let path_str = path.as_str();
+            let mut file = File::open(path_str)?;
+            let file_size = file.metadata()?.len();
+
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer)?;
+            let bytes = Bytes::from(buffer);
+
+            let object_store = Arc::new(InMemory::new());
+            let partitioned_file = PartitionedFile::new(filename, file_size);
+            object_store
+                .put(&partitioned_file.object_meta.location, bytes.into())
+                .await?;
+
+            let schema = match FileReader::try_new(File::open(path_str)?, None) {
+                Ok(reader) => reader.schema(),
+                Err(_) => StreamReader::try_new(File::open(path_str)?, None)?.schema(),
+            };
+
+            let source = Arc::new(ArrowSource::default());
+
+            let scan_config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                schema,
+                source.clone(),
+            )
+            .build();
+
+            let file_opener = source.create_file_opener(object_store, &scan_config, 0);
+            let mut stream = file_opener.open(partitioned_file)?.await?;
+
+            assert!(stream.next().await.is_some());
+        }
+
+        Ok(())
     }
 }
