@@ -272,7 +272,12 @@ fn hash_map_array(
 
     // Create hashes for each entry in each row
     let mut values_hashes = vec![0u64; array.entries().len()];
-    let columns: Vec<&dyn Array> = array.entries().columns().iter().map(|a| a.as_ref()).collect();
+    let columns: Vec<&dyn Array> = array
+        .entries()
+        .columns()
+        .iter()
+        .map(|a| a.as_ref())
+        .collect();
     create_hashes_from_arrays(&columns, random_state, &mut values_hashes)?;
 
     // Combine the hashes for entries on each row with each other and previous hash for that row

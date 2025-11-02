@@ -54,11 +54,7 @@ fn benchmark_hash_single_string_column(c: &mut Criterion) {
 
             b.iter(|| {
                 let mut hashes = vec![0u64; size_copy];
-                let _ = create_hashes(
-                    &[array.clone()],
-                    &random_state,
-                    &mut hashes,
-                );
+                let _ = create_hashes(&[array.clone()], &random_state, &mut hashes);
                 hashes
             })
         });
@@ -83,7 +79,7 @@ fn benchmark_hash_multi_column(c: &mut Criterion) {
                 let _ = create_hashes(
                     &[string_array.clone(), int_array.clone()],
                     &random_state,
-                    &mut hashes
+                    &mut hashes,
                 );
                 hashes
             })
@@ -106,11 +102,7 @@ fn benchmark_hash_integers(c: &mut Criterion) {
 
             b.iter(|| {
                 let mut hashes = vec![0u64; size_copy];
-                let _ = create_hashes(
-                    &[array.clone()],
-                    &random_state,
-                    &mut hashes,
-                );
+                let _ = create_hashes(&[array.clone()], &random_state, &mut hashes);
                 hashes
             })
         });
