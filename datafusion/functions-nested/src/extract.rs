@@ -1261,4 +1261,71 @@ mod tests {
         assert_eq!(list_view_values(result), vec![vec![3, 2, 1], vec![5, 4]]);
         Ok(())
     }
+
+    #[test]
+    fn test_array_slice_list_view_out_of_order() -> Result<()> {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let offsets = ScalarBuffer::from(vec![3, 1, 0]);
+        let sizes = ScalarBuffer::from(vec![2, 2, 1]);
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let array = ListViewArray::new(field, offsets, sizes, values, None);
+        assert_eq!(
+            list_view_values(&array),
+            vec![vec![4, 5], vec![2, 3], vec![1]]
+        );
+
+        let from = Int64Array::from(vec![2, 2, 2]);
+        let to = Int64Array::from(vec![1, 1, 1]);
+        let stride = Int64Array::from(vec![-1, -1, -1]);
+
+        let result =
+            general_list_view_array_slice::<i32>(&array, &from, &to, Some(&stride))?;
+        let result = result.as_ref().as_list_view::<i32>();
+
+        assert_eq!(
+            list_view_values(result),
+            vec![vec![5, 4], vec![3, 2], vec![]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_slice_list_view_with_nulls() -> Result<()> {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
+        let offsets = ScalarBuffer::from(vec![0, 2, 5]);
+        let sizes = ScalarBuffer::from(vec![2, 3, 0]);
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let array = ListViewArray::new(field, offsets, sizes, values, None);
+
+        let from = Int64Array::from(vec![1, 1, 1]);
+        let to = Int64Array::from(vec![2, 2, 1]);
+
+        let result = general_list_view_array_slice::<i32>(&array, &from, &to, None)?;
+        let result = result.as_ref().as_list_view::<i32>();
+
+        let actual: Vec<Vec<Option<i32>>> = (0..result.len())
+            .map(|i| {
+                result
+                    .value(i)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .iter()
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(
+            actual,
+            vec![vec![Some(1), None], vec![Some(3), Some(4)], Vec::new(),]
+        );
+
+        Ok(())
+    }
 }
