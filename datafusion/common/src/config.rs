@@ -529,7 +529,8 @@ config_namespace! {
         /// A smaller value creates more files but allows finer-grained space reclamation
         /// as files can be deleted once fully consumed.
         ///
-        /// Not all operators support this feature, some may create spill files larger than the limit.
+        /// Now only `RepartitionExec` supports this spill file rotation feature, other spilling operators
+        /// may create spill files larger than the limit.
         ///
         /// Default: 128 MB
         pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
