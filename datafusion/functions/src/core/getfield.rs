@@ -245,7 +245,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             Ok(ColumnarValue::Array(data))
         }
 
-        fn process_map_nest(
+        fn process_map_with_nested_key(
             array: Arc<dyn Array>,
             key_array: Arc<dyn Array>,
         ) -> Result<ColumnarValue> {
@@ -296,7 +296,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Map(_, _), other) => {
                 let data_type = other.data_type();
                 if data_type.is_nested() {
-                    process_map_nest(array, other.to_array()?)
+                    process_map_with_nested_key(array, other.to_array()?)
                 } else {
                     process_map_array(array, other.to_array()?)
                 }

@@ -555,6 +555,9 @@ SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {2:'b', 1:'a'}];
 ----
 NULL
 
+# TODO: Test accessing map with empty map as key
+# TODO: Test accessing map with null map as key
+
 # accessing map with non-string key
 query I
 SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
