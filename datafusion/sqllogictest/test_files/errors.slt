@@ -145,7 +145,7 @@ SELECT
    LIMIT 5;
 
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
 
 query error DataFusion error: Error during planning: Substring without for/from is not valid

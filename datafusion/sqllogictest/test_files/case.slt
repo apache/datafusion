@@ -617,3 +617,69 @@ SELECT CASE WHEN a = 0 THEN 'a' WHEN 1 / a = 1 THEN 'b' ELSE 'c' END FROM (VALUE
 a
 b
 c
+
+# EvalMethod::WithExpression using subset of all selected columns in case expression
+query III
+SELECT CASE a1 WHEN 1 THEN a1 WHEN 2 THEN a2 WHEN 3 THEN b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+2 20 200
+30 30 300
+
+# EvalMethod::NoExpression using subset of all selected columns in case expression
+query III
+SELECT CASE WHEN a1 = 1 THEN a2 WHEN a2 = 2 THEN a1 WHEN 3 THEN b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+2 20 200
+30 30 300
+
+# EvalMethod::ExpressionOrExpression using subset of all selected columns in case expression
+query III
+SELECT CASE WHEN a1 = 1 THEN a2 ELSE b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+20 20 200
+30 30 300
+
+# EvalMethod::WithExpression using all selected columns in case expression
+query I
+SELECT CASE a1 WHEN 1 THEN a1 WHEN 2 THEN a2 WHEN 3 THEN NULL END
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1
+2
+NULL
+
+# EvalMethod::NoExpression using all selected columns in case expression
+query I
+SELECT CASE WHEN a1 = 1 THEN a2 WHEN a2 = 2 THEN a1 WHEN 3 THEN NULL END
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1
+2
+NULL
+
+# EvalMethod::ExpressionOrExpression using all selected columns in case expression
+query I
+SELECT CASE WHEN a1 = 1 THEN a2 ELSE NULL END
+FROM (SELECT a as a1, a as a2 FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1
+NULL
+NULL
+
+# Nested case with projection
+query III
+SELECT CASE WHEN a = -1 THEN b WHEN a = -2 THEN -b END, b, c
+FROM (
+  SELECT b, c, CASE WHEN a1 = 1 THEN -a2 WHEN a1 = 2 THEN -a1 END as a
+  FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c))
+);
+----
+10 10 100
+-20 20 200
+NULL 30 300

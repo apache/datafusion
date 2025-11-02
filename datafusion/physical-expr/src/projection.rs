@@ -166,9 +166,9 @@ impl ProjectionExprs {
     /// # Example
     ///
     /// ```rust
-    /// use std::sync::Arc;
-    /// use arrow::datatypes::{Schema, Field, DataType};
+    /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_physical_expr::projection::ProjectionExprs;
+    /// use std::sync::Arc;
     ///
     /// // Create a schema with three columns
     /// let schema = Arc::new(Schema::new(vec![
@@ -234,11 +234,11 @@ impl ProjectionExprs {
     /// # Example
     ///
     /// ```rust
-    /// use std::sync::Arc;
-    /// use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionExpr};
-    /// use datafusion_physical_expr::expressions::{Column, BinaryExpr, Literal};
     /// use datafusion_common::{Result, ScalarValue};
     /// use datafusion_expr::Operator;
+    /// use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    /// use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+    /// use std::sync::Arc;
     ///
     /// fn main() -> Result<()> {
     ///     // Example from the docstring:
