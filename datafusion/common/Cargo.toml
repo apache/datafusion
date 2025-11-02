@@ -85,7 +85,3 @@ criterion = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
 sqlparser = { workspace = true }
-
-[[bench]]
-name = "hash_utils"
-harness = false

@@ -395,7 +395,9 @@ impl BatchPartitioner {
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(&arrays, random_state, hash_buffer)?;
+                    let array_refs: Vec<&dyn Array> =
+                        arrays.iter().map(|a| a.as_ref()).collect();
+                    create_hashes_from_arrays(&array_refs, random_state, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| Vec::with_capacity(batch.num_rows()))

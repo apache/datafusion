@@ -1077,7 +1077,9 @@ fn lookup_join_hashmap(
 
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+    let array_refs: Vec<&dyn Array> = keys_values.iter().map(|a| a.as_ref()).collect();
+    let hash_values =
+        create_hashes_from_arrays(&array_refs, random_state, hashes_buffer)?;
 
     // As SymmetricHashJoin uses LIFO JoinHashMap, the chained list algorithm
     // will return build indices for each probe row in a reverse order as such:

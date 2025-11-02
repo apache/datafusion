@@ -457,6 +457,12 @@ pub fn create_hashes_from_arrays<'a>(
 ///
 /// The number of rows to hash is determined by `hashes_buffer.len()`.
 /// `hashes_buffer` should be pre-sized appropriately
+///
+/// # Deprecated
+/// This function is deprecated in favor of [`create_hashes_from_arrays`] which accepts
+/// array references directly, avoiding unnecessary Arc cloning. It will be removed in
+/// version 51.0.0.
+#[deprecated(since = "51.0.0", note = "Use create_hashes_from_arrays instead")]
 #[cfg(not(feature = "force_hash_collisions"))]
 pub fn create_hashes<'a>(
     arrays: &[ArrayRef],
@@ -471,6 +477,11 @@ pub fn create_hashes<'a>(
 /// all hashes (to test collisions)
 ///
 /// See comments on `hashes_buffer` for more details.
+///
+/// # Deprecated
+/// This function is deprecated in favor of [`create_hashes_from_arrays`]. It will be removed in
+/// version 51.0.0.
+#[deprecated(since = "43.0.0", note = "Use create_hashes_from_arrays instead")]
 #[cfg(feature = "force_hash_collisions")]
 pub fn create_hashes<'a>(
     _arrays: &[ArrayRef],
@@ -504,17 +515,23 @@ mod tests {
         let array_ref = Arc::new(array);
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; array_ref.len()];
-        let hashes = create_hashes(&[array_ref], &random_state, hashes_buff)?;
+        let hashes =
+            create_hashes_from_arrays(&[array_ref.as_ref()], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4);
         Ok(())
     }
 
     #[test]
     fn create_hashes_for_empty_fixed_size_lit() -> Result<()> {
-        let empty_array = FixedSizeListBuilder::new(StringBuilder::new(), 1).finish();
+        let empty_array =
+            Arc::new(FixedSizeListBuilder::new(StringBuilder::new(), 1).finish());
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; 0];
-        let hashes = create_hashes(&[Arc::new(empty_array)], &random_state, hashes_buff)?;
+        let hashes = create_hashes_from_arrays(
+            &[empty_array.as_ref()],
+            &random_state,
+            hashes_buff,
+        )?;
         assert_eq!(hashes, &Vec::<u64>::new());
         Ok(())
     }
@@ -526,10 +543,12 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; f32_arr.len()];
-        let hashes = create_hashes(&[f32_arr], &random_state, hashes_buff)?;
+        let hashes =
+            create_hashes_from_arrays(&[f32_arr.as_ref()], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4,);
 
-        let hashes = create_hashes(&[f64_arr], &random_state, hashes_buff)?;
+        let hashes =
+            create_hashes_from_arrays(&[f64_arr.as_ref()], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4,);
 
         Ok(())
@@ -556,11 +575,20 @@ mod tests {
                 let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
                 let mut binary_hashes = vec![0; binary.len()];
-                create_hashes(&[binary_array], &random_state, &mut binary_hashes)
-                    .unwrap();
+                create_hashes_from_arrays(
+                    &[binary_array.as_ref()],
+                    &random_state,
+                    &mut binary_hashes,
+                )
+                .unwrap();
 
                 let mut ref_hashes = vec![0; binary.len()];
-                create_hashes(&[ref_array], &random_state, &mut ref_hashes).unwrap();
+                create_hashes_from_arrays(
+                    &[ref_array.as_ref()],
+                    &random_state,
+                    &mut ref_hashes,
+                )
+                .unwrap();
 
                 // Null values result in a zero hash,
                 for (val, hash) in binary.iter().zip(binary_hashes.iter()) {
@@ -594,8 +622,11 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; fixed_size_binary_array.len()];
-        let hashes =
-            create_hashes(&[fixed_size_binary_array], &random_state, hashes_buff)?;
+        let hashes = create_hashes_from_arrays(
+            &[fixed_size_binary_array.as_ref()],
+            &random_state,
+            hashes_buff,
+        )?;
         assert_eq!(hashes.len(), 3,);
 
         Ok(())
@@ -627,11 +658,20 @@ mod tests {
                 let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
                 let mut string_hashes = vec![0; strings.len()];
-                create_hashes(&[string_array], &random_state, &mut string_hashes)
-                    .unwrap();
+                create_hashes_from_arrays(
+                    &[string_array.as_ref()],
+                    &random_state,
+                    &mut string_hashes,
+                )
+                .unwrap();
 
                 let mut dict_hashes = vec![0; strings.len()];
-                create_hashes(&[dict_array], &random_state, &mut dict_hashes).unwrap();
+                create_hashes_from_arrays(
+                    &[dict_array.as_ref()],
+                    &random_state,
+                    &mut dict_hashes,
+                )
+                .unwrap();
 
                 // Null values result in a zero hash,
                 for (val, hash) in strings.iter().zip(string_hashes.iter()) {
@@ -676,10 +716,20 @@ mod tests {
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
         let mut string_hashes = vec![0; strings.len()];
-        create_hashes(&[string_array], &random_state, &mut string_hashes).unwrap();
+        create_hashes_from_arrays(
+            &[string_array.as_ref()],
+            &random_state,
+            &mut string_hashes,
+        )
+        .unwrap();
 
         let mut dict_hashes = vec![0; strings.len()];
-        create_hashes(&[dict_array], &random_state, &mut dict_hashes).unwrap();
+        create_hashes_from_arrays(
+            &[dict_array.as_ref()],
+            &random_state,
+            &mut dict_hashes,
+        )
+        .unwrap();
 
         // Null values result in a zero hash,
         for (val, hash) in strings.iter().zip(string_hashes.iter()) {
@@ -720,7 +770,7 @@ mod tests {
             Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let mut hashes = vec![0; list_array.len()];
-        create_hashes(&[list_array], &random_state, &mut hashes).unwrap();
+        create_hashes_from_arrays(&[&list_array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[5]);
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
@@ -745,7 +795,7 @@ mod tests {
             )) as ArrayRef;
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let mut hashes = vec![0; list_array.len()];
-        create_hashes(&[list_array], &random_state, &mut hashes).unwrap();
+        create_hashes_from_arrays(&[&list_array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[5]);
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
@@ -795,7 +845,7 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let mut hashes = vec![0; array.len()];
-        create_hashes(&[array], &random_state, &mut hashes).unwrap();
+        create_hashes_from_arrays(&[&array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[1]);
         // same value but the third row ( hashes[2] ) is null
         assert_ne!(hashes[2], hashes[3]);
@@ -832,7 +882,7 @@ mod tests {
         let array = Arc::new(struct_array) as ArrayRef;
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let mut hashes = vec![0; array.len()];
-        create_hashes(&[array], &random_state, &mut hashes).unwrap();
+        create_hashes_from_arrays(&[&array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[1]);
     }
 
@@ -885,7 +935,7 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let mut hashes = vec![0; array.len()];
-        create_hashes(&[array], &random_state, &mut hashes).unwrap();
+        create_hashes_from_arrays(&[&array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[1]); // same value
         assert_ne!(hashes[0], hashes[2]); // different value
         assert_ne!(hashes[0], hashes[3]); // different key
@@ -912,16 +962,16 @@ mod tests {
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
         let mut one_col_hashes = vec![0; strings1.len()];
-        create_hashes(
-            &[Arc::clone(&dict_array) as ArrayRef],
+        create_hashes_from_arrays(
+            &[dict_array.as_ref()],
             &random_state,
             &mut one_col_hashes,
         )
         .unwrap();
 
         let mut two_col_hashes = vec![0; strings1.len()];
-        create_hashes(
-            &[dict_array, string_array],
+        create_hashes_from_arrays(
+            &[dict_array.as_ref(), string_array.as_ref()],
             &random_state,
             &mut two_col_hashes,
         )

@@ -456,7 +456,13 @@ impl HashJoinStream {
 
                 self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);
-                create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+                let array_refs: Vec<&dyn Array> =
+                    keys_values.iter().map(|a| a.as_ref()).collect();
+                create_hashes_from_arrays(
+                    &array_refs,
+                    &self.random_state,
+                    &mut self.hashes_buffer,
+                )?;
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());

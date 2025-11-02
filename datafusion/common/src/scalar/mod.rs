@@ -51,7 +51,7 @@ use crate::cast::{
 };
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::format::DEFAULT_CAST_OPTIONS;
-use crate::hash_utils::create_hashes;
+use crate::hash_utils::create_hashes_from_arrays;
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
@@ -878,10 +878,10 @@ impl Hash for ScalarValue {
 
 fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
     let len = arr.len();
-    let arrays = vec![arr];
     let hashes_buffer = &mut vec![0; len];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-    let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+    let hashes =
+        create_hashes_from_arrays(&[&arr], &random_state, hashes_buffer).unwrap();
     // Hash back to std::hash::Hasher
     hashes.hash(state);
 }
