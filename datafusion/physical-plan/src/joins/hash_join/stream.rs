@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::joins::hash_join::exec::JoinLeftData;
-use crate::joins::hash_join::shared_bounds::SharedBoundsAccumulator;
+use crate::joins::hash_join::shared_bounds::SharedBuildAccumulator;
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
 };
@@ -207,7 +207,7 @@ pub(super) struct HashJoinStream {
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
     /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
-    bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
+    bounds_accumulator: Option<Arc<SharedBuildAccumulator>>,
     /// Optional future to signal when bounds have been reported by all partitions
     /// and the dynamic filter has been updated
     bounds_waiter: Option<OnceFut<()>>,
@@ -315,7 +315,7 @@ impl HashJoinStream {
         batch_size: usize,
         hashes_buffer: Vec<u64>,
         right_side_ordered: bool,
-        bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
+        bounds_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
     ) -> Self {
         Self {
