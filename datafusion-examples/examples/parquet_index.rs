@@ -99,7 +99,6 @@ use url::Url;
 ///                   Thus some parquet files are      │             │
 ///                   "pruned" and thus are not        └─────────────┘
 ///                   scanned at all                   Parquet Files
-///
 /// ```
 ///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable

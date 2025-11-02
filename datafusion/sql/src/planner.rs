@@ -251,7 +251,6 @@ impl IdentNormalizer {
 /// This helps resolve scoping issues of CTEs.
 /// By using cloning, a subquery can inherit CTEs from the outer query
 /// and can also define its own private CTEs without affecting the outer query.
-///
 #[derive(Debug, Clone)]
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied

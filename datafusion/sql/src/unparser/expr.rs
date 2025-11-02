@@ -71,7 +71,7 @@ use sqlparser::tokenizer::Span;
 /// use datafusion_sql::unparser::expr_to_sql;
 /// let expr = col("a").gt(lit(4)); // form an expression `a > 4`
 /// let sql = expr_to_sql(&expr).unwrap(); // convert to ast::Expr
-/// // use the Display impl to convert to SQL text
+///                                        // use the Display impl to convert to SQL text
 /// assert_eq!(sql.to_string(), "(a > 4)")
 /// ```
 ///
