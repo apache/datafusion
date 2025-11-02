@@ -261,6 +261,23 @@ The accompanying `AggregateUDF::is_ordered_set_aggregate` has also been renamed 
 No functionality has been changed with regards to this method; it still refers only to permitting use of `WITHIN GROUP`
 SQL syntax for the aggregate function.
 
+### `AggregateUDFImpl::supports_null_handling_clause` now defaults to `false`
+
+This method specifies whether an aggregate function allows `IGNORE NULLS`/`RESPECT NULLS`
+during SQL parsing, with the implication it respects these configs during computation.
+For the vast majority of DataFusion aggregate functions, they do not actually make
+use of this config even though by default it is permitted. We change this so only
+the few functions which do respect this clause (e.g. `array_agg`, `first_value`,
+`last_value`) need to implement it.
+
+This means SQL parsing will now fail for queries such as this:
+
+```sql
+SELECT median(c1) IGNORE NULLS FROM table
+```
+
+Instead of silently succeeding.
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
