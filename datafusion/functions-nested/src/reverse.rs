@@ -305,124 +305,125 @@ fn fixed_size_array_reverse(
 mod tests {
     use crate::reverse::list_view_reverse;
     use arrow::{
-        array::{AsArray, Int32Array, LargeListViewArray, ListViewArray},
+        array::{
+            AsArray, GenericListViewArray, Int32Array, LargeListViewArray, ListViewArray,
+            OffsetSizeTrait,
+        },
         buffer::{NullBuffer, ScalarBuffer},
         datatypes::{DataType, Field, Int32Type},
     };
+    use datafusion_common::Result;
     use std::sync::Arc;
 
-    #[test]
-    fn test_reverse_list_view_and_large_list_view() {
-        // ListView
-        let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 1, 6, 6]),
-            ScalarBuffer::from(vec![1, 5, 0, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            Some(NullBuffer::from(vec![true, true, false, true])),
-        );
-        let result = list_view_reverse(
-            &list_view,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )
-        .unwrap();
-        let list_view_reversed: Vec<_> = result
-            .as_list_view::<i32>()
+    fn list_view_values<O: OffsetSizeTrait + TryFrom<i64>>(
+        array: &GenericListViewArray<O>,
+    ) -> Vec<Option<Vec<i32>>> {
+        array
             .iter()
             .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
-            .collect();
-
-        // LargeListView
-        let large_list_view = LargeListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 1, 6, 6]),
-            ScalarBuffer::from(vec![1, 5, 0, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            Some(NullBuffer::from(vec![true, true, false, true])),
-        );
-        let result = list_view_reverse(
-            &large_list_view,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )
-        .unwrap();
-        let large_list_view_reversed: Vec<_> = result
-            .as_list_view::<i64>()
-            .iter()
-            .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
-            .collect();
-
-        // Check results
-        let expected = vec![
-            Some(vec![1]),
-            Some(vec![6, 5, 4, 3, 2]),
-            None,
-            Some(vec![9, 8, 7]),
-        ];
-        assert_eq!(expected, list_view_reversed);
-        assert_eq!(expected, large_list_view_reversed);
+            .collect()
     }
 
     #[test]
-    fn test_reverse_list_view_out_of_order() {
-        let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![6, 1, 6, 0]), // out of order
-            ScalarBuffer::from(vec![3, 5, 0, 1]),
-            Arc::new(Int32Array::from(vec![
-                1, // fourth array: offset 0, size 1
-                2, 3, 4, 5, 6, // second array: offset 1, size 5
-                // third array null but size 0
-                7, 8, 9, // first array: offset 6, size 3
-            ])),
-            Some(NullBuffer::from(vec![true, true, false, true])),
-        );
-        let list_view_reversed: Vec<_> = list_view_reverse(
+    fn test_reverse_list_view() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let offsets = ScalarBuffer::from(vec![0, 1, 6, 6]);
+        let sizes = ScalarBuffer::from(vec![1, 5, 0, 3]);
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        let nulls = Some(NullBuffer::from(vec![true, true, false, true]));
+        let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
+        let result = list_view_reverse(
             &list_view,
             &Arc::new(Field::new("test", DataType::Int32, true)),
-        )
-        .unwrap()
-        .as_list_view::<i32>()
-        .iter()
-        .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
-        .collect();
+        )?;
+        let reversed = list_view_values(&result.as_list_view::<i32>());
         let expected = vec![
-            Some(vec![9, 8, 7]),
+            Some(vec![1]),
             Some(vec![6, 5, 4, 3, 2]),
             None,
-            Some(vec![1]),
+            Some(vec![9, 8, 7]),
         ];
-        assert_eq!(expected, list_view_reversed);
+        assert_eq!(expected, reversed);
+        Ok(())
     }
 
     #[test]
-    fn test_reverse_list_view_with_nulls() {
-        let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![16, 1, 6, 0]), // out of order
-            ScalarBuffer::from(vec![3, 5, 10, 1]),
-            Arc::new(Int32Array::from(vec![
-                1, // fourth array: offset 0, size 1
-                2, 3, 4, 5, 6, // second array: offset 1, size 5
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, // third array: offset 6, size 10
-                7, 8, 9, // first array: offset 6, size 3
-            ])),
-            Some(NullBuffer::from(vec![true, true, false, true])),
-        );
-        let list_view_reversed: Vec<_> = list_view_reverse(
+    fn test_reverse_large_list_view() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let offsets = ScalarBuffer::from(vec![0, 1, 6, 6]);
+        let sizes = ScalarBuffer::from(vec![1, 5, 0, 3]);
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        let nulls = Some(NullBuffer::from(vec![true, true, false, true]));
+        let list_view = LargeListViewArray::new(field, offsets, sizes, values, nulls);
+        let result = list_view_reverse(
             &list_view,
             &Arc::new(Field::new("test", DataType::Int32, true)),
-        )
-        .unwrap()
-        .as_list_view::<i32>()
-        .iter()
-        .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
-        .collect();
+        )?;
+        let reversed = list_view_values(&result.as_list_view::<i64>());
+        let expected = vec![
+            Some(vec![1]),
+            Some(vec![6, 5, 4, 3, 2]),
+            None,
+            Some(vec![9, 8, 7]),
+        ];
+        assert_eq!(expected, reversed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_list_view_out_of_order() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let offsets = ScalarBuffer::from(vec![6, 1, 6, 0]); // out of order
+        let sizes = ScalarBuffer::from(vec![3, 5, 0, 1]);
+        let values = Arc::new(Int32Array::from(vec![
+            1, // fourth array: offset 0, size 1
+            2, 3, 4, 5, 6, // second array: offset 1, size 5
+            // third array: offset 6, size 0 (and null)
+            7, 8, 9, // first array: offset 6, size 3
+        ]));
+        let nulls = Some(NullBuffer::from(vec![true, true, false, true]));
+        let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
+        let result = list_view_reverse(
+            &list_view,
+            &Arc::new(Field::new("test", DataType::Int32, true)),
+        )?;
+        let reversed = list_view_values(&result.as_list_view::<i32>());
         let expected = vec![
             Some(vec![9, 8, 7]),
             Some(vec![6, 5, 4, 3, 2]),
             None,
             Some(vec![1]),
         ];
-        assert_eq!(expected, list_view_reversed);
+        assert_eq!(expected, reversed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_list_view_with_nulls() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let offsets = ScalarBuffer::from(vec![16, 1, 6, 0]); // out of order
+        let sizes = ScalarBuffer::from(vec![3, 5, 10, 1]);
+        let values = Arc::new(Int32Array::from(vec![
+            1, // fourth array: offset 0, size 1
+            2, 3, 4, 5, 6, // second array: offset 1, size 5
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, // third array: offset 6, size 10
+            7, 8, 9, // first array: offset 6, size 3
+        ]));
+        let nulls = Some(NullBuffer::from(vec![true, true, false, true]));
+        let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
+        let result = list_view_reverse(
+            &list_view,
+            &Arc::new(Field::new("test", DataType::Int32, true)),
+        )?;
+        let result = result.as_list_view::<i32>();
+        let reversed = list_view_values(&result);
+        let expected = vec![
+            Some(vec![9, 8, 7]),
+            Some(vec![6, 5, 4, 3, 2]),
+            None,
+            Some(vec![1]),
+        ];
+        assert_eq!(expected, reversed);
+        Ok(())
     }
 }
