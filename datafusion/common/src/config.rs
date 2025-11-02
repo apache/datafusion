@@ -1215,28 +1215,15 @@ impl ConfigField for ConfigOptions {
         }
 
         let (section, rem) = rest.split_once('.').unwrap_or((rest, ""));
+        if rem.is_empty() {
+            return _config_err!("could not find config field for key \"{key}\"");
+        }
+
         match section {
-            "catalog" => {
-                if rem.is_empty() {
-                    self.catalog = CatalogOptions::default();
-                    Ok(())
-                } else {
-                    self.catalog.reset(rem)
-                }
-            }
-            "execution" => {
-                if rem.is_empty() {
-                    self.execution = ExecutionOptions::default();
-                    Ok(())
-                } else {
-                    self.execution.reset(rem)
-                }
-            }
+            "catalog" => self.catalog.reset(rem),
+            "execution" => self.execution.reset(rem),
             "optimizer" => {
-                if rem.is_empty() {
-                    self.optimizer = OptimizerOptions::default();
-                    Ok(())
-                } else if rem == "enable_dynamic_filter_pushdown" {
+                if rem == "enable_dynamic_filter_pushdown" {
                     let defaults = OptimizerOptions::default();
                     self.optimizer.enable_dynamic_filter_pushdown =
                         defaults.enable_dynamic_filter_pushdown;
@@ -1249,30 +1236,9 @@ impl ConfigField for ConfigOptions {
                     self.optimizer.reset(rem)
                 }
             }
-            "explain" => {
-                if rem.is_empty() {
-                    self.explain = ExplainOptions::default();
-                    Ok(())
-                } else {
-                    self.explain.reset(rem)
-                }
-            }
-            "sql_parser" => {
-                if rem.is_empty() {
-                    self.sql_parser = SqlParserOptions::default();
-                    Ok(())
-                } else {
-                    self.sql_parser.reset(rem)
-                }
-            }
-            "format" => {
-                if rem.is_empty() {
-                    self.format = FormatOptions::default();
-                    Ok(())
-                } else {
-                    self.format.reset(rem)
-                }
-            }
+            "explain" => self.explain.reset(rem),
+            "sql_parser" => self.sql_parser.reset(rem),
+            "format" => self.format.reset(rem),
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }
@@ -1681,7 +1647,7 @@ macro_rules! config_field {
                     Ok(())
                 } else {
                     $crate::error::_config_err!(
-                        "Config value \"{}\" not found on {}",
+                        "Cannot reset nested config value \"{}\" on {}",
                         key,
                         stringify!($t)
                     )
@@ -3121,6 +3087,16 @@ mod tests {
             .set("enable_options_value_normalization", "true")
             .unwrap();
         assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn reset_nested_scalar_reports_helpful_error() {
+        let mut value = true;
+        let err = <bool as ConfigField>::reset(&mut value, "nested").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid or Unsupported Configuration: Cannot reset nested config value \"nested\" on bool"
+        );
     }
 
     #[cfg(feature = "parquet")]
