@@ -26,7 +26,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBoundsAccumulator};
+use crate::joins::hash_join::shared_bounds::{
+    ColumnBounds, PushdownStrategy, SharedBuildAccumulator,
+};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
@@ -87,7 +89,8 @@ const HASH_JOIN_SEED: RandomState =
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
-    pub(super) hash_map: Box<dyn JoinHashMapType>,
+    /// Arc is used to allow sharing with SharedBuildAccumulator for hash map pushdown
+    pub(super) hash_map: Arc<dyn JoinHashMapType>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
@@ -104,18 +107,24 @@ pub(super) struct JoinLeftData {
     _reservation: MemoryReservation,
     /// Bounds computed from the build side for dynamic filter pushdown
     pub(super) bounds: Option<Vec<ColumnBounds>>,
+    /// InList values for small build sides (alternative to hash map pushdown)
+    /// Contains unique values from build side for filter pushdown as InList expressions
+    #[allow(dead_code)] // Will be used in future PR for filter pushdown
+    pub(super) membership: PushdownStrategy,
 }
 
 impl JoinLeftData {
     /// Create a new `JoinLeftData` from its parts
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        hash_map: Box<dyn JoinHashMapType>,
+        hash_map: Arc<dyn JoinHashMapType>,
         batch: RecordBatch,
         values: Vec<ArrayRef>,
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
         bounds: Option<Vec<ColumnBounds>>,
+        membership: PushdownStrategy,
     ) -> Self {
         Self {
             hash_map,
@@ -125,6 +134,7 @@ impl JoinLeftData {
             probe_threads_counter,
             _reservation: reservation,
             bounds,
+            membership,
         }
     }
 
@@ -146,6 +156,12 @@ impl JoinLeftData {
     /// returns a reference to the visited indices bitmap
     pub(super) fn visited_indices_bitmap(&self) -> &SharedBitmapBuilder {
         &self.visited_indices_bitmap
+    }
+
+    /// returns a reference to the InList values for filter pushdown
+    #[allow(dead_code)] // Will be used in future PR for filter pushdown
+    pub(super) fn membership(&self) -> &PushdownStrategy {
+        &self.membership
     }
 
     /// Decrements the counter of running threads, and returns `true`
@@ -366,7 +382,7 @@ struct HashJoinExecDynamicFilter {
     filter: Arc<DynamicFilterPhysicalExpr>,
     /// Bounds accumulator to keep track of the min/max bounds on the join keys for each partition.
     /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
-    bounds_accumulator: OnceLock<Arc<SharedBoundsAccumulator>>,
+    bounds_accumulator: OnceLock<Arc<SharedBuildAccumulator>>,
 }
 
 impl fmt::Debug for HashJoinExec {
@@ -988,12 +1004,13 @@ impl ExecutionPlan for HashJoinExec {
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
                     Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
-                        Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
+                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
                             filter,
                             on_right,
+                            RandomState::with_seeds(0, 0, 0, 0), // RepartitionExec's random state
                         ))
                     })))
                 })
@@ -1346,7 +1363,7 @@ impl BuildSideState {
 /// When `should_compute_bounds` is true, this function computes the min/max bounds
 /// for each join key column but does NOT update the dynamic filter. Instead, the
 /// bounds are stored in the returned `JoinLeftData` and later coordinated by
-/// `SharedBoundsAccumulator` to ensure all partitions contribute their bounds
+/// `SharedBuildAccumulator` to ensure all partitions contribute their bounds
 /// before updating the filter exactly once.
 ///
 /// # Returns
@@ -1417,18 +1434,18 @@ async fn collect_left_input(
 
     // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
     // `u64` indice variant
-    let mut hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
+    let mut hashmap: Arc<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
         let estimated_hashtable_size =
             estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;
         reservation.try_grow(estimated_hashtable_size)?;
         metrics.build_mem_used.add(estimated_hashtable_size);
-        Box::new(JoinHashMapU64::with_capacity(num_rows))
+        Arc::new(JoinHashMapU64::with_capacity(num_rows))
     } else {
         let estimated_hashtable_size =
             estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?;
         reservation.try_grow(estimated_hashtable_size)?;
         metrics.build_mem_used.add(estimated_hashtable_size);
-        Box::new(JoinHashMapU32::with_capacity(num_rows))
+        Arc::new(JoinHashMapU32::with_capacity(num_rows))
     };
 
     let mut hashes_buffer = Vec::new();
@@ -1439,10 +1456,13 @@ async fn collect_left_input(
     for batch in batches_iter.clone() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
+        // SAFETY: We just created the Arc and have exclusive ownership at this point
+        let hashmap_mut = Arc::get_mut(&mut hashmap)
+            .expect("Exclusive ownership of hashmap at this point");
         update_hash(
             &on_left,
             batch,
-            &mut *hashmap,
+            hashmap_mut,
             offset,
             &random_state,
             &mut hashes_buffer,
@@ -1495,6 +1515,7 @@ async fn collect_left_input(
         AtomicUsize::new(probe_threads_count),
         reservation,
         bounds,
+        PushdownStrategy::Empty, // TODO: Implement membership pushdown in future PR
     );
 
     Ok(data)
