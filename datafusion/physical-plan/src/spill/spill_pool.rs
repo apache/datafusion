@@ -15,49 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SpillPool: A reusable abstraction for managing spill files with FIFO semantics.
-//!
-//! # Overview
-//!
-//! The `SpillPool` provides a centralized mechanism for spilling record batches to disk
-//! when memory is constrained. It manages a collection of spill files, each containing
-//! multiple batches, with configurable maximum file sizes.
-//!
-//! # Design
-//!
-//! - **FIFO (Queue) semantics**: Batches are read in the order they were spilled
-//! - **File handle reuse**: Multiple batches are written to the same file to minimize syscalls
-//! - **Automatic file rotation**: When a file exceeds `max_file_size_bytes`, rotate to a new file
-//! - **Sequential reading**: Uses IPC Stream format's natural sequential access pattern
-//! - **Automatic cleanup**: Files are deleted once fully consumed
-//!
-//! # Usage Example
-//!
-//! ```ignore
-//! use std::sync::Arc;
-//! use parking_lot::Mutex;
-//!
-//! let pool = SpillPool::new(
-//!     100 * 1024 * 1024,  // 100MB max per file
-//!     spill_manager,
-//! );
-//! let pool = Arc::new(Mutex::new(pool));
-//!
-//! // Spill batches - automatically rotates files when size limit reached
-//! {
-//!     let mut pool = pool.lock();
-//!     pool.push_batch(batch1)?;
-//!     pool.push_batch(batch2)?;
-//!     pool.flush()?;  // Finalize current file
-//!     pool.finalize(); // Signal no more writes
-//! }
-//!
-//! // Read back in FIFO order using a stream
-//! let mut stream = SpillPool::reader(pool);
-//! let batch1 = stream.next().await.unwrap()?;  // Returns batch1
-//! let batch2 = stream.next().await.unwrap()?;  // Returns batch2
-//! // stream.next() returns None after finalize
-//! ```
+//! Spill pool for managing spill files with FIFO semantics.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -76,9 +34,110 @@ use super::spill_manager::SpillManager;
 
 /// A pool of spill files that manages batch-level spilling with FIFO semantics.
 ///
-/// Batches are written sequentially to files, with automatic rotation when the
-/// configured size limit is reached. Reading is done via an infinite stream
-/// that can read concurrently while writes continue.
+/// # Overview
+///
+/// The `SpillPool` provides a centralized mechanism for spilling record batches to disk
+/// when memory is constrained. It manages a collection of spill files, each containing
+/// multiple batches, with configurable maximum file sizes.
+///
+/// # Design
+///
+/// - **FIFO (Queue) semantics**: Batches are read in the order they were spilled
+/// - **File handle reuse**: Multiple batches are written to the same file to minimize syscalls
+/// - **Automatic file rotation**: When a file exceeds `max_file_size_bytes`, rotate to a new file
+/// - **Sequential reading**: Uses IPC Stream format's natural sequential access pattern
+/// - **Automatic cleanup**: Files are deleted once fully consumed
+/// - **Concurrent reading/writing**: Readers can poll and consume batches while writers continue
+///   to spill more data, enabling pipelined processing
+///
+/// # Usage Example
+///
+/// This example demonstrates concurrent reading and writing. Note that the reader can start
+/// polling for batches before the writer has finished, enabling pipelined processing:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use parking_lot::Mutex;
+/// # use arrow::array::{ArrayRef, Int32Array};
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use arrow::record_batch::RecordBatch;
+/// # use datafusion_common::Result;
+/// # use datafusion_execution::runtime_env::RuntimeEnv;
+/// # use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
+/// # use datafusion_physical_plan::SpillManager;
+/// # use datafusion_physical_plan::spill::spill_pool::SpillPool;
+/// # use datafusion_common_runtime::SpawnedTask;
+/// # use futures::StreamExt;
+/// #
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// # // Create test schema and batches
+/// # let schema = Arc::new(Schema::new(vec![
+/// #     Field::new("a", DataType::Int32, false),
+/// # ]));
+/// # let batch1 = RecordBatch::try_new(
+/// #     Arc::clone(&schema),
+/// #     vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+/// # )?;
+/// # let batch2 = RecordBatch::try_new(
+/// #     Arc::clone(&schema),
+/// #     vec![Arc::new(Int32Array::from(vec![4, 5, 6])) as ArrayRef],
+/// # )?;
+/// # let batch3 = RecordBatch::try_new(
+/// #     Arc::clone(&schema),
+/// #     vec![Arc::new(Int32Array::from(vec![7, 8, 9])) as ArrayRef],
+/// # )?;
+/// #
+/// # // Set up spill manager
+/// # let env = Arc::new(RuntimeEnv::default());
+/// # let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+/// # let spill_manager = Arc::new(SpillManager::new(env, metrics, schema));
+/// #
+/// // Create a spill pool
+/// let pool = SpillPool::new(
+///     100 * 1024 * 1024,  // 100MB max per file
+///     spill_manager,
+/// );
+/// let pool = Arc::new(Mutex::new(pool));
+///
+/// // Create a reader that will consume batches as they become available
+/// let stream = SpillPool::reader(pool.clone());
+///
+/// // Spawn a task to write batches concurrently
+/// let writer = SpawnedTask::spawn({
+///     let pool = pool.clone();
+///     async move {
+///         let mut pool = pool.lock();
+///         pool.push_batch(&batch1).unwrap();
+///         pool.push_batch(&batch2).unwrap();
+///         pool.flush().unwrap();  // Finalize current file
+///         pool.push_batch(&batch3).unwrap();
+///         pool.flush().unwrap();  // Flush the last batch
+///         pool.finalize(); // Signal no more writes
+///     }
+/// });
+///
+/// // Reader can start consuming immediately, even while writer is still working
+/// let reader = SpawnedTask::spawn(async move {
+///     let mut batches = vec![];
+///     let mut stream = stream;
+///     while let Some(result) = stream.next().await {
+///         batches.push(result.unwrap());
+///     }
+///     batches
+/// });
+///
+/// // Wait for both tasks to complete
+/// writer.join().await.unwrap();
+/// let batches = reader.join().await.unwrap();
+///
+/// assert_eq!(batches.len(), 3);
+/// assert_eq!(batches[0].num_rows(), 3);
+/// assert_eq!(batches[1].num_rows(), 3);
+/// assert_eq!(batches[2].num_rows(), 3);
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// # Thread Safety
 ///
