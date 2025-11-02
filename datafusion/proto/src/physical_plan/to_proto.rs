@@ -311,11 +311,12 @@ pub fn serialize_physical_expr(
             )),
         })
     } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
+        let list_exprs = expr.list()?;
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
                 protobuf::PhysicalInListNode {
                     expr: Some(Box::new(serialize_physical_expr(expr.expr(), codec)?)),
-                    list: serialize_physical_exprs(expr.list(), codec)?,
+                    list: serialize_physical_exprs(&list_exprs, codec)?,
                     negated: expr.negated(),
                 },
             ))),
