@@ -1061,6 +1061,11 @@ To add named argument support to your Window UDF, use `.with_parameter_names()` 
 use arrow::datatypes::DataType;
 use datafusion_expr::{Signature, Volatility};
 
+#[derive(Debug)]
+struct MyWindowUDF {
+    signature: Signature,
+}
+
 impl MyWindowUDF {
     fn new() -> Self {
         Self {
@@ -1424,9 +1429,11 @@ To add named argument support to your Aggregate UDF, use `.with_parameter_names(
 
 ```rust
 use arrow::datatypes::DataType;
-use datafusion_expr::{Signature, Volatility, AggregateUDFImpl};
+use datafusion_expr::{Signature, Volatility, AggregateUDFImpl, Accumulator};
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_common::Result;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct MyAggregateFunction {
     signature: Signature,
 }
@@ -1452,7 +1459,12 @@ impl AggregateUDFImpl for MyAggregateFunction {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn name(&self) -> &str { "my_aggregate" }
     fn signature(&self) -> &Signature { &self.signature }
-    // ... other required methods
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
+    }
+    fn accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        unimplemented!("accumulator implementation")
+    }
 }
 ```
 
