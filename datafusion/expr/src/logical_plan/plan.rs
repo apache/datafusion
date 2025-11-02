@@ -633,12 +633,15 @@ impl LogicalPlan {
             LogicalPlan::Dml(_) => Ok(self),
             LogicalPlan::Copy(_) => Ok(self),
             LogicalPlan::Values(Values { schema, values }) => {
-                // Using `values` alone cannot compute correct schema for the plan. For example:
+                // We cannot compute the correct schema if we only use values.
+                //
+                // For example, given the following plan:
                 //   Projection: col_1, col_2
                 //     Values: (Float32(1), Float32(10)), (Float32(100), Float32(10))
                 //
-                // Thus, we need to recompute a new schema from `values` and retain some
-                // information from the original schema.
+                // We wouldn't know about `col_1`, and `col_2` if we only relied on `values`.
+                // To correctly recompute the new schema, we also need to retain some information
+                // from the original schema.
                 let new_plan = LogicalPlanBuilder::values(values.clone())?.build()?;
 
                 let qualified_fields = schema
