@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{}", usage);
+        eprintln!("{usage}");
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
