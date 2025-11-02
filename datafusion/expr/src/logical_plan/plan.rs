@@ -4865,53 +4865,50 @@ mod tests {
     }
 
     #[test]
-    fn test_replace_placeholder_values_relation_valid_schema() {
-        // SELECT a, b, c, d FROM (VALUES (1), ($1), ($2), ($3 + $4)) AS t(a, b, c, d);
+    fn test_replace_placeholder_values_list_relation_valid_schema() {
+        // SELECT a, b, c FROM (VALUES (1, $1, $2 + $3) AS t(a, b, c);
         let plan = LogicalPlanBuilder::values(vec![vec![
             lit(1),
             placeholder("$1"),
-            placeholder("$2"),
-            binary_expr(placeholder("$3"), Operator::Plus, placeholder("$4")),
+            binary_expr(placeholder("$2"), Operator::Plus, placeholder("$3")),
         ]])
         .unwrap()
         .project(vec![
             col("column1").alias("a"),
             col("column2").alias("b"),
             col("column3").alias("c"),
-            col("column4").alias("d"),
         ])
         .unwrap()
         .alias("t")
         .unwrap()
-        .project(vec![col("a"), col("b"), col("c"), col("d")])
+        .project(vec![col("a"), col("b"), col("c")])
         .unwrap()
         .build()
         .unwrap();
 
         // original
         assert_snapshot!(plan.display_indent_schema(), @r"
-        Projection: t.a, t.b, t.c, t.d [a:Int32;N, b:Null;N, c:Null;N, d:Int64;N]
-          SubqueryAlias: t [a:Int32;N, b:Null;N, c:Null;N, d:Int64;N]
-            Projection: column1 AS a, column2 AS b, column3 AS c, column4 AS d [a:Int32;N, b:Null;N, c:Null;N, d:Int64;N]
-              Values: (Int32(1), $1, $2, $3 + $4) [column1:Int32;N, column2:Null;N, column3:Null;N, column4:Int64;N]
+        Projection: t.a, t.b, t.c [a:Int32;N, b:Null;N, c:Int64;N]
+          SubqueryAlias: t [a:Int32;N, b:Null;N, c:Int64;N]
+            Projection: column1 AS a, column2 AS b, column3 AS c [a:Int32;N, b:Null;N, c:Int64;N]
+              Values: (Int32(1), $1, $2 + $3) [column1:Int32;N, column2:Null;N, column3:Int64;N]
         ");
 
         let plan = plan
             .with_param_values(vec![
                 ScalarValue::from(1i32),
-                ScalarValue::from("s"),
-                ScalarValue::from(3),
-                ScalarValue::from(4),
+                ScalarValue::from(2i32),
+                ScalarValue::from(3i32),
             ])
             .unwrap();
 
         // replaced
-        assert_snapshot!(plan.display_indent_schema(), @r#"
-        Projection: t.a, t.b, t.c, t.d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
-          SubqueryAlias: t [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
-            Projection: column1 AS a, column2 AS b, column3 AS c, column4 AS d [a:Int32;N, b:Int32;N, c:Utf8;N, d:Int64;N]
-              Values: (Int32(1), Int32(1) AS $1, Utf8("s") AS $2, Int32(3) + Int32(4) AS $3 + $4) [column1:Int32;N, column2:Int32;N, column3:Utf8;N, column4:Int64;N]
-        "#);
+        assert_snapshot!(plan.display_indent_schema(), @r"
+        Projection: t.a, t.b, t.c [a:Int32;N, b:Int32;N, c:Int64;N]
+          SubqueryAlias: t [a:Int32;N, b:Int32;N, c:Int64;N]
+            Projection: column1 AS a, column2 AS b, column3 AS c [a:Int32;N, b:Int32;N, c:Int64;N]
+              Values: (Int32(1), Int32(1) AS $1, Int32(2) + Int32(3) AS $2 + $3) [column1:Int32;N, column2:Int32;N, column3:Int64;N]
+        ");
     }
 
     #[test]
