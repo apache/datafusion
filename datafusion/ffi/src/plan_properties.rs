@@ -23,14 +23,12 @@ use crate::physical_expr::sort::FFI_LexOrdering;
 use abi_stable::std_types::ROption;
 use abi_stable::StableAbi;
 use arrow::datatypes::SchemaRef;
-use datafusion::physical_expr::LexOrdering;
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_expr::EquivalenceProperties,
-    physical_plan::{
-        execution_plan::{Boundedness, EmissionType},
-        PlanProperties,
-    },
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_plan::{
+    execution_plan::{Boundedness, EmissionType},
+    PlanProperties,
 };
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.

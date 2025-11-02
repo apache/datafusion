@@ -1,7 +1,7 @@
 use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
 use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
-use datafusion::physical_expr::{Partitioning, PhysicalExpr};
+use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 use std::sync::Arc;
 
 #[repr(C)]

@@ -22,11 +22,9 @@ use abi_stable::{
     StableAbi,
 };
 
-use datafusion::error::Result;
-use datafusion::{
-    catalog::{TableFunctionImpl, TableProvider},
-    prelude::{Expr, SessionContext},
-};
+use datafusion_common::error::Result;
+use datafusion_catalog::{TableFunctionImpl, TableProvider};
+use datafusion_expr::Expr;
 use datafusion_proto::{
     logical_plan::{
         from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
@@ -35,11 +33,11 @@ use datafusion_proto::{
 };
 use prost::Message;
 use tokio::runtime::Handle;
-
 use crate::{
     df_result, rresult_return,
     table_provider::{FFI_TableProvider, ForeignTableProvider},
 };
+use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
@@ -52,6 +50,8 @@ pub struct FFI_TableFunction {
         udtf: &Self,
         args: RVec<u8>,
     ) -> RResult<FFI_TableProvider, RString>,
+
+    pub function_registry: FFI_WeakFunctionRegistry,
 
     /// Used to create a clone on the provider of the udtf. This should
     /// only need to be called by the receiver of the udtf.
@@ -89,16 +89,17 @@ unsafe extern "C" fn call_fn_wrapper(
     udtf: &FFI_TableFunction,
     args: RVec<u8>,
 ) -> RResult<FFI_TableProvider, RString> {
+    let function_registry = ForeignWeakFunctionRegistry::try_from(&udtf.function_registry)?;
+
     let runtime = udtf.runtime();
     let udtf = udtf.inner();
 
-    let default_ctx = SessionContext::new();
     let codec = DefaultLogicalExtensionCodec {};
 
     let proto_filters = rresult_return!(LogicalExprList::decode(args.as_ref()));
 
     let args =
-        rresult_return!(parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec));
+        rresult_return!(parse_exprs(proto_filters.expr.iter(), &function_registry, &codec));
 
     let table_provider = rresult_return!(udtf.call(&args));
     RResult::ROk(FFI_TableProvider::new(table_provider, false, runtime))
@@ -110,10 +111,11 @@ unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udtf: &FFI_TableFunction) -> FFI_TableFunction {
+    let function_registry = udtf.function_registry.clone();
     let runtime = udtf.runtime();
     let udtf = udtf.inner();
 
-    FFI_TableFunction::new(Arc::clone(udtf), runtime)
+    FFI_TableFunction::new(Arc::clone(udtf), runtime, function_registry)
 }
 
 impl Clone for FFI_TableFunction {
@@ -123,11 +125,13 @@ impl Clone for FFI_TableFunction {
 }
 
 impl FFI_TableFunction {
-    pub fn new(udtf: Arc<dyn TableFunctionImpl>, runtime: Option<Handle>) -> Self {
+    pub fn new(udtf: Arc<dyn TableFunctionImpl>, runtime: Option<Handle>, function_registry: impl Into<FFI_WeakFunctionRegistry>) -> Self {
+        let function_registry = function_registry.into();
         let private_data = Box::new(TableFunctionPrivateData { udtf, runtime });
 
         Self {
             call: call_fn_wrapper,
+            function_registry: function_registry.into(),
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -135,21 +139,21 @@ impl FFI_TableFunction {
     }
 }
 
-impl From<Arc<dyn TableFunctionImpl>> for FFI_TableFunction {
-    fn from(udtf: Arc<dyn TableFunctionImpl>) -> Self {
-        let private_data = Box::new(TableFunctionPrivateData {
-            udtf,
-            runtime: None,
-        });
-
-        Self {
-            call: call_fn_wrapper,
-            clone: clone_fn_wrapper,
-            release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
-        }
-    }
-}
+// impl From<Arc<dyn TableFunctionImpl>> for FFI_TableFunction {
+//     fn from(udtf: Arc<dyn TableFunctionImpl>) -> Self {
+//         let private_data = Box::new(TableFunctionPrivateData {
+//             udtf,
+//             runtime: None,
+//         });
+//
+//         Self {
+//             call: call_fn_wrapper,
+//             clone: clone_fn_wrapper,
+//             release: release_fn_wrapper,
+//             private_data: Box::into_raw(private_data) as *mut c_void,
+//         }
+//     }
+// }
 
 impl Drop for FFI_TableFunction {
     fn drop(&mut self) {
@@ -203,7 +207,7 @@ mod tests {
     use datafusion::{
         catalog::MemTable, common::exec_err, prelude::lit, scalar::ScalarValue,
     };
-
+    use datafusion::prelude::SessionContext;
     use super::*;
 
     #[derive(Debug)]
@@ -288,14 +292,14 @@ mod tests {
     async fn test_round_trip_udtf() -> Result<()> {
         let original_udtf = Arc::new(TestUDTF {}) as Arc<dyn TableFunctionImpl>;
 
+        let ctx = Arc::new(SessionContext::default());
         let local_udtf: FFI_TableFunction =
-            FFI_TableFunction::new(Arc::clone(&original_udtf), None);
+            FFI_TableFunction::new(Arc::clone(&original_udtf), None, Arc::clone(&ctx))?;
 
         let foreign_udf: ForeignTableFunction = local_udtf.into();
 
         let table = foreign_udf.call(&[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
 
-        let ctx = SessionContext::default();
         let _ = ctx.register_table("test-table", table)?;
 
         let returned_batches = ctx.table("test-table").await?.collect().await?;

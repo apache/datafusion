@@ -20,7 +20,7 @@ use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
 use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_common::{exec_datafusion_err, DataFusionError};
 use std::sync::Arc;
 

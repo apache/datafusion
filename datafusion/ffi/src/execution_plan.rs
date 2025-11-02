@@ -21,12 +21,12 @@ use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
-use datafusion::{
-    error::DataFusionError,
-    execution::{SendableRecordBatchStream, TaskContext},
-    physical_plan::{DisplayAs, ExecutionPlan, PlanProperties},
+use datafusion_common::{
+    error::{DataFusionError, Result},
 };
-use datafusion::{error::Result, physical_plan::DisplayFormatType};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
+use datafusion_physical_plan::DisplayFormatType;
 use tokio::runtime::Handle;
 
 use crate::{

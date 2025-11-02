@@ -19,7 +19,7 @@ use crate::expr::interval::FFI_Interval;
 use crate::expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8};
 use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
-use datafusion::logical_expr::statistics::{
+use datafusion_expr::statistics::{
     BernoulliDistribution, Distribution, ExponentialDistribution, GaussianDistribution,
     GenericDistribution, UniformDistribution,
 };

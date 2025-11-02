@@ -30,10 +30,10 @@ use arrow::{
     error::ArrowError,
     ffi::to_ffi,
 };
-use datafusion::{
+use datafusion_common::{
     error::{DataFusionError, Result},
-    logical_expr::{EmitTo, GroupsAccumulator},
 };
+use datafusion_expr::{EmitTo, GroupsAccumulator};
 
 /// A stable struct for sharing [`GroupsAccumulator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function

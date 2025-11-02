@@ -24,15 +24,8 @@ use abi_stable::{
 use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{Session, TableProvider},
-    datasource::TableType,
-    error::DataFusionError,
-    execution::{session_state::SessionStateBuilder, TaskContext},
-    logical_expr::{logical_plan::dml::InsertOp, TableProviderFilterPushDown},
-    physical_plan::ExecutionPlan,
-    prelude::{Expr, SessionContext},
-};
+use datafusion_catalog::{Session, TableProvider};
+
 use datafusion_proto::{
     logical_plan::{
         from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
@@ -55,6 +48,12 @@ use super::{
     session_config::FFI_SessionConfig,
 };
 use datafusion::error::Result;
+use datafusion_common::DataFusionError;
+use datafusion_execution::TaskContext;
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion_physical_plan::ExecutionPlan;
+use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 ///
@@ -143,6 +142,8 @@ pub struct FFI_TableProvider {
             insert_op: FFI_InsertOp,
         ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
 
+    pub function_registry: FFI_WeakFunctionRegistry,
+
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
@@ -185,8 +186,8 @@ unsafe extern "C" fn table_type_fn_wrapper(
 fn supports_filters_pushdown_internal(
     provider: &Arc<dyn TableProvider + Send>,
     filters_serialized: &[u8],
+    function_registry: &ForeignWeakFunctionRegistry,
 ) -> Result<RVec<FFI_TableProviderFilterPushDown>> {
-    let default_ctx = SessionContext::new();
     let codec = DefaultLogicalExtensionCodec {};
 
     let filters = match filters_serialized.is_empty() {
@@ -195,7 +196,7 @@ fn supports_filters_pushdown_internal(
             let proto_filters = LogicalExprList::decode(filters_serialized)
                 .map_err(|e| DataFusionError::Plan(e.to_string()))?;
 
-            parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec)?
+            parse_exprs(proto_filters.expr.iter(), function_registry, &codec)?
         }
     };
     let filters_borrowed: Vec<&Expr> = filters.iter().collect();
@@ -213,38 +214,41 @@ unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
 ) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
+    let function_registry = rresult_return!(ForeignWeakFunctionRegistry::try_from(&provider.function_registry));
     let private_data = provider.private_data as *const ProviderPrivateData;
     let provider = &(*private_data).provider;
 
-    supports_filters_pushdown_internal(provider, &filters_serialized)
+    supports_filters_pushdown_internal(provider, &filters_serialized, &function_registry)
         .map_err(|e| e.to_string().into())
         .into()
 }
 
 unsafe extern "C" fn scan_fn_wrapper(
     provider: &FFI_TableProvider,
-    session_config: &FFI_SessionConfig,
+    session: &FFI_Session,
     projections: RVec<usize>,
     filters_serialized: RVec<u8>,
     limit: ROption<usize>,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+    let function_registry = ForeignWeakFunctionRegistry::try_from(&provider.function_registry);
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
     let session_config = session_config.clone();
     let runtime = &(*private_data).runtime;
 
     async move {
+        let function_registry = rresult_return!(function_registry);
         let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
-        let session = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(config.0)
-            .build();
-        let ctx = SessionContext::new_with_state(session);
+        // let session = SessionStateBuilder::new()
+        //     .with_default_features()
+        //     .with_config(config.0)
+        //     .build();
+        // let ctx = SessionContext::new_with_state(session);
 
         let filters = match filters_serialized.is_empty() {
             true => vec![],
             false => {
-                let default_ctx = SessionContext::new();
+                // let default_ctx = SessionContext::new();
                 let codec = DefaultLogicalExtensionCodec {};
 
                 let proto_filters =
@@ -252,7 +256,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 
                 rresult_return!(parse_exprs(
                     proto_filters.expr.iter(),
-                    &default_ctx,
+                    &function_registry,
                     &codec
                 ))
             }

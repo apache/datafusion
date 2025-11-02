@@ -26,11 +26,11 @@ use arrow::{
     ffi::FFI_ArrowSchema,
 };
 use arrow_schema::FieldRef;
-use datafusion::{
+use datafusion_common::{
     error::{DataFusionError, Result},
-    logical_expr::function::PartitionEvaluatorArgs,
-    physical_plan::{expressions::Column, PhysicalExpr},
 };
+use datafusion_expr::function::PartitionEvaluatorArgs;
+use datafusion_physical_plan::{expressions::Column, PhysicalExpr};
 
 /// A stable struct for sharing [`PartitionEvaluatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function

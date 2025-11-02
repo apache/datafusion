@@ -23,18 +23,14 @@ use abi_stable::{
 };
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{SchemaProvider, TableProvider},
-    error::DataFusionError,
-};
+use datafusion_catalog::{SchemaProvider, TableProvider};
+use datafusion_common::error::{DataFusionError, Result};
 use tokio::runtime::Handle;
 
 use crate::{
     df_result, rresult_return,
     table_provider::{FFI_TableProvider, ForeignTableProvider},
 };
-
-use datafusion::error::Result;
 
 /// A stable struct for sharing [`SchemaProvider`] across FFI boundaries.
 #[repr(C)]

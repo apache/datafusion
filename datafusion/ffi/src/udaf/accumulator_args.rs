@@ -26,11 +26,11 @@ use abi_stable::{
 };
 use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
-use datafusion::{
+use datafusion_common::{
     error::DataFusionError,
-    logical_expr::function::AccumulatorArgs,
-    physical_expr::{PhysicalExpr, PhysicalSortExpr},
 };
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 /// A stable struct for sharing [`AccumulatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding field

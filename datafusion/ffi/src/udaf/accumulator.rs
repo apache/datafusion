@@ -22,11 +22,11 @@ use abi_stable::{
     StableAbi,
 };
 use arrow::{array::ArrayRef, error::ArrowError};
-use datafusion::{
+use datafusion_common::{
     error::{DataFusionError, Result},
-    logical_expr::Accumulator,
     scalar::ScalarValue,
 };
+use datafusion_expr::Accumulator;
 use prost::Message;
 
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};

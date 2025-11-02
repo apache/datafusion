@@ -18,7 +18,7 @@
 use crate::expr::interval::FFI_Interval;
 use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
-use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_common::DataFusionError;
 
 #[repr(C)]
