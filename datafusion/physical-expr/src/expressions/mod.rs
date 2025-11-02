@@ -46,7 +46,7 @@ pub use cast_column::CastColumnExpr;
 pub use column::{col, with_new_schema, Column};
 pub use datafusion_expr::utils::format_state_name;
 pub use dynamic_filters::DynamicFilterPhysicalExpr;
-pub use in_list::{in_list, InListExpr};
+pub use in_list::{in_list, in_list_from_array, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
 pub use like::{like, LikeExpr};

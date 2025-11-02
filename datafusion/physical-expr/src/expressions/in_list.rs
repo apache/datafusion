@@ -806,7 +806,6 @@ pub fn in_list(
 ///
 /// # Errors
 /// Returns an error if the array type is not supported for `InList` expressions or if we cannot build a hash based lookup.
-#[allow(dead_code)]
 pub fn in_list_from_array(
     expr: Arc<dyn PhysicalExpr>,
     array: ArrayRef,
