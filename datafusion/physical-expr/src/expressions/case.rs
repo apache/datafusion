@@ -2154,7 +2154,7 @@ mod tests {
             PartialResultIndex::try_new(2).unwrap(),
         ];
 
-        let merged = merge(&vec![a1, a2, a3], &indices).unwrap();
+        let merged = merge(&[a1, a2, a3], &indices).unwrap();
         let merged = merged.as_string::<i32>();
 
         assert_eq!(merged.len(), indices.len());
