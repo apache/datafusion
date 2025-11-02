@@ -19,7 +19,10 @@
 
 use std::{borrow::Cow, sync::Arc};
 
-use crate::metrics::{value::PruningMetrics, MetricType};
+use crate::metrics::{
+    value::{PruningMetrics, RatioMetrics},
+    MetricType,
+};
 
 use super::{
     Count, ExecutionPlanMetricsSet, Gauge, Label, Metric, MetricValue, Time, Timestamp,
@@ -264,5 +267,19 @@ impl<'a> MetricBuilder<'a> {
                 pruning_metrics: pruning_metrics.clone(),
             });
         pruning_metrics
+    }
+
+    /// Consumes self and creates a new [`RatioMetrics`]
+    pub fn ratio_metrics(
+        self,
+        name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> RatioMetrics {
+        let ratio_metrics = RatioMetrics::new();
+        self.with_partition(partition).build(MetricValue::Ratio {
+            name: name.into(),
+            ratio_metrics: ratio_metrics.clone(),
+        });
+        ratio_metrics
     }
 }
