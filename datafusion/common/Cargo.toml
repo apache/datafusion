@@ -81,6 +81,11 @@ web-time = "1.1.0"
 
 [dev-dependencies]
 chrono = { workspace = true }
+criterion = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
 sqlparser = { workspace = true }
+
+[[bench]]
+name = "hash_utils"
+harness = false
