@@ -17,9 +17,6 @@
 
 //! Functionality used both on logical and physical plans
 
-#[cfg(not(feature = "force_hash_collisions"))]
-use std::sync::Arc;
-
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
@@ -215,12 +212,11 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
     // redundant hashing for large dictionary elements (e.g. strings)
-    let dict_values = Arc::clone(array.values());
+    let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
-    create_hashes(&[dict_values], random_state, &mut dict_hashes)?;
+    create_hashes_from_arrays(&[dict_values.as_ref()], random_state, &mut dict_hashes)?;
 
     // combine hash for each index in values
-    let dict_values = array.values();
     for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
         if let Some(key) = key {
             let idx = key.as_usize();
@@ -253,7 +249,8 @@ fn hash_struct_array(
 
     // Create hashes for each row that combines the hashes over all the column at that row.
     let mut values_hashes = vec![0u64; row_len];
-    create_hashes(array.columns(), random_state, &mut values_hashes)?;
+    let columns: Vec<&dyn Array> = array.columns().iter().map(|a| a.as_ref()).collect();
+    create_hashes_from_arrays(&columns, random_state, &mut values_hashes)?;
 
     for i in valid_row_indices {
         let hash = &mut hashes_buffer[i];
@@ -275,7 +272,8 @@ fn hash_map_array(
 
     // Create hashes for each entry in each row
     let mut values_hashes = vec![0u64; array.entries().len()];
-    create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
+    let columns: Vec<&dyn Array> = array.entries().columns().iter().map(|a| a.as_ref()).collect();
+    create_hashes_from_arrays(&columns, random_state, &mut values_hashes)?;
 
     // Combine the hashes for entries on each row with each other and previous hash for that row
     if let Some(nulls) = nulls {
@@ -308,11 +306,11 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let values = Arc::clone(array.values());
+    let values = array.values();
     let offsets = array.value_offsets();
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
-    create_hashes(&[values], random_state, &mut values_hashes)?;
+    create_hashes_from_arrays(&[values.as_ref()], random_state, &mut values_hashes)?;
     if let Some(nulls) = nulls {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             if nulls.is_valid(i) {
@@ -339,11 +337,11 @@ fn hash_fixed_list_array(
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
-    let values = Arc::clone(array.values());
+    let values = array.values();
     let value_length = array.value_length() as usize;
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
-    create_hashes(&[values], random_state, &mut values_hashes)?;
+    create_hashes_from_arrays(&[values.as_ref()], random_state, &mut values_hashes)?;
     if let Some(nulls) = nulls {
         for i in 0..array.len() {
             if nulls.is_valid(i) {
@@ -366,35 +364,21 @@ fn hash_fixed_list_array(
     Ok(())
 }
 
-/// Test version of `create_hashes` that produces the same value for
-/// all hashes (to test collisions)
-///
-/// See comments on `hashes_buffer` for more details
-#[cfg(feature = "force_hash_collisions")]
-pub fn create_hashes<'a>(
-    _arrays: &[ArrayRef],
-    _random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
-) -> Result<&'a mut Vec<u64>> {
-    for hash in hashes_buffer.iter_mut() {
-        *hash = 0
-    }
-    Ok(hashes_buffer)
-}
-
 /// Creates hash values for every row, based on the values in the
 /// columns.
 ///
 /// The number of rows to hash is determined by `hashes_buffer.len()`.
 /// `hashes_buffer` should be pre-sized appropriately
+///
+/// This function accepts array references directly, avoiding the need to
+/// wrap arrays in `Arc` at the call site.
 #[cfg(not(feature = "force_hash_collisions"))]
-pub fn create_hashes<'a>(
-    arrays: &[ArrayRef],
+pub fn create_hashes_from_arrays<'a>(
+    arrays: &[&dyn Array],
     random_state: &RandomState,
     hashes_buffer: &'a mut Vec<u64>,
 ) -> Result<&'a mut Vec<u64>> {
-    for (i, col) in arrays.iter().enumerate() {
-        let array = col.as_ref();
+    for (i, &array) in arrays.iter().enumerate() {
         // combine hashes with `combine_hashes` for all columns besides the first
         let rehash = i >= 1;
         downcast_primitive_array! {
@@ -439,10 +423,57 @@ pub fn create_hashes<'a>(
                 // This is internal because we should have caught this before.
                 return _internal_err!(
                     "Unsupported data type in hasher: {}",
-                    col.data_type()
+                    array.data_type()
                 );
             }
         }
+    }
+    Ok(hashes_buffer)
+}
+
+/// Test version of `create_hashes_from_arrays` that produces the same value for
+/// all hashes (to test collisions)
+///
+/// See comments on `hashes_buffer` for more details.
+#[cfg(feature = "force_hash_collisions")]
+pub fn create_hashes_from_arrays<'a>(
+    _arrays: &[&dyn Array],
+    _random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    Ok(hashes_buffer)
+}
+
+/// Creates hash values for every row, based on the values in the
+/// columns.
+///
+/// The number of rows to hash is determined by `hashes_buffer.len()`.
+/// `hashes_buffer` should be pre-sized appropriately
+#[cfg(not(feature = "force_hash_collisions"))]
+pub fn create_hashes<'a>(
+    arrays: &[ArrayRef],
+    random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    let array_refs: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+    create_hashes_from_arrays(&array_refs, random_state, hashes_buffer)
+}
+
+/// Test version of `create_hashes` that produces the same value for
+/// all hashes (to test collisions)
+///
+/// See comments on `hashes_buffer` for more details.
+#[cfg(feature = "force_hash_collisions")]
+pub fn create_hashes<'a>(
+    _arrays: &[ArrayRef],
+    _random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
     }
     Ok(hashes_buffer)
 }

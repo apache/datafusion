@@ -17,8 +17,6 @@
 
 //! Hash computation and hash table lookup expressions for dynamic filtering
 
-#![allow(dead_code)] // Will be used in future PR for filter pushdown
-
 use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
 
 use ahash::RandomState;
