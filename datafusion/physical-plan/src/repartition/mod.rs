@@ -418,6 +418,10 @@ enum BatchPartitionerState {
     },
 }
 
+/// Fixed seed used for hash repartitioning to ensure consistent behavior across
+/// executions and runs.
+pub const REPARTITION_HASH_SEED: [u64; 4] = [0u64; 4];
+
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
     ///
@@ -434,7 +438,12 @@ impl BatchPartitioner {
                 exprs,
                 num_partitions,
                 // Use fixed random hash
-                random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
+                random_state: ahash::RandomState::with_seeds(
+                    REPARTITION_HASH_SEED[0],
+                    REPARTITION_HASH_SEED[1],
+                    REPARTITION_HASH_SEED[2],
+                    REPARTITION_HASH_SEED[3],
+                ),
                 hash_buffer: vec![],
             },
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
