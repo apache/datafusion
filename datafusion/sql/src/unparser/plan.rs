@@ -81,8 +81,9 @@ use std::{sync::Arc, vec};
 ///     .unwrap()
 ///     .build()
 ///     .unwrap();
-/// let sql = plan_to_sql(&plan).unwrap(); // convert to AST
-///                                        // use the Display impl to convert to SQL text
+/// // convert to AST
+/// let sql = plan_to_sql(&plan).unwrap();
+/// // use the Display impl to convert to SQL text
 /// assert_eq!(
 ///     sql.to_string(),
 ///     "SELECT \"table\".id, \"table\".\"value\" FROM \"table\""
