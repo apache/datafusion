@@ -85,7 +85,9 @@ use super::spill_manager::SpillManager;
 /// `SpillPool` is not thread-safe and should be used from a single thread or
 /// protected with appropriate synchronization (e.g., `Arc<Mutex<SpillPool>>`).
 pub struct SpillPool {
-    /// Maximum size in bytes before rotating to a new file
+    /// Maximum size in bytes before rotating to a new file.
+    /// Typically initialized from the configuration option
+    /// `datafusion.execution.max_spill_file_size_bytes`.
     max_file_size_bytes: usize,
     /// Queue of spill files (front = oldest, back = newest)
     files: VecDeque<RefCountedTempFile>,
