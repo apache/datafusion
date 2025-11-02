@@ -215,12 +215,11 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
     // redundant hashing for large dictionary elements (e.g. strings)
-    let dict_values = Arc::clone(array.values());
+    let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
-    create_hashes(&[dict_values], random_state, &mut dict_hashes)?;
+    create_hashes_from_arrays(&[dict_values.as_ref()], random_state, &mut dict_hashes)?;
 
     // combine hash for each index in values
-    let dict_values = array.values();
     for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
         if let Some(key) = key {
             let idx = key.as_usize();
@@ -253,7 +252,8 @@ fn hash_struct_array(
 
     // Create hashes for each row that combines the hashes over all the column at that row.
     let mut values_hashes = vec![0u64; row_len];
-    create_hashes(array.columns(), random_state, &mut values_hashes)?;
+    let columns: Vec<&dyn Array> = array.columns().iter().map(|a| a.as_ref()).collect();
+    create_hashes_from_arrays(&columns, random_state, &mut values_hashes)?;
 
     for i in valid_row_indices {
         let hash = &mut hashes_buffer[i];
@@ -275,7 +275,8 @@ fn hash_map_array(
 
     // Create hashes for each entry in each row
     let mut values_hashes = vec![0u64; array.entries().len()];
-    create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
+    let columns: Vec<&dyn Array> = array.entries().columns().iter().map(|a| a.as_ref()).collect();
+    create_hashes_from_arrays(&columns, random_state, &mut values_hashes)?;
 
     // Combine the hashes for entries on each row with each other and previous hash for that row
     if let Some(nulls) = nulls {
@@ -308,11 +309,11 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let values = Arc::clone(array.values());
+    let values = array.values();
     let offsets = array.value_offsets();
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
-    create_hashes(&[values], random_state, &mut values_hashes)?;
+    create_hashes_from_arrays(&[values.as_ref()], random_state, &mut values_hashes)?;
     if let Some(nulls) = nulls {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             if nulls.is_valid(i) {
@@ -339,11 +340,11 @@ fn hash_fixed_list_array(
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
-    let values = Arc::clone(array.values());
+    let values = array.values();
     let value_length = array.value_length() as usize;
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
-    create_hashes(&[values], random_state, &mut values_hashes)?;
+    create_hashes_from_arrays(&[values.as_ref()], random_state, &mut values_hashes)?;
     if let Some(nulls) = nulls {
         for i in 0..array.len() {
             if nulls.is_valid(i) {
