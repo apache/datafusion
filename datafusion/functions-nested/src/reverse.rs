@@ -22,7 +22,7 @@ use arrow::array::{
     Array, ArrayRef, Capacities, FixedSizeListArray, GenericListArray,
     GenericListViewArray, MutableArrayData, OffsetSizeTrait, UInt32Array,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::take;
 use arrow::datatypes::DataType::{
     FixedSizeList, LargeList, LargeListView, List, ListView, Null,
@@ -149,7 +149,7 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
+fn general_array_reverse<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
@@ -199,8 +199,10 @@ fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     array: &GenericListViewArray<O>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
-    let (_, offsets, sizes, values, nulls) = array.clone().into_parts();
-
+    let offsets = array.offsets();
+    let values = array.values();
+    let sizes = array.sizes();
+    let nulls = array.nulls();
     // Construct indices, sizes and offsets for the reversed array by iterating over
     // the list view array in the logical order, and reversing the order of the elements.
     // We end up with a list view array where the elements are in order,
@@ -208,20 +210,15 @@ fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     let mut indices: Vec<O> = Vec::with_capacity(values.len());
     let mut new_sizes = Vec::with_capacity(sizes.len());
     let mut new_offsets: Vec<O> = Vec::with_capacity(offsets.len());
-    let mut new_nulls =
-        Vec::with_capacity(nulls.clone().map(|nulls| nulls.len()).unwrap_or(0));
+    // Add the offset of the first array
     new_offsets.push(O::zero());
-    let has_nulls = nulls.is_some();
-    for (i, offset) in offsets.iter().enumerate().take(offsets.len()) {
+    for (i, offset) in offsets.iter().enumerate() {
         // If this array is null, we set the new array to null with size 0 and continue
-        if let Some(ref nulls) = nulls {
+        if let Some(nulls) = nulls {
             if nulls.is_null(i) {
-                new_nulls.push(false); // null
                 new_sizes.push(O::zero());
                 new_offsets.push(new_offsets[i]);
                 continue;
-            } else {
-                new_nulls.push(true); // valid
             }
         }
 
@@ -232,6 +229,8 @@ fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
             indices.push(O::usize_as(idx));
         }
         new_sizes.push(sizes[i]);
+
+        // If there is another array, we add the offset of that array
         if i < sizes.len() - 1 {
             new_offsets.push(new_offsets[i] + sizes[i]);
         }
@@ -260,7 +259,7 @@ fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
         ScalarBuffer::from(new_offsets),
         ScalarBuffer::from(new_sizes),
         values_reversed,
-        has_nulls.then_some(NullBuffer::from(new_nulls)),
+        array.nulls().cloned(),
     )?))
 }
 
@@ -315,7 +314,7 @@ mod tests {
     use datafusion_common::Result;
     use std::sync::Arc;
 
-    fn list_view_values<O: OffsetSizeTrait + TryFrom<i64>>(
+    fn list_view_values<O: OffsetSizeTrait>(
         array: &GenericListViewArray<O>,
     ) -> Vec<Option<Vec<i32>>> {
         array
