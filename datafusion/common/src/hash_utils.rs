@@ -17,9 +17,6 @@
 
 //! Functionality used both on logical and physical plans
 
-#[cfg(not(feature = "force_hash_collisions"))]
-use std::sync::Arc;
-
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
