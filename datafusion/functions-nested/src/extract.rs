@@ -32,6 +32,7 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::cast::{
     as_int64_array, as_large_list_view_array, as_list_view_array,
 };
+use datafusion_common::internal_err;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
@@ -703,6 +704,12 @@ where
     let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
+    let field = match array.data_type() {
+        ListView(field) | LargeListView(field) => Arc::clone(field),
+        other => {
+            return internal_err!("array_slice got unexpected data type: {}", other);
+        }
+    };
 
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
@@ -775,15 +782,6 @@ where
     }
 
     let data = mutable.freeze();
-    let field = match array.data_type() {
-        ListView(field) | LargeListView(field) => Arc::clone(field),
-        other => {
-            return Err(internal_datafusion_err!(
-                "array_slice got unexpected data type: {}",
-                other
-            ));
-        }
-    };
 
     Ok(Arc::new(GenericListViewArray::<O>::try_new(
         field,
