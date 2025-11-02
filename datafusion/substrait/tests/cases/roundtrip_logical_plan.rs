@@ -1258,7 +1258,10 @@ async fn roundtrip_values() -> Result<()> {
 async fn roundtrip_values_no_columns() -> Result<()> {
     let ctx = create_context().await?;
     // "VALUES ()" is not yet supported by the SQL parser, so we construct the plan manually
-    let plan = LogicalPlanBuilder::values(vec![vec![], vec![]])?.build()?;
+    let plan = LogicalPlanBuilder::values(
+        vec![vec![], vec![]], // two rows, no columns
+    )?
+    .build()?;
     roundtrip_logical_plan_with_ctx(plan, ctx).await?;
     Ok(())
 }
