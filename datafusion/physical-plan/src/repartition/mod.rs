@@ -31,7 +31,6 @@ use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
-use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
 use crate::repartition::distributor_channels::{
@@ -46,6 +45,7 @@ use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
 use datafusion_common::{internal_err, ColumnStatistics, HashMap};
@@ -394,10 +394,7 @@ impl BatchPartitioner {
 
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
-
-                    let array_refs: Vec<&dyn Array> =
-                        arrays.iter().map(|a| a.as_ref()).collect();
-                    create_hashes_from_arrays(&array_refs, random_state, hash_buffer)?;
+                    create_hashes(&arrays, random_state, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| Vec::with_capacity(batch.num_rows()))

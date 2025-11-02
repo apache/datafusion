@@ -1515,7 +1515,7 @@ mod tests {
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
     use arrow_schema::Schema;
-    use datafusion_common::hash_utils::create_hashes;
+    use datafusion_common::hash_utils::create_hashes_from_arrays;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,

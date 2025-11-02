@@ -23,7 +23,7 @@ use ahash::RandomState;
 use arrow::array::cast::AsArray;
 use arrow::array::{Array, ArrayBuilder, ArrayRef, GenericByteViewBuilder};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
-use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::hash_utils::create_hashes_from_arrays;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
 use std::sync::Arc;

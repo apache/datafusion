@@ -1681,9 +1681,7 @@ pub fn update_hash(
         .collect::<Result<Vec<_>>>()?;
 
     // calculate the hash values
-    let array_refs: Vec<&dyn Array> = keys_values.iter().map(|a| a.as_ref()).collect();
-    let hash_values =
-        create_hashes_from_arrays(&array_refs, random_state, hashes_buffer)?;
+    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
     hash_map.extend_zero(batch.num_rows());

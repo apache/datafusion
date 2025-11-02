@@ -27,7 +27,7 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::hash_utils::create_hashes_from_arrays;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::any::type_name;
 use std::fmt::Debug;

@@ -338,8 +338,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
-        let array_refs: Vec<&dyn Array> = cols.iter().map(|a| a.as_ref()).collect();
-        create_hashes_from_arrays(&array_refs, &self.random_state, batch_hashes)?;
+        create_hashes(cols, &self.random_state, batch_hashes)?;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self
@@ -441,8 +440,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         let mut batch_hashes = mem::take(&mut self.hashes_buffer);
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
-        let array_refs: Vec<&dyn Array> = cols.iter().map(|a| a.as_ref()).collect();
-        create_hashes_from_arrays(&array_refs, &self.random_state, &mut batch_hashes)?;
+        create_hashes(cols, &self.random_state, &mut batch_hashes)?;
 
         // General steps for one round `vectorized equal_to & append`:
         //   1. Collect vectorized context by checking hash values of `cols` in `map`,
