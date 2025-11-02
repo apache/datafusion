@@ -24,7 +24,9 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::joins::hash_join::exec::JoinLeftData;
-use crate::joins::hash_join::shared_bounds::SharedBuildAccumulator;
+use crate::joins::hash_join::shared_bounds::{
+    PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
+};
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
 };
@@ -207,10 +209,10 @@ pub(super) struct HashJoinStream {
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
     /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
-    bounds_accumulator: Option<Arc<SharedBuildAccumulator>>,
+    build_accumulator: Option<Arc<SharedBuildAccumulator>>,
     /// Optional future to signal when bounds have been reported by all partitions
     /// and the dynamic filter has been updated
-    bounds_waiter: Option<OnceFut<()>>,
+    build_waiter: Option<OnceFut<()>>,
 
     /// Partitioning mode to use
     mode: PartitionMode,
@@ -315,7 +317,7 @@ impl HashJoinStream {
         batch_size: usize,
         hashes_buffer: Vec<u64>,
         right_side_ordered: bool,
-        bounds_accumulator: Option<Arc<SharedBuildAccumulator>>,
+        build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
     ) -> Self {
         Self {
@@ -334,8 +336,8 @@ impl HashJoinStream {
             batch_size,
             hashes_buffer,
             right_side_ordered,
-            bounds_accumulator,
-            bounds_waiter: None,
+            build_accumulator,
+            build_waiter: None,
             mode,
         }
     }
@@ -383,7 +385,7 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        if let Some(ref mut fut) = self.bounds_waiter {
+        if let Some(ref mut fut) = self.build_waiter {
             ready!(fut.get_shared(cx))?;
         }
         self.state = HashJoinStreamState::FetchProbeBatch;
@@ -406,24 +408,41 @@ impl HashJoinStream {
             .get_shared(cx))?;
         build_timer.done();
 
-        // Handle dynamic filter bounds accumulation
+        // Handle dynamic filter build-side information accumulation
         //
         // Dynamic filter coordination between partitions:
-        // Report bounds to the accumulator which will handle synchronization and filter updates
-        if let Some(ref bounds_accumulator) = self.bounds_accumulator {
-            let bounds_accumulator = Arc::clone(bounds_accumulator);
-
+        // Report hash maps (Partitioned mode) or bounds (CollectLeft mode) to the accumulator
+        // which will handle synchronization and filter updates
+        if let Some(ref build_accumulator) = self.build_accumulator {
+            let build_accumulator = Arc::clone(build_accumulator);
             let left_side_partition_id = match self.mode {
                 PartitionMode::Partitioned => self.partition,
                 PartitionMode::CollectLeft => 0,
                 PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
             };
-
-            let left_data_bounds = left_data.bounds.clone();
-            self.bounds_waiter = Some(OnceFut::new(async move {
-                bounds_accumulator
-                    .report_partition_bounds(left_side_partition_id, left_data_bounds)
-                    .await
+            // Determine pushdown strategy based on availability of InList values
+            let pushdown = left_data.membership().clone();
+            // Construct the appropriate build data enum variant based on partition mode
+            let build_data = match self.mode {
+                PartitionMode::Partitioned => PartitionBuildData::Partitioned {
+                    partition_id: left_side_partition_id,
+                    pushdown,
+                    bounds: PartitionBounds::new(
+                        left_data.bounds.clone().unwrap_or_default(),
+                    ),
+                },
+                PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
+                    pushdown,
+                    bounds: PartitionBounds::new(
+                        left_data.bounds.clone().unwrap_or_default(),
+                    ),
+                },
+                PartitionMode::Auto => unreachable!(
+                    "PartitionMode::Auto should not be present at execution time"
+                ),
+            };
+            self.build_waiter = Some(OnceFut::new(async move {
+                build_accumulator.report_build_data(build_data).await
             }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
         } else {
