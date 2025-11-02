@@ -31,6 +31,7 @@ use crate::joins::utils::{
 use crate::joins::PartitionMode;
 use crate::{
     handle_state,
+    hash_utils::create_hashes,
     joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
@@ -44,7 +45,6 @@ use crate::{
 use arrow::array::{ArrayRef, UInt32Array, UInt64Array};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{
     internal_datafusion_err, internal_err, JoinSide, JoinType, NullEquality, Result,
 };

@@ -3454,8 +3454,8 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; left.num_rows()];
-        let left_col = left.columns()[0].clone();
-        let hashes = create_hashes_from_arrays(&[&left_col], &random_state, hashes_buff)?;
+        let left_col = left.columns()[0].as_ref();
+        let hashes = create_hashes_from_arrays(&[left_col], &random_state, hashes_buff)?;
 
         // Maps both values to both indices (1 and 2, representing input 0 and 1)
         // 0 -> (0, 1)
@@ -3522,8 +3522,8 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; left.num_rows()];
-        let left_col = left.columns()[0].clone();
-        let hashes = create_hashes_from_arrays(&[&left_col], &random_state, hashes_buff)?;
+        let left_col = left.columns()[0].as_ref();
+        let hashes = create_hashes_from_arrays(&[left_col], &random_state, hashes_buff)?;
 
         hashmap_left.insert_unique(hashes[0], (hashes[0], 1u32), |(h, _)| *h);
         hashmap_left.insert_unique(hashes[0], (hashes[0], 2u32), |(h, _)| *h);

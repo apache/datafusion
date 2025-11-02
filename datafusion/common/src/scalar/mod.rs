@@ -830,19 +830,19 @@ impl Hash for ScalarValue {
                 v.hash(state)
             }
             List(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(arr.as_ref(), state);
             }
             LargeList(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(arr.as_ref(), state);
             }
             FixedSizeList(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(arr.as_ref(), state);
             }
             Struct(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(arr.as_ref(), state);
             }
             Map(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(arr.as_ref(), state);
             }
             Date32(v) => v.hash(state),
             Date64(v) => v.hash(state),
@@ -876,12 +876,12 @@ impl Hash for ScalarValue {
     }
 }
 
-fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
+fn hash_nested_array<H: Hasher>(arr: &dyn Array, state: &mut H) {
     let len = arr.len();
     let hashes_buffer = &mut vec![0; len];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
     let hashes =
-        create_hashes_from_arrays(&[&arr], &random_state, hashes_buffer).unwrap();
+        create_hashes_from_arrays(&[arr], &random_state, hashes_buffer).unwrap();
     // Hash back to std::hash::Hasher
     hashes.hash(state);
 }
