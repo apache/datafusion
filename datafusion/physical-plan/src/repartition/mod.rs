@@ -472,10 +472,10 @@ impl BatchPartitioner {
 ///        │                  │                  │
 ///        │                  │                  │
 ///        │                  │                  │
-///┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-///│    GroupBy    │  │    GroupBy    │  │    GroupBy    │
-///│   (Partial)   │  │   (Partial)   │  │   (Partial)   │
-///└───────────────┘  └───────────────┘  └───────────────┘
+/// ┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+/// │    GroupBy    │  │    GroupBy    │  │    GroupBy    │
+/// │   (Partial)   │  │   (Partial)   │  │   (Partial)   │
+/// └───────────────┘  └───────────────┘  └───────────────┘
 ///        ▲                  ▲                  ▲
 ///        └──────────────────┼──────────────────┘
 ///                           │
@@ -494,7 +494,7 @@ impl BatchPartitioner {
 ///     ╲               ╱           ╲               ╱
 ///      '─.         ,─'             '─.         ,─'
 ///         `───────'                   `───────'
-///```
+/// ```
 ///
 /// # Error Handling
 ///
@@ -2154,7 +2154,6 @@ mod test {
     ///
     /// `$EXPECTED_PLAN_LINES`: input plan
     /// `$PLAN`: the plan to optimized
-    ///
     macro_rules! assert_plan {
         ($PLAN: expr,  @ $EXPECTED: expr) => {
             let formatted = crate::displayable($PLAN).indent(true).to_string();
