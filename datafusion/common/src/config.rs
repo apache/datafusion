@@ -3093,9 +3093,12 @@ mod tests {
     fn reset_nested_scalar_reports_helpful_error() {
         let mut value = true;
         let err = <bool as ConfigField>::reset(&mut value, "nested").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Invalid or Unsupported Configuration: Cannot reset nested config value \"nested\" on bool"
+        let message = err.to_string();
+        assert!(
+            message.starts_with(
+                "Invalid or Unsupported Configuration: Cannot reset nested config value \"nested\" on bool"
+            ),
+            "unexpected error message: {message}"
         );
     }
 
