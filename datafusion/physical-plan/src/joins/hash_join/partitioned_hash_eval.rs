@@ -212,6 +212,7 @@ impl Hash for HashTableLookupExpr {
 impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.hash_expr, &other.hash_expr)
+            && Arc::ptr_eq(&self.hash_map, &other.hash_map)
             && self.description == other.description
     }
 }
@@ -272,17 +273,20 @@ impl PhysicalExpr for HashTableLookupExpr {
             ),
         )?;
 
-        // Check each hash against the hash table
-        let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(num_rows, 8));
-        for (idx, hash_value) in hash_array.values().iter().enumerate() {
-            // Use get_matched_indices to check - if it returns any indices, the hash exists
-            let (matched_indices, _) = self
-                .hash_map
-                .get_matched_indices(Box::new(std::iter::once((idx, hash_value))), None);
+        // Batch check all hashes against the hash table
+        let hash_iter = hash_array
+            .values()
+            .iter()
+            .enumerate()
+            .map(|(idx, hash_value)| (idx, hash_value));
 
-            if !matched_indices.is_empty() {
-                bit_util::set_bit(buf.as_slice_mut(), idx);
-            }
+        let (matched_indices, _) =
+            self.hash_map.get_matched_indices(Box::new(hash_iter), None);
+
+        // Create boolean array from matched indices
+        let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(num_rows, 8));
+        for idx in matched_indices {
+            bit_util::set_bit(buf.as_slice_mut(), idx as usize);
         }
 
         Ok(ColumnarValue::Array(Arc::new(
