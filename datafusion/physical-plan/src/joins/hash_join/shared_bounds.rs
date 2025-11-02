@@ -235,11 +235,22 @@ pub(crate) struct SharedBuildAccumulator {
 }
 
 /// Strategy for filter pushdown (decided at collection time)
+///
+/// Controls how dynamic filters are pushed down to the probe side:
+/// - **InList**: Materializes build side values into an array for InList expressions.
+///   Can be serialized and used in distributed contexts. Preferred for small build sides.
+/// - **HashTable**: Shares a reference to the build side hash table. More efficient for
+///   large build sides but **cannot be serialized** for distributed execution.
+/// - **Empty**: No filter needed (empty partition).
+///
+/// The `hash_join_inlist_pushdown_max_size` config controls the threshold between InList and HashTable.
 #[derive(Clone)]
 pub(crate) enum PushdownStrategy {
     /// Use InList for small build sides (< 128MB)
+    /// Serializable and can be used in distributed contexts.
     InList(ArrayRef),
     /// Use hash table lookup for large build sides
+    /// NOT serializable - only for local execution within a single process.
     HashTable(Arc<dyn JoinHashMapType>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
@@ -444,6 +455,59 @@ impl SharedBuildAccumulator {
                         partitions.iter().filter_map(|p| p.as_ref()).collect();
 
                     if !partition_data.is_empty() {
+                        // When force_hash_collisions is enabled, hash-based routing breaks down
+                        // because all values hash to the same bucket. In this case, we can only
+                        // use bounds-based filtering across all partitions, not membership checks.
+                        #[cfg(feature = "force_hash_collisions")]
+                        {
+                            // Merge bounds from all partitions
+                            let mut merged_bounds: Option<Vec<ColumnBounds>> = None;
+                            for partition in &partition_data {
+                                let partition_bounds = &partition.bounds;
+                                match &mut merged_bounds {
+                                    None => {
+                                        merged_bounds =
+                                            Some(partition_bounds.column_bounds.clone());
+                                    }
+                                    Some(existing_bounds) => {
+                                        // Merge bounds: take the most permissive (widest) range
+                                        for (i, new_bound) in partition_bounds
+                                            .column_bounds
+                                            .iter()
+                                            .enumerate()
+                                        {
+                                            if let Some(existing_bound) =
+                                                existing_bounds.get_mut(i)
+                                            {
+                                                // Take min of mins
+                                                if new_bound.min < existing_bound.min {
+                                                    existing_bound.min =
+                                                        new_bound.min.clone();
+                                                }
+                                                // Take max of maxes
+                                                if new_bound.max > existing_bound.max {
+                                                    existing_bound.max =
+                                                        new_bound.max.clone();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Create a simple bounds-only filter (no membership checks)
+                            if let Some(bounds) = merged_bounds {
+                                let bounds_partition = PartitionBounds::new(bounds);
+                                if let Some(filter_expr) = create_bounds_predicate(
+                                    &self.on_right,
+                                    &bounds_partition,
+                                ) {
+                                    self.dynamic_filter.update(filter_expr)?;
+                                }
+                            }
+                            return Ok(());
+                        }
+
                         // Build a CASE expression that combines range checks AND membership checks
                         // CASE (hash_repartition(join_keys) % num_partitions)
                         //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...) AND membership_check_0
@@ -452,102 +516,107 @@ impl SharedBuildAccumulator {
                         //   ELSE false
                         // END
 
-                        let num_partitions = partition_data.len();
+                        #[cfg(not(feature = "force_hash_collisions"))]
+                        {
+                            let num_partitions = partition_data.len();
 
-                        // Create base expression: hash_repartition(join_keys) % num_partitions
-                        let routing_hash_expr = Arc::new(HashExpr::new(
-                            self.on_right.clone(),
-                            self.repartition_random_state.clone(),
-                            "hash_repartition".to_string(),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
+                            // Create base expression: hash_repartition(join_keys) % num_partitions
+                            let routing_hash_expr = Arc::new(HashExpr::new(
+                                self.on_right.clone(),
+                                self.repartition_random_state.clone(),
+                                "hash_repartition".to_string(),
+                            ))
+                                as Arc<dyn PhysicalExpr>;
 
-                        let modulo_expr = Arc::new(BinaryExpr::new(
-                            routing_hash_expr,
-                            Operator::Modulo,
-                            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                        ))
-                            as Arc<dyn PhysicalExpr>;
+                            let modulo_expr = Arc::new(BinaryExpr::new(
+                                routing_hash_expr,
+                                Operator::Modulo,
+                                lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+                            ))
+                                as Arc<dyn PhysicalExpr>;
 
-                        // Create WHEN branches for each partition
-                        let when_then_branches: Vec<(
-                            Arc<dyn PhysicalExpr>,
-                            Arc<dyn PhysicalExpr>,
-                        )> = partitions
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(partition_id, partition_opt)| {
-                                partition_opt.as_ref().and_then(|partition| {
-                                    // Skip empty partitions - they would always return false anyway
-                                    match &partition.pushdown {
-                                        PushdownStrategy::Empty => None,
-                                        _ => Some((partition_id, partition)),
-                                    }
+                            // Create WHEN branches for each partition
+                            let when_then_branches: Vec<(
+                                Arc<dyn PhysicalExpr>,
+                                Arc<dyn PhysicalExpr>,
+                            )> = partitions
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(partition_id, partition_opt)| {
+                                    partition_opt.as_ref().and_then(|partition| {
+                                        // Skip empty partitions - they would always return false anyway
+                                        match &partition.pushdown {
+                                            PushdownStrategy::Empty => None,
+                                            _ => Some((partition_id, partition)),
+                                        }
+                                    })
                                 })
-                            })
-                            .map(|(partition_id, partition)| -> Result<_> {
-                                // WHEN partition_id
-                                let when_expr =
-                                    lit(ScalarValue::UInt64(Some(partition_id as u64)));
+                                .map(|(partition_id, partition)| -> Result<_> {
+                                    // WHEN partition_id
+                                    let when_expr = lit(ScalarValue::UInt64(Some(
+                                        partition_id as u64,
+                                    )));
 
-                                // THEN: Combine bounds check AND membership predicate
+                                    // THEN: Combine bounds check AND membership predicate
 
-                                // 1. Create membership predicate (InList for small build sides, hash lookup otherwise)
-                                let membership_expr = create_membership_predicate(
-                                    &self.on_right,
-                                    partition.pushdown.clone(),
-                                    &HASH_JOIN_SEED,
-                                    self.probe_schema.as_ref(),
-                                )?;
+                                    // 1. Create membership predicate (InList for small build sides, hash lookup otherwise)
+                                    let membership_expr = create_membership_predicate(
+                                        &self.on_right,
+                                        partition.pushdown.clone(),
+                                        &HASH_JOIN_SEED,
+                                        self.probe_schema.as_ref(),
+                                    )?;
 
-                                // 2. Create bounds check expression for this partition (if bounds available)
-                                let bounds_expr = create_bounds_predicate(
-                                    &self.on_right,
-                                    &partition.bounds,
-                                );
+                                    // 2. Create bounds check expression for this partition (if bounds available)
+                                    let bounds_expr = create_bounds_predicate(
+                                        &self.on_right,
+                                        &partition.bounds,
+                                    );
 
-                                // 3. Combine membership and bounds expressions
-                                let then_expr = match (membership_expr, bounds_expr) {
-                                    (Some(membership), Some(bounds)) => {
-                                        // Both available: combine with AND
-                                        Arc::new(BinaryExpr::new(
-                                            bounds,
-                                            Operator::And,
-                                            membership,
-                                        ))
-                                            as Arc<dyn PhysicalExpr>
-                                    }
-                                    (Some(membership), None) => membership,
-                                    (None, Some(bounds)) => bounds,
-                                    (None, None) => {
-                                        // No filter for this partition - should not happen due to filter_map above
-                                        // but handle defensively by returning a "true" literal
-                                        lit(true)
-                                    }
-                                };
+                                    // 3. Combine membership and bounds expressions
+                                    let then_expr = match (membership_expr, bounds_expr) {
+                                        (Some(membership), Some(bounds)) => {
+                                            // Both available: combine with AND
+                                            Arc::new(BinaryExpr::new(
+                                                bounds,
+                                                Operator::And,
+                                                membership,
+                                            ))
+                                                as Arc<dyn PhysicalExpr>
+                                        }
+                                        (Some(membership), None) => membership,
+                                        (None, Some(bounds)) => bounds,
+                                        (None, None) => {
+                                            // No filter for this partition - should not happen due to filter_map above
+                                            // but handle defensively by returning a "true" literal
+                                            lit(true)
+                                        }
+                                    };
 
-                                Ok((when_expr, then_expr))
-                            })
-                            .collect::<Result<Vec<_>>>()?;
+                                    Ok((when_expr, then_expr))
+                                })
+                                .collect::<Result<Vec<_>>>()?;
 
-                        // Optimize for single partition: skip CASE expression entirely
-                        let filter_expr = if when_then_branches.is_empty() {
-                            // All partitions are empty: no rows can match
-                            lit(false)
-                        } else if when_then_branches.len() == 1 {
-                            // Single partition: just use the condition directly
-                            // since hash % 1 == 0 always, the WHEN 0 branch will always match
-                            Arc::clone(&when_then_branches[0].1)
-                        } else {
-                            // Multiple partitions: create CASE expression
-                            Arc::new(CaseExpr::try_new(
-                                Some(modulo_expr),
-                                when_then_branches,
-                                Some(lit(false)), // ELSE false
-                            )?) as Arc<dyn PhysicalExpr>
-                        };
+                            // Optimize for single partition: skip CASE expression entirely
+                            let filter_expr = if when_then_branches.is_empty() {
+                                // All partitions are empty: no rows can match
+                                lit(false)
+                            } else if when_then_branches.len() == 1 {
+                                // Single partition: just use the condition directly
+                                // since hash % 1 == 0 always, the WHEN 0 branch will always match
+                                Arc::clone(&when_then_branches[0].1)
+                            } else {
+                                // Multiple partitions: create CASE expression
+                                Arc::new(CaseExpr::try_new(
+                                    Some(modulo_expr),
+                                    when_then_branches,
+                                    Some(lit(false)), // ELSE false
+                                )?)
+                                    as Arc<dyn PhysicalExpr>
+                            };
 
-                        self.dynamic_filter.update(filter_expr)?;
+                            self.dynamic_filter.update(filter_expr)?;
+                        }
                     }
                 }
             }

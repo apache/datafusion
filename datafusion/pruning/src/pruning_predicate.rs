@@ -1452,9 +1452,9 @@ fn build_predicate_expression(
                 return build_predicate_expression(
                     &change_expr,
                     schema,
-                required_columns,
-                unhandled_hook,
-            );
+                    required_columns,
+                    unhandled_hook,
+                );
             } else {
                 return unhandled_hook.handle(expr);
             }

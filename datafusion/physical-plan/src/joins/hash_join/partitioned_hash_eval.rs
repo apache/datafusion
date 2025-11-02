@@ -163,6 +163,22 @@ impl PhysicalExpr for HashExpr {
 ///
 /// Takes a UInt64Array of hash values and checks membership in a hash table.
 /// Returns a BooleanArray indicating which hashes exist.
+///
+/// # Serialization Warning
+///
+/// **This expression is NOT serializable and should NOT be used in distributed execution contexts.**
+///
+/// HashTableLookupExpr contains an in-memory hash table reference (`Arc<dyn JoinHashMapType>`)
+/// that cannot be serialized to protobuf or sent over the network. This expression is designed for
+/// local filter pushdown within a single process where the build side hash table can be shared
+/// via Arc references.
+///
+/// For distributed execution (e.g., Ballista, Ray), use InList expressions instead, which can be
+/// serialized. The `hash_join_inlist_pushdown_max_size` configuration controls when to use InList
+/// vs HashTableLookup - set it to a large value for distributed contexts to prefer InList.
+///
+/// If you need to serialize a physical plan containing this expression, you will get a serialization
+/// error. The plan should be modified to use InList or other serializable filter expressions.
 pub struct HashTableLookupExpr {
     /// Expression that computes hash values (should be a HashExpr)
     hash_expr: PhysicalExprRef,

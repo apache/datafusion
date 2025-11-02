@@ -1526,11 +1526,23 @@ async fn collect_left_input(
         // If the build side is small enough we can use IN list pushdown.
         // If it's too big we fall back to pushing down a reference to the hash table.
         // See `PushdownStrategy` for more details.
+        //
+        // When force_hash_collisions is enabled (for testing), we must skip InList
+        // because InList relies on hashing for efficient lookups, which breaks when
+        // all values hash to the same bucket.
+        #[cfg(not(feature = "force_hash_collisions"))]
         if let Some(in_list_values) =
             build_struct_inlist_values(&left_values, max_inlist_size)?
         {
             PushdownStrategy::InList(in_list_values)
         } else {
+            PushdownStrategy::HashTable(Arc::clone(&hash_map))
+        }
+
+        #[cfg(feature = "force_hash_collisions")]
+        {
+            // Always use HashTable strategy when hash collisions are forced
+            // to avoid incorrect results from hash-based InList lookups
             PushdownStrategy::HashTable(Arc::clone(&hash_map))
         }
     };

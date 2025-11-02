@@ -184,11 +184,7 @@ impl Set for StructArraySet {
         // Compute hashes for all rows in the input array
         let mut input_hashes = vec![0u64; v.len()];
         let v_arc = Arc::new(v.clone()) as ArrayRef;
-        create_hashes(
-            &[v_arc],
-            &self.hash_set.state,
-            &mut input_hashes,
-        )?;
+        create_hashes(&[v_arc], &self.hash_set.state, &mut input_hashes)?;
 
         // Check each row for membership
         let result: BooleanArray = (0..v.len())
