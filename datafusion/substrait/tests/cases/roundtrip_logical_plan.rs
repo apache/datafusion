@@ -32,8 +32,8 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
-    Extension, InvariantLevel, LogicalPlan, PartitionEvaluator, Repartition,
-    UserDefinedLogicalNode, Values, Volatility,
+    Extension, InvariantLevel, LogicalPlan, LogicalPlanBuilder, PartitionEvaluator,
+    Repartition, UserDefinedLogicalNode, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -1258,10 +1258,7 @@ async fn roundtrip_values() -> Result<()> {
 async fn roundtrip_values_no_columns() -> Result<()> {
     let ctx = create_context().await?;
     // "VALUES ()" is not yet supported by the SQL parser, so we construct the plan manually
-    let plan = LogicalPlan::Values(Values {
-        values: vec![vec![], vec![]], // two rows, no columns
-        schema: DFSchemaRef::new(DFSchema::empty()),
-    });
+    let plan = LogicalPlanBuilder::values(vec![vec![], vec![]])?.build()?;
     roundtrip_logical_plan_with_ctx(plan, ctx).await?;
     Ok(())
 }
