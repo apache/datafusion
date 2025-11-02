@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::NativeType;
+use super::{NativeType, ValuePrettyPrinter};
 use crate::error::Result;
 use arrow::datatypes::DataType;
 use core::fmt;
@@ -32,7 +32,7 @@ pub enum TypeSignature<'a> {
     /// The `name` should contain the same value as 'ARROW:extension:name'.
     Extension {
         name: &'a str,
-        parameters: &'a [TypeParameter<'a>],
+        parameters: Vec<TypeParameter<'a>>,
     },
 }
 
@@ -87,6 +87,9 @@ pub trait LogicalType: Sync + Send {
     fn default_cast_for(&self, origin: &DataType) -> Result<DataType> {
         self.native().default_cast_for(origin)
     }
+
+    /// Returns a pretty-printer that can format values of this type.
+    fn pretty_printer(&self) -> &Arc<dyn ValuePrettyPrinter>;
 }
 
 impl fmt::Debug for dyn LogicalType {

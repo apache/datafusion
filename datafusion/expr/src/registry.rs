@@ -20,6 +20,8 @@
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
+use arrow::datatypes::DataType;
+use datafusion_common::types::{LogicalTypeRef, NativeType};
 use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -213,5 +215,141 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn udwfs(&self) -> HashSet<String> {
         self.udwfs.keys().cloned().collect()
+    }
+}
+
+/// TODO
+pub trait ExtensionTypeRegistration: Debug {
+    /// TODO
+    fn type_name(&self) -> &str;
+
+    /// TODO
+    fn create_logical_type(
+        &self,
+        data_type: DataType,
+        metadata: HashMap<String, String>,
+    ) -> Result<LogicalTypeRef>;
+}
+
+/// TODO
+type ExtensionTypeRegistrationRef = Arc<dyn ExtensionTypeRegistration>;
+
+/// Supports registering custom [LogicalType]s, including native types.
+pub trait ExtensionTypeRegistry {
+    /// Returns a reference to the logical type named `name`.
+    ///
+    /// Returns an error if there is no
+    fn extension_type(&self, name: &str) -> Result<ExtensionTypeRegistrationRef>;
+
+    /// TODO
+    fn create_logical_type_for(
+        &self,
+        data_type: DataType,
+        metadata: HashMap<String, String>,
+    ) -> Result<LogicalTypeRef> {
+        match metadata.get(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY) {
+            None => Ok(Arc::new(NativeType::from(data_type))),
+            Some(name) => {
+                let extension_type = self.extension_type(name)?;
+                extension_type.create_logical_type(data_type, metadata)
+            }
+        }
+    }
+
+    /// Registers a new [ExtensionTypeRegistrationRef], returning any previously registered
+    /// implementation.
+    ///
+    /// Returns an error if the type cannot be registered, for example, if the registry is
+    /// read-only.
+    fn register_extension_type(
+        &mut self,
+        extension_type: ExtensionTypeRegistrationRef,
+    ) -> Result<Option<ExtensionTypeRegistrationRef>>;
+
+    /// Deregisters an extension type registration with the name `name`, returning the
+    /// implementation that was deregistered.
+    ///
+    /// Returns an error if the type cannot be deregistered, for example, if the registry is
+    /// read-only.
+    fn deregister_extension_type(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<ExtensionTypeRegistrationRef>>;
+}
+
+/// An [`ExtensionTypeRegistry`] that uses in memory [`HashMap`]s.
+#[derive(Clone, Debug)]
+pub struct MemoryExtensionTypeRegistry {
+    /// Holds a mapping between the name of an extension type and its logical type.
+    extension_types: HashMap<String, ExtensionTypeRegistrationRef>,
+}
+
+impl Default for MemoryExtensionTypeRegistry {
+    fn default() -> Self {
+        MemoryExtensionTypeRegistry {
+            extension_types: HashMap::new(),
+        }
+    }
+}
+
+impl MemoryExtensionTypeRegistry {
+    /// Creates an empty [MemoryExtensionTypeRegistry].
+    pub fn new() -> Self {
+        Self {
+            extension_types: HashMap::new(),
+        }
+    }
+
+    /// Creates a new [MemoryExtensionTypeRegistry] with the provided `types`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one of the `types` is a native type.
+    pub fn new_with_types(
+        types: impl IntoIterator<Item = ExtensionTypeRegistrationRef>,
+    ) -> Result<Self> {
+        let extension_types = types
+            .into_iter()
+            .map(|t| (t.type_name().to_owned(), t))
+            .collect();
+        Ok(Self { extension_types })
+    }
+
+    /// Returns a list of all registered types.
+    pub fn all_extension_types(&self) -> Vec<ExtensionTypeRegistrationRef> {
+        self.extension_types.values().cloned().collect()
+    }
+}
+
+impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
+    fn extension_type(&self, name: &str) -> Result<ExtensionTypeRegistrationRef> {
+        self.extension_types
+            .get(name)
+            .ok_or_else(|| plan_datafusion_err!("Logical type not found."))
+            .cloned()
+    }
+
+    fn register_extension_type(
+        &mut self,
+        extension_type: ExtensionTypeRegistrationRef,
+    ) -> Result<Option<ExtensionTypeRegistrationRef>> {
+        Ok(self
+            .extension_types
+            .insert(extension_type.type_name().to_owned(), extension_type))
+    }
+
+    fn deregister_extension_type(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<ExtensionTypeRegistrationRef>> {
+        Ok(self.extension_types.remove(name))
+    }
+}
+
+impl From<HashMap<String, ExtensionTypeRegistrationRef>> for MemoryExtensionTypeRegistry {
+    fn from(value: HashMap<String, ExtensionTypeRegistrationRef>) -> Self {
+        Self {
+            extension_types: value,
+        }
     }
 }

@@ -61,6 +61,7 @@ apache-avro = { version = "0.20", default-features = false, features = [
 ], optional = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
+arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }

@@ -2016,6 +2016,7 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-ipc",
+ "arrow-schema",
  "chrono",
  "half",
  "hashbrown 0.14.5",
@@ -2255,6 +2256,7 @@ name = "datafusion-expr"
 version = "50.3.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "async-trait",
  "chrono",
  "ctor",

@@ -182,6 +182,7 @@ testcontainers = { version = "0.25.2", features = ["default"] }
 testcontainers-modules = { version = "0.13" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
+uuid = { version = "1.18", features = ["v4"] }
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
