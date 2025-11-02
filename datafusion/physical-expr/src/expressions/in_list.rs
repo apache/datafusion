@@ -2312,4 +2312,112 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_struct_in_list_multi_column_join_scenario() -> Result<()> {
+        // Simulate a multi-column join scenario where we check if (key1, key2)
+        // pairs exist in a set - this is a common pattern in join optimizations
+        let struct_fields = Fields::from(vec![
+            Field::new("key1", DataType::Int32, false),
+            Field::new("key2", DataType::Utf8, false),
+        ]);
+        let schema = Schema::new(vec![Field::new(
+            "join_keys",
+            DataType::Struct(struct_fields.clone()),
+            true,
+        )]);
+
+        // Simulate a large probe side with 1000 rows
+        let key1_values: Vec<i32> = (0..1000).collect();
+        let key2_values: Vec<&str> = (0..1000)
+            .map(|i| match i % 10 {
+                0 => "type_a",
+                1 => "type_b",
+                2 => "type_c",
+                3 => "type_d",
+                4 => "type_e",
+                5 => "type_f",
+                6 => "type_g",
+                7 => "type_h",
+                8 => "type_i",
+                _ => "type_j",
+            })
+            .collect();
+
+        let probe_struct = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(key1_values)),
+                Arc::new(StringArray::from(key2_values)),
+            ],
+            None,
+        ));
+
+        // Build side has selective set of key pairs (simulating a filtered dimension table)
+        // Include every 10th key pair from the probe side
+        let build_key1: Vec<i32> = (0..100).map(|i| i * 10).collect();
+        let build_key2: Vec<&str> = vec!["type_a"; 100];
+        let build_struct = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(build_key1)),
+                Arc::new(StringArray::from(build_key2)),
+            ],
+            None,
+        )) as ArrayRef;
+
+        // Create the InList expression using the efficient array-based storage
+        let col_join_keys = col("join_keys", &schema)?;
+        let expr = in_list_from_array(col_join_keys, build_struct, false)?;
+
+        // Create probe batch
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![probe_struct])?;
+
+        // Evaluate - this should efficiently filter to matching rows
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result)?;
+
+        // Verify: only rows where i % 10 == 0 AND key2 == "type_a" should match
+        // That's rows 0, 10, 20, ..., 990 (100 matches total)
+        let mut match_count = 0;
+        for (i, value) in result.iter().enumerate() {
+            if i % 10 == 0 {
+                // These rows should match (have type_a and the right key1)
+                assert_eq!(
+                    value,
+                    Some(true),
+                    "Row {i} should match: key1={i}, key2=type_a"
+                );
+                match_count += 1;
+            } else {
+                // All other rows should not match
+                let key2 = match i % 10 {
+                    1 => "type_b",
+                    2 => "type_c",
+                    3 => "type_d",
+                    4 => "type_e",
+                    5 => "type_f",
+                    6 => "type_g",
+                    7 => "type_h",
+                    8 => "type_i",
+                    _ => "type_j",
+                };
+                assert_eq!(
+                    value,
+                    Some(false),
+                    "Row {i} should not match: key1={i}, key2={key2}"
+                );
+            }
+        }
+
+        assert_eq!(match_count, 100, "Expected exactly 100 matches");
+
+        // Verify that we're using the efficient SET-based approach
+        assert!(
+            expr.to_string().contains("(SET)"),
+            "Should use efficient SET-based filtering for struct arrays"
+        );
+
+        Ok(())
+    }
 }
