@@ -26,6 +26,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PushdownStrategy, SharedBuildAccumulator,
 };
@@ -109,7 +110,6 @@ pub(super) struct JoinLeftData {
     pub(super) bounds: Option<Vec<ColumnBounds>>,
     /// InList values for small build sides (alternative to hash map pushdown)
     /// Contains unique values from build side for filter pushdown as InList expressions
-    #[allow(dead_code)] // Will be used in future PR for filter pushdown
     pub(super) membership: PushdownStrategy,
 }
 
@@ -159,7 +159,6 @@ impl JoinLeftData {
     }
 
     /// returns a reference to the InList values for filter pushdown
-    #[allow(dead_code)] // Will be used in future PR for filter pushdown
     pub(super) fn membership(&self) -> &PushdownStrategy {
         &self.membership
     }
@@ -963,6 +962,11 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_size,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -981,6 +985,11 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_size,
                 ))
             }
             PartitionMode::Auto => {
@@ -1379,6 +1388,7 @@ async fn collect_left_input(
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
     should_compute_bounds: bool,
+    max_inlist_size: usize,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1507,15 +1517,33 @@ async fn collect_left_input(
         _ => None,
     };
 
+    // Use Arc directly for sharing with SharedBuildAccumulator
+    let hash_map = hashmap;
+
+    let membership = if num_rows == 0 {
+        PushdownStrategy::Empty
+    } else {
+        // If the build side is small enough we can use IN list pushdown.
+        // If it's too big we fall back to pushing down a reference to the hash table.
+        // See `PushdownStrategy` for more details.
+        if let Some(in_list_values) =
+            build_struct_inlist_values(&left_values, max_inlist_size)?
+        {
+            PushdownStrategy::InList(in_list_values)
+        } else {
+            PushdownStrategy::HashTable(Arc::clone(&hash_map))
+        }
+    };
+
     let data = JoinLeftData::new(
-        hashmap,
+        hash_map,
         single_batch,
         left_values.clone(),
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,
         bounds,
-        PushdownStrategy::Empty, // TODO: Implement membership pushdown in future PR
+        membership,
     );
 
     Ok(data)

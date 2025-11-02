@@ -25,7 +25,6 @@ use arrow::downcast_dictionary_array;
 use arrow_schema::DataType;
 use datafusion_common::Result;
 
-#[allow(dead_code)] // Will be used in future PR for filter pushdown
 pub(super) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
     data_types
         .iter()
@@ -36,7 +35,6 @@ pub(super) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
 
 /// Flattens dictionary-encoded arrays to their underlying value arrays.
 /// Non-dictionary arrays are returned as-is.
-#[allow(dead_code)] // Will be used in future PR for filter pushdown
 fn flatten_dictionary_array(array: &ArrayRef) -> ArrayRef {
     downcast_dictionary_array! {
         array => {
@@ -62,7 +60,6 @@ fn flatten_dictionary_array(array: &ArrayRef) -> ArrayRef {
 ///
 /// Returns `None` if the estimated size exceeds `max_size_bytes`.
 /// Performs deduplication to ensure unique values only.
-#[allow(dead_code)] // Will be used in future PR for filter pushdown
 pub(super) fn build_struct_inlist_values(
     join_key_arrays: &[ArrayRef],
     max_size_bytes: usize,
