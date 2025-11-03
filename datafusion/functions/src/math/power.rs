@@ -220,6 +220,7 @@ impl ScalarUDFImpl for PowerFunc {
 
         fn coerced_type_base(name: &str, data_type: &DataType) -> Result<DataType> {
             match data_type {
+                DataType::Null => Ok(DataType::Int64),
                 d if d.is_floating() => Ok(DataType::Float64),
                 d if d.is_integer() => Ok(DataType::Int64),
                 d if is_decimal(d) => Ok(d.clone()),
@@ -231,6 +232,7 @@ impl ScalarUDFImpl for PowerFunc {
 
         fn coerced_type_exp(name: &str, data_type: &DataType) -> Result<DataType> {
             match data_type {
+                DataType::Null => Ok(DataType::Int64),
                 d if d.is_floating() => Ok(DataType::Float64),
                 d if d.is_integer() => Ok(DataType::Int64),
                 d if is_decimal(d) => Ok(DataType::Float64),
