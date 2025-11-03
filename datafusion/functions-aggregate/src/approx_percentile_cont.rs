@@ -319,7 +319,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         false
     }
 
-    fn is_ordered_set_aggregate(&self) -> bool {
+    fn supports_within_group_clause(&self) -> bool {
         true
     }
 
