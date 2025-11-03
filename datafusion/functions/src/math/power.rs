@@ -454,13 +454,12 @@ mod tests {
     use super::*;
     use arrow::array::{Array, Decimal128Array, Float64Array, Int64Array};
     use arrow::datatypes::{
-        Field, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_SCALE, DECIMAL32_MAX_SCALE,
-        DECIMAL64_MAX_SCALE,
+        Field, DECIMAL128_MAX_SCALE, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_SCALE,
     };
     use arrow_buffer::NullBuffer;
     use datafusion_common::cast::{
-        as_decimal128_array, as_decimal256_array, as_decimal32_array, as_decimal64_array,
-        as_float64_array, as_int64_array,
+        as_decimal128_array, as_decimal32_array, as_decimal64_array, as_float64_array,
+        as_int64_array,
     };
     use datafusion_common::config::ConfigOptions;
 
@@ -711,103 +710,10 @@ mod tests {
         }
     }
 
+    /// Required to have a separate test for Decimal32 as there is no
+    /// cast to this type in SLT-based tests
     #[test]
-    fn test_power_i128_exp_float_fail() {
-        let bad_exponents = [
-            3.5,
-            -1.0,
-            u32::MAX as f64 + 10.0,
-            f64::INFINITY,
-            -f64::INFINITY,
-            f64::NAN,
-        ];
-        for exp in bad_exponents {
-            let arg_fields = vec![
-                Field::new(
-                    "a",
-                    DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
-                    true,
-                )
-                .into(),
-                Field::new("a", DataType::Float64, true).into(),
-            ];
-            let args = ScalarFunctionArgs {
-                args: vec![
-                    ColumnarValue::Scalar(ScalarValue::Decimal128(Some(2), 38, 0)), // base
-                    ColumnarValue::Scalar(ScalarValue::Float64(Some(exp))), // exponent
-                ],
-                arg_fields,
-                number_rows: 1,
-                return_field: Field::new(
-                    "f",
-                    DataType::Decimal128(DECIMAL128_MAX_SCALE as u8, 0),
-                    true,
-                )
-                .into(),
-                config_options: Arc::new(ConfigOptions::default()),
-            };
-            let result = PowerFunc::new().invoke_with_args(args);
-            assert!(result.is_err());
-        }
-    }
-
-    #[test]
-    fn test_power_i256_exp_int_scalar() {
-        let arg_fields = vec![
-            Field::new(
-                "a",
-                DataType::Decimal256(DECIMAL256_MAX_SCALE as u8, 0),
-                true,
-            )
-            .into(),
-            Field::new("a", DataType::Int64, true).into(),
-        ];
-        let args = ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Decimal256(
-                    Some(i256::from(2)),
-                    DECIMAL256_MAX_SCALE as u8,
-                    0,
-                )), // base
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))), // exponent
-            ],
-            arg_fields,
-            number_rows: 1,
-            return_field: Field::new(
-                "f",
-                DataType::Decimal256(DECIMAL256_MAX_SCALE as u8, 0),
-                true,
-            )
-            .into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-        let result = PowerFunc::new()
-            .invoke_with_args(args)
-            .expect("failed to initialize function power");
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let ints = as_decimal256_array(&arr)
-                    .expect("failed to convert result to an array");
-
-                assert_eq!(ints.len(), 1);
-                assert_eq!(ints.value(0), i256::from(8));
-
-                // Value is the same as expected, but scale should be 0
-                if let DataType::Decimal256(_precision, scale) = arr.data_type() {
-                    assert_eq!(*scale, 0);
-                } else {
-                    panic!("Expected Decimal256 result")
-                }
-            }
-            ColumnarValue::Scalar(_) => {
-                panic!("Expected an array value")
-            }
-        }
-    }
-
-    #[test]
-    fn test_power_i32_exp_int_scalar() {
+    fn test_power_decimal32_exp_int_scalar() {
         let arg_fields = vec![
             Field::new("a", DataType::Decimal32(DECIMAL32_MAX_SCALE as u8, 0), true)
                 .into(),
@@ -857,8 +763,10 @@ mod tests {
         }
     }
 
+    /// Required to have a separate test for Decimal64 as there is no
+    /// cast to this type in SLT-based tests
     #[test]
-    fn test_power_i64_exp_int_scalar() {
+    fn test_power_decimal64_exp_int_scalar() {
         let arg_fields = vec![
             Field::new("a", DataType::Decimal64(DECIMAL64_MAX_SCALE as u8, 0), true)
                 .into(),

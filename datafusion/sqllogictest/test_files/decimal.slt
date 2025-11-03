@@ -941,6 +941,30 @@ SELECT power(2.5, 4.0), arrow_typeof(power(2.5, 4.0));
 query error Compute error: Cannot use non-integer exp
 SELECT power(2.5, 4.2), arrow_typeof(power(2.5, 4.2));
 
+query error Compute error: Cannot use non-integer exp: NaN
+SELECT power(2::decimal(38, 0), arrow_cast('NaN','Float64'))
+
+query error Compute error: Cannot use non-integer exp: inf
+SELECT power(2::decimal(38, 0), arrow_cast('INF','Float64'))
+
+# Floating above u32::max
+query error Compute error: Cannot use non-integer exp
+SELECT power(2::decimal(38, 0), 5000000000.1)
+
+# Integer Above u32::max
+query error Arrow error: Arithmetic overflow: Unsupported exp value
+SELECT power(2::decimal(38, 0), 5000000000)
+
+query RT
+SELECT power(2::decimal(76, 0), 4), arrow_typeof(power(2::decimal(76, 0), 4));
+----
+16 Decimal256(76, 0)
+
+query R
+SELECT power(2.0, null)
+----
+NULL
+
 # Set parse_float_as_decimal to false to test float parsing
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
@@ -986,3 +1010,8 @@ query R
 SELECT power(2.5, 4)
 ----
 39.0625
+
+query I
+SELECT power(2, null)
+----
+NULL
