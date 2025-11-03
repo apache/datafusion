@@ -167,7 +167,6 @@ impl LazyMemoryExec {
     /// Create a new lazy memory execution plan
     pub fn try_new(
         schema: SchemaRef,
-        projection: Option<Vec<usize>>,
         generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     ) -> Result<Self> {
         let boundedness = generators
@@ -192,11 +191,6 @@ impl LazyMemoryExec {
             })
             .unwrap_or(Boundedness::Bounded);
 
-        let schema = match projection.as_ref() {
-            Some(columns) => Arc::new(schema.project(columns)?),
-            None => schema,
-        };
-
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
             Partitioning::RoundRobinBatch(generators.len()),
@@ -207,11 +201,26 @@ impl LazyMemoryExec {
 
         Ok(Self {
             schema,
-            projection,
+            projection: None,
             batch_generators: generators,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
         })
+    }
+
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        match projection.as_ref() {
+            Some(columns) => {
+                let projected = Arc::new(self.schema.project(columns).unwrap());
+                self.cache = self.cache.with_eq_properties(EquivalenceProperties::new(
+                    Arc::clone(&projected),
+                ));
+                self.schema = projected;
+                self.projection = projection;
+                self
+            }
+            _ => self,
+        }
     }
 
     pub fn try_set_partitioning(&mut self, partitioning: Partitioning) -> Result<()> {
@@ -453,11 +462,8 @@ mod lazy_memory_tests {
             schema: Arc::clone(&schema),
         };
 
-        let exec = LazyMemoryExec::try_new(
-            schema,
-            None,
-            vec![Arc::new(RwLock::new(generator))],
-        )?;
+        let exec =
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
 
         // Test schema
         assert_eq!(exec.schema().fields().len(), 1);
@@ -507,11 +513,8 @@ mod lazy_memory_tests {
             schema: Arc::clone(&schema),
         };
 
-        let exec = LazyMemoryExec::try_new(
-            schema,
-            None,
-            vec![Arc::new(RwLock::new(generator))],
-        )?;
+        let exec =
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
 
         // Test invalid partition
         let result = exec.execute(1, Arc::new(TaskContext::default()));
@@ -544,11 +547,8 @@ mod lazy_memory_tests {
                 schema: Arc::clone(&schema),
             };
 
-            let exec = LazyMemoryExec::try_new(
-                schema,
-                None,
-                vec![Arc::new(RwLock::new(generator))],
-            )?;
+            let exec =
+                LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
             let task_ctx = Arc::new(TaskContext::default());
 
             let stream = exec.execute(0, task_ctx)?;

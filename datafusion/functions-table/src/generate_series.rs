@@ -474,11 +474,10 @@ impl TableProvider for GenerateSeriesTable {
         let batch_size = state.config_options().execution.batch_size;
         let generator = self.as_generator(batch_size)?;
 
-        Ok(Arc::new(LazyMemoryExec::try_new(
-            self.schema(),
-            projection.cloned(),
-            vec![generator],
-        )?))
+        Ok(Arc::new(
+            LazyMemoryExec::try_new(self.schema(), vec![generator])?
+                .with_projection(projection.cloned()),
+        ))
     }
 }
 
