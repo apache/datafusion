@@ -44,7 +44,8 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
 /// file format specific behaviors for elements in [`DataSource`]
 ///
 /// See more details on specific implementations:
-/// * [`ArrowSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowSource.html)
+/// * [`ArrowFileSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowFileSource.html)
+/// * [`ArrowStreamSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowStreamSource.html)
 /// * [`AvroSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.AvroSource.html)
 /// * [`CsvSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html)
 /// * [`JsonSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.JsonSource.html)
