@@ -72,7 +72,7 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[c1@0 as c1]",
-        "reduction_factor="
+        "reduction_factor=5.1% (5/99)"
     );
 
     assert_metrics!(
