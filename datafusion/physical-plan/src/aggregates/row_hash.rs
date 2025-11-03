@@ -434,7 +434,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Aggregation-specific metrics
     group_by_metrics: GroupByMetrics,
 
-    /// Reduction factor metric (only for partial aggregation)
+    /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
     reduction_factor: Option<metrics::RatioMetrics>,
 }
 
