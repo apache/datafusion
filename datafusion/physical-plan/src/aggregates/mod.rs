@@ -1032,6 +1032,8 @@ impl ExecutionPlan for AggregateExec {
         CardinalityEffect::LowerEqual
     }
 
+    /// Push down parent filters when possible (see implementation comment for details),
+    /// but do not introduce any new self filters.
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,

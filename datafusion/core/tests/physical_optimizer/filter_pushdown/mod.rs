@@ -1957,10 +1957,10 @@ async fn test_aggregate_filter_pushdown() {
 }
 
 #[tokio::test]
-async fn test_no_pushdown_aggregate_filter_on_non_grouping_column() {
-    // Test that filters on non-grouping columns (like aggregate results) are NOT pushed through
-    // Simulates: SELECT a, COUNT(b) as cnt FROM table GROUP BY a HAVING cnt > 5
-    // The filter on 'cnt' cannot be pushed down because it's an aggregate result, not a grouping column
+async fn test_no_pushdown_filter_on_aggregate_result() {
+    // Test that filters on aggregate results (not grouping columns) are NOT pushed through
+    // SELECT a, COUNT(b) as cnt FROM table GROUP BY a HAVING cnt > 5
+    // The filter on 'cnt' cannot be pushed down because it's an aggregate result
 
     let batches =
         vec![
@@ -2009,7 +2009,7 @@ async fn test_no_pushdown_aggregate_filter_on_non_grouping_column() {
     let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap())
         as Arc<dyn ExecutionPlan>;
 
-    // The filter should NOT be pushed through the aggregate since it references a non-grouping column
+    // The filter should NOT be pushed through the aggregate since it's on an aggregate result
     insta::assert_snapshot!(
         OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new(), true),
         @r"
@@ -2023,6 +2023,59 @@ async fn test_no_pushdown_aggregate_filter_on_non_grouping_column() {
           - FilterExec: count[count]@1 > 5
           -   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    "
+    );
+}
+
+#[test]
+fn test_pushdown_filter_on_non_first_grouping_column() {
+    // Test that filters on non-first grouping columns are still pushed down
+    // SELECT a, b, count(*) as cnt FROM table GROUP BY a, b HAVING b = 'bar'
+    // The filter is on 'b' (second grouping column), should push down
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+
+    let aggregate_expr =
+        vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
+                .schema(schema())
+                .alias("cnt")
+                .build()
+                .map(Arc::new)
+                .unwrap(),
+        ];
+
+    let group_by = PhysicalGroupBy::new_single(vec![
+        (col("a", &schema()).unwrap(), "a".to_string()),
+        (col("b", &schema()).unwrap(), "b".to_string()),
+    ]);
+
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr.clone(),
+            vec![None],
+            scan,
+            schema(),
+        )
+        .unwrap(),
+    );
+
+    let predicate = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar
+        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
 }
@@ -2162,6 +2215,121 @@ fn test_pushdown_grouping_sets_filter_on_common_column() {
         Ok:
           - AggregateExec: mode=Final, gby=[(a@0 as a, b@1 as b), (NULL as a, b@1 as b)], aggr=[cnt], ordering_mode=PartiallySorted([1])
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
+    "
+    );
+}
+
+#[test]
+fn test_pushdown_with_empty_group_by() {
+    // Test that filters can be pushed down when GROUP BY is empty (no grouping columns)
+    // SELECT count(*) as cnt FROM table WHERE a = 'foo'
+    // There are no grouping columns, so the filter should still push down
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+
+    let aggregate_expr =
+        vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
+                .schema(schema())
+                .alias("cnt")
+                .build()
+                .map(Arc::new)
+                .unwrap(),
+        ];
+
+    // Empty GROUP BY - no grouping columns
+    let group_by = PhysicalGroupBy::new_single(vec![]);
+
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr.clone(),
+            vec![None],
+            scan,
+            schema(),
+        )
+        .unwrap(),
+    );
+
+    // Filter on 'a'
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    // The filter should be pushed down even with empty GROUP BY
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   AggregateExec: mode=Final, gby=[], aggr=[cnt]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - AggregateExec: mode=Final, gby=[], aggr=[cnt]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_pushdown_with_computed_grouping_key() {
+    // Test filter pushdown with computed grouping expression
+    // SELECT (c + 1.0) as c_plus_1, count(*) FROM table WHERE c > 5.0 GROUP BY (c + 1.0)
+
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+
+    let predicate = Arc::new(BinaryExpr::new(
+        col("c", &schema()).unwrap(),
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Float64(Some(5.0)))),
+    )) as Arc<dyn PhysicalExpr>;
+    let filter = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
+
+    let aggregate_expr =
+        vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema()).unwrap()])
+                .schema(schema())
+                .alias("cnt")
+                .build()
+                .map(Arc::new)
+                .unwrap(),
+        ];
+
+    let c_plus_one = Arc::new(BinaryExpr::new(
+        col("c", &schema()).unwrap(),
+        Operator::Plus,
+        Arc::new(Literal::new(ScalarValue::Float64(Some(1.0)))),
+    )) as Arc<dyn PhysicalExpr>;
+
+    let group_by =
+        PhysicalGroupBy::new_single(vec![(c_plus_one, "c_plus_1".to_string())]);
+
+    let plan = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr.clone(),
+            vec![None],
+            filter,
+            schema(),
+        )
+        .unwrap(),
+    );
+
+    // The filter should be pushed down because 'c' is extracted from the grouping expression (c + 1.0)
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - AggregateExec: mode=Final, gby=[c@2 + 1 as c_plus_1], aggr=[cnt]
+        -   FilterExec: c@2 > 5
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - AggregateExec: mode=Final, gby=[c@2 + 1 as c_plus_1], aggr=[cnt]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=c@2 > 5
     "
     );
 }
