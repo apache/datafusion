@@ -575,7 +575,6 @@ impl TDigest {
     ///                          │└ ─ ─ ─ ┘│
     ///                          │         │
     ///                              ...
-    ///
     /// ```
     ///
     /// The [`TDigest::from_scalar_state()`] method reverses this processes,
