@@ -128,3 +128,76 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 # Errors in partition filters should be reported
 query error Divide by zero error
 SELECT f0 FROM arrow_partitioned WHERE CASE WHEN true THEN 1 / 0 ELSE part END = 1;
+
+#############
+## Arrow IPC stream format support
+#############
+
+# Test CREATE EXTERNAL TABLE with stream format
+statement ok
+CREATE EXTERNAL TABLE arrow_stream
+STORED AS ARROW
+LOCATION '../datasource-arrow/tests/data/example_stream.arrow';
+
+# physical plan for stream format
+query TT
+EXPLAIN SELECT * FROM arrow_stream
+----
+logical_plan TableScan: arrow_stream projection=[f0, f1, f2]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/datasource-arrow/tests/data/example_stream.arrow]]}, projection=[f0, f1, f2], file_type=arrow_stream
+
+# stream format should return same data as file format
+query ITB
+SELECT * FROM arrow_stream
+----
+1 foo true
+2 bar NULL
+3 baz false
+4 NULL true
+
+# Verify both file and stream formats return identical results
+query ITB
+SELECT * FROM arrow_simple ORDER BY f0
+----
+1 foo true
+2 bar NULL
+3 baz false
+4 NULL true
+
+query ITB
+SELECT * FROM arrow_stream ORDER BY f0
+----
+1 foo true
+2 bar NULL
+3 baz false
+4 NULL true
+
+# Both formats should support projection pushdown
+query IT
+SELECT f0, f1 FROM arrow_simple ORDER BY f0
+----
+1 foo
+2 bar
+3 baz
+4 NULL
+
+query IT
+SELECT f0, f1 FROM arrow_stream ORDER BY f0
+----
+1 foo
+2 bar
+3 baz
+4 NULL
+
+# Both formats should support filtering
+query ITB
+SELECT * FROM arrow_simple WHERE f0 > 2 ORDER BY f0
+----
+3 baz false
+4 NULL true
+
+query ITB
+SELECT * FROM arrow_stream WHERE f0 > 2 ORDER BY f0
+----
+3 baz false
+4 NULL true

@@ -23,6 +23,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
+use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -152,7 +153,13 @@ impl FileFormat for ArrowFormat {
                 GetResultPayload::File(mut file, _) => {
                     match FileReader::try_new(&mut file, None) {
                         Ok(reader) => reader.schema(),
-                        Err(_) => StreamReader::try_new(&mut file, None)?.schema(),
+                        Err(_) => {
+                            // not in the file format, but FileReader read some bytes
+                            // while trying to parse the file and so we need to rewind
+                            // it to the beginning of the file
+                            file.seek(SeekFrom::Start(0))?;
+                            StreamReader::try_new(&mut file, None)?.schema()
+                        }
                     }
                 }
                 GetResultPayload::Stream(stream) => infer_ipc_schema(stream).await?,
