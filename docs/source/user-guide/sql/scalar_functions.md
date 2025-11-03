@@ -2660,7 +2660,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `now`
 
-Returns the current UTC timestamp.
+Returns the current timestamp in the system configured timezone (None by default).
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
 
