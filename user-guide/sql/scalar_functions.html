@@ -3133,7 +3133,7 @@ Can be a constant, column, or function.</p></li>
 </section>
 <section id="now">
 <h3><code class="docutils literal notranslate"><span class="pre">now</span></code><a class="headerlink" href="#now" title="Link to this heading">#</a></h3>
-<p>Returns the current UTC timestamp.</p>
+<p>Returns the current timestamp in the system configured timezone (None by default).</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">now()</span></code> return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">now</span><span class="p">()</span>
 </pre></div>

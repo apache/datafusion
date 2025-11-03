@@ -494,8 +494,8 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.time_zone</p></td>
-<td><p>+00:00</p></td>
-<td><p>The default time zone Some functions, e.g. <code class="docutils literal notranslate"><span class="pre">EXTRACT(HOUR</span> <span class="pre">from</span> <span class="pre">SOME_TIME)</span></code>, shift the underlying datetime according to this time zone, and then extract the hour</p></td>
+<td><p>NULL</p></td>
+<td><p>The default time zone Some functions, e.g. <code class="docutils literal notranslate"><span class="pre">now</span></code> return timestamps in this time zone</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.enable_page_index</p></td>
 <td><p>true</p></td>

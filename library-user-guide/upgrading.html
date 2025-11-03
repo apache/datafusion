@@ -529,6 +529,18 @@ Users may need to update their paths to account for these changes.</p>
 <em>execution plan</em> of the query. With this release, <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">query</span></code> now outputs
 the computed <em>schema</em> of the query, consistent with the behavior of <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">table_name</span></code>.</p>
 </section>
+<section id="datafusion-execution-time-zone-default-configuration-changed">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> default configuration changed<a class="headerlink" href="#datafusion-execution-time-zone-default-configuration-changed" title="Link to this heading">#</a></h3>
+<p>The default value for <code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> previously was a string value of <code class="docutils literal notranslate"><span class="pre">+00:00</span></code> (GMT/Zulu time).
+This was changed to be an <code class="docutils literal notranslate"><span class="pre">Option&lt;String&gt;</span></code> with a default of <code class="docutils literal notranslate"><span class="pre">None</span></code>. If you want to change the timezone back
+to the previous value you can execute the sql:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span>
+<span class="n">TIMEZONE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;+00:00&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>This change was made to better support using the default timezone in scalar UDF functions such as
+<code class="docutils literal notranslate"><span class="pre">now</span></code>, <code class="docutils literal notranslate"><span class="pre">current_date</span></code>, <code class="docutils literal notranslate"><span class="pre">current_time</span></code>, and <code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code> among others.</p>
+</section>
 <section id="introduction-of-tableschema-and-changes-to-filesource-with-schema-method">
 <h3>Introduction of <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> and changes to <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method<a class="headerlink" href="#introduction-of-tableschema-and-changes-to-filesource-with-schema-method" title="Link to this heading">#</a></h3>
 <p>A new <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> struct has been introduced in the <code class="docutils literal notranslate"><span class="pre">datafusion-datasource</span></code> crate to better manage table schemas with partition columns. This struct helps distinguish between:</p>
@@ -1562,6 +1574,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reorganization-of-arrowsource-into-datafusion-datasource-arrow-crate">Reorganization of <code class="docutils literal notranslate"><span class="pre">ArrowSource</span></code> into <code class="docutils literal notranslate"><span class="pre">datafusion-datasource-arrow</span></code> crate</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filescanconfig-projection-renamed-to-filescanconfig-projection-exprs"><code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection</span></code> renamed to <code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection_exprs</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#describe-query-support"><code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">query</span></code> support</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-execution-time-zone-default-configuration-changed"><code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> default configuration changed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#introduction-of-tableschema-and-changes-to-filesource-with-schema-method">Introduction of <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> and changes to <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-is-ordered-set-aggregate-has-been-renamed-to-aggregateudfimpl-supports-within-group-clause"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_ordered_set_aggregate</span></code> has been renamed to <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_within_group_clause</span></code></a></li>
 </ul>
