@@ -428,7 +428,6 @@ async fn infer_ipc_schema(
     infer_ipc_schema_ignoring_preamble_bytes(bytes, preamble_size, stream).await
 }
 
-/// Infer schema from IPC format, ignoring the preamble bytes
 async fn infer_ipc_schema_ignoring_preamble_bytes(
     bytes: Vec<u8>,
     preamble_size: usize,
