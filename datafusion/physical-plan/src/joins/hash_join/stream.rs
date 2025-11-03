@@ -115,7 +115,6 @@ impl BuildSide {
 ///  │          │
 ///  │          ▼
 ///  └─ ProcessProbeBatch
-///
 /// ```
 #[derive(Debug, Clone)]
 pub(super) enum HashJoinStreamState {
