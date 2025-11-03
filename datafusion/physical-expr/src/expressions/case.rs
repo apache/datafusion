@@ -2266,13 +2266,10 @@ mod tests {
         let a1 = Arc::new(StringArray::from(vec![Some("A"), Some("C")]));
         let a2 = Arc::new(StringArray::from(vec![Some("B")]));
 
-        let mask = BooleanArray::from(vec![
-            true,
-            false,
-            true
-        ]);
+        let mask = BooleanArray::from(vec![true, false, true]);
 
-        let merged = merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
+        let merged =
+            merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
         let merged = merged.as_string::<i32>();
 
         assert_eq!(merged.len(), mask.len());
