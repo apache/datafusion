@@ -17,9 +17,8 @@
 
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::{DataType, DecimalType};
+use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use arrow_buffer::i256;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
@@ -185,42 +184,22 @@ where
     })
 }
 
-macro_rules! make_decimal_unscale_fn {
-    ($t:ty, $name:ident) => {
-        /// Converts Decimal components (value and scale) to an unscaled underlying integer value
-        pub fn $name(value: $t, scale: i8) -> Result<$t, ArrowError> {
-            if scale < 0 {
-                Err(ArrowError::ComputeError(
-                    "Negative scale is not supported".into(),
-                ))
-            } else if scale == 0 {
-                Ok(value)
-            } else {
-                match <$t>::from(10).checked_pow(scale as u32) {
-                    Some(divisor) => Ok(value / divisor),
-                    None => Err(ArrowError::ComputeError(format!(
-                        "Cannot get a power of {scale}"
-                    ))),
-                }
-            }
+/// Converts Decimal128 components (value and scale) to an unscaled i128
+pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        match i128::from(10).checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
         }
-    };
-}
-
-make_decimal_unscale_fn!(i32, decimal32_to_i32);
-make_decimal_unscale_fn!(i64, decimal64_to_i64);
-make_decimal_unscale_fn!(i128, decimal128_to_i128);
-make_decimal_unscale_fn!(i256, decimal256_to_i256);
-
-/// Change scale of decimal array to 0 instead of default scale 10
-/// It is required to reset scale for decimals. automatically constructed from
-/// Apache Arrow operations on underlying integer type
-pub fn reset_decimal_scale<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
-where
-    T: DecimalType,
-{
-    let precision = array.precision();
-    Ok(array.clone().with_precision_and_scale(precision, 0)?)
+    }
 }
 
 #[cfg(test)]
