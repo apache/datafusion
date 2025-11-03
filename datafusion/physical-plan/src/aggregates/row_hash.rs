@@ -604,9 +604,11 @@ impl GroupedHashAggregateStream {
         };
 
         let reduction_factor = if agg.mode == AggregateMode::Partial {
-            Some(MetricBuilder::new(&agg.metrics)
-            .with_type(metrics::MetricType::SUMMARY)
-            .ratio_metrics("reduction_factor", partition))
+            Some(
+                MetricBuilder::new(&agg.metrics)
+                    .with_type(metrics::MetricType::SUMMARY)
+                    .ratio_metrics("reduction_factor", partition),
+            )
         } else {
             None
         };
@@ -674,7 +676,8 @@ impl Stream for GroupedHashAggregateStream {
                             let timer = elapsed_compute.timer();
                             let input_rows = batch.num_rows();
 
-                            if let Some(reduction_factor) = self.reduction_factor.as_ref() {
+                            if let Some(reduction_factor) = self.reduction_factor.as_ref()
+                            {
                                 reduction_factor.add_total(input_rows);
                             }
 
