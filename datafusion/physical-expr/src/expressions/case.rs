@@ -2231,7 +2231,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge() {
+    fn test_merge_n() {
         let a1 = StringArray::from(vec![Some("A")]).to_data();
         let a2 = StringArray::from(vec![Some("B")]).to_data();
         let a3 = StringArray::from(vec![Some("C"), Some("D")]).to_data();
@@ -2259,5 +2259,28 @@ mod tests {
         assert_eq!(merged.value(4), "C");
         assert!(merged.is_valid(5));
         assert_eq!(merged.value(5), "D");
+    }
+
+    #[test]
+    fn test_merge() {
+        let a1 = Arc::new(StringArray::from(vec![Some("A"), Some("C")]));
+        let a2 = Arc::new(StringArray::from(vec![Some("B")]));
+
+        let mask = BooleanArray::from(vec![
+            true,
+            false,
+            true
+        ]);
+
+        let merged = merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
+        let merged = merged.as_string::<i32>();
+
+        assert_eq!(merged.len(), mask.len());
+        assert!(merged.is_valid(0));
+        assert_eq!(merged.value(0), "A");
+        assert!(merged.is_valid(1));
+        assert_eq!(merged.value(1), "B");
+        assert!(merged.is_valid(2));
+        assert_eq!(merged.value(2), "C");
     }
 }
