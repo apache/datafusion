@@ -195,6 +195,12 @@ fn general_array_reverse<O: OffsetSizeTrait>(
     )?))
 }
 
+/// Reverses a list view array.
+///
+/// Construct indices, sizes and offsets for the reversed array by iterating over
+/// the list view array in the logical order, and reversing the order of the elements.
+/// We end up with a list view array where the elements are in order,
+/// even if the original array had elements out of order.
 fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     array: &GenericListViewArray<O>,
     field: &FieldRef,
@@ -203,35 +209,32 @@ fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     let values = array.values();
     let sizes = array.sizes();
 
-    // Construct indices, sizes and offsets for the reversed array by iterating over
-    // the list view array in the logical order, and reversing the order of the elements.
-    // We end up with a list view array where the elements are in order,
-    // even if the original array had elements out of order.
+    let mut new_offsets: Vec<O> = Vec::with_capacity(offsets.len());
     let mut indices: Vec<O> = Vec::with_capacity(values.len());
     let mut new_sizes = Vec::with_capacity(sizes.len());
-    let mut new_offsets: Vec<O> = Vec::with_capacity(offsets.len());
-    // Add the offset of the first array
-    new_offsets.push(O::zero());
-    for (i, offset) in offsets.iter().enumerate() {
-        // If this array is null, we set the new array to null with size 0 and continue
-        if array.is_null(i) {
+
+    let mut current_offset = O::zero();
+    for (row_index, offset) in offsets.iter().enumerate() {
+        new_offsets.push(current_offset);
+
+        // If this array is null, we set its size to 0 and continue
+        if array.is_null(row_index) {
             new_sizes.push(O::zero());
-            new_offsets.push(new_offsets[i]);
             continue;
         }
+        let size = sizes[row_index];
+        new_sizes.push(size);
 
-        // Each array is located at [offset, offset + size), so we collect indices in the reverse order
-        let array_start = offset.as_usize();
-        let array_end = array_start + sizes[i].as_usize();
-        for idx in (array_start..array_end).rev() {
-            indices.push(O::usize_as(idx));
+        // Each array is located at [offset, offset + size), collect indices in the reverse order
+        let array_start = *offset;
+        let array_end = array_start + size;
+        let mut idx = array_end - O::one();
+        while idx >= array_start {
+            indices.push(idx);
+            idx = idx - O::one();
         }
-        new_sizes.push(sizes[i]);
 
-        // If there is another array, we add the offset of that array
-        if i < sizes.len() - 1 {
-            new_offsets.push(new_offsets[i] + sizes[i]);
-        }
+        current_offset += size;
     }
 
     // Materialize values from underlying array with take
@@ -333,7 +336,7 @@ mod tests {
             &list_view,
             &Arc::new(Field::new("test", DataType::Int32, true)),
         )?;
-        let reversed = list_view_values(&result.as_list_view::<i32>());
+        let reversed = list_view_values(result.as_list_view::<i32>());
         let expected = vec![
             Some(vec![1]),
             Some(vec![6, 5, 4, 3, 2]),
@@ -356,7 +359,7 @@ mod tests {
             &list_view,
             &Arc::new(Field::new("test", DataType::Int32, true)),
         )?;
-        let reversed = list_view_values(&result.as_list_view::<i64>());
+        let reversed = list_view_values(result.as_list_view::<i64>());
         let expected = vec![
             Some(vec![1]),
             Some(vec![6, 5, 4, 3, 2]),
@@ -384,7 +387,7 @@ mod tests {
             &list_view,
             &Arc::new(Field::new("test", DataType::Int32, true)),
         )?;
-        let reversed = list_view_values(&result.as_list_view::<i32>());
+        let reversed = list_view_values(result.as_list_view::<i32>());
         let expected = vec![
             Some(vec![9, 8, 7]),
             Some(vec![6, 5, 4, 3, 2]),
@@ -412,14 +415,32 @@ mod tests {
             &list_view,
             &Arc::new(Field::new("test", DataType::Int32, true)),
         )?;
-        let result = result.as_list_view::<i32>();
-        let reversed = list_view_values(&result);
+        let reversed = list_view_values(result.as_list_view::<i32>());
         let expected = vec![
             Some(vec![9, 8, 7]),
             Some(vec![6, 5, 4, 3, 2]),
             None,
             Some(vec![1]),
         ];
+        assert_eq!(expected, reversed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_list_view_empty() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let offsets = ScalarBuffer::from(vec![]);
+        let sizes = ScalarBuffer::from(vec![]);
+        let empty_array: Vec<i32> = vec![];
+        let values = Arc::new(Int32Array::from(empty_array));
+        let nulls = None;
+        let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
+        let result = list_view_reverse(
+            &list_view,
+            &Arc::new(Field::new("test", DataType::Int32, true)),
+        )?;
+        let reversed = list_view_values(result.as_list_view::<i32>());
+        let expected: Vec<Option<Vec<i32>>> = vec![];
         assert_eq!(expected, reversed);
         Ok(())
     }
