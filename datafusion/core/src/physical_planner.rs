@@ -2344,7 +2344,25 @@ impl DefaultPhysicalPlanner {
         Ok(mem_exec)
     }
 
-    fn create_project_physical_exec(
+    /// Creates a physical [`ProjectionExec`] from logical projection expressions.
+    ///
+    /// This method converts logical projection expressions into physical expressions,
+    /// handling column name mapping between logical and physical schemas. It also
+    /// detects and plans asynchronous expressions (e.g., async UDFs) by wrapping them
+    /// in an [`AsyncFuncExec`] when needed.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_state`: The session state for accessing configuration and resources
+    /// * `input_exec`: The physical execution plan providing input data
+    /// * `input`: The logical plan corresponding to the input execution plan
+    /// * `expr`: The logical projection expressions to convert
+    ///
+    /// # Returns
+    ///
+    /// A [`ProjectionExec`] for synchronous expressions, or a [`ProjectionExec`]
+    /// wrapping an [`AsyncFuncExec`] when async expressions are detected.
+    pub fn create_project_physical_exec(
         &self,
         session_state: &SessionState,
         input_exec: Arc<dyn ExecutionPlan>,
