@@ -1074,7 +1074,7 @@ impl ExecutionPlan for AggregateExec {
 
             // For GROUPING SETS, verify this filter's columns appear in all grouping sets
             if self.group_by.groups().len() > 1 {
-                let filter_column_indices: HashSet<usize> = filter_columns
+                let filter_column_indices: Vec<usize> = filter_columns
                     .iter()
                     .filter_map(|filter_col| {
                         self.group_by.expr().iter().position(|(expr, _)| {
