@@ -382,6 +382,7 @@ mod tests {
     use arrow::datatypes::{DataType, SchemaBuilder};
     use std::sync::Arc;
 
+    #[allow(clippy::needless_pass_by_value)]
     fn create_qualified_schema(qualifier: &str, names: Vec<&str>) -> Result<DFSchema> {
         let mut schema_builder = SchemaBuilder::new();
         schema_builder.extend(

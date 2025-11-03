@@ -478,6 +478,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn extract_column_options(
         props: &WriterProperties,
         col: ColumnPath,

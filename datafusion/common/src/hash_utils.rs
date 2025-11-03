@@ -140,6 +140,7 @@ fn hash_array_primitive<T>(
 /// If `rehash==true` this combines the previous hash value in the buffer
 /// with the new hash using `combine_hashes`
 #[cfg(not(feature = "force_hash_collisions"))]
+#[allow(clippy::needless_pass_by_value)]
 fn hash_array<T>(
     array: T,
     random_state: &RandomState,
