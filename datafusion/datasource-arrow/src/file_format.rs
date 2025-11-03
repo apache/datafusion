@@ -23,10 +23,8 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
-use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use arrow::array::{RecordBatch, RecordBatchReader};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
@@ -51,7 +49,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::source::ArrowSource;
+use crate::source::{ArrowFileSource, ArrowStreamSource};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -63,7 +61,7 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use object_store::{GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore};
 use tokio::io::AsyncWriteExt;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
@@ -177,10 +175,39 @@ impl FileFormat for ArrowFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         conf: FileScanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source = Arc::new(ArrowSource::default());
+        let is_stream_format = if let Some(first_group) = conf.file_groups.first() {
+            if let Some(first_file) = first_group.files().first() {
+                let object_store =
+                    state.runtime_env().object_store(&conf.object_store_url)?;
+
+                let get_opts = GetOptions {
+                    range: Some(GetRange::Bounded(0..6)),
+                    ..Default::default()
+                };
+                let result = object_store
+                    .get_opts(&first_file.object_meta.location, get_opts)
+                    .await?;
+                let bytes = result.bytes().await?;
+
+                // assume stream format if the file is too short
+                // or the file does not start with the magic number
+                bytes.len() < 6 || bytes[0..6] != ARROW_MAGIC
+            } else {
+                false // no files, default to file format
+            }
+        } else {
+            false // no file groups, default to file format
+        };
+
+        let source: Arc<dyn FileSource> = if is_stream_format {
+            Arc::new(ArrowStreamSource::default())
+        } else {
+            Arc::new(ArrowFileSource::default())
+        };
+
         let config = FileScanConfigBuilder::from(conf)
             .with_source(source)
             .build();
@@ -205,7 +232,9 @@ impl FileFormat for ArrowFormat {
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(ArrowSource::default())
+        // defaulting to the file format source since it's
+        // more capable in general
+        Arc::new(ArrowFileSource::default())
     }
 }
 
@@ -346,8 +375,8 @@ impl DataSink for ArrowFileSink {
     }
 }
 
-/// Custom implementation of inferring schema. Should eventually be moved upstream to arrow-rs.
-/// See <https://github.com/apache/arrow-rs/issues/5021>
+// Custom implementation of inferring schema. Should eventually be moved upstream to arrow-rs.
+// See <https://github.com/apache/arrow-rs/issues/5021>
 
 const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
@@ -389,7 +418,7 @@ async fn infer_ipc_schema(
         0
     };
 
-    return infer_ipc_schema_ignoring_preamble_bytes(bytes, preamble_size, stream).await;
+    infer_ipc_schema_ignoring_preamble_bytes(bytes, preamble_size, stream).await
 }
 
 /// Infer schema from IPC format, ignoring the preamble bytes
@@ -458,32 +487,10 @@ async fn collect_at_least_n_bytes(
     if buf.len() < n {
         return Err(ArrowError::ParseError(
             "Unexpected end of byte stream for Arrow IPC file".to_string(),
-        ))?;
+        )
+        .into());
     }
     Ok(buf)
-}
-
-/// Creates a [`RecordBatchReader`] for Arrow IPC formatted data from a
-/// [`Read`] and [`Seek`] reader. Detects whether `reader`'s format
-/// is IPC file or IPC stream using the `ARROW1` magic number.
-pub fn try_new_record_batch_reader<R: Read + Seek + Send + 'static>(
-    mut reader: R,
-    projection: Option<Vec<usize>>,
-) -> Result<Box<dyn RecordBatchReader<Item = Result<RecordBatch, ArrowError>> + Send>> {
-    let stream_position = reader.stream_position()?;
-    let mut buffer = [0; 6];
-    if reader.read(&mut buffer)? < 6 {
-        return Err(ArrowError::ParseError(
-            "Unexpected end of byte stream for Arrow IPC file".to_string(),
-        ))?;
-    }
-    reader.seek(SeekFrom::Start(stream_position))?;
-
-    if buffer == ARROW_MAGIC {
-        return Ok(Box::new(FileReader::try_new(reader, projection)?));
-    }
-
-    Ok(Box::new(StreamReader::try_new(reader, projection)?))
 }
 
 #[cfg(test)]

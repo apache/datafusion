@@ -37,7 +37,7 @@ pub use datafusion_datasource_parquet::{ParquetFileMetrics, ParquetFileReaderFac
 
 pub use json::{JsonOpener, JsonSource};
 
-pub use arrow::{ArrowOpener, ArrowSource};
+pub use arrow::{ArrowFileOpener, ArrowFileSource, ArrowStreamOpener, ArrowStreamSource};
 pub use csv::{CsvOpener, CsvSource};
 pub use datafusion_datasource::file::FileSource;
 pub use datafusion_datasource::file_groups::FileGroup;
