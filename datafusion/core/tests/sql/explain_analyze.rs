@@ -68,6 +68,13 @@ async fn explain_analyze_baseline_metrics() {
         "AggregateExec: mode=Partial, gby=[]",
         "output_bytes="
     );
+
+    assert_metrics!(
+        &formatted,
+        "AggregateExec: mode=Partial, gby=[c1@0 as c1]",
+        "reduction_factor="
+    );
+
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
