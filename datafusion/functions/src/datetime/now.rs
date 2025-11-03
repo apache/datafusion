@@ -58,8 +58,7 @@ impl NowFunc {
     ///
     /// Prefer [`NowFunc::new_with_config`] which allows specifying the
     /// timezone via [`ConfigOptions`]. This helper now mirrors the
-    /// canonical default offset (`"+00:00"`) provided by
-    /// `ConfigOptions::default()`.
+    /// canonical default offset (None) provided by `ConfigOptions::default()`.
     pub fn new() -> Self {
         Self::new_with_config(&ConfigOptions::default())
     }
@@ -182,6 +181,6 @@ mod tests {
             ScalarValue::TimestampNanosecond(None, configured_now.timezone.clone());
 
         assert_eq!(legacy_scalar, configured_scalar);
-        assert_eq!(Some("+00:00"), legacy_now.timezone.as_deref());
+        assert_eq!(None, legacy_now.timezone.as_deref());
     }
 }
