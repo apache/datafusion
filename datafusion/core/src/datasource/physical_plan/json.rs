@@ -297,7 +297,7 @@ mod tests {
         let source = Arc::new(JsonSource::new());
         let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
-            .with_projection(Some(vec![0, 2]))
+            .with_projection_indices(Some(vec![0, 2]))
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
         let exec = DataSourceExec::from_data_source(conf);
@@ -345,7 +345,7 @@ mod tests {
         let source = Arc::new(JsonSource::new());
         let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
-            .with_projection(Some(vec![3, 0, 2]))
+            .with_projection_indices(Some(vec![3, 0, 2]))
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
         let exec = DataSourceExec::from_data_source(conf);

@@ -70,7 +70,7 @@ use arrow::array::{
     TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
     UInt64Array, UInt8Array, UnionArray,
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{cast_with_options, CastOptions};
 use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
@@ -171,9 +171,9 @@ pub use struct_builder::ScalarStructBuilder;
 /// let field_b = Field::new("b", DataType::Utf8, false);
 ///
 /// let s1 = ScalarStructBuilder::new()
-///    .with_scalar(field_a, ScalarValue::from(1i32))
-///    .with_scalar(field_b, ScalarValue::from("foo"))
-///    .build();
+///     .with_scalar(field_a, ScalarValue::from(1i32))
+///     .with_scalar(field_b, ScalarValue::from("foo"))
+///     .build();
 /// ```
 ///
 /// ## Example: Creating a null [`ScalarValue::Struct`] using [`ScalarStructBuilder`]
@@ -199,13 +199,13 @@ pub use struct_builder::ScalarStructBuilder;
 /// // Build a struct like: {a: 1, b: "foo"}
 /// // Field description
 /// let fields = Fields::from(vec![
-///   Field::new("a", DataType::Int32, false),
-///   Field::new("b", DataType::Utf8, false),
+///     Field::new("a", DataType::Int32, false),
+///     Field::new("b", DataType::Utf8, false),
 /// ]);
 /// // one row arrays for each field
 /// let arrays: Vec<ArrayRef> = vec![
-///   Arc::new(Int32Array::from(vec![1])),
-///   Arc::new(StringArray::from(vec!["foo"])),
+///     Arc::new(Int32Array::from(vec![1])),
+///     Arc::new(StringArray::from(vec!["foo"])),
 /// ];
 /// // no nulls for this array
 /// let nulls = None;
@@ -1068,8 +1068,8 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::datatypes::DataType;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalar = ScalarValue::try_new_null(&DataType::Int32).unwrap();
     /// assert_eq!(scalar.is_null(), true);
@@ -2231,23 +2231,16 @@ impl ScalarValue {
     ///
     /// # Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::{BooleanArray, Int32Array};
+    /// use datafusion_common::ScalarValue;
     ///
     /// let arr = Int32Array::from(vec![Some(1), None, Some(10)]);
     /// let five = ScalarValue::Int32(Some(5));
     ///
-    /// let result = arrow::compute::kernels::cmp::lt(
-    ///   &arr,
-    ///   &five.to_scalar().unwrap(),
-    /// ).unwrap();
+    /// let result =
+    ///     arrow::compute::kernels::cmp::lt(&arr, &five.to_scalar().unwrap()).unwrap();
     ///
-    /// let expected = BooleanArray::from(vec![
-    ///     Some(true),
-    ///     None,
-    ///     Some(false)
-    ///   ]
-    /// );
+    /// let expected = BooleanArray::from(vec![Some(true), None, Some(false)]);
     ///
     /// assert_eq!(&result, &expected);
     /// ```
@@ -2265,26 +2258,20 @@ impl ScalarValue {
     ///
     /// # Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::{ArrayRef, BooleanArray};
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///   ScalarValue::Boolean(Some(true)),
-    ///   ScalarValue::Boolean(None),
-    ///   ScalarValue::Boolean(Some(false)),
+    ///     ScalarValue::Boolean(Some(true)),
+    ///     ScalarValue::Boolean(None),
+    ///     ScalarValue::Boolean(Some(false)),
     /// ];
     ///
     /// // Build an Array from the list of ScalarValues
-    /// let array = ScalarValue::iter_to_array(scalars.into_iter())
-    ///   .unwrap();
+    /// let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
     ///
-    /// let expected: ArrayRef = std::sync::Arc::new(
-    ///   BooleanArray::from(vec![
-    ///     Some(true),
-    ///     None,
-    ///     Some(false)
-    ///   ]
-    /// ));
+    /// let expected: ArrayRef =
+    ///     std::sync::Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)]));
     ///
     /// assert_eq!(&array, &expected);
     /// ```
@@ -2731,23 +2718,24 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::array::{Int32Array, ListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
     /// let result = ScalarValue::new_list(&scalars, &DataType::Int32, true);
     ///
-    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     None,
+    ///     Some(2),
+    /// ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -2791,23 +2779,25 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::array::{Int32Array, ListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
-    /// let result = ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32, true);
+    /// let result =
+    ///     ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32, true);
     ///
-    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     None,
+    ///     Some(2),
+    /// ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -2833,23 +2823,25 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{LargeListArray, Int32Array};
+    /// use arrow::array::{Int32Array, LargeListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_large_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
     /// let result = ScalarValue::new_large_list(&scalars, &DataType::Int32);
     ///
-    /// let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected =
+    ///     LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///         Some(1),
+    ///         None,
+    ///         Some(2),
+    ///     ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -2888,9 +2880,17 @@ impl ScalarValue {
             ScalarValue::Decimal256(e, precision, scale) => Arc::new(
                 ScalarValue::build_decimal256_array(*e, *precision, *scale, size)?,
             ),
-            ScalarValue::Boolean(e) => {
-                Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
-            }
+            ScalarValue::Boolean(e) => match e {
+                None => new_null_array(&DataType::Boolean, size),
+                Some(true) => {
+                    Arc::new(BooleanArray::new(BooleanBuffer::new_set(size), None))
+                        as ArrayRef
+                }
+                Some(false) => {
+                    Arc::new(BooleanArray::new(BooleanBuffer::new_unset(size), None))
+                        as ArrayRef
+                }
+            },
             ScalarValue::Float64(e) => {
                 build_array_from_option!(Float64, Float64Array, e, size)
             }
@@ -2973,15 +2973,13 @@ impl ScalarValue {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<BinaryArray>(),
                 ),
-                None => Arc::new(repeat_n(None::<&str>, size).collect::<BinaryArray>()),
+                None => new_null_array(&DataType::Binary, size),
             },
             ScalarValue::BinaryView(e) => match e {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<BinaryViewArray>(),
                 ),
-                None => {
-                    Arc::new(repeat_n(None::<&str>, size).collect::<BinaryViewArray>())
-                }
+                None => new_null_array(&DataType::BinaryView, size),
             },
             ScalarValue::FixedSizeBinary(s, e) => match e {
                 Some(value) => Arc::new(
@@ -2991,21 +2989,13 @@ impl ScalarValue {
                     )
                     .unwrap(),
                 ),
-                None => Arc::new(
-                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                        repeat_n(None::<&[u8]>, size),
-                        *s,
-                    )
-                    .unwrap(),
-                ),
+                None => Arc::new(FixedSizeBinaryArray::new_null(*s, size)),
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<LargeBinaryArray>(),
                 ),
-                None => {
-                    Arc::new(repeat_n(None::<&str>, size).collect::<LargeBinaryArray>())
-                }
+                None => new_null_array(&DataType::LargeBinary, size),
             },
             ScalarValue::List(arr) => {
                 if size == 1 {
@@ -3250,14 +3240,14 @@ impl ScalarValue {
     ///
     /// Example 1: Array (ScalarValue::Int32)
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::ScalarValue;
     ///
     /// // Equivalent to [[1,2,3], [4,5]]
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    Some(vec![Some(4), Some(5)])
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
     /// // Convert the array into Scalar Values for each row
@@ -3280,15 +3270,15 @@ impl ScalarValue {
     ///
     /// Example 2: Nested array (ScalarValue::List)
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::utils::SingleRowListArrayBuilder;
+    /// use datafusion_common::ScalarValue;
     /// use std::sync::Arc;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    Some(vec![Some(4), Some(5)])
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
     /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
@@ -3297,33 +3287,34 @@ impl ScalarValue {
     /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
-    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///     Some(vec![Some(1), Some(2), Some(3)]),
-    /// ]);
-    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///     Some(vec![Some(4), Some(5)]),
-    /// ]);
+    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     Some(2),
+    ///     Some(3),
+    /// ])]);
+    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(4),
+    ///     Some(5),
+    /// ])]);
     ///
-    /// let expected = vec![
-    ///   Some(vec![
+    /// let expected = vec![Some(vec![
     ///     ScalarValue::List(Arc::new(l1)),
     ///     ScalarValue::List(Arc::new(l2)),
-    ///   ]),
-    /// ];
+    /// ])];
     ///
     /// assert_eq!(scalar_vec, expected);
     /// ```
     ///
     /// Example 3: Nullable array
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::ScalarValue;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    None,
-    ///    Some(vec![Some(4), Some(5)])
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    ///     None,
+    ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
     /// // Convert the array into Scalar Values for each row
@@ -8702,7 +8693,7 @@ mod tests {
             ])),
             true,
         ));
-        let scalars = vec![
+        let scalars = [
             ScalarValue::try_new_null(&DataType::List(Arc::clone(&field_ref))).unwrap(),
             ScalarValue::try_new_null(&DataType::LargeList(Arc::clone(&field_ref)))
                 .unwrap(),

@@ -26,14 +26,15 @@ use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
+#[cfg(feature = "parquet_encryption")]
+use hex;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
-
 #[cfg(feature = "parquet_encryption")]
-use hex;
+use std::sync::Arc;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -56,7 +57,7 @@ use hex;
 ///        /// Field 3 doc
 ///        field3: Option<usize>, default = None
 ///    }
-///}
+/// }
 /// ```
 ///
 /// Will generate
@@ -620,7 +621,10 @@ config_namespace! {
         /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and
         /// another to fetch the metadata length encoded in the footer
-        pub metadata_size_hint: Option<usize>, default = None
+        /// Default setting to 512 KiB, which should be sufficient for most parquet files,
+        /// it can reduce one I/O operation per parquet file. If the metadata is larger than
+        /// the hint, two reads will still be performed.
+        pub metadata_size_hint: Option<usize>, default = Some(512 * 1024)
 
         /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
@@ -937,6 +941,11 @@ config_namespace! {
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         pub prefer_hash_join: bool, default = true
+
+        /// When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently
+        /// experimental. Physical planner will opt for PiecewiseMergeJoin when there is only
+        /// one range filter.
+        pub enable_piecewise_merge_join: bool, default = false
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
@@ -1317,36 +1326,35 @@ impl ConfigOptions {
 /// # Example
 /// ```
 /// use datafusion_common::{
-///     config::ConfigExtension, extensions_options,
-///     config::ConfigOptions,
+///     config::ConfigExtension, config::ConfigOptions, extensions_options,
 /// };
-///  // Define a new configuration struct using the `extensions_options` macro
-///  extensions_options! {
-///     /// My own config options.
-///     pub struct MyConfig {
-///         /// Should "foo" be replaced by "bar"?
-///         pub foo_to_bar: bool, default = true
+/// // Define a new configuration struct using the `extensions_options` macro
+/// extensions_options! {
+///    /// My own config options.
+///    pub struct MyConfig {
+///        /// Should "foo" be replaced by "bar"?
+///        pub foo_to_bar: bool, default = true
 ///
-///         /// How many "baz" should be created?
-///         pub baz_count: usize, default = 1337
-///     }
-///  }
+///        /// How many "baz" should be created?
+///        pub baz_count: usize, default = 1337
+///    }
+/// }
 ///
-///  impl ConfigExtension for MyConfig {
+/// impl ConfigExtension for MyConfig {
 ///     const PREFIX: &'static str = "my_config";
-///  }
+/// }
 ///
-///  // set up config struct and register extension
-///  let mut config = ConfigOptions::default();
-///  config.extensions.insert(MyConfig::default());
+/// // set up config struct and register extension
+/// let mut config = ConfigOptions::default();
+/// config.extensions.insert(MyConfig::default());
 ///
-///  // overwrite config default
-///  config.set("my_config.baz_count", "42").unwrap();
+/// // overwrite config default
+/// config.set("my_config.baz_count", "42").unwrap();
 ///
-///  // check config state
-///  let my_config = config.extensions.get::<MyConfig>().unwrap();
-///  assert!(my_config.foo_to_bar,);
-///  assert_eq!(my_config.baz_count, 42,);
+/// // check config state
+/// let my_config = config.extensions.get::<MyConfig>().unwrap();
+/// assert!(my_config.foo_to_bar,);
+/// assert_eq!(my_config.baz_count, 42,);
 /// ```
 ///
 /// # Note:
@@ -2404,13 +2412,13 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
                 hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
             fep = fep.with_aad_prefix(aad_prefix);
         }
-        fep.build().unwrap()
+        Arc::unwrap_or_clone(fep.build().unwrap())
     }
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
-    fn from(f: &FileEncryptionProperties) -> Self {
+impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
+    fn from(f: &Arc<FileEncryptionProperties>) -> Self {
         let (column_names_vec, column_keys_vec, column_metas_vec) = f.column_keys();
 
         let mut column_encryption_properties: HashMap<
@@ -2552,13 +2560,13 @@ impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
             fep = fep.with_aad_prefix(aad_prefix);
         }
 
-        fep.build().unwrap()
+        Arc::unwrap_or_clone(fep.build().unwrap())
     }
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<&FileDecryptionProperties> for ConfigFileDecryptionProperties {
-    fn from(f: &FileDecryptionProperties) -> Self {
+impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
+    fn from(f: &Arc<FileDecryptionProperties>) -> Self {
         let (column_names_vec, column_keys_vec) = f.column_keys();
         let mut column_decryption_properties: HashMap<
             String,
@@ -2829,6 +2837,7 @@ mod tests {
     };
     use std::any::Any;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {
@@ -2985,16 +2994,15 @@ mod tests {
             .unwrap();
 
         // Test round-trip
-        let config_encrypt: ConfigFileEncryptionProperties =
-            (&file_encryption_properties).into();
-        let encryption_properties_built: FileEncryptionProperties =
-            config_encrypt.clone().into();
+        let config_encrypt =
+            ConfigFileEncryptionProperties::from(&file_encryption_properties);
+        let encryption_properties_built =
+            Arc::new(FileEncryptionProperties::from(config_encrypt.clone()));
         assert_eq!(file_encryption_properties, encryption_properties_built);
 
-        let config_decrypt: ConfigFileDecryptionProperties =
-            (&decryption_properties).into();
-        let decryption_properties_built: FileDecryptionProperties =
-            config_decrypt.clone().into();
+        let config_decrypt = ConfigFileDecryptionProperties::from(&decryption_properties);
+        let decryption_properties_built =
+            Arc::new(FileDecryptionProperties::from(config_decrypt.clone()));
         assert_eq!(decryption_properties, decryption_properties_built);
 
         ///////////////////////////////////////////////////////////////////////////////////

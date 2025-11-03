@@ -40,7 +40,9 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
 };
-use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
+use datafusion_physical_plan::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics,
+};
 use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 
 #[cfg(feature = "parquet_encryption")]
@@ -195,10 +197,12 @@ impl FileOpener for ParquetOpener {
             if let Some(file_pruner) = &mut file_pruner {
                 if file_pruner.should_prune()? {
                     // Return an empty stream immediately to skip the work of setting up the actual stream
-                    file_metrics.files_ranges_pruned_statistics.add(1);
+                    file_metrics.files_ranges_pruned_statistics.add_pruned(1);
                     return Ok(futures::stream::empty().boxed());
                 }
             }
+
+            file_metrics.files_ranges_pruned_statistics.add_matched(1);
 
             // Don't load the page index yet. Since it is not stored inline in
             // the footer, loading the page index if it is not needed will do
@@ -208,7 +212,7 @@ impl FileOpener for ParquetOpener {
             let mut options = ArrowReaderOptions::new().with_page_index(false);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
-                options = options.with_file_decryption_properties((*fd_val).clone());
+                options = options.with_file_decryption_properties(Arc::clone(&fd_val));
             }
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
 
@@ -357,6 +361,7 @@ impl FileOpener for ParquetOpener {
             if let Some(range) = file_range.as_ref() {
                 row_groups.prune_by_range(rg_metadata, range);
             }
+
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
                 if enable_row_group_stats_pruning {
@@ -367,6 +372,12 @@ impl FileOpener for ParquetOpener {
                         predicate,
                         &file_metrics,
                     );
+                } else {
+                    // Update metrics: statistics unavailable, so all row groups are
+                    // matched (not pruned)
+                    file_metrics
+                        .row_groups_pruned_statistics
+                        .add_matched(row_groups.remaining_row_group_count());
                 }
 
                 if enable_bloom_filter && !row_groups.is_empty() {
@@ -378,7 +389,22 @@ impl FileOpener for ParquetOpener {
                             &file_metrics,
                         )
                         .await;
+                } else {
+                    // Update metrics: bloom filter unavailable, so all row groups are
+                    // matched (not pruned)
+                    file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(row_groups.remaining_row_group_count());
                 }
+            } else {
+                // Update metrics: no predicate, so all row groups are matched (not pruned)
+                let n_remaining_row_groups = row_groups.remaining_row_group_count();
+                file_metrics
+                    .row_groups_pruned_statistics
+                    .add_matched(n_remaining_row_groups);
+                file_metrics
+                    .row_groups_pruned_bloom_filter
+                    .add_matched(n_remaining_row_groups);
             }
 
             let mut access_plan = row_groups.build();
@@ -480,7 +506,7 @@ struct EarlyStoppingStream<S> {
     /// None
     done: bool,
     file_pruner: FilePruner,
-    files_ranges_pruned_statistics: Count,
+    files_ranges_pruned_statistics: PruningMetrics,
     /// The inner stream
     inner: S,
 }
@@ -489,7 +515,7 @@ impl<S> EarlyStoppingStream<S> {
     pub fn new(
         stream: S,
         file_pruner: FilePruner,
-        files_ranges_pruned_statistics: Count,
+        files_ranges_pruned_statistics: PruningMetrics,
     ) -> Self {
         Self {
             done: false,
@@ -509,7 +535,9 @@ where
         // Since dynamic filters may have been updated, see if we can stop
         // reading this stream entirely.
         if self.file_pruner.should_prune()? {
-            self.files_ranges_pruned_statistics.add(1);
+            self.files_ranges_pruned_statistics.add_pruned(1);
+            // Previously this file range has been counted as matched
+            self.files_ranges_pruned_statistics.subtract_matched(1);
             self.done = true;
             Ok(None)
         } else {
@@ -581,8 +609,7 @@ impl EncryptionContext {
             None => match &self.encryption_factory {
                 Some((encryption_factory, encryption_config)) => Ok(encryption_factory
                     .get_file_decryption_properties(encryption_config, file_location)
-                    .await?
-                    .map(Arc::new)),
+                    .await?),
                 None => Ok(None),
             },
         }

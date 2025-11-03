@@ -29,7 +29,7 @@
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::metrics::MetricsSet;
+use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
 use datafusion::prelude::{
     col, lit, lit_timestamp_nano, Expr, ParquetReadOptions, SessionContext,
 };
@@ -563,9 +563,9 @@ impl<'a> TestCase<'a> {
             }
         };
 
-        let page_index_rows_pruned = get_value(&metrics, "page_index_rows_pruned");
+        let (page_index_rows_pruned, page_index_rows_matched) =
+            get_pruning_metrics(&metrics, "page_index_rows_pruned");
         println!(" page_index_rows_pruned: {page_index_rows_pruned}");
-        let page_index_rows_matched = get_value(&metrics, "page_index_rows_matched");
         println!(" page_index_rows_matched: {page_index_rows_matched}");
 
         let page_index_filtering_expected = if scan_options.enable_page_index {
@@ -592,14 +592,29 @@ impl<'a> TestCase<'a> {
     }
 }
 
+fn get_pruning_metrics(metrics: &MetricsSet, metric_name: &str) -> (usize, usize) {
+    match metrics.sum_by_name(metric_name) {
+        Some(MetricValue::PruningMetrics {
+            pruning_metrics, ..
+        }) => (pruning_metrics.pruned(), pruning_metrics.matched()),
+        Some(_) => {
+            panic!("Metric '{metric_name}' is not a pruning metric in\n\n{metrics:#?}")
+        }
+        None => panic!(
+            "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+        ),
+    }
+}
+
 fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
     match metrics.sum_by_name(metric_name) {
+        Some(MetricValue::PruningMetrics {
+            pruning_metrics, ..
+        }) => pruning_metrics.pruned(),
         Some(v) => v.as_usize(),
-        _ => {
-            panic!(
-                "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
-            );
-        }
+        None => panic!(
+            "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+        ),
     }
 }
 
@@ -631,8 +646,8 @@ async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
 
 #[tokio::test]
 async fn predicate_cache_pushdown_disable() -> datafusion_common::Result<()> {
-    // Can disable the cache even with filter pushdown by setting the size to 0. In this case we
-    // expect the inner records are reported but no records are read from the cache
+    // Can disable the cache even with filter pushdown by setting the size to 0.
+    // This results in no records read from the cache and no metrics reported
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
     config
@@ -641,13 +656,10 @@ async fn predicate_cache_pushdown_disable() -> datafusion_common::Result<()> {
         .parquet
         .max_predicate_cache_size = Some(0);
     let ctx = SessionContext::new_with_config(config);
+    // Since the cache is disabled, there is no reporting or use of the cache
     PredicateCacheTest {
-        // file has 8 rows, which need to be read twice, one for filter, one for
-        // final output
-        expected_inner_records: 16,
-        // Expect this to 0 records read as the cache is disabled. However, it is
-        // non zero due to https://github.com/apache/arrow-rs/issues/8307
-        expected_records: 3,
+        expected_inner_records: 0,
+        expected_records: 0,
     }
     .run(&ctx)
     .await

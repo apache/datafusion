@@ -31,8 +31,9 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     let field = Field::new("f", data_type.clone(), true).into();
     let schema = Arc::new(Schema::new(vec![Arc::clone(&field)]));
     let accumulator_args = AccumulatorArgs {
-        return_field: field,
+        return_field: Arc::clone(&field),
         schema: &schema,
+        expr_fields: &[field],
         ignore_nulls: false,
         order_bys: &[],
         is_reversed: false,

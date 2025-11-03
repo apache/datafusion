@@ -579,15 +579,11 @@ impl ExprIntervalGraph {
     ///
     /// let mut graph = ExprIntervalGraph::try_new(expr, &schema).unwrap();
     /// // Do it once, while constructing.
-    /// let node_indices = graph
-    ///     .gather_node_indices(&[Arc::new(Column::new("gnz", 0))]);
+    /// let node_indices = graph.gather_node_indices(&[Arc::new(Column::new("gnz", 0))]);
     /// let left_index = node_indices.get(0).unwrap().1;
     ///
     /// // Provide intervals for leaf variables (here, there is only one).
-    /// let intervals = vec![(
-    ///     left_index,
-    ///     Interval::make(Some(10), Some(20)).unwrap(),
-    /// )];
+    /// let intervals = vec![(left_index, Interval::make(Some(10), Some(20)).unwrap())];
     ///
     /// // Evaluate bounds for the composite expression:
     /// graph.assign_intervals(&intervals);
@@ -795,11 +791,11 @@ mod tests {
         result: PropagationResult,
         schema: &Schema,
     ) -> Result<()> {
-        let col_stats = vec![
+        let col_stats = [
             (Arc::clone(&exprs_with_interval.0), left_interval),
             (Arc::clone(&exprs_with_interval.1), right_interval),
         ];
-        let expected = vec![
+        let expected = [
             (Arc::clone(&exprs_with_interval.0), left_expected),
             (Arc::clone(&exprs_with_interval.1), right_expected),
         ];
