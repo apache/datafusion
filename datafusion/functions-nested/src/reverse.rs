@@ -33,6 +33,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use itertools::Itertools;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -137,7 +138,7 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
+fn general_array_reverse<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
@@ -145,33 +146,24 @@ fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
     let mut offsets = vec![O::usize_as(0)];
-    let mut nulls = vec![];
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
-    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+    for (row_index, (&start, &end)) in array.offsets().iter().tuple_windows().enumerate()
+    {
         // skip the null value
         if array.is_null(row_index) {
-            nulls.push(false);
-            offsets.push(offsets[row_index] + O::one());
-            mutable.extend(0, 0, 1);
+            offsets.push(offsets[row_index]);
             continue;
-        } else {
-            nulls.push(true);
         }
 
-        let start = offset_window[0];
-        let end = offset_window[1];
-
         let mut index = end - O::one();
-        let mut cnt = 0;
-
         while index >= start {
             mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
             index = index - O::one();
-            cnt += 1;
         }
-        offsets.push(offsets[row_index] + O::usize_as(cnt));
+        let size = end - start;
+        offsets.push(offsets[row_index] + size);
     }
 
     let data = mutable.freeze();
@@ -179,7 +171,7 @@ fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
-        Some(nulls.into()),
+        array.nulls().cloned(),
     )?))
 }
 
@@ -190,7 +182,6 @@ fn fixed_size_array_reverse(
     let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
-    let mut nulls = vec![];
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], false, capacity);
     let value_length = array.value_length() as usize;
@@ -198,11 +189,8 @@ fn fixed_size_array_reverse(
     for row_index in 0..array.len() {
         // skip the null value
         if array.is_null(row_index) {
-            nulls.push(false);
             mutable.extend(0, 0, value_length);
             continue;
-        } else {
-            nulls.push(true);
         }
         let start = row_index * value_length;
         let end = start + value_length;
@@ -216,6 +204,6 @@ fn fixed_size_array_reverse(
         Arc::clone(field),
         array.value_length(),
         arrow::array::make_array(data),
-        Some(nulls.into()),
+        array.nulls().cloned(),
     )?))
 }

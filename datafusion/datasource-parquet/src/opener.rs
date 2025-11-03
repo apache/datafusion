@@ -361,6 +361,7 @@ impl FileOpener for ParquetOpener {
             if let Some(range) = file_range.as_ref() {
                 row_groups.prune_by_range(rg_metadata, range);
             }
+
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
                 if enable_row_group_stats_pruning {
@@ -371,6 +372,12 @@ impl FileOpener for ParquetOpener {
                         predicate,
                         &file_metrics,
                     );
+                } else {
+                    // Update metrics: statistics unavailable, so all row groups are
+                    // matched (not pruned)
+                    file_metrics
+                        .row_groups_pruned_statistics
+                        .add_matched(row_groups.remaining_row_group_count());
                 }
 
                 if enable_bloom_filter && !row_groups.is_empty() {
@@ -382,7 +389,22 @@ impl FileOpener for ParquetOpener {
                             &file_metrics,
                         )
                         .await;
+                } else {
+                    // Update metrics: bloom filter unavailable, so all row groups are
+                    // matched (not pruned)
+                    file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(row_groups.remaining_row_group_count());
                 }
+            } else {
+                // Update metrics: no predicate, so all row groups are matched (not pruned)
+                let n_remaining_row_groups = row_groups.remaining_row_group_count();
+                file_metrics
+                    .row_groups_pruned_statistics
+                    .add_matched(n_remaining_row_groups);
+                file_metrics
+                    .row_groups_pruned_bloom_filter
+                    .add_matched(n_remaining_row_groups);
             }
 
             let mut access_plan = row_groups.build();

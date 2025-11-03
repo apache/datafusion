@@ -19,7 +19,10 @@
 
 use std::{borrow::Cow, sync::Arc};
 
-use crate::metrics::{value::PruningMetrics, MetricType};
+use crate::metrics::{
+    value::{PruningMetrics, RatioMetrics},
+    MetricType,
+};
 
 use super::{
     Count, ExecutionPlanMetricsSet, Gauge, Label, Metric, MetricValue, Time, Timestamp,
@@ -31,19 +34,18 @@ use super::{
 /// case of constant strings
 ///
 /// ```rust
-///  use datafusion_physical_plan::metrics::*;
+/// use datafusion_physical_plan::metrics::*;
 ///
-///  let metrics = ExecutionPlanMetricsSet::new();
-///  let partition = 1;
+/// let metrics = ExecutionPlanMetricsSet::new();
+/// let partition = 1;
 ///
-///  // Create the standard output_rows metric
-///  let output_rows = MetricBuilder::new(&metrics).output_rows(partition);
+/// // Create the standard output_rows metric
+/// let output_rows = MetricBuilder::new(&metrics).output_rows(partition);
 ///
-///  // Create a operator specific counter with some labels
-///  let num_bytes = MetricBuilder::new(&metrics)
-///    .with_new_label("filename", "my_awesome_file.parquet")
-///    .counter("num_bytes", partition);
-///
+/// // Create a operator specific counter with some labels
+/// let num_bytes = MetricBuilder::new(&metrics)
+///     .with_new_label("filename", "my_awesome_file.parquet")
+///     .counter("num_bytes", partition);
 /// ```
 pub struct MetricBuilder<'a> {
     /// Location that the metric created by this builder will be added do
@@ -265,5 +267,19 @@ impl<'a> MetricBuilder<'a> {
                 pruning_metrics: pruning_metrics.clone(),
             });
         pruning_metrics
+    }
+
+    /// Consumes self and creates a new [`RatioMetrics`]
+    pub fn ratio_metrics(
+        self,
+        name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> RatioMetrics {
+        let ratio_metrics = RatioMetrics::new();
+        self.with_partition(partition).build(MetricValue::Ratio {
+            name: name.into(),
+            ratio_metrics: ratio_metrics.clone(),
+        });
+        ratio_metrics
     }
 }

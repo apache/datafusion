@@ -90,6 +90,11 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
+        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
+        "selectivity=99% (99/100)"
+    );
+    assert_metrics!(
+        &formatted,
         "ProjectionExec: expr=[]",
         "metrics=[output_rows=5, elapsed_compute="
     );
@@ -852,10 +857,29 @@ async fn parquet_explain_analyze() {
 
     // should contain aggregated stats
     assert_contains!(&formatted, "output_rows=8");
-    assert_contains!(&formatted, "row_groups_matched_bloom_filter=0");
-    assert_contains!(&formatted, "row_groups_pruned_bloom_filter=0");
-    assert_contains!(&formatted, "row_groups_matched_statistics=1");
-    assert_contains!(&formatted, "row_groups_pruned_statistics=0");
+    assert_contains!(
+        &formatted,
+        "row_groups_pruned_bloom_filter=1 total \u{2192} 1 matched"
+    );
+    assert_contains!(
+        &formatted,
+        "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+    );
+
+    // The order of metrics is expected to be the same as the actual pruning order
+    // (file-> row-group -> page)
+    let i_file = formatted.find("files_ranges_pruned_statistics").unwrap();
+    let i_rowgroup_stat = formatted.find("row_groups_pruned_statistics").unwrap();
+    let i_rowgroup_bloomfilter =
+        formatted.find("row_groups_pruned_bloom_filter").unwrap();
+    let i_page = formatted.find("page_index_rows_pruned").unwrap();
+
+    assert!(
+        (i_file < i_rowgroup_stat)
+            && (i_rowgroup_stat < i_rowgroup_bloomfilter)
+            && (i_rowgroup_bloomfilter < i_page),
+            "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
+    );
 }
 
 // This test reproduces the behavior described in
@@ -995,9 +1019,7 @@ async fn parquet_explain_analyze_verbose() {
         .to_string();
 
     // should contain the raw per file stats (with the label)
-    assert_contains!(&formatted, "row_groups_matched_bloom_filter{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter{partition=0");
-    assert_contains!(&formatted, "row_groups_matched_statistics{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_statistics{partition=0");
 }
 
