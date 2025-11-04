@@ -233,7 +233,6 @@ mod tests {
             ],
         )?)?;
 
-        // Repartition to have the desired.
         let partitioned_df = df.repartition(Partitioning::RoundRobinBatch(2))?;
         let tmp_dir = tempdir()?;
         let path = tmp_dir
@@ -250,6 +249,23 @@ mod tests {
         let test_path = std::path::Path::new(&path);
         assert!(
             test_path.is_dir(),
+            "No extension and default DataFrameWriteOptons should have yielded a dir."
+        );
+
+        let mut count = 0;
+        if let Ok(dir) = test_path.read_dir() {
+            for result in dir {
+                if let Ok(entry) = result {
+                    if entry.file_type()?.is_file() {
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        // TODO: depending on file size this actually emits > 1
+        assert_eq!(
+            count, 1,
             "No extension and default DataFrameWriteOptons should have yielded a dir."
         );
 
@@ -271,7 +287,6 @@ mod tests {
                 Arc::new(Int32Array::from(vec![1, 3, 2, 4, 3])),
             ],
         )?)?;
-        // Repartition to have
         let partitioned_df = df.repartition(Partitioning::RoundRobinBatch(2))?;
         let tmp_dir = tempdir()?;
         let path = tmp_dir
