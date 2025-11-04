@@ -20,7 +20,7 @@ extern crate criterion;
 use arrow::array::{Int32Array, ListArray, StringArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::planner::ExprPlanner;
@@ -30,6 +30,7 @@ use datafusion_functions_nested::planner::NestedFunctionPlanner;
 use rand::prelude::ThreadRng;
 use rand::Rng;
 use std::collections::HashSet;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn keys(rng: &mut ThreadRng) -> Vec<String> {
