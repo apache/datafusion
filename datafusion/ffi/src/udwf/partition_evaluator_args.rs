@@ -18,7 +18,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::arrow_wrappers::WrappedSchema;
-use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
+use crate::physical_expr::FFI_PhysicalExpr;
 use abi_stable::{std_types::RVec, StableAbi};
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -131,9 +131,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
         let input_exprs = value
             .input_exprs
             .into_iter()
-            .map(|expr| {
-                <Arc<dyn PhysicalExpr>>::from(expr)
-            })
+            .map(<Arc<dyn PhysicalExpr>>::from)
             .collect::<Vec<_>>();
 
         let input_fields = input_exprs

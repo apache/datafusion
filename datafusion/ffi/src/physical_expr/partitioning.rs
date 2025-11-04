@@ -1,4 +1,4 @@
-use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
+use crate::physical_expr::FFI_PhysicalExpr;
 use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
 use datafusion_physical_expr::{Partitioning, PhysicalExpr};
@@ -40,9 +40,7 @@ impl From<FFI_Partitioning> for Partitioning {
             FFI_Partitioning::Hash(exprs, size) => {
                 let exprs = exprs
                     .into_iter()
-                    .map(|expr| {
-                        <Arc<dyn PhysicalExpr>>::from(expr)
-                    })
+                    .map(<Arc<dyn PhysicalExpr>>::from)
                     .collect();
                 Self::Hash(exprs, size)
             }

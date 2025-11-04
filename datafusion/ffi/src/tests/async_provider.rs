@@ -27,23 +27,23 @@
 
 use std::{any::Any, fmt::Debug, sync::Arc};
 
+use super::create_record_batch;
+use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::table_provider::FFI_TableProvider;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion_common::{exec_err, error::Result};
+use datafusion_catalog::{Session, TableProvider};
+use datafusion_common::{error::Result, exec_err};
+use datafusion_execution::RecordBatchStream;
+use datafusion_expr::Expr;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_plan::ExecutionPlan;
 use futures::Stream;
 use tokio::{
     runtime::Handle,
     sync::{broadcast, mpsc},
 };
-use datafusion_catalog::{Session, TableProvider};
-use datafusion_execution::RecordBatchStream;
-use datafusion_expr::Expr;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::ExecutionPlan;
-use crate::function_registry::FFI_WeakFunctionRegistry;
-use super::create_record_batch;
 
 #[derive(Debug)]
 pub struct AsyncTableProvider {
@@ -274,7 +274,14 @@ impl Stream for AsyncTestRecordBatchStream {
     }
 }
 
-pub(crate) fn create_async_table_provider(function_registry: FFI_WeakFunctionRegistry) -> FFI_TableProvider {
+pub(crate) fn create_async_table_provider(
+    function_registry: FFI_WeakFunctionRegistry,
+) -> FFI_TableProvider {
     let (table_provider, tokio_rt) = start_async_provider();
-    FFI_TableProvider::new(Arc::new(table_provider), true, Some(tokio_rt), function_registry)
+    FFI_TableProvider::new(
+        Arc::new(table_provider),
+        true,
+        Some(tokio_rt),
+        function_registry,
+    )
 }

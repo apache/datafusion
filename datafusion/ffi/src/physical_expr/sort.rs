@@ -16,14 +16,14 @@
 // under the License.
 
 use crate::expr::expr_properties::FFI_SortOptions;
-use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
+use crate::physical_expr::FFI_PhysicalExpr;
 use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
 use datafusion_common::{exec_datafusion_err, DataFusionError};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use std::sync::Arc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]

@@ -472,7 +472,7 @@ impl From<FFI_PhysicalExpr> for Arc<dyn PhysicalExpr> {
         let children = unsafe {
             (expr.children)(&expr)
                 .into_iter()
-                .map(|child| <Arc<dyn PhysicalExpr>>::from(child))
+                .map(<Arc<dyn PhysicalExpr>>::from)
                 .collect()
         };
 
@@ -552,7 +552,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         unsafe {
             let children = children.into_iter().map(FFI_PhysicalExpr::from).collect();
             df_result!((self.expr.new_with_children)(&self.expr, &children)
-                .map(|expr| <Arc<dyn PhysicalExpr>>::from(expr)))
+                .map(<Arc<dyn PhysicalExpr>>::from))
         }
     }
 
@@ -658,9 +658,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         unsafe {
             let result = df_result!((self.expr.snapshot)(&self.expr))?;
-            Ok(result
-                .map(|ffi_expr| <Arc<dyn PhysicalExpr>>::from(ffi_expr))
-                .into())
+            Ok(result.map(<Arc<dyn PhysicalExpr>>::from).into())
         }
     }
 

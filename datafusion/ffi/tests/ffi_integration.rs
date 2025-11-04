@@ -21,12 +21,12 @@
 mod tests {
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
+    use datafusion_expr::registry::FunctionRegistry;
     use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
     use datafusion_ffi::table_provider::ForeignTableProvider;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
-    use datafusion_expr::registry::FunctionRegistry;
 
     /// It is important that this test is in the `tests` directory and not in the
     /// library directory so we can verify we are building a dynamic library and

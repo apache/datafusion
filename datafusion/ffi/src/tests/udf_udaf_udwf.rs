@@ -20,17 +20,16 @@ use crate::{
     udwf::FFI_WindowUDF,
 };
 
-
-use std::sync::Arc;
+use crate::function_registry::FFI_WeakFunctionRegistry;
+use datafusion_catalog::TableFunctionImpl;
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions::math::abs::AbsFunc;
+use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::stddev::Stddev;
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_functions_table::generate_series::RangeFunc;
 use datafusion_functions_window::rank::Rank;
-use datafusion_catalog::TableFunctionImpl;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
-use datafusion_functions::math::random::RandomFunc;
-use crate::function_registry::FFI_WeakFunctionRegistry;
+use std::sync::Arc;
 
 pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(AbsFunc::new().into());
@@ -44,7 +43,9 @@ pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
     udf.into()
 }
 
-pub(crate) extern "C" fn create_ffi_table_func(function_registry: FFI_WeakFunctionRegistry) -> FFI_TableFunction {
+pub(crate) extern "C" fn create_ffi_table_func(
+    function_registry: FFI_WeakFunctionRegistry,
+) -> FFI_TableFunction {
     let udtf: Arc<dyn TableFunctionImpl> = Arc::new(RangeFunc {});
 
     FFI_TableFunction::new(udtf, None, function_registry)

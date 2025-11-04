@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::physical_expr::sort::FFI_PhysicalSortExpr;
-use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
+use crate::physical_expr::FFI_PhysicalExpr;
 use abi_stable::{
     std_types::{RString, RVec},
     StableAbi,
@@ -104,9 +104,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
         let exprs = value
             .exprs
             .into_iter()
-            .map(|expr| {
-                <Arc<dyn PhysicalExpr>>::from(expr)
-            })
+            .map(<Arc<dyn PhysicalExpr>>::from)
             .collect();
 
         let return_field = Arc::new((&value.return_field.0).try_into()?);

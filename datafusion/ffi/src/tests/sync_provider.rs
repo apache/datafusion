@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-use datafusion_catalog::MemTable;
-use crate::table_provider::FFI_TableProvider;
-use crate::function_registry::FFI_WeakFunctionRegistry;
 use super::{create_record_batch, create_test_schema};
+use crate::function_registry::FFI_WeakFunctionRegistry;
+use crate::table_provider::FFI_TableProvider;
+use datafusion_catalog::MemTable;
+use std::sync::Arc;
 
-pub(crate) fn create_sync_table_provider(function_registry: FFI_WeakFunctionRegistry) -> FFI_TableProvider {
+pub(crate) fn create_sync_table_provider(
+    function_registry: FFI_WeakFunctionRegistry,
+) -> FFI_TableProvider {
     let schema = create_test_schema();
 
     // It is useful to create these as multiple record batches
