@@ -797,7 +797,7 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
 /// For unbounded streams, it also tracks whether the operator requires finite memory
 /// to process the stream or if memory usage could grow unbounded.
 ///
-/// Boundedness of the output stream is based on the the boundedness of the input stream and the nature of
+/// Boundedness of the output stream is based on the boundedness of the input stream and the nature of
 /// the operator. For example, limit or topk with fetch operator can convert an unbounded stream to a bounded stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Boundedness {
