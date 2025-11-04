@@ -47,7 +47,7 @@ async fn explain_analyze_baseline_metrics() {
                  UNION ALL \
                SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) AS b \
                LIMIT 3";
-    println!("running query: {sql}");
+
     let dataframe = ctx.sql(sql).await.unwrap();
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let task_ctx = ctx.task_ctx();
@@ -55,8 +55,6 @@ async fn explain_analyze_baseline_metrics() {
     let formatted = arrow::util::pretty::pretty_format_batches(&results)
         .unwrap()
         .to_string();
-
-    println!("Query Output:\n\n{formatted}");
 
     assert_metrics!(
         &formatted,
@@ -1106,7 +1104,7 @@ async fn csv_explain_analyze_with_statistics() {
 
 #[tokio::test]
 async fn nested_loop_join_selectivity() {
-    for (join_type, expected_selectivity) in vec![
+    for (join_type, expected_selectivity) in [
         ("INNER", "1% (1/100)"),
         ("LEFT", "10% (10/100)"),
         ("RIGHT", "10% (10/100)"),
@@ -1117,17 +1115,14 @@ async fn nested_loop_join_selectivity() {
         let sql = format!(
             "EXPLAIN ANALYZE SELECT * \
                 FROM generate_series(1, 10) as t1(a) \
-                {} JOIN generate_series(1, 10) as t2(b) \
-                ON (t1.a + t2.b) = 20",
-            join_type
+                {join_type} JOIN generate_series(1, 10) as t2(b) \
+                ON (t1.a + t2.b) = 20"
         );
 
         let actual = execute_to_batches(&ctx, sql.as_str()).await;
         let formatted = arrow::util::pretty::pretty_format_batches(&actual)
             .unwrap()
             .to_string();
-        println!("SQL: {}", sql);
-        println!("Formatted: {}", formatted);
 
         assert_metrics!(
             &formatted,
