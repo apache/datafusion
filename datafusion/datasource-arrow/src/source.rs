@@ -410,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn test_file_opener_without_ranges() -> Result<()> {
         for filename in ["example.arrow", "example_stream.arrow"] {
-            let path = format!("tests/data/{}", filename);
+            let path = format!("tests/data/{filename}");
             let path_str = path.as_str();
             let mut file = File::open(path_str)?;
             let file_size = file.metadata()?.len();
@@ -455,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn test_file_opener_with_ranges() -> Result<()> {
         let filename = "example.arrow";
-        let path = format!("tests/data/{}", filename);
+        let path = format!("tests/data/{filename}");
         let path_str = path.as_str();
         let mut file = File::open(path_str)?;
         let file_size = file.metadata()?.len();
@@ -497,7 +497,7 @@ mod tests {
     #[tokio::test]
     async fn test_stream_opener_errors_with_ranges() -> Result<()> {
         let filename = "example_stream.arrow";
-        let path = format!("tests/data/{}", filename);
+        let path = format!("tests/data/{filename}");
         let path_str = path.as_str();
         let mut file = File::open(path_str)?;
         let file_size = file.metadata()?.len();

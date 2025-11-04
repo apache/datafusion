@@ -592,7 +592,7 @@ mod tests {
     #[tokio::test]
     async fn test_infer_schema_stream() -> Result<()> {
         for file in ["example.arrow", "example_stream.arrow"] {
-            let mut bytes = std::fs::read(format!("tests/data/{}", file))?;
+            let mut bytes = std::fs::read(format!("tests/data/{file}"))?;
             bytes.truncate(bytes.len() - 20); // mangle end to show we don't need to read whole file
             let location = Path::parse(file)?;
             let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -636,7 +636,7 @@ mod tests {
     #[tokio::test]
     async fn test_infer_schema_short_stream() -> Result<()> {
         for file in ["example.arrow", "example_stream.arrow"] {
-            let mut bytes = std::fs::read(format!("tests/data/{}", file))?;
+            let mut bytes = std::fs::read(format!("tests/data/{file}"))?;
             bytes.truncate(20); // should cause error that file shorter than expected
             let location = Path::parse(file)?;
             let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
