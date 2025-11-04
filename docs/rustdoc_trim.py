@@ -16,11 +16,10 @@
 # under the License.
 
 import re
-
-from pathlib import Path
+from sphinx.application import Sphinx
 
 # Regex pattern to match Rust code blocks in Markdown
-RUST_CODE_BLOCK_PATTERN = re.compile(r"```rust\s*(.*?)```", re.DOTALL)
+RUST_CODE_BLOCK_PATTERN = re.compile(r"```rust(?:,ignore)?\s*(.*?)```", re.DOTALL)
 
 
 def remove_hashtag_lines_in_rust_blocks(markdown_content):
@@ -46,30 +45,16 @@ def remove_hashtag_lines_in_rust_blocks(markdown_content):
     return RUST_CODE_BLOCK_PATTERN.sub(_process_code_block, markdown_content)
 
 
-# Example usage
-def process_markdown_file(file_path):
-    # Read the Markdown file
-    with open(file_path, "r", encoding="utf-8") as file:
-        markdown_content = file.read()
-
+def process_source_file(app: Sphinx, docname: str, source: list[str]):
+    original_content = source[0]
     # Remove lines starting with '#' in Rust code blocks
-    updated_markdown_content = remove_hashtag_lines_in_rust_blocks(markdown_content)
-
-    # Write the updated content back to the Markdown file
-    with open(file_path, "w", encoding="utf-8") as file:
-        file.write(updated_markdown_content)
-
-    print(f"Done processing file: {file_path}")
+    modified_content = remove_hashtag_lines_in_rust_blocks(original_content)
+    source[0] = modified_content
 
 
-root_directory = Path("./temp/library-user-guide")
-for file_path in root_directory.rglob("*.md"):
-    print(f"Processing file: {file_path}")
-    process_markdown_file(file_path)
-
-root_directory = Path("./temp/user-guide")
-for file_path in root_directory.rglob("*.md"):
-    print(f"Processing file: {file_path}")
-    process_markdown_file(file_path)
-
-print("All Markdown files processed.")
+def setup(app: Sphinx):
+    app.connect("source-read", process_source_file)
+    return dict(
+        parallel_read_safe=True,
+        parallel_write_safe=True,
+    )

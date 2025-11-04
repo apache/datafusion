@@ -237,6 +237,7 @@ impl GenerateSeriesTable {
     pub fn as_generator(
         &self,
         batch_size: usize,
+        projection: Option<Vec<usize>>,
     ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
         let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
             GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
@@ -255,6 +256,7 @@ impl GenerateSeriesTable {
                 batch_size,
                 include_end: *include_end,
                 name,
+                projection,
             })),
             GenSeriesArgs::TimestampArgs {
                 start,
@@ -269,9 +271,9 @@ impl GenerateSeriesTable {
                     .map(|s| Tz::from_str(s.as_ref()))
                     .transpose()
                     .map_err(|e| {
-                        datafusion_common::DataFusionError::Internal(format!(
+                        datafusion_common::internal_datafusion_err!(
                             "Failed to parse timezone: {e}"
-                        ))
+                        )
                     })?
                     .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
                 Arc::new(RwLock::new(GenericSeriesState {
@@ -295,6 +297,7 @@ impl GenerateSeriesTable {
                     batch_size,
                     include_end: *include_end,
                     name,
+                    projection,
                 }))
             }
             GenSeriesArgs::DateArgs {
@@ -324,6 +327,7 @@ impl GenerateSeriesTable {
                 batch_size,
                 include_end: *include_end,
                 name,
+                projection,
             })),
         };
 
@@ -341,6 +345,7 @@ pub struct GenericSeriesState<T: SeriesValue> {
     current: T,
     include_end: bool,
     name: &'static str,
+    projection: Option<Vec<usize>>,
 }
 
 impl<T: SeriesValue> GenericSeriesState<T> {
@@ -396,7 +401,11 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
 
         let array = self.current.create_array(buf)?;
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
-        Ok(Some(batch))
+        let projected = match self.projection.as_ref() {
+            Some(projection) => batch.project(projection)?,
+            None => batch,
+        };
+        Ok(Some(projected))
     }
 }
 
@@ -477,7 +486,7 @@ impl TableProvider for GenerateSeriesTable {
             None => self.schema(),
         };
 
-        let generator = self.as_generator(batch_size)?;
+        let generator = self.as_generator(batch_size, projection.cloned())?;
 
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }

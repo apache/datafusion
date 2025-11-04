@@ -519,7 +519,7 @@ fn type_coercion_demo() -> Result<()> {
     )?;
     let i8_array = Int8Array::from_iter_values(vec![0, 1, 2]);
     let batch = RecordBatch::try_new(
-        Arc::new(df_schema.as_arrow().to_owned()),
+        Arc::clone(df_schema.inner()),
         vec![Arc::new(i8_array) as _],
     )?;
 

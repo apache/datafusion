@@ -48,6 +48,14 @@ use datafusion_macros::user_doc;
     description = "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
     syntax_example = r#"log(base, numeric_expression)
 log(numeric_expression)"#,
+    sql_example = r#"```sql
+> SELECT log(10);
++---------+
+| log(10) |
++---------+
+| 1.0     |
++---------+
+```"#,
     standard_argument(name = "base", prefix = "Base numeric"),
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
@@ -712,7 +720,7 @@ mod tests {
     #[test]
     fn test_log_output_ordering() {
         // [Unordered, Ascending, Descending, Literal]
-        let orders = vec![
+        let orders = [
             ExprProperties::new_unknown(),
             ExprProperties::new_unknown().with_order(SortProperties::Ordered(
                 SortOptions {
@@ -747,7 +755,7 @@ mod tests {
                 results.push(result);
             }
         }
-        let expected = vec![
+        let expected = [
             // base: Unordered
             SortProperties::Unordered,
             SortProperties::Unordered,

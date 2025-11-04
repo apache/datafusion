@@ -19,7 +19,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 //
@@ -86,26 +86,29 @@
 //! let ctx = SessionContext::new();
 //!
 //! // create the dataframe
-//! let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+//! let df = ctx
+//!     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+//!     .await?;
 //!
 //! // create a plan
-//! let df = df.filter(col("a").lt_eq(col("b")))?
-//!            .aggregate(vec![col("a")], vec![min(col("b"))])?
-//!            .limit(0, Some(100))?;
+//! let df = df
+//!     .filter(col("a").lt_eq(col("b")))?
+//!     .aggregate(vec![col("a")], vec![min(col("b"))])?
+//!     .limit(0, Some(100))?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!    .to_string();
+//! let pretty_results =
+//!     arrow::util::pretty::pretty_format_batches(&results)?.to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
 //!     "| a | min(?table?.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+----------------+",
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -126,24 +129,27 @@
 //! # async fn main() -> Result<()> {
 //! let ctx = SessionContext::new();
 //!
-//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new())
+//!     .await?;
 //!
 //! // create a plan
-//! let df = ctx.sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
+//! let df = ctx
+//!     .sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100")
+//!     .await?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!   .to_string();
+//! let pretty_results =
+//!     arrow::util::pretty::pretty_format_batches(&results)?.to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
 //!     "| a | min(example.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+----------------+",
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -443,7 +449,30 @@
 //! other operators read a single [`RecordBatch`] from their input to produce a
 //! single [`RecordBatch`] as output.
 //!
-//! For example, given this SQL query:
+//! For example, given this SQL:
+//!
+//! ```sql
+//! SELECT name FROM 'data.parquet' WHERE id > 10
+//! ```
+//!
+//! An simplified DataFusion execution plan is shown below. It first reads
+//! data from the Parquet file, then applies the filter, then the projection,
+//! and finally produces output. Each step processes one [`RecordBatch`] at a
+//! time. Multiple batches are processed concurrently on different CPU cores
+//! for plans with multiple partitions.
+//!
+//! ```text
+//! ┌─────────────┐    ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐    ┌──────────┐
+//! │ Parquet     │───▶│ DataSource   │───▶│ FilterExec     │───▶│ ProjectionExec   │───▶│ Results  │
+//! │ File        │    │              │    │                │    │                  │    │          │
+//! └─────────────┘    └──────────────┘    └────────────────┘    └──────────────────┘    └──────────┘
+//!                    (reads data)        (id > 10)             (keeps "name" col)
+//!                    RecordBatch ───▶    RecordBatch ────▶     RecordBatch ────▶        RecordBatch
+//! ```
+//!
+//! DataFusion uses the classic "pull" based control flow (explained more in the
+//! next section) to implement streaming execution. As an example,
+//! consider the following SQL query:
 //!
 //! ```sql
 //! SELECT date_trunc('month', time) FROM data WHERE id IN (10,20,30);
@@ -607,7 +636,7 @@
 //! └─────────────┘           ┗━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
 //!                          ─────────────────────────────────────────────────────────────▶
 //!                                                                                           time
-//!```
+//! ```
 //!
 //! Note that DataFusion does not use [`tokio::task::spawn_blocking`] for
 //! CPU-bounded work, because `spawn_blocking` is designed for blocking **IO**,
@@ -897,6 +926,12 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 // For example, if `user_guide_expressions(line 123)` fails,
 // go to `docs/source/user-guide/expressions.md` to find the relevant problem.
 //
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/arrow-introduction.md",
+    user_guide_arrow_introduction
+);
+
 #[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/user-guide/concepts-readings-events.md",

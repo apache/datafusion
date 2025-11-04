@@ -34,13 +34,13 @@ use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionS
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
-    plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_datafusion_err,
+    exec_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
@@ -478,13 +478,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     "###);
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
-    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
-    +------------+
-    | dummy(t.i) |
-    +------------+
-    | 1          |
-    +------------+
-    "###);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r"
+    +------------------+
+    | dummy_alias(t.i) |
+    +------------------+
+    | 1                |
+    +------------------+
+    ");
 
     Ok(())
 }
@@ -775,10 +775,12 @@ async fn deregister_udf() -> Result<()> {
     ctx.register_udf(cast2i64);
 
     assert!(ctx.udfs().contains("cast_to_i64"));
+    assert!(FunctionRegistry::udfs(&ctx).contains("cast_to_i64"));
 
     ctx.deregister_udf("cast_to_i64");
 
     assert!(!ctx.udfs().contains("cast_to_i64"));
+    assert!(!FunctionRegistry::udfs(&ctx).contains("cast_to_i64"));
 
     Ok(())
 }
@@ -1007,9 +1009,7 @@ impl ScalarFunctionWrapper {
     fn parse_placeholder_identifier(placeholder: &str) -> Result<usize> {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Placeholder `{placeholder}` parsing error: {e}!"
-                ))
+                exec_datafusion_err!("Placeholder `{placeholder}` parsing error: {e}!")
             })?)
         } else {
             exec_err!("Placeholder should start with `$`!")
@@ -1812,7 +1812,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     });
 
     let mut config = SessionConfig::new();
-    config.options_mut().execution.time_zone = "AEST".into();
+    config.options_mut().execution.time_zone = Some("AEST".into());
 
     let ctx = SessionContext::new_with_config(config);
 

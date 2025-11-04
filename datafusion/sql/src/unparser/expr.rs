@@ -336,7 +336,7 @@ impl Unparser<'_> {
                     None => None,
                 };
                 let within_group: Vec<ast::OrderByExpr> =
-                    if agg.func.is_ordered_set_aggregate() {
+                    if agg.func.supports_within_group_clause() {
                         order_by
                             .iter()
                             .map(|sort_expr| self.sort_to_sql(sort_expr))
@@ -606,7 +606,7 @@ impl Unparser<'_> {
     }
 
     fn named_struct_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() % 2 != 0 {
+        if !args.len().is_multiple_of(2) {
             return internal_err!("named_struct must have an even number of arguments");
         }
 
@@ -1689,7 +1689,7 @@ impl Unparser<'_> {
             DataType::Float16 => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
-            DataType::Float32 => Ok(ast::DataType::Float(None)),
+            DataType::Float32 => Ok(ast::DataType::Float(ast::ExactNumberInfo::None)),
             DataType::Float64 => Ok(self.dialect.float64_ast_dtype()),
             DataType::Timestamp(time_unit, tz) => {
                 Ok(self.dialect.timestamp_cast_dtype(time_unit, tz))
@@ -1705,7 +1705,10 @@ impl Unparser<'_> {
             DataType::Duration(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
-            DataType::Interval(_) => Ok(ast::DataType::Interval),
+            DataType::Interval(_) => Ok(ast::DataType::Interval {
+                fields: None,
+                precision: None,
+            }),
             DataType::Binary => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
@@ -1755,7 +1758,10 @@ impl Unparser<'_> {
                 }
 
                 Ok(ast::DataType::Decimal(
-                    ast::ExactNumberInfo::PrecisionAndScale(new_precision, new_scale),
+                    ast::ExactNumberInfo::PrecisionAndScale(
+                        new_precision,
+                        new_scale as i64,
+                    ),
                 ))
             }
             DataType::Map(_, _) => {

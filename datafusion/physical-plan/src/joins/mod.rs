@@ -24,11 +24,13 @@ pub use hash_join::HashJoinExec;
 pub use nested_loop_join::NestedLoopJoinExec;
 use parking_lot::Mutex;
 // Note: SortMergeJoin is not used in plans yet
+pub use piecewise_merge_join::PiecewiseMergeJoinExec;
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
 mod cross_join;
 mod hash_join;
 mod nested_loop_join;
+mod piecewise_merge_join;
 mod sort_merge_join;
 mod stream_join_utils;
 mod symmetric_hash_join;

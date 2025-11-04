@@ -627,7 +627,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Joins the the indexed row of left data with the current probe batch.
+    /// Joins the indexed row of left data with the current probe batch.
     /// If all the results are produced, the state is set to fetch new probe batch.
     fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let right_batch = self.state.try_as_record_batch()?;
@@ -895,7 +895,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec"
+            "Resources exhausted: Additional allocation failed for CrossJoinExec with top memory consumers (across reservations) as:\n  CrossJoinExec"
         );
 
         Ok(())

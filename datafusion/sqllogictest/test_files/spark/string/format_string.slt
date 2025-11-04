@@ -21,7 +21,2295 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT format_string("Hello World %d %s", 100, "days");
-## PySpark 3.5.5 Result: {'format_string(Hello World %d %s, 100, days)': 'Hello World 100 days', 'typeof(format_string(Hello World %d %s, 100, days))': 'string', 'typeof(Hello World %d %s)': 'string', 'typeof(100)': 'int', 'typeof(days)': 'string'}
-#query
-#SELECT format_string('Hello World %d %s'::string, 100::int, 'days'::string);
+# ================================
+# Basic format_string tests
+# ================================
+
+## Basic string formatting
+query T
+SELECT format_string('Hello World %s', 'DataFusion');
+----
+Hello World DataFusion
+
+query T
+SELECT format_string(arrow_cast('Hello World %s', 'LargeUtf8'), 'DataFusion');
+----
+Hello World DataFusion
+
+query T
+SELECT format_string(arrow_cast('Hello World %s', 'Utf8View'), 'DataFusion');
+----
+Hello World DataFusion
+
+## Basic integer formatting
+query T
+SELECT format_string('Hello World %d %s', 100, 'days');
+----
+Hello World 100 days
+
+## Multiple string arguments
+query T
+SELECT format_string('%s %s %s', 'Hello', 'World', 'Test');
+----
+Hello World Test
+
+## Format without arguments (just return the format string)
+query T
+SELECT format_string('Hello World');
+----
+Hello World
+
+# ================================
+# Integer formatting tests
+# ================================
+
+## Decimal integer formatting
+query T
+SELECT format_string('Value: %d', 42);
+----
+Value: 42
+
+## Hexadecimal integer formatting (lowercase)
+query T
+SELECT format_string('Hex: %x', 255);
+----
+Hex: ff
+
+## Hexadecimal integer formatting (uppercase)
+query T
+SELECT format_string('Hex: %X', 255);
+----
+Hex: FF
+
+## Octal integer formatting
+query T
+SELECT format_string('Octal: %o', 64);
+----
+Octal: 100
+
+## Integer with width padding
+query T
+SELECT format_string('Padded: %5d', 42);
+----
+Padded:    42
+
+## Integer with zero padding
+query T
+SELECT format_string('Zero padded: %05d', 42);
+----
+Zero padded: 00042
+
+## Left-aligned integer
+query T
+SELECT format_string('Left: %-5d|', 42);
+----
+Left: 42   |
+
+## Integer with force sign
+query T
+SELECT format_string('Signed: %+d', 42);
+----
+Signed: +42
+
+## Negative integer
+query T
+SELECT format_string('Negative: %d', -42);
+----
+Negative: -42
+
+# ================================
+# Float formatting tests
+# ================================
+
+## Basic float formatting
+query T
+SELECT format_string('Float: %f', 3.14159);
+----
+Float: 3.141590
+
+query T
+SELECT format_string('Float: %f', 30.0);
+----
+Float: 30.000000
+
+## Float with precision
+query T
+SELECT format_string('Precision: %.2f', 3.14159);
+----
+Precision: 3.14
+
+## Scientific notation (lowercase)
+query T
+SELECT format_string('Scientific: %e', 1234.5);
+----
+Scientific: 1.234500e+03
+
+## Scientific notation (uppercase)
+query T
+SELECT format_string('Scientific: %E', 1234.5);
+----
+Scientific: 1.234500E+03
+
+## Compact float (lowercase)
+query T
+SELECT format_string('Compact: %g', 1234.5);
+----
+Compact: 1234.5
+
+query T
+SELECT format_string('Compact: %g', CAST(123456789.1 AS DOUBLE));
+----
+Compact: 1.23457e+08
+
+## Compact float (uppercase)
+query T
+SELECT format_string('Compact: %G', 1234.5);
+----
+Compact: 1234.5
+
+query T
+SELECT format_string('Compact: %G', CAST(123456789.1 AS DOUBLE));
+----
+Compact: 1.23457E+08
+
+## Float with width and precision
+query T
+SELECT format_string('Formatted: %10.2f', 3.14159);
+----
+Formatted:       3.14
+
+## Float zero padding
+query T
+SELECT format_string('Zero: %08.2f', 3.14);
+----
+Zero: 00003.14
+
+## Float with left alignment
+query T
+SELECT format_string('Left: %-10.2f|', 3.14);
+----
+Left: 3.14      |
+
+## Float with space sign (positive)
+query T
+SELECT format_string('Space: % .2f', 3.14);
+----
+Space:  3.14
+
+## Float with space sign (negative)
+query T
+SELECT format_string('Space: % .2f', -3.14);
+----
+Space: -3.14
+
+## Float with force sign (positive)
+query T
+SELECT format_string('Force: %+.2f', 3.14);
+----
+Force: +3.14
+
+## Float with force sign (negative)
+query T
+SELECT format_string('Force: %+.2f', -3.14);
+----
+Force: -3.14
+
+## Float with precision 0
+query T
+SELECT format_string('Precision 0: %.0f', 3.14);
+----
+Precision 0: 3
+
+## Float with precision 0 (rounds up)
+query T
+SELECT format_string('Precision 0: %.0f', 3.6);
+----
+Precision 0: 4
+
+## Float with precision 0 and alternate form
+query T
+SELECT format_string('Alt form: %#.0f', 3.14);
+----
+Alt form: 3.
+
+## Scientific notation with precision 0
+query T
+SELECT format_string('Sci: %.0e', 1234.5);
+----
+Sci: 1e+03
+
+## Compact format with precision 0
+query T
+SELECT format_string('Compact: %.0g', 1234.5);
+----
+Compact: 1e+03
+
+# ================================
+# Boolean formatting tests
+# ================================
+
+## Boolean lowercase
+query T
+SELECT format_string('Bool: %b', true);
+----
+Bool: true
+
+## Boolean uppercase
+query T
+SELECT format_string('Bool: %B', false);
+----
+Bool: FALSE
+
+## Boolean with width
+query T
+SELECT format_string('Bool: %6b', true);
+----
+Bool:   true
+
+## Boolean with invalid ARGUMENT
+statement error
+SELECT format_string('Bool: %6b', 1)
+
+# ================================
+# String formatting tests
+# ================================
+
+## String formatting
+query T
+SELECT format_string('String: %s', 'DataFusion');
+----
+String: DataFusion
+
+## String with width
+query T
+SELECT format_string('Padded: %10s|', 'test');
+----
+Padded:       test|
+
+## String left-aligned
+query T
+SELECT format_string('Left: %-10s|', 'test');
+----
+Left: test      |
+
+## String with precision (truncation)
+query T
+SELECT format_string('Truncated: %.3s', 'DataFusion');
+----
+Truncated: Dat
+
+## String uppercase conversion
+query T
+SELECT format_string('Upper: %S', 'datafusion');
+----
+Upper: DATAFUSION
+
+# ================================
+# Character formatting tests
+# ================================
+
+## Character formatting from integer
+query T
+SELECT format_string('Char: %c', 97);
+----
+Char: a
+
+## Character uppercase
+query T
+SELECT format_string('Char: %C', 97);
+----
+Char: A
+
+## Character with width padding
+query T
+SELECT format_string('Char: %5c', 65);
+----
+Char:     A
+
+## Character with left alignment
+query T
+SELECT format_string('Char: %-5c|', 65);
+----
+Char: A    |
+
+## Character uppercase with width
+query T
+SELECT format_string('Char: %5C', 97);
+----
+Char:     A
+
+## Character uppercase with left alignment
+query T
+SELECT format_string('Char: %-5C|', 97);
+----
+Char: A    |
+
+## Character with invalid ARGUMENT
+statement error
+SELECT format_string('Char: %5c', true);
+
+# ================================
+# Time formatting tests
+# ================================
+
+## Hour formatting (24-hour)
+query T
+SELECT format_string('Hour: %tH', TIMESTAMP '2023-12-25 14:30:45');
+----
+Hour: 14
+
+## Hour formatting (12-hour)
+query T
+SELECT format_string('Hour: %tI', TIMESTAMP '2023-12-25 14:30:45');
+----
+Hour: 02
+
+## Minute formatting
+query T
+SELECT format_string('Minute: %tM', TIMESTAMP '2023-12-25 14:30:45');
+----
+Minute: 30
+
+## Second formatting
+query T
+SELECT format_string('Second: %tS', TIMESTAMP '2023-12-25 14:30:45');
+----
+Second: 45
+
+## AM/PM marker
+query T
+SELECT format_string('AM/PM: %tp', TIMESTAMP '2023-12-25 14:30:45');
+----
+AM/PM: pm
+
+## AM/PM marker uppercase
+query T
+SELECT format_string('AM/PM: %Tp', TIMESTAMP '2023-12-25 14:30:45');
+----
+AM/PM: PM
+
+## AM/PM marker uppercase (morning)
+query T
+SELECT format_string('AM/PM: %Tp', TIMESTAMP '2023-12-25 09:30:45');
+----
+AM/PM: AM
+
+## Year formatting
+query T
+SELECT format_string('Year: %tY', TIMESTAMP '2023-12-25 14:30:45');
+----
+Year: 2023
+
+## Year formatting uppercase
+query T
+SELECT format_string('Year: %TY', TIMESTAMP '2023-12-25 14:30:45');
+----
+Year: 2023
+
+## Month formatting
+query T
+SELECT format_string('Month: %tm', TIMESTAMP '2023-12-25 14:30:45');
+----
+Month: 12
+
+## Day formatting
+query T
+SELECT format_string('Day: %td', TIMESTAMP '2023-12-25 14:30:45');
+----
+Day: 25
+
+## Time formatting (HH:MM)
+query T
+SELECT format_string('Time: %tR', TIMESTAMP '2023-12-25 14:30:45');
+----
+Time: 14:30
+
+## Time formatting (HH:MM:SS)
+query T
+SELECT format_string('Time: %tT', TIMESTAMP '2023-12-25 14:30:45');
+----
+Time: 14:30:45
+
+## Date formatting (MM/DD/YY)
+query T
+SELECT format_string('Date: %tD', TIMESTAMP '2023-12-25 14:30:45');
+----
+Date: 12/25/23
+
+## ISO date formatting (YYYY-MM-DD)
+query T
+SELECT format_string('ISO Date: %tF', TIMESTAMP '2023-12-25 14:30:45');
+----
+ISO Date: 2023-12-25
+
+## Complex date formatting (Sun Jul 20 16:17:00 EDT 1969)
+query B
+SELECT format_string('Date: %tc', TIMESTAMP '1969-07-20 16:17:00') LIKE 'Date: Sun Jul 20 16:17:00 % 1969';
+----
+true
+
+
+## Hour formatting (24-hour no padding)
+query T
+SELECT format_string('Hour: %tk', TIMESTAMP '2023-12-25 04:30:45');
+----
+Hour: 4
+
+## Hour formatting (12-hour no padding)
+query T
+SELECT format_string('Hour: %tl', TIMESTAMP '2023-12-25 14:30:45');
+----
+Hour: 2
+
+## Milliseconds formatting
+query T
+SELECT format_string('Milliseconds: %tL', TIMESTAMP '2023-12-25 14:30:45.123');
+----
+Milliseconds: 123
+
+## Nanoseconds formatting
+query T
+SELECT format_string('Nanoseconds: %tN', TIMESTAMP '2023-12-25 14:30:45.123456789');
+----
+Nanoseconds: 123456789
+
+## Timezone offset (RFC 822)
+query T
+SELECT format_string('Timezone: %tz', TIMESTAMP '2023-12-25 14:30:45');
+----
+Timezone: +0000
+
+## Timezone abbreviation
+query T
+SELECT format_string('Timezone: %tZ', from_unixtime(1599572549, 'America/New_York'));
+----
+Timezone: UTC
+
+## Seconds since epoch
+query T
+SELECT format_string('Epoch seconds: %ts', TIMESTAMP '1970-01-01 00:00:01');
+----
+Epoch seconds: 1
+
+## Milliseconds since epoch
+query T
+SELECT format_string('Epoch millis: %tQ', TIMESTAMP '1970-01-01 00:00:01');
+----
+Epoch millis: 1000
+
+## Full month name
+query T
+SELECT format_string('Month: %tB', TIMESTAMP '2023-12-25 14:30:45');
+----
+Month: December
+
+## Full month name uppercase
+query T
+SELECT format_string('Month: %TB', TIMESTAMP '2023-12-25 14:30:45');
+----
+Month: DECEMBER
+
+## Abbreviated month name
+query T
+SELECT format_string('Month: %tb', TIMESTAMP '2023-12-25 14:30:45');
+----
+Month: Dec
+
+## Abbreviated month name uppercase
+query T
+SELECT format_string('Month: %Tb', TIMESTAMP '2023-12-25 14:30:45');
+----
+Month: DEC
+
+## Same as %tb
+query T
+SELECT format_string('Month: %th', TIMESTAMP '2023-12-25 14:30:45');
+----
+Month: Dec
+
+## Full day of week
+query T
+SELECT format_string('Day: %tA', TIMESTAMP '2023-12-25 14:30:45');
+----
+Day: Monday
+
+## Full day of week uppercase
+query T
+SELECT format_string('Day: %TA', TIMESTAMP '2023-12-25 14:30:45');
+----
+Day: MONDAY
+
+## Abbreviated day of week
+query T
+SELECT format_string('Day: %ta', TIMESTAMP '2023-12-25 14:30:45');
+----
+Day: Mon
+
+## Abbreviated day of week uppercase
+query T
+SELECT format_string('Day: %Ta', TIMESTAMP '2023-12-25 14:30:45');
+----
+Day: MON
+
+## Century (year/100)
+query T
+SELECT format_string('Century: %tC', TIMESTAMP '2023-12-25 14:30:45');
+----
+Century: 20
+
+## Two-digit year
+query T
+SELECT format_string('Year: %ty', TIMESTAMP '2023-12-25 14:30:45');
+----
+Year: 23
+
+## Day of year
+query T
+SELECT format_string('Day of year: %tj', TIMESTAMP '2023-12-25 14:30:45');
+----
+Day of year: 359
+
+## Day of month (no padding)
+query T
+SELECT format_string('Day: %te', TIMESTAMP '2023-12-05 14:30:45');
+----
+Day: 5
+
+## 12-hour time with AM/PM
+query T
+SELECT format_string('Time: %tr', TIMESTAMP '2023-12-25 14:30:45');
+----
+Time: 02:30:45 PM
+
+statement error
+SELECT format_string('Time: %t', TIMESTAMP '2023-12-25 14:30:45');
+
+statement error
+SELECT format_string('Time: %T', TIMESTAMP '2023-12-25 14:30:45');
+
+
+statement error
+SELECT format_string('Time: %tx', TIMESTAMP '2023-12-25 14:30:45');
+
+statement error
+SELECT format_string('Time: %Tx', TIMESTAMP '2023-12-25 14:30:45');
+
+
+
+# ================================
+# Decimal formatting tests
+# ================================
+
+## Decimal formatting
+query T
+SELECT format_string('Decimal: %f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Decimal: 123.456000
+
+## Decimal with precision
+query T
+SELECT format_string('Decimal: %.2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Decimal: 123.46
+
+## Decimal scientific notation
+query T
+SELECT format_string('Scientific: %e', CAST(1234.5 AS DECIMAL(10,2)));
+----
+Scientific: 1.234500e+03
+
+## Decimal with width padding
+query T
+SELECT format_string('Padded: %10.2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Padded:     123.46
+
+## Decimal with zero padding
+query T
+SELECT format_string('Zero padded: %010.2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Zero padded: 0000123.46
+
+## Decimal with left adjustment
+query T
+SELECT format_string('Left: %-10.2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Left: 123.46
+
+## Decimal with plus sign
+query T
+SELECT format_string('Plus: %+.2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Plus: +123.46
+
+## Decimal with space sign
+query T
+SELECT format_string('Space: % .2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Space:  123.46
+
+## Negative decimal with plus sign
+query T
+SELECT format_string('Negative: %+.2f', CAST(-123.456 AS DECIMAL(10,3)));
+----
+Negative: -123.46
+
+## Negative decimal with space sign
+query T
+SELECT format_string('Negative: % .2f', CAST(-123.456 AS DECIMAL(10,3)));
+----
+Negative: -123.46
+
+## Decimal with width and plus sign
+query T
+SELECT format_string('Width+Plus: %+10.2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Width+Plus:    +123.46
+
+## Decimal with zero padding and plus sign
+query T
+SELECT format_string('Zero+Plus: %+010.2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Zero+Plus: +000123.46
+
+## Decimal with left adjustment and plus sign
+query T
+SELECT format_string('Left+Plus: %-+10.2f', CAST(123.456 AS DECIMAL(10,3)));
+----
+Left+Plus: +123.46
+
+## Decimal scientific notation with width
+query T
+SELECT format_string('Sci Width: %15.2e', CAST(1234.5 AS DECIMAL(10,2)));
+----
+Sci Width:        1.23e+03
+
+## Decimal scientific notation with zero padding
+query T
+SELECT format_string('Sci Zero: %015.2e', CAST(1234.5 AS DECIMAL(10,2)));
+----
+Sci Zero: 00000001.23e+03
+
+## Decimal scientific notation with plus sign
+query T
+SELECT format_string('Sci Plus: %+.2e', CAST(1234.5 AS DECIMAL(10,2)));
+----
+Sci Plus: +1.23e+03
+
+## Decimal compact format with width
+query T
+SELECT format_string('Compact: %10.2g', CAST(123.456 AS DECIMAL(10,3)));
+----
+Compact:    1.2e+02
+
+## Decimal compact format with plus sign
+query T
+SELECT format_string('Compact+: %+.2g', CAST(123.456 AS DECIMAL(10,3)));
+----
+Compact+: +1.2e+02
+
+statement error
+SELECT format_string('Compact+: %+.2g', 1);
+
+# ================================
+# Special cases and edge cases
+# ================================
+
+## Literal percent sign
+query T
+SELECT format_string('Percent: %%');
+----
+Percent: %
+
+## Newline character
+query T
+SELECT format_string('Line1%nLine2');
+----
+ 
+01)Line1
+02)Line2
+
+## Multiple format specifiers
+query T
+SELECT format_string('String: %s, Integer: %d, Float: %.2f', 'test', 42, 3.14159);
+----
+String: test, Integer: 42, Float: 3.14
+
+## Mixed width and precision
+query T
+SELECT format_string('Mixed: %10s %5d %.2f', 'hello', 123, 45.678);
+----
+Mixed:      hello   123 45.68
+
+# ================================
+# NULL handling tests
+# ================================
+
+## NULL format string
+query T
+SELECT format_string(NULL, 'test');
+----
+NULL
+
+query T
+SELECT format_string(arrow_cast(NULL, 'Utf8'), 'test');
+----
+NULL
+
+query T
+SELECT format_string(arrow_cast(NULL, 'LargeUtf8'), 'test');
+----
+NULL
+
+query T
+SELECT format_string(arrow_cast(NULL, 'Utf8View'), 'test');
+----
+NULL
+
+## NULL argument with string format
+query T
+SELECT format_string('Value: %s', NULL);
+----
+Value: null
+
+## NULL with string format (uppercase)
+query T
+SELECT format_string('Upper: %S', NULL);
+----
+Upper: NULL
+
+
+## NULL argument with string format
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Utf8'));
+----
+Value: null
+
+## NULL with string format (uppercase)
+query T
+SELECT format_string('Upper: %S', arrow_cast(NULL, 'Utf8'));
+----
+Upper: NULL
+
+## NULL argument with string format
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'LargeUtf8'));
+----
+Value: null
+
+## NULL with string format (uppercase)
+query T
+SELECT format_string('Upper: %S', arrow_cast(NULL, 'LargeUtf8'));
+----
+Upper: NULL
+
+## NULL argument with string format
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Utf8View'));
+----
+Value: null
+
+## NULL with string format (uppercase)
+query T
+SELECT format_string('Upper: %S', arrow_cast(NULL, 'Utf8View'));
+----
+Upper: NULL
+
+## NULL with integer format using arrow_cast
+query T
+SELECT format_string('Integer: %d', arrow_cast(NULL, 'Int32'));
+----
+Integer: null
+
+## NULL with hex format (lowercase) using arrow_cast
+query T
+SELECT format_string('Hex: %x', arrow_cast(NULL, 'Int32'));
+----
+Hex: null
+
+## NULL with hex format (uppercase) using arrow_cast
+query T
+SELECT format_string('Hex: %X', arrow_cast(NULL, 'Int32'));
+----
+Hex: NULL
+
+## NULL with octal format using arrow_cast
+query T
+SELECT format_string('Octal: %o', arrow_cast(NULL, 'Int32'));
+----
+Octal: null
+
+## NULL with float format using arrow_cast
+query T
+SELECT format_string('Float: %f', arrow_cast(NULL, 'Float64'));
+----
+Float: null
+
+## NULL with float and precision using arrow_cast
+query T
+SELECT format_string('Float: %.2f', arrow_cast(NULL, 'Float64'));
+----
+Float: nu
+
+## NULL with scientific notation (lowercase) using arrow_cast
+query T
+SELECT format_string('Scientific: %e', arrow_cast(NULL, 'Float64'));
+----
+Scientific: null
+
+## NULL with scientific notation (uppercase) using arrow_cast
+query T
+SELECT format_string('Scientific: %E', arrow_cast(NULL, 'Float64'));
+----
+Scientific: NULL
+
+## NULL with compact float (lowercase) using arrow_cast
+query T
+SELECT format_string('Compact: %g', arrow_cast(NULL, 'Float64'));
+----
+Compact: null
+
+## NULL with compact float and precision (lowercase) using arrow_cast
+query T
+SELECT format_string('Float: %.3g', arrow_cast(NULL, 'Float64'));
+----
+Float: nul
+
+## NULL with compact float (uppercase) using arrow_cast
+query T
+SELECT format_string('Compact: %G', arrow_cast(NULL, 'Float64'));
+----
+Compact: NULL
+
+## NULL with compact float and precision (uppercase) using arrow_cast
+query T
+SELECT format_string('Float: %.3G', arrow_cast(NULL, 'Float64'));
+----
+Float: NUL
+
+## NULL with hex float (lowercase) using arrow_cast
+query T
+SELECT format_string('Hex float: %a', arrow_cast(NULL, 'Float64'));
+----
+Hex float: null
+
+## NULL with hex float (uppercase) using arrow_cast
+query T
+SELECT format_string('Hex float: %A', arrow_cast(NULL, 'Float64'));
+----
+Hex float: NULL
+
+# ## NULL with float and precision using arrow_cast
+# query T
+# SELECT format_string('Float: %.2f', arrow_cast(NULL, 'Float16'));
+# ----
+# Float: nu
+
+## NULL with boolean format (lowercase) using arrow_cast
+query T
+SELECT format_string('Bool: %b', arrow_cast(NULL, 'Boolean'));
+----
+Bool: false
+
+## NULL with boolean format (uppercase) using arrow_cast
+query T
+SELECT format_string('Bool: %B', arrow_cast(NULL, 'Boolean'));
+----
+Bool: FALSE
+
+## NULL with character format (lowercase) using arrow_cast
+query T
+SELECT format_string('Char: %c', arrow_cast(NULL, 'Int32'));
+----
+Char: null
+
+## NULL with character format (uppercase) using arrow_cast
+query T
+SELECT format_string('Char: %C', arrow_cast(NULL, 'Int32'));
+----
+Char: NULL
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Hour: %tH', arrow_cast(NULL, 'Timestamp(Nanosecond, None)'));
+----
+Hour: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Nanosecond, None)'));
+----
+Month: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Time32(Second)'));
+----
+Month: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Time32(Millisecond)'));
+----
+Month: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Time64(Microsecond)'));
+----
+Month: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Time64(Nanosecond)'));
+----
+Month: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Second, None)'));
+----
+Month: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Millisecond, None)'));
+----
+Month: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Microsecond, None)'));
+----
+Month: null
+
+## NULL with timestamp format using arrow_cast
+query T
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Nanosecond, None)'));
+----
+Month: null
+
+## NULL with decimal format using arrow_cast
+query T
+SELECT format_string('Decimal: %f', arrow_cast(NULL, 'Decimal128(10, 2)'));
+----
+Decimal: null
+
+## NULL Int8 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Int8'));
+----
+Value: null
+
+## NULL Int16 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Int16'));
+----
+Value: null
+
+## NULL Int64 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Int64'));
+----
+Value: null
+
+## NULL UInt8 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'UInt8'));
+----
+Value: null
+
+## NULL UInt16 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'UInt16'));
+----
+Value: null
+
+## NULL UInt32 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'UInt32'));
+----
+Value: null
+
+## NULL UInt64 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'UInt64'));
+----
+Value: null
+
+## NULL Float32 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Float32'));
+----
+Value: null
+
+## NULL Float64 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Float64'));
+----
+Value: null
+
+## NULL Timestamp with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Timestamp(Nanosecond, None)'));
+----
+Value: null
+
+## NULL Date32 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Date32'));
+----
+Value: null
+
+## NULL Date64 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Date64'));
+----
+Value: null
+
+## NULL Decimal128 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Decimal128(10, 2)'));
+----
+Value: null
+
+## NULL Decimal256 with string format using arrow_cast
+query T
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Decimal256(20, 3)'));
+----
+Value: null
+
+
+# ================================
+# Error cases (should fail)
+# ================================
+
+## Format string expects arguments but none provided
+statement error
+SELECT format_string('Value: %d');
+
+statement error
+SELECT format_string(1);
+
+## Too few arguments for format specifiers
+statement error
+SELECT format_string('Values: %d %s', 42);
+
+## Invalid conversion for data type
+statement error
+SELECT format_string('Value: %d', 'not_a_number');
+
+statement error
+SELECT format_string('Value: %k', 'string');
+
+# ================================
+# Positional argument tests
+# ================================
+
+## Positional arguments
+query T
+SELECT format_string('%2$s %1$d', 42, 'test');
+----
+test 42
+
+## Reuse positional arguments
+query T
+SELECT format_string('%1$s %1$s', 'repeat');
+----
+repeat repeat
+
+## Mixed positional and sequential
+query T
+SELECT format_string('%2$s %s %1$d', 42, 'middle', 'end');
+----
+middle 42 42
+
+statement error
+SELECT format_string('%$s', 'test');
+
+# ================================
+# Flag combination tests
+# ================================
+
+## Alternate form with hex
+query T
+SELECT format_string('Hex: %#x', 255);
+----
+Hex: 0xff
+
+## Alternate form with octal
+query T
+SELECT format_string('Octal: %#o', 64);
+----
+Octal: 0100
+
+## Space sign with positive number
+query T
+SELECT format_string('Space: % d', 42);
+----
+Space:  42
+
+## Grouping separator (if supported)
+query T
+SELECT format_string('Grouped: %,d', 1234567);
+----
+Grouped: 1,234,567
+
+## Parentheses for negative numbers
+query T
+SELECT format_string('Negative: %(d', -42);
+----
+Negative: (42)
+
+# ================================
+# Array/Column tests
+# ================================
+
+## Test with array values
+statement ok
+CREATE TABLE test_format(fmt STRING, val1 STRING, val2 INT) AS VALUES 
+  ('Hello %s %d', 'World', 1),
+  ('Float: %2$d %1$s', '3.14159', 2),
+  (NULL, '3.14159', 3);
+
+query T
+SELECT format_string(arrow_cast(fmt, 'Utf8'), val1, val2) FROM test_format;
+----
+Hello World 1
+Float: 2 3.14159
+NULL
+
+query T
+SELECT format_string(arrow_cast(fmt, 'LargeUtf8'), val1, val2) FROM test_format;
+----
+Hello World 1
+Float: 2 3.14159
+NULL
+
+query T
+SELECT format_string(arrow_cast(fmt, 'Utf8View'), val1, val2) FROM test_format;
+----
+Hello World 1
+Float: 2 3.14159
+NULL
+
+query T
+SELECT format_string(fmt, arrow_cast(val1, 'LargeUtf8'), val2) FROM test_format;
+----
+Hello World 1
+Float: 2 3.14159
+NULL
+
+query T
+SELECT format_string(fmt, arrow_cast(val1, 'Utf8'), val2) FROM test_format;
+----
+Hello World 1
+Float: 2 3.14159
+NULL
+
+query T
+SELECT format_string(fmt, arrow_cast(val1, 'Utf8View'), val2) FROM test_format;
+----
+Hello World 1
+Float: 2 3.14159
+NULL
+
+query T
+SELECT format_string(arrow_cast('Hello %s %d', 'Utf8'), val1, val2) FROM test_format;
+----
+Hello World 1
+Hello 3.14159 2
+Hello 3.14159 3
+
+query T
+SELECT format_string(arrow_cast('Hello %s %d', 'LargeUtf8'), val1, val2) FROM test_format;
+----
+Hello World 1
+Hello 3.14159 2
+Hello 3.14159 3
+
+query T
+SELECT format_string(arrow_cast('Hello %s %d', 'Utf8View'), val1, val2) FROM test_format;
+----
+Hello World 1
+Hello 3.14159 2
+Hello 3.14159 3
+
+statement ok
+DROP TABLE test_format;
+
+# ================================
+# Type-specific conversion tests
+# ================================
+
+## Boolean with string formats
+query T
+SELECT format_string('Value: %s', arrow_cast(true, 'Boolean'));
+----
+Value: true
+
+query T
+SELECT format_string('Value: %S', arrow_cast(false, 'Boolean'));
+----
+Value: FALSE
+
+## Int8 with various formats
+query T
+SELECT format_string('Decimal: %d', arrow_cast(127, 'Int8'));
+----
+Decimal: 127
+
+query T
+SELECT format_string('Hex: %x', arrow_cast(127, 'Int8'));
+----
+Hex: 7f
+
+query T
+SELECT format_string('Hex: %X', arrow_cast(127, 'Int8'));
+----
+Hex: 7F
+
+query T
+SELECT format_string('Octal: %o', arrow_cast(127, 'Int8'));
+----
+Octal: 177
+
+query T
+SELECT format_string('Char: %c', arrow_cast(65, 'Int8'));
+----
+Char: A
+
+query T
+SELECT format_string('Char: %C', arrow_cast(97, 'Int8'));
+----
+Char: A
+
+query T
+SELECT format_string('Char: %c', arrow_cast(65, 'UInt32'));
+----
+Char: A
+
+query T
+SELECT format_string('Char: %C', arrow_cast(97, 'UInt32'));
+----
+Char: A
+
+query T
+SELECT format_string('Char: %c', arrow_cast(65, 'UInt64'));
+----
+Char: A
+
+query T
+SELECT format_string('Char: %C', arrow_cast(97, 'UInt64'));
+----
+Char: A
+
+query T
+SELECT format_string('String: %s', arrow_cast(127, 'Int8'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %S', arrow_cast(127, 'Int8'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %s', arrow_cast(127, 'UInt8'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %S', arrow_cast(127, 'UInt8'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %s', arrow_cast(127, 'UInt16'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %S', arrow_cast(127, 'UInt16'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %s', arrow_cast(127, 'Int32'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %S', arrow_cast(127, 'Int32'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %s', arrow_cast(127, 'UInt64'));
+----
+String: 127
+
+query T
+SELECT format_string('String: %S', arrow_cast(127, 'UInt64'));
+----
+String: 127
+
+## Int16 with various formats
+query T
+SELECT format_string('Decimal: %d', arrow_cast(32767, 'Int16'));
+----
+Decimal: 32767
+
+query T
+SELECT format_string('Hex: %x', arrow_cast(32767, 'Int16'));
+----
+Hex: 7fff
+
+query T
+SELECT format_string('Hex: %X', arrow_cast(32767, 'Int16'));
+----
+Hex: 7FFF
+
+query T
+SELECT format_string('Octal: %o', arrow_cast(32767, 'Int16'));
+----
+Octal: 77777
+
+query T
+SELECT format_string('Char: %c', arrow_cast(8364, 'Int16'));
+----
+Char: €
+
+query T
+SELECT format_string('String: %s', arrow_cast(32767, 'Int16'));
+----
+String: 32767
+
+query T
+SELECT format_string('NaN: %s', CAST('NaN' AS DOUBLE));
+----
+NaN: NaN
+
+query T
+SELECT format_string('Infinity: %s', CAST('+Inf' AS DOUBLE));
+----
+Infinity: Infinity
+
+query T
+SELECT format_string('Infinity: %s', CAST('-Inf' AS DOUBLE));
+----
+Infinity: -Infinity
+
+query T
+SELECT format_string('NaN: %S', CAST('NaN' AS DOUBLE));
+----
+NaN: NAN
+
+query T
+SELECT format_string('Infinity: %S', CAST('+Inf' AS DOUBLE));
+----
+Infinity: INFINITY
+
+query T
+SELECT format_string('Infinity: %S', CAST('-Inf' AS DOUBLE));
+----
+Infinity: -INFINITY
+
+## Int32 with various formats
+query T
+SELECT format_string('Decimal: %d', arrow_cast(2147483647, 'Int32'));
+----
+Decimal: 2147483647
+
+query T
+SELECT format_string('Hex: %x', arrow_cast(255, 'Int32'));
+----
+Hex: ff
+
+query T
+SELECT format_string('Octal: %o', arrow_cast(511, 'Int32'));
+----
+Octal: 777
+
+query T
+SELECT format_string('Char: %c', arrow_cast(128512, 'Int32'));
+----
+Char: 😀
+
+## UInt8 with various formats
+query T
+SELECT format_string('Decimal: %d', arrow_cast(255, 'UInt8'));
+----
+Decimal: 255
+
+query T
+SELECT format_string('Hex: %x', arrow_cast(255, 'UInt8'));
+----
+Hex: ff
+
+query T
+SELECT format_string('Octal: %o', arrow_cast(255, 'UInt8'));
+----
+Octal: 377
+
+query T
+SELECT format_string('Char: %c', arrow_cast(65, 'UInt8'));
+----
+Char: A
+
+## UInt16 with various formats
+query T
+SELECT format_string('Decimal: %d', arrow_cast(65535, 'UInt16'));
+----
+Decimal: 65535
+
+query T
+SELECT format_string('Hex: %X', arrow_cast(65535, 'UInt16'));
+----
+Hex: FFFF
+
+query T
+SELECT format_string('Char: %c', arrow_cast(9733, 'UInt16'));
+----
+Char: ★
+
+## UInt32 with various formats
+query T
+SELECT format_string('Decimal: %d', arrow_cast(4294967295, 'UInt32'));
+----
+Decimal: 4294967295
+
+query T
+SELECT format_string('Hex: %x', arrow_cast(4294967295, 'UInt32'));
+----
+Hex: ffffffff
+
+query T
+SELECT format_string('String: %s', arrow_cast(4294967295, 'UInt32'));
+----
+String: 4294967295
+
+## UInt64 with various formats
+query T
+SELECT format_string('Decimal: %d', arrow_cast(18446744073709551615, 'UInt64'));
+----
+Decimal: 18446744073709551615
+
+query T
+SELECT format_string('Hex: %X', arrow_cast(18446744073709551615, 'UInt64'));
+----
+Hex: FFFFFFFFFFFFFFFF
+
+## Float16 with various formats
+query T
+SELECT format_string('Float: %f', arrow_cast(3.14, 'Float16'));
+----
+Float: 3.140625
+
+query T
+SELECT format_string('Scientific: %e', arrow_cast(3.14, 'Float16'));
+----
+Scientific: 3.140625e+00
+
+query T
+SELECT format_string('Scientific: %E', arrow_cast(3.14, 'Float16'));
+----
+Scientific: 3.140625E+00
+
+query T
+SELECT format_string('Compact: %g', arrow_cast(3.14, 'Float16'));
+----
+Compact: 3.14063
+
+query T
+SELECT format_string('Compact: %G', arrow_cast(3.14, 'Float16'));
+----
+Compact: 3.14063
+
+query T
+SELECT format_string('String: %s', arrow_cast(3.14, 'Float16'));
+----
+String: 3.140625
+
+query T
+SELECT format_string('String: %S', arrow_cast(3.14, 'Float16'));
+----
+String: 3.140625
+
+query T
+SELECT format_string('Hex float: %a', arrow_cast(3.14, 'Float16'));
+----
+Hex float: 0x1.92p1
+
+query T
+SELECT format_string('Hex float: %A', arrow_cast(3.14, 'Float16'));
+----
+Hex float: 0X1.92P1
+
+## Float32 with various formats
+query T
+SELECT format_string('Float: %f', arrow_cast(3.14159, 'Float32'));
+----
+Float: 3.141590
+
+query T
+SELECT format_string('Scientific: %e', arrow_cast(1234.5, 'Float32'));
+----
+Scientific: 1.234500e+03
+
+query T
+SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Float32'));
+----
+Compact: 1234.5
+
+query T
+SELECT format_string('String: %s', arrow_cast(3.14159, 'Float32'));
+----
+String: 3.14159
+
+query T
+SELECT format_string('Hex float: %a', arrow_cast(3.14, 'Float32'));
+----
+Hex float: 0x1.91eb86p1
+
+query T
+SELECT format_string('Hex float: %A', arrow_cast(3.14, 'Float32'));
+----
+Hex float: 0X1.91EB86P1
+
+## Float64 with various formats
+
+query T
+SELECT format_string('String: %s', arrow_cast(3.14159, 'Float64'));
+----
+String: 3.14159
+
+query T
+SELECT format_string('String: %S', arrow_cast(3.14159, 'Float64'));
+----
+String: 3.14159
+
+## Decimal128 with various formats
+query T
+SELECT format_string('Float: %f', arrow_cast(123.456, 'Decimal128(10, 3)'));
+----
+Float: 123.456000
+
+query T
+SELECT format_string('Scientific: %e', arrow_cast(1234.5, 'Decimal128(10, 2)'));
+----
+Scientific: 1.234500e+03
+
+query T
+SELECT format_string('Scientific: %E', arrow_cast(1234.5, 'Decimal128(10, 2)'));
+----
+Scientific: 1.234500E+03
+
+query T
+SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Decimal128(10, 2)'));
+----
+Compact: 1234.5
+
+query T
+SELECT format_string('Compact: %G', arrow_cast(1234.5, 'Decimal128(10, 2)'));
+----
+Compact: 1234.5
+
+query T
+SELECT format_string('String: %s', arrow_cast(123.456, 'Decimal128(10, 3)'));
+----
+String: 123456
+
+query T
+SELECT format_string('String: %S', arrow_cast(123.456, 'Decimal128(10, 3)'));
+----
+String: 123456
+
+## Decimal256 with various formats
+query T
+SELECT format_string('Float: %f', arrow_cast(123.456, 'Decimal256(20, 3)'));
+----
+Float: 123.456000
+
+query T
+SELECT format_string('Scientific: %e', arrow_cast(1234.5, 'Decimal256(20, 2)'));
+----
+Scientific: 1.234500e+03
+
+query T
+SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Decimal256(20, 2)'));
+----
+Compact: 1234.5
+
+query T
+SELECT format_string('String: %s', arrow_cast(123.456, 'Decimal256(20, 3)'));
+----
+String: 123456
+
+## Time32Second with time formats
+query T
+SELECT format_string('Hour: %tH', arrow_cast(52245::int, 'Time32(Second)'));
+----
+Hour: 14
+
+query T
+SELECT format_string('Minute: %tM', arrow_cast(52245::int, 'Time32(Second)'));
+----
+Minute: 30
+
+query T
+SELECT format_string('String: %s', arrow_cast(52245::int, 'Time32(Second)'));
+----
+String: 52245
+
+query T
+SELECT format_string('String: %S', arrow_cast(52245::int, 'Time32(Second)'));
+----
+String: 52245
+
+## Time32Millisecond with time formats
+query T
+SELECT format_string('Hour: %tH', arrow_cast(52245000::int, 'Time32(Millisecond)'));
+----
+Hour: 14
+
+query T
+SELECT format_string('Second: %tS', arrow_cast(52245000::int, 'Time32(Millisecond)'));
+----
+Second: 45
+
+query T
+SELECT format_string('String: %s', arrow_cast(52245000::int, 'Time32(Millisecond)'));
+----
+String: 52245000
+
+## Time64Microsecond with time formats
+query T
+SELECT format_string('Hour: %tH', arrow_cast(52245000000, 'Time64(Microsecond)'));
+----
+Hour: 14
+
+query T
+SELECT format_string('Time: %tT', arrow_cast(52245000000, 'Time64(Microsecond)'));
+----
+Time: 14:30:45
+
+query T
+SELECT format_string('String: %s', arrow_cast(52245000000, 'Time64(Microsecond)'));
+----
+String: 52245000000
+
+## Time64Nanosecond with time formats
+query T
+SELECT format_string('Hour: %tH', arrow_cast(52245000000000, 'Time64(Nanosecond)'));
+----
+Hour: 14
+
+query T
+SELECT format_string('AM/PM: %tp', arrow_cast(52245000000000, 'Time64(Nanosecond)'));
+----
+AM/PM: pm
+
+query T
+SELECT format_string('String: %s', arrow_cast(52245000000000, 'Time64(Nanosecond)'));
+----
+String: 52245000000000
+
+## TimestampSecond with time formats
+query T
+SELECT format_string('Year: %tY', arrow_cast(1703512245, 'Timestamp(Second, None)'));
+----
+Year: 2023
+
+query T
+SELECT format_string('Month: %tm', arrow_cast(1703512245, 'Timestamp(Second, None)'));
+----
+Month: 12
+
+query T
+SELECT format_string('String: %s', arrow_cast(1703512245, 'Timestamp(Second, None)'));
+----
+String: 1703512245
+
+query T
+SELECT format_string('String: %S', arrow_cast(1703512245, 'Timestamp(Second, None)'));
+----
+String: 1703512245
+
+## TimestampMillisecond with time formats
+query T
+SELECT format_string('ISO Date: %tF', arrow_cast(1703512245000, 'Timestamp(Millisecond, None)'));
+----
+ISO Date: 2023-12-25
+
+query T
+SELECT format_string('String: %s', arrow_cast(1703512245000, 'Timestamp(Millisecond, None)'));
+----
+String: 1703512245000
+
+## TimestampMicrosecond with time formats
+query T
+SELECT format_string('Date: %tD', arrow_cast(1703512245000000, 'Timestamp(Microsecond, None)'));
+----
+Date: 12/25/23
+
+query T
+SELECT format_string('String: %s', arrow_cast(1703512245000000, 'Timestamp(Microsecond, None)'));
+----
+String: 1703512245000000
+
+query T
+SELECT format_string('String: %s', arrow_cast('2020-01-02 01:01:11.1234567890Z', 'Timestamp(Nanosecond, None)'));
+----
+String: 1577926871123456789
+
+## Date32 with time formats
+query T
+SELECT format_string('Year: %tY', arrow_cast(19716, 'Date32'));
+----
+Year: 2023
+
+query T
+SELECT format_string('Month: %tB', arrow_cast(19716, 'Date32'));
+----
+Month: December
+
+query T
+SELECT format_string('String: %s', arrow_cast(19716, 'Date32'));
+----
+String: 19716
+
+query T
+SELECT format_string('String: %S', arrow_cast(19716, 'Date32'));
+----
+String: 19716
+
+## Date64 with time formats
+query T
+SELECT format_string('Year: %tY', arrow_cast(19716, 'Date64'));
+----
+Year: 2023
+
+query T
+SELECT format_string('Month: %tB', arrow_cast(19716, 'Date64'));
+----
+Month: December
+
+query T
+SELECT format_string('String: %s', arrow_cast(19716, 'Date64'));
+----
+String: 19716
+
+query T
+SELECT format_string('String: %S', arrow_cast(19716, 'Date64'));
+----
+String: 19716
+
+## Date64 with invalid ARGUMENT
+statement error
+SELECT format_string('String: %tY', true);
+
+# ================================
+# General formatting tests (%h, %H)
+# ================================
+
+# Not implemented yet. Can be implemented after https://github.com/apache/datafusion/pull/17093 is merged
+## Hash value formatting (lowercase)
+statement error
+SELECT format_string('Hash: %h', 'test');
+# ----
+# Hash: ec06e15a
+
+## Hash value formatting (uppercase)
+statement error
+SELECT format_string('Hash: %H', 'test');
+# ----
+# Hash: EC06E15A
+
+## Hash with width
+statement error
+SELECT format_string('Hash: %10h', 'test');
+# ----
+# Hash:   ec06e15a
+
+# ================================
+# Hexadecimal floating point tests
+# ================================
+
+## Hexadecimal float (lowercase)
+query T
+SELECT format_string('Hex float: %a', 15.9375);
+----
+Hex float: 0x1.fep3
+
+## Hexadecimal float (uppercase)
+query T
+SELECT format_string('Hex float: %A', 15.9375);
+----
+Hex float: 0X1.FEP3
+
+## Hexadecimal float with precision
+query T
+SELECT format_string('Hex float: %.10a', 15.9375);
+----
+Hex float: 0x1.fe00000000p3
+
+query T
+SELECT format_string('%a', 12.3456);
+----
+0x1.8b0f27bb2fec5p3
+
+## Hexadecimal float with zero
+query T
+SELECT format_string('Hex float: %a', 0.0);
+----
+Hex float: 0x0.0p0
+
+## Hexadecimal float with negative value
+query T
+SELECT format_string('Hex float: %a', -15.9375);
+----
+Hex float: -0x1.fep3
+
+## Hexadecimal float with very small value
+query T
+SELECT format_string('Hex float: %a', 0.0000152587890625);
+----
+Hex float: 0x1.0p-16
+
+## Hexadecimal float with force sign
+query T
+SELECT format_string('Hex float: %+a', 15.9375);
+----
+Hex float: +0x1.fep3
+
+## Hexadecimal float with space sign (positive)
+query T
+SELECT format_string('Hex float: % a', 15.9375);
+----
+Hex float:  0x1.fep3
+
+## Hexadecimal float with space sign (negative)
+query T
+SELECT format_string('Hex float: % a', -15.9375);
+----
+Hex float: -0x1.fep3
+
+## Hexadecimal float uppercase with space sign
+query T
+SELECT format_string('Hex float: % A', 15.9375);
+----
+Hex float:  0X1.FEP3
+
+## Hexadecimal float with width
+query T
+SELECT format_string('Hex float: %20a', 15.9375);
+----
+Hex float:             0x1.fep3
+
+## Hexadecimal float with zero padding
+query T
+SELECT format_string('Hex float: %020a', 15.9375);
+----
+Hex float: 0x0000000000001.fep3
+
+## Hexadecimal float with alternate form and precision
+query T
+SELECT format_string('Hex float: %#.5a', 1.0);
+----
+Hex float: 0x1.00000p0
+
+## Hexadecimal float uppercase with force sign
+query T
+SELECT format_string('Hex float: %+A', -15.9375);
+----
+Hex float: -0X1.FEP3
+
+## Hexadecimal float with left alignment
+query T
+SELECT format_string('Hex float: %-20a', 15.9375);
+----
+Hex float: 0x1.fep3
+
+## Hexadecimal float with subnormal number (Float64)
+query T
+SELECT format_string('Hex float: %a', 2.2250738585072014e-308);
+----
+Hex float: 0x1.0p-1022
+
+## Hexadecimal float with smallest subnormal (Float64)
+query T
+SELECT format_string('Hex float: %a', 5.0e-324);
+----
+Hex float: 0x0.0000000000001p-1022
+
+## Hexadecimal float uppercase with subnormal
+query T
+SELECT format_string('Hex float: %A', 5.0e-324);
+----
+Hex float: 0X0.0000000000001P-1022
+
+## Hexadecimal float with subnormal and precision
+query T
+SELECT format_string('Hex float: %.20a', 2.2250738585072014e-308);
+----
+Hex float: 0x1.00000000000000000000p-1022
+
+## Hexadecimal float with negative subnormal
+query T
+SELECT format_string('Hex float: %a', -5.0e-324);
+----
+Hex float: -0x0.0000000000001p-1022
+
+## Hexadecimal float with subnormal and precision 5
+query T
+SELECT format_string('Hex float: %.5a', 5.0e-324);
+----
+Hex float: 0x1.00000p-1074
+
+## Hexadecimal float with subnormal and precision 10
+query T
+SELECT format_string('Hex float: %.10a', 5.0e-324);
+----
+Hex float: 0x1.0000000000p-1074
+
+## Hexadecimal float with subnormal and precision 13 (full)
+query T
+SELECT format_string('Hex float: %.13a', 5.0e-324);
+----
+Hex float: 0x0.0000000000001p-1022
+
+## Hexadecimal float with larger subnormal and precision
+query T
+SELECT format_string('Hex float: %.5a', 2.225e-308);
+----
+Hex float: 0x1.fffbap-1023
+
+## Hexadecimal float with subnormal and precision 0
+query T
+SELECT format_string('Hex float: %.0a', 5.0e-324);
+----
+Hex float: 0x1.0p-1074
+
+query T
+SELECT format_string('Hex float: %.2a', 5.0e-324);
+----
+Hex float: 0x1.00p-1074
+
+
+query T
+SELECT format_string('Hex float: %.2a', 5.0e-323);
+----
+Hex float: 0x1.40p-1071
+
+query T
+SELECT format_string('Hex float: %.0a', 5.0e-323);
+----
+Hex float: 0x1.4p-1071
+
+# ================================
+# Relative indexing tests
+# ================================
+
+## Relative indexing with <
+query T
+SELECT format_string('%s %<s %<s', 'repeat');
+----
+repeat repeat repeat
+
+## Mixed relative and positional indexing
+query T
+SELECT format_string('%2$s %<s %1$d', 42, 'test');
+----
+test test 42
+
+statement error
+SELECT format_string('%<s %<s', 'repeat');
+
+# ================================
+# Extended flag combination tests
+# ================================
+
+## Combine + and 0 flags
+query T
+SELECT format_string('Signed zero-padded: %+08d', 42);
+----
+Signed zero-padded: +0000042
+
+## Combine space and width
+query T
+SELECT format_string('Space padded: % 8d', 42);
+----
+Space padded:       42
+
+## Combine # flag with float
+query T
+SELECT format_string('Always decimal: %#.0f', 42.0);
+----
+Always decimal: 42.
+
+## Combine # flag with float
+query T
+SELECT format_string('Always decimal: %#.0f', 40.0);
+----
+Always decimal: 40.
+
+## Combine multiple flags with hex
+query T
+SELECT format_string('Hex: %#08x', 255);
+----
+Hex: 0x0000ff
+
+# ================================
+# Special numeric values
+# ================================
+
+## Float NaN
+query T
+SELECT format_string('NaN: %f', CAST('NaN' AS DOUBLE));
+----
+NaN: NaN
+
+## Float positive infinity
+query T
+SELECT format_string('Infinity: %f', CAST('+Inf' AS DOUBLE));
+----
+Infinity: Infinity
+
+## Float negative infinity
+query T
+SELECT format_string('Negative Infinity: %f', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: -Infinity
+
+## Float negative infinity with parentheses
+query T
+SELECT format_string('Negative Infinity: %(f', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: (Infinity)
+
+## NaN with scientific notation (lowercase)
+query T
+SELECT format_string('NaN: %e', CAST('NaN' AS DOUBLE));
+----
+NaN: NaN
+
+## NaN with scientific notation (uppercase)
+query T
+SELECT format_string('NaN: %E', CAST('NaN' AS DOUBLE));
+----
+NaN: NAN
+
+## NaN with compact format (lowercase)
+query T
+SELECT format_string('NaN: %g', CAST('NaN' AS DOUBLE));
+----
+NaN: NaN
+
+## NaN with compact format (uppercase)
+query T
+SELECT format_string('NaN: %G', CAST('NaN' AS DOUBLE));
+----
+NaN: NAN
+
+## NaN with hex float (lowercase)
+query T
+SELECT format_string('NaN: %a', CAST('NaN' AS DOUBLE));
+----
+NaN: NaN
+
+## NaN with hex float (uppercase)
+query T
+SELECT format_string('NaN: %A', CAST('NaN' AS DOUBLE));
+----
+NaN: NAN
+
+## Positive infinity with scientific notation (lowercase)
+query T
+SELECT format_string('Infinity: %e', CAST('+Inf' AS DOUBLE));
+----
+Infinity: Infinity
+
+## Positive infinity with scientific notation (uppercase)
+query T
+SELECT format_string('Infinity: %E', CAST('+Inf' AS DOUBLE));
+----
+Infinity: INFINITY
+
+## Positive infinity with compact format (lowercase)
+query T
+SELECT format_string('Infinity: %g', CAST('+Inf' AS DOUBLE));
+----
+Infinity: Infinity
+
+## Positive infinity with compact format (uppercase)
+query T
+SELECT format_string('Infinity: %G', CAST('+Inf' AS DOUBLE));
+----
+Infinity: INFINITY
+
+## Positive infinity with hex float (lowercase)
+query T
+SELECT format_string('Infinity: %a', CAST('+Inf' AS DOUBLE));
+----
+Infinity: Infinity
+
+## Positive infinity with hex float (uppercase)
+query T
+SELECT format_string('Infinity: %A', CAST('+Inf' AS DOUBLE));
+----
+Infinity: INFINITY
+
+## Negative infinity with scientific notation (lowercase)
+query T
+SELECT format_string('Negative Infinity: %e', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: -Infinity
+
+## Negative infinity with scientific notation (uppercase)
+query T
+SELECT format_string('Negative Infinity: %E', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: -INFINITY
+
+## Negative infinity with compact format (lowercase)
+query T
+SELECT format_string('Negative Infinity: %g', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: -Infinity
+
+## Negative infinity with compact format (uppercase)
+query T
+SELECT format_string('Negative Infinity: %G', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: -INFINITY
+
+## Negative infinity with hex float (lowercase)
+query T
+SELECT format_string('Negative Infinity: %a', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: -Infinity
+
+## Negative infinity with hex float (uppercase)
+query T
+SELECT format_string('Negative Infinity: %A', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: -INFINITY
+
+## Positive infinity with force sign
+query T
+SELECT format_string('Infinity: %+f', CAST('+Inf' AS DOUBLE));
+----
+Infinity: +Infinity
+
+## Negative infinity with scientific notation and parentheses
+query T
+SELECT format_string('Negative Infinity: %(e', CAST('-Inf' AS DOUBLE));
+----
+Negative Infinity: (Infinity)
+
+# ================================
+# Large number tests
+# ================================
+
+## Large integer
+query T
+SELECT format_string('Large: %d', 9223372036854775807);
+----
+Large: 9223372036854775807
+
+## Very large integer with grouping
+query T
+SELECT format_string('Grouped large: %,d', 9223372036854775807);
+----
+Grouped large: 9,223,372,036,854,775,807
+
+# ================================
+# Precision edge cases
+# ================================
+
+## Zero precision with decimal
+query T
+SELECT format_string('Zero precision: %.0f', 3.14159);
+----
+Zero precision: 3
+
+## High precision float
+query T
+SELECT format_string('High precision: %.10f', 3.14159);
+----
+High precision: 3.1415900000
+
+## Scientific notation with precision
+query T
+SELECT format_string('Scientific: %.3e', 1234.56789);
+----
+Scientific: 1.235e+03
+
+# ================================
+# Width edge cases
+# ================================
+
+## Very wide formatting
+query T
+SELECT format_string('Wide: %20s|', 'test');
+----
+Wide:                 test|
+
+## Wide with left alignment
+query T
+SELECT format_string('Wide left: %-20s|', 'test');
+----
+Wide left: test                |
+
+# ================================
+# Character encoding tests
+# ================================
+
+## Unicode character
+query T
+SELECT format_string('Unicode: %c', 8364);
+----
+Unicode: €
+
+## High Unicode codepoint
+query T
+SELECT format_string('Emoji: %c', 128512);
+----
+Emoji: 😀
+
+# ================================
+# Advanced error cases
+# ================================
+
+## Invalid flag combination (+ and space)
+statement error
+SELECT format_string('%+ d', 42);
+
+## Invalid flag combination (+ and space)
+statement error
+SELECT format_string('% +d', 42);
+
+## Invalid flag combination (- and 0)
+statement error
+SELECT format_string('%-0d', 42);
+
+## Width without value for line separator
+statement error
+SELECT format_string('%5n');
+
+# ================================
+# BigInteger-like tests
+# ================================
+
+## Very large number in different bases
+query T
+SELECT format_string('Large hex: %x', 9223372036854775807::BIGINT);
+----
+Large hex: 7fffffffffffffff
+
+## Large octal
+query T
+SELECT format_string('Large octal: %o', 9223372036854775807::BIGINT);
+----
+Large octal: 777777777777777777777

@@ -32,8 +32,8 @@ use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
-    DataFusionError, Result,
+    exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
+    utils::take_function_args, Result,
 };
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
@@ -237,9 +237,7 @@ where
         i64: TryInto<O>,
     {
         let index: O = index.try_into().map_err(|_| {
-            DataFusionError::Execution(format!(
-                "array_element got invalid index: {index}"
-            ))
+            exec_datafusion_err!("array_element got invalid index: {index}")
         })?;
         // 0 ~ len - 1
         let adjusted_zero_index = if index < O::usize_as(0) {
@@ -337,7 +335,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                         ],
-                        array_coercion: None,
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: vec![
@@ -346,7 +344,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                         ],
-                        array_coercion: None,
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
                     }),
                 ],
                 Volatility::Immutable,
@@ -672,15 +670,7 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::Array {
-                        arguments: vec![ArrayFunctionArgument::Array],
-                        array_coercion: Some(ListCoercion::FixedSizedListToList),
-                    },
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -776,15 +766,7 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::Array {
-                        arguments: vec![ArrayFunctionArgument::Array],
-                        array_coercion: Some(ListCoercion::FixedSizedListToList),
-                    },
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_pop_back")],
         }
     }

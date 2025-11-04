@@ -796,7 +796,6 @@ fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) ->
 /// # Returns
 ///
 /// A tuple of two arrays of primitive types representing the build and probe indices.
-///
 fn calculate_indices_by_join_type<L: ArrowPrimitiveType, R: ArrowPrimitiveType>(
     build_side: JoinSide,
     prune_length: usize,
@@ -1018,6 +1017,7 @@ pub(crate) fn join_with_probe_batch(
             | JoinType::LeftSemi
             | JoinType::LeftMark
             | JoinType::RightSemi
+            | JoinType::RightMark
     ) {
         Ok(None)
     } else {
@@ -1864,6 +1864,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -1952,6 +1953,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2020,6 +2022,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2073,6 +2076,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2101,6 +2105,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2485,6 +2490,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2571,6 +2577,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2649,6 +2656,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,

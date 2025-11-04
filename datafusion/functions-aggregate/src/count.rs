@@ -113,8 +113,8 @@ pub fn count_all() -> Expr {
 /// // create `count(*)` OVER ... window function expression
 /// let expr = count_all_window();
 /// assert_eq!(
-///   expr.schema_name().to_string(),
-///   "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+///     expr.schema_name().to_string(),
+///     "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// );
 /// // if you need to refer to this column, use the `schema_name` function
 /// let expr = col(expr.schema_name().to_string());
@@ -333,7 +333,7 @@ impl AggregateUDFImpl for Count {
             return not_impl_err!("COUNT DISTINCT with multiple arguments");
         }
 
-        let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
+        let data_type = acc_args.expr_fields[0].data_type();
 
         Ok(match data_type {
             DataType::Dictionary(_, values_type) => {
@@ -854,7 +854,7 @@ mod tests {
         datatypes::{DataType, Field, Int32Type, Schema},
     };
     use datafusion_expr::function::AccumulatorArgs;
-    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
     use std::sync::Arc;
     /// Helper function to create a dictionary array with non-null keys but some null values
     /// Returns a dictionary array where:
@@ -895,8 +895,10 @@ mod tests {
         // Using Count UDAF's accumulator
         let count = Count::new();
         let expr = Arc::new(Column::new("dict_col", 0));
+        let expr_field = expr.return_field(&schema)?;
         let args = AccumulatorArgs {
             schema: &schema,
+            expr_fields: &[expr_field],
             exprs: &[expr],
             is_distinct: true,
             name: "count",

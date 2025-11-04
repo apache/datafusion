@@ -38,7 +38,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
 
@@ -343,7 +343,7 @@ impl ChildFilterDescription {
                 // All columns exist in child - we can push down
                 // Need to reassign column indices to match child schema
                 let reassigned_filter =
-                    reassign_predicate_columns(Arc::clone(filter), &child_schema, false)?;
+                    reassign_expr_columns(Arc::clone(filter), &child_schema)?;
                 child_parent_filters
                     .push(PushedDownPredicate::supported(reassigned_filter));
             } else {

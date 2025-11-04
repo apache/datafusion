@@ -26,7 +26,7 @@ use arrow::array::{
     ArrowPrimitiveType, LargeStringArray, PrimitiveArray, StringArray, StringViewArray,
 };
 use arrow::datatypes::{i256, DataType};
-use datafusion_common::DataFusionError;
+use datafusion_common::exec_datafusion_err;
 use datafusion_common::Result;
 use half::f16;
 use hashbrown::raw::RawTable;
@@ -432,9 +432,9 @@ pub fn new_hash_table(
         _ => {}
     }
 
-    Err(DataFusionError::Execution(format!(
+    Err(exec_datafusion_err!(
         "Can't create HashTable for type: {kt:?}"
-    )))
+    ))
 }
 
 #[cfg(test)]

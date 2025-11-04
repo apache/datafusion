@@ -346,8 +346,10 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     /// # Example
     ///
     /// ```rust
+    /// use datafusion_execution::memory_pool::{
+    ///     FairSpillPool, GreedyMemoryPool, TrackConsumersPool,
+    /// };
     /// use std::num::NonZeroUsize;
-    /// use datafusion_execution::memory_pool::{TrackConsumersPool, GreedyMemoryPool, FairSpillPool};
     ///
     /// // Create with a greedy pool backend, reporting top 3 consumers in error messages
     /// let tracked_greedy = TrackConsumersPool::new(
@@ -463,6 +465,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                     // wrap OOM message in top consumers
                     DataFusionError::ResourcesExhausted(
                         provide_top_memory_consumers_to_error_msg(
+                            &reservation.consumer().name,
                             e,
                             self.report_top(self.top.into()),
                         ),
@@ -490,10 +493,11 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 }
 
 fn provide_top_memory_consumers_to_error_msg(
+    consumer_name: &str,
     error_msg: String,
     top_consumers: String,
 ) -> String {
-    format!("Additional allocation failed with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}")
+    format!("Additional allocation failed for {consumer_name} with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}")
 }
 
 #[cfg(test)]
@@ -619,7 +623,7 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+        Resources exhausted: Additional allocation failed for r5 with top memory consumers (across reservations) as:
           r1#[ID](can spill: false) consumed 50.0 B, peak 70.0 B,
           r3#[ID](can spill: false) consumed 20.0 B, peak 25.0 B,
           r2#[ID](can spill: false) consumed 15.0 B, peak 15.0 B.
@@ -644,7 +648,7 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
           foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 100.0 B remain available for the total pool
         ");
@@ -661,7 +665,7 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
           foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
           foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 90.0 B remain available for the total pool
@@ -674,7 +678,7 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
           foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
           foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 20.0 B already allocated for this reservation - 70.0 B remain available for the total pool
@@ -689,7 +693,7 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
           foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
           foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
           foo#[ID](can spill: true) consumed 0.0 B, peak 0.0 B.
@@ -713,7 +717,7 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-                Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+                Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
                   r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
                   r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 70.0 B remain available for the total pool
@@ -726,7 +730,7 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-                Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+                Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
                   r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));
@@ -737,7 +741,7 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-                Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+                Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
                   r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));
@@ -748,7 +752,7 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-                Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+                Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
                   r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));

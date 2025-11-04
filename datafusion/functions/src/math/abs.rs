@@ -21,8 +21,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array,
+    ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array,
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
@@ -34,6 +35,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
+use num_traits::sign::Signed;
 
 type MathArrayFunction = fn(&ArrayRef) -> Result<ArrayRef>;
 
@@ -81,6 +83,7 @@ macro_rules! make_decimal_abs_function {
 /// Return different implementations based on input datatype to reduce branches during execution
 fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> {
     match input_data_type {
+        DataType::Float16 => Ok(make_abs_function!(Float16Array)),
         DataType::Float32 => Ok(make_abs_function!(Float32Array)),
         DataType::Float64 => Ok(make_abs_function!(Float64Array)),
 
@@ -98,6 +101,8 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
         | DataType::UInt64 => Ok(|input: &ArrayRef| Ok(Arc::clone(input))),
 
         // Decimal types
+        DataType::Decimal32(_, _) => Ok(make_decimal_abs_function!(Decimal32Array)),
+        DataType::Decimal64(_, _) => Ok(make_decimal_abs_function!(Decimal64Array)),
         DataType::Decimal128(_, _) => Ok(make_decimal_abs_function!(Decimal128Array)),
         DataType::Decimal256(_, _) => Ok(make_decimal_abs_function!(Decimal256Array)),
 
@@ -108,6 +113,14 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
     doc_section(label = "Math Functions"),
     description = "Returns the absolute value of a number.",
     syntax_example = "abs(numeric_expression)",
+    sql_example = r#"```sql
+> SELECT abs(-5);
++----------+
+| abs(-5)  |
++----------+
+| 5        |
++----------+
+```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -133,6 +146,7 @@ impl ScalarUDFImpl for AbsFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "abs"
     }
@@ -142,29 +156,7 @@ impl ScalarUDFImpl for AbsFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Float32 => Ok(DataType::Float32),
-            DataType::Float64 => Ok(DataType::Float64),
-            DataType::Int8 => Ok(DataType::Int8),
-            DataType::Int16 => Ok(DataType::Int16),
-            DataType::Int32 => Ok(DataType::Int32),
-            DataType::Int64 => Ok(DataType::Int64),
-            DataType::Null => Ok(DataType::Null),
-            DataType::UInt8 => Ok(DataType::UInt8),
-            DataType::UInt16 => Ok(DataType::UInt16),
-            DataType::UInt32 => Ok(DataType::UInt32),
-            DataType::UInt64 => Ok(DataType::UInt64),
-            DataType::Decimal128(precision, scale) => {
-                Ok(DataType::Decimal128(precision, scale))
-            }
-            DataType::Decimal256(precision, scale) => {
-                Ok(DataType::Decimal256(precision, scale))
-            }
-            _ => not_impl_err!(
-                "Unsupported data type {} for function abs",
-                arg_types[0].to_string()
-            ),
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

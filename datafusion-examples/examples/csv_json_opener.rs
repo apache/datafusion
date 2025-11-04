@@ -31,7 +31,9 @@ use datafusion::{
     test_util::aggr_test_schema,
 };
 
-use datafusion::datasource::physical_plan::FileScanConfigBuilder;
+use datafusion::datasource::{
+    physical_plan::FileScanConfigBuilder, table_schema::TableSchema,
+};
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
@@ -60,14 +62,14 @@ async fn csv_opener() -> Result<()> {
         Arc::clone(&schema),
         Arc::new(CsvSource::default()),
     )
-    .with_projection(Some(vec![12, 0]))
+    .with_projection_indices(Some(vec![12, 0]))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.display().to_string(), 10))
     .build();
 
     let config = CsvSource::new(true, b',', b'"')
         .with_comment(Some(b'#'))
-        .with_schema(schema)
+        .with_schema(TableSchema::from_file_schema(schema))
         .with_batch_size(8192)
         .with_projection(&scan_config);
 
@@ -126,7 +128,7 @@ async fn json_opener() -> Result<()> {
         schema,
         Arc::new(JsonSource::default()),
     )
-    .with_projection(Some(vec![1, 0]))
+    .with_projection_indices(Some(vec![1, 0]))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.to_string(), 10))
     .build();

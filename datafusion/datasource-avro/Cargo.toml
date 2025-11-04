@@ -18,11 +18,11 @@
 [package]
 name = "datafusion-datasource-avro"
 description = "datafusion-datasource-avro"
+readme = "README.md"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
-readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -41,7 +41,7 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
-num-traits = { version = "0.2" }
+num-traits = { workspace = true }
 object_store = { workspace = true }
 
 [dev-dependencies]

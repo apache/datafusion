@@ -238,7 +238,6 @@ impl JoinLeftData {
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
-///
 /// ```
 ///
 /// 2. the **probe phase** where the tuples of the probe side are streamed
@@ -273,7 +272,6 @@ impl JoinLeftData {
 ///     └────────────┘                                            └────────────┘
 ///
 ///        build side                                                probe side
-///
 /// ```
 ///
 /// # Example "Optimal" Plans
@@ -690,6 +688,8 @@ impl HashJoinExec {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) || self.projection.is_some()
         {
             Ok(Arc::new(new_join))
@@ -1135,7 +1135,7 @@ impl ExecutionPlan for HashJoinExec {
 
         // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
-            && config.optimizer.enable_dynamic_filter_pushdown
+            && config.optimizer.enable_join_dynamic_filter_pushdown
         {
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
@@ -4298,7 +4298,7 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput"
+                "Resources exhausted: Additional allocation failed for HashJoinInput with top memory consumers (across reservations) as:\n  HashJoinInput"
             );
 
             assert_contains!(
@@ -4379,7 +4379,7 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
 
             );
 
