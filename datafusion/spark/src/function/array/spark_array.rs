@@ -22,12 +22,12 @@ use arrow::array::{
     MutableArrayData, NullArray, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    ColumnarValue,ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
 
