@@ -25,7 +25,7 @@ use arrow::compute::{
     is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
     SlicesIterator,
 };
-use arrow::datatypes::{DataType, Schema, UInt32Type};
+use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
@@ -254,6 +254,17 @@ fn create_filter(predicate: &BooleanArray, optimize: bool) -> FilterPredicate {
         filter_builder = filter_builder.optimize();
     }
     filter_builder.build()
+}
+
+fn multiple_arrays(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(fields) => {
+            fields.len() > 1
+                || fields.len() == 1 && multiple_arrays(fields[0].data_type())
+        }
+        DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
+        _ => false,
+    }
 }
 
 // This should be removed when https://github.com/apache/arrow-rs/pull/8693
@@ -1073,7 +1084,8 @@ impl CaseBody {
             }
         };
 
-        let optimize_filter = batch.num_columns() > 1;
+        let optimize_filter = batch.num_columns() > 1
+            || (batch.num_columns() == 1 && multiple_arrays(batch.column(0).data_type()));
 
         let when_filter = create_filter(&when_value, optimize_filter);
         let then_batch = filter_record_batch(batch, &when_filter)?;
