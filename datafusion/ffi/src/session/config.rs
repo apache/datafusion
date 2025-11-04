@@ -19,13 +19,16 @@ use abi_stable::{
     std_types::{RHashMap, RString},
     StableAbi,
 };
-use datafusion_common::{config::ConfigOptions, error::{DataFusionError, Result}};
+use datafusion_common::{
+    config::ConfigOptions,
+    error::{DataFusionError, Result},
+};
+use datafusion_execution::config::SessionConfig;
 use std::sync::Arc;
 use std::{
     collections::HashMap,
     ffi::{c_char, c_void, CString},
 };
-use datafusion_execution::config::SessionConfig;
 
 /// A stable struct for sharing [`SessionConfig`] across FFI boundaries.
 /// Instead of attempting to expose the entire SessionConfig interface, we

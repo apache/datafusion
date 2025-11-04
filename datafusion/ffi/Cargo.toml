@@ -51,7 +51,11 @@ datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-functions = { workspace = true, optional = true }
+datafusion-functions-aggregate = { workspace = true, optional = true }
 datafusion-functions-aggregate-common = { workspace = true }
+datafusion-functions-table = { workspace = true, optional = true }
+datafusion-functions-window = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
@@ -64,9 +68,9 @@ semver = "1.0.27"
 tokio = { workspace = true }
 
 [dev-dependencies]
-datafusion = { workspace = true, default-features = false }
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
 doc-comment = { workspace = true }
 
 [features]
-integration-tests = []
+integration-tests = ["dep:datafusion-functions"]
 tarpaulin_include = [] # Exists only to prevent warnings on stable and still have accurate coverage

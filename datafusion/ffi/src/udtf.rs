@@ -22,8 +22,13 @@ use abi_stable::{
     StableAbi,
 };
 
-use datafusion_common::error::Result;
+use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
+use crate::{
+    df_result, rresult_return,
+    table_provider::{FFI_TableProvider, ForeignTableProvider},
+};
 use datafusion_catalog::{TableFunctionImpl, TableProvider};
+use datafusion_common::error::Result;
 use datafusion_expr::Expr;
 use datafusion_proto::{
     logical_plan::{
@@ -33,11 +38,6 @@ use datafusion_proto::{
 };
 use prost::Message;
 use tokio::runtime::Handle;
-use crate::{
-    df_result, rresult_return,
-    table_provider::{FFI_TableProvider, ForeignTableProvider},
-};
-use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
@@ -89,7 +89,8 @@ unsafe extern "C" fn call_fn_wrapper(
     udtf: &FFI_TableFunction,
     args: RVec<u8>,
 ) -> RResult<FFI_TableProvider, RString> {
-    let function_registry = ForeignWeakFunctionRegistry::try_from(&udtf.function_registry)?;
+    let function_registry = udtf.function_registry.clone();
+    let foreign_registry = ForeignWeakFunctionRegistry::from(&function_registry);
 
     let runtime = udtf.runtime();
     let udtf = udtf.inner();
@@ -98,11 +99,19 @@ unsafe extern "C" fn call_fn_wrapper(
 
     let proto_filters = rresult_return!(LogicalExprList::decode(args.as_ref()));
 
-    let args =
-        rresult_return!(parse_exprs(proto_filters.expr.iter(), &function_registry, &codec));
+    let args = rresult_return!(parse_exprs(
+        proto_filters.expr.iter(),
+        &foreign_registry,
+        &codec
+    ));
 
     let table_provider = rresult_return!(udtf.call(&args));
-    RResult::ROk(FFI_TableProvider::new(table_provider, false, runtime))
+    RResult::ROk(FFI_TableProvider::new(
+        table_provider,
+        false,
+        runtime,
+        function_registry,
+    ))
 }
 
 unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
@@ -125,13 +134,16 @@ impl Clone for FFI_TableFunction {
 }
 
 impl FFI_TableFunction {
-    pub fn new(udtf: Arc<dyn TableFunctionImpl>, runtime: Option<Handle>, function_registry: impl Into<FFI_WeakFunctionRegistry>) -> Self {
-        let function_registry = function_registry.into();
+    pub fn new(
+        udtf: Arc<dyn TableFunctionImpl>,
+        runtime: Option<Handle>,
+        function_registry: FFI_WeakFunctionRegistry,
+    ) -> Self {
         let private_data = Box::new(TableFunctionPrivateData { udtf, runtime });
 
         Self {
             call: call_fn_wrapper,
-            function_registry: function_registry.into(),
+            function_registry,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -198,17 +210,18 @@ impl TableFunctionImpl for ForeignTableFunction {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::{
         array::{
             record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
         },
         datatypes::{DataType, Field, Schema},
     };
+    use datafusion::prelude::SessionContext;
     use datafusion::{
         catalog::MemTable, common::exec_err, prelude::lit, scalar::ScalarValue,
     };
-    use datafusion::prelude::SessionContext;
-    use super::*;
+    use datafusion_expr::registry::FunctionRegistry;
 
     #[derive(Debug)]
     struct TestUDTF {}
@@ -293,8 +306,12 @@ mod tests {
         let original_udtf = Arc::new(TestUDTF {}) as Arc<dyn TableFunctionImpl>;
 
         let ctx = Arc::new(SessionContext::default());
-        let local_udtf: FFI_TableFunction =
-            FFI_TableFunction::new(Arc::clone(&original_udtf), None, Arc::clone(&ctx))?;
+        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let local_udtf: FFI_TableFunction = FFI_TableFunction::new(
+            Arc::clone(&original_udtf),
+            None,
+            function_registry.into(),
+        );
 
         let foreign_udf: ForeignTableFunction = local_udtf.into();
 

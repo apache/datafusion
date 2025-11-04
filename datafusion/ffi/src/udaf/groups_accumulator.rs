@@ -30,9 +30,7 @@ use arrow::{
     error::ArrowError,
     ffi::to_ffi,
 };
-use datafusion_common::{
-    error::{DataFusionError, Result},
-};
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 
 /// A stable struct for sharing [`GroupsAccumulator`] across FFI boundaries.

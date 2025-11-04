@@ -26,9 +26,7 @@ use abi_stable::{
 };
 use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
-use datafusion_common::{
-    error::DataFusionError,
-};
+use datafusion_common::error::DataFusionError;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
@@ -107,7 +105,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
             .exprs
             .into_iter()
             .map(|expr| {
-                Arc::new(ForeignPhysicalExpr::from(expr)) as Arc<dyn PhysicalExpr>
+                <Arc<dyn PhysicalExpr>>::from(expr)
             })
             .collect();
 

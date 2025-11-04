@@ -21,6 +21,7 @@ use abi_stable::{export_root_module, prefix_type::PrefixTypeTrait};
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::{common::record_batch, datasource::MemTable};
+use datafusion_ffi::function_registry::FFI_WeakFunctionRegistry;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use ffi_module_interface::{TableProviderModule, TableProviderModuleRef};
 
@@ -34,7 +35,7 @@ fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
 
 /// Here we only wish to create a simple table provider as an example.
 /// We create an in-memory table and convert it to it's FFI counterpart.
-extern "C" fn construct_simple_table_provider() -> FFI_TableProvider {
+extern "C" fn construct_simple_table_provider(function_registry: FFI_WeakFunctionRegistry) -> FFI_TableProvider {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Float64, true),
@@ -50,7 +51,7 @@ extern "C" fn construct_simple_table_provider() -> FFI_TableProvider {
 
     let table_provider = MemTable::try_new(schema, vec![batches]).unwrap();
 
-    FFI_TableProvider::new(Arc::new(table_provider), true, None)
+    FFI_TableProvider::new(Arc::new(table_provider), true, None, function_registry)
 }
 
 #[export_root_module]

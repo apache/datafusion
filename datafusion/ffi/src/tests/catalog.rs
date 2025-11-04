@@ -30,15 +30,11 @@ use std::{any::Any, fmt::Debug, sync::Arc};
 use crate::catalog_provider::FFI_CatalogProvider;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{
-        CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider,
-        TableProvider,
-    },
-    common::exec_err,
-    datasource::MemTable,
-    error::{DataFusionError, Result},
-};
+use datafusion_catalog::{CatalogProvider, MemTable, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, TableProvider};
+use datafusion_common::error::{DataFusionError, Result}
+;
+use datafusion_common::exec_err;
+use crate::function_registry::FFI_WeakFunctionRegistry;
 
 /// This schema provider is intended only for unit tests. It prepopulates with one
 /// table and only allows for tables named sales and purchases.
@@ -49,7 +45,7 @@ pub struct FixedSchemaProvider {
 
 pub fn fruit_table() -> Arc<dyn TableProvider + 'static> {
     use arrow::datatypes::{DataType, Field};
-    use datafusion::common::record_batch;
+    use datafusion_common::record_batch;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("units", DataType::Int32, true),
@@ -177,7 +173,7 @@ impl CatalogProvider for FixedCatalogProvider {
     }
 }
 
-pub(crate) extern "C" fn create_catalog_provider() -> FFI_CatalogProvider {
+pub(crate) extern "C" fn create_catalog_provider(function_registry: FFI_WeakFunctionRegistry) -> FFI_CatalogProvider {
     let catalog_provider = Arc::new(FixedCatalogProvider::default());
-    FFI_CatalogProvider::new(catalog_provider, None)
+    FFI_CatalogProvider::new(catalog_provider, None, function_registry)
 }

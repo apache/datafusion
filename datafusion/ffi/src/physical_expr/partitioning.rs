@@ -41,7 +41,7 @@ impl From<FFI_Partitioning> for Partitioning {
                 let exprs = exprs
                     .into_iter()
                     .map(|expr| {
-                        Arc::new(ForeignPhysicalExpr::from(expr)) as Arc<dyn PhysicalExpr>
+                        <Arc<dyn PhysicalExpr>>::from(expr)
                     })
                     .collect();
                 Self::Hash(exprs, size)

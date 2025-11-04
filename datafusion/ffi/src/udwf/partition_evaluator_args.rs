@@ -26,9 +26,7 @@ use arrow::{
     ffi::FFI_ArrowSchema,
 };
 use arrow_schema::FieldRef;
-use datafusion_common::{
-    error::{DataFusionError, Result},
-};
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_expr::function::PartitionEvaluatorArgs;
 use datafusion_physical_plan::{expressions::Column, PhysicalExpr};
 
@@ -134,7 +132,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .input_exprs
             .into_iter()
             .map(|expr| {
-                Arc::new(ForeignPhysicalExpr::from(expr)) as Arc<dyn PhysicalExpr>
+                <Arc<dyn PhysicalExpr>>::from(expr)
             })
             .collect::<Vec<_>>();
 

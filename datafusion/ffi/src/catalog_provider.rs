@@ -29,6 +29,7 @@ use crate::{
     schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider},
 };
 
+use crate::function_registry::FFI_WeakFunctionRegistry;
 use datafusion_common::error::Result;
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
@@ -56,6 +57,8 @@ pub struct FFI_CatalogProvider {
             name: RString,
             cascade: bool,
         ) -> RResult<ROption<FFI_SchemaProvider>, RString>,
+
+    function_registry: FFI_WeakFunctionRegistry,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -105,7 +108,13 @@ unsafe extern "C" fn schema_fn_wrapper(
 ) -> ROption<FFI_SchemaProvider> {
     let maybe_schema = provider.inner().schema(name.as_str());
     maybe_schema
-        .map(|schema| FFI_SchemaProvider::new(schema, provider.runtime()))
+        .map(|schema| {
+            FFI_SchemaProvider::new(
+                schema,
+                provider.runtime(),
+                provider.function_registry.clone(),
+            )
+        })
         .into()
 }
 
@@ -115,13 +124,15 @@ unsafe extern "C" fn register_schema_fn_wrapper(
     schema: &FFI_SchemaProvider,
 ) -> RResult<ROption<FFI_SchemaProvider>, RString> {
     let runtime = provider.runtime();
-    let provider = provider.inner();
     let schema = Arc::new(ForeignSchemaProvider::from(schema));
 
-    let returned_schema =
-        rresult_return!(provider.register_schema(name.as_str(), schema))
-            .map(|schema| FFI_SchemaProvider::new(schema, runtime))
-            .into();
+    let returned_schema = rresult_return!(provider
+        .inner()
+        .register_schema(name.as_str(), schema))
+    .map(|schema| {
+        FFI_SchemaProvider::new(schema, runtime, provider.function_registry.clone())
+    })
+    .into();
 
     RResult::ROk(returned_schema)
 }
@@ -132,14 +143,19 @@ unsafe extern "C" fn deregister_schema_fn_wrapper(
     cascade: bool,
 ) -> RResult<ROption<FFI_SchemaProvider>, RString> {
     let runtime = provider.runtime();
-    let provider = provider.inner();
 
     let maybe_schema =
-        rresult_return!(provider.deregister_schema(name.as_str(), cascade));
+        rresult_return!(provider.inner().deregister_schema(name.as_str(), cascade));
 
     RResult::ROk(
         maybe_schema
-            .map(|schema| FFI_SchemaProvider::new(schema, runtime))
+            .map(|schema| {
+                FFI_SchemaProvider::new(
+                    schema,
+                    runtime,
+                    provider.function_registry.clone(),
+                )
+            })
             .into(),
     )
 }
@@ -165,6 +181,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         schema: schema_fn_wrapper,
         register_schema: register_schema_fn_wrapper,
         deregister_schema: deregister_schema_fn_wrapper,
+        function_registry: provider.function_registry.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
@@ -183,6 +200,7 @@ impl FFI_CatalogProvider {
     pub fn new(
         provider: Arc<dyn CatalogProvider + Send>,
         runtime: Option<Handle>,
+        function_registry: FFI_WeakFunctionRegistry,
     ) -> Self {
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
@@ -191,6 +209,7 @@ impl FFI_CatalogProvider {
             schema: schema_fn_wrapper,
             register_schema: register_schema_fn_wrapper,
             deregister_schema: deregister_schema_fn_wrapper,
+            function_registry,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -254,7 +273,11 @@ impl CatalogProvider for ForeignCatalogProvider {
         unsafe {
             let schema = match schema.as_any().downcast_ref::<ForeignSchemaProvider>() {
                 Some(s) => &s.0,
-                None => &FFI_SchemaProvider::new(schema, None),
+                None => &FFI_SchemaProvider::new(
+                    schema,
+                    None,
+                    self.0.function_registry.clone(),
+                ),
             };
             let returned_schema: Option<FFI_SchemaProvider> =
                 df_result!((self.0.register_schema)(&self.0, name.into(), schema))?
@@ -283,9 +306,10 @@ impl CatalogProvider for ForeignCatalogProvider {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
-
     use super::*;
+    use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
+    use datafusion::prelude::SessionContext;
+    use datafusion_expr::registry::FunctionRegistry;
 
     #[test]
     fn test_round_trip_ffi_catalog_provider() {
@@ -298,7 +322,11 @@ mod tests {
             .unwrap()
             .is_none());
 
-        let ffi_catalog = FFI_CatalogProvider::new(catalog, None);
+        let ctx = Arc::new(SessionContext::new());
+        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+
+        let ffi_catalog =
+            FFI_CatalogProvider::new(catalog, None, function_registry.into());
 
         let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
 

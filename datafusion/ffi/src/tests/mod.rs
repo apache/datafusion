@@ -36,15 +36,14 @@ use crate::udwf::FFI_WindowUDF;
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
 use arrow::array::RecordBatch;
 use async_provider::create_async_table_provider;
-use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema},
-    common::record_batch,
-};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::record_batch;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
     create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
 };
+use crate::function_registry::FFI_WeakFunctionRegistry;
 
 mod async_provider;
 pub mod catalog;
@@ -60,17 +59,17 @@ pub mod utils;
 /// module.
 pub struct ForeignLibraryModule {
     /// Construct an opinionated catalog provider
-    pub create_catalog: extern "C" fn() -> FFI_CatalogProvider,
+    pub create_catalog: extern "C" fn(function_registry: FFI_WeakFunctionRegistry) -> FFI_CatalogProvider,
 
     /// Constructs the table provider
-    pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,
+    pub create_table: extern "C" fn(synchronous: bool, function_registry: FFI_WeakFunctionRegistry) -> FFI_TableProvider,
 
     /// Create a scalar UDF
     pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
-    pub create_table_function: extern "C" fn() -> FFI_TableFunction,
+    pub create_table_function: extern "C" fn(function_registry: FFI_WeakFunctionRegistry) -> FFI_TableFunction,
 
     /// Create an aggregate UDAF using sum
     pub create_sum_udaf: extern "C" fn() -> FFI_AggregateUDF,
@@ -111,10 +110,10 @@ pub fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
 
 /// Here we only wish to create a simple table provider as an example.
 /// We create an in-memory table and convert it to it's FFI counterpart.
-extern "C" fn construct_table_provider(synchronous: bool) -> FFI_TableProvider {
+extern "C" fn construct_table_provider(synchronous: bool, function_registry: FFI_WeakFunctionRegistry) -> FFI_TableProvider {
     match synchronous {
-        true => create_sync_table_provider(),
-        false => create_async_table_provider(),
+        true => create_sync_table_provider(function_registry),
+        false => create_async_table_provider(function_registry),
     }
 }
 

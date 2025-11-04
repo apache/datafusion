@@ -17,6 +17,7 @@
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution_plan::{FFI_ExecutionPlan, ForeignExecutionPlan};
+use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
 use crate::session::config::{FFI_SessionConfig, ForeignSessionConfig};
 use crate::session::task::FFI_TaskContext;
 use crate::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
@@ -32,17 +33,17 @@ use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion::catalog::Session;
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::execution::TaskContext;
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionConfig;
+use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, DataFusionError};
+use datafusion_execution::config::SessionConfig;
+use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
@@ -98,6 +99,8 @@ pub struct FFI_Session {
 
     pub task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
 
+    pub function_registry: FFI_WeakFunctionRegistry,
+
     /// Used to create a clone on the provider of the registry. This should
     /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
@@ -116,24 +119,23 @@ pub struct FFI_Session {
 unsafe impl Send for FFI_Session {}
 unsafe impl Sync for FFI_Session {}
 
-struct SessionPrivateData {
-    session: Arc<dyn Session + Send>,
-    function_registry: Arc<dyn FunctionRegistry>,
-    runtime: Handle,
+struct SessionPrivateData<'a> {
+    session: &'a (dyn Session + Send),
+    runtime: Option<Handle>,
 }
 
 impl FFI_Session {
-    unsafe fn inner(&self) -> &Arc<dyn Session + Send> {
+    unsafe fn inner(&self) -> &(dyn Session + Send) {
         let private_data = self.private_data as *const SessionPrivateData;
-        &(*private_data).session
+        (*private_data).session
     }
 
-    unsafe fn function_registry(&self) -> &Arc<dyn FunctionRegistry> {
-        let private_data = self.private_data as *const SessionPrivateData;
-        &(*private_data).function_registry
+    unsafe fn function_registry(&self) -> Arc<dyn FunctionRegistry> {
+        let registry = ForeignWeakFunctionRegistry::from(&self.function_registry);
+        Arc::new(registry) as Arc<dyn FunctionRegistry>
     }
 
-    unsafe fn runtime(&self) -> &Handle {
+    unsafe fn runtime(&self) -> &Option<Handle> {
         let private_data = self.private_data as *const SessionPrivateData;
         &(*private_data).runtime
     }
@@ -154,8 +156,9 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
     logical_plan_serialized: RVec<u8>,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
     let runtime = session.runtime().clone();
-    let session = Arc::clone(session.inner());
+    let session = session.clone();
     async move {
+        let session = session.inner();
         let task_ctx = session.task_ctx();
 
         let logical_plan = rresult_return!(logical_plan_from_bytes(
@@ -168,7 +171,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
         rresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(
             plan,
             task_ctx,
-            Some(runtime)
+            runtime
         )))
     }
     .into_ffi()
@@ -187,7 +190,7 @@ unsafe extern "C" fn create_physical_expr_fn_wrapper(
     let logical_expr =
         parse_expr(&logical_expr, function_registry.as_ref(), &codec).unwrap();
     let schema: SchemaRef = schema.into();
-    let schema: DFSchema = rresult_return!((schema).try_into());
+    let schema: DFSchema = rresult_return!(schema.try_into());
 
     let physical_expr =
         rresult_return!(session.create_physical_expr(logical_expr, &schema));
@@ -275,8 +278,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_Session) -> FFI_Session {
     let old_private_data = provider.private_data as *const SessionPrivateData;
 
     let private_data = Box::into_raw(Box::new(SessionPrivateData {
-        session: Arc::clone(&(*old_private_data).session),
-        function_registry: Arc::clone(&(*old_private_data).function_registry),
+        session: (*old_private_data).session,
         runtime: (*old_private_data).runtime.clone(),
     })) as *mut c_void;
 
@@ -291,6 +293,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_Session) -> FFI_Session {
         table_options: table_options_fn_wrapper,
         default_table_options: default_table_options_fn_wrapper,
         task_ctx: task_ctx_fn_wrapper,
+        function_registry: provider.function_registry.clone(),
 
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
@@ -308,15 +311,11 @@ impl Drop for FFI_Session {
 impl FFI_Session {
     /// Creates a new [`FFI_Session`].
     pub fn new(
-        session: Arc<dyn Session + Send>,
-        function_registry: Arc<dyn FunctionRegistry>,
-        runtime: Handle,
+        session: &(dyn Session + Send),
+        function_registry: FFI_WeakFunctionRegistry,
+        runtime: Option<Handle>,
     ) -> Self {
-        let private_data = Box::new(SessionPrivateData {
-            session,
-            function_registry,
-            runtime,
-        });
+        let private_data = Box::new(SessionPrivateData { session, runtime });
 
         Self {
             session_id: session_id_fn_wrapper,
@@ -329,6 +328,7 @@ impl FFI_Session {
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
+            function_registry,
 
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,

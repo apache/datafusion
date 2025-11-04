@@ -161,9 +161,9 @@ impl Drop for FFI_WeakFunctionRegistry {
     }
 }
 
-impl FFI_WeakFunctionRegistry {
+impl From<Arc<dyn FunctionRegistry + Send>> for FFI_WeakFunctionRegistry {
     /// Creates a new [`FFI_WeakFunctionRegistry`].
-    pub fn new(registry: Arc<dyn FunctionRegistry + Send>) -> Self {
+    fn from(registry: Arc<dyn FunctionRegistry + Send>) -> Self {
         let registry = Arc::downgrade(&registry);
         let private_data = Box::new(RegistryPrivateData { registry });
 

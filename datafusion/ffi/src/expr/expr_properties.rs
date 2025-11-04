@@ -18,8 +18,8 @@
 use crate::expr::interval::FFI_Interval;
 use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_common::DataFusionError;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]

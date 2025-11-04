@@ -22,8 +22,8 @@ use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 use abi_stable::pmr::ROption;
 use abi_stable::std_types::RHashMap;
 use abi_stable::{std_types::RString, StableAbi};
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::execution::TaskContext;
+use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::{ffi::c_void, sync::Arc};
 

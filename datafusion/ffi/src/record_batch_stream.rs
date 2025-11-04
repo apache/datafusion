@@ -28,8 +28,8 @@ use arrow::{
 };
 use async_ffi::{ContextExt, FfiContext, FfiPoll};
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_common::{exec_datafusion_err, exec_err};
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use futures::{Stream, TryStreamExt};
 use tokio::runtime::Handle;
 

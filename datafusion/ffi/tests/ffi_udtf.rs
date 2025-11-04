@@ -25,7 +25,7 @@ mod tests {
     use arrow::array::{create_array, ArrayRef};
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
-
+    use datafusion_expr::registry::FunctionRegistry;
     use datafusion_ffi::tests::utils::get_module;
     use datafusion_ffi::udtf::ForeignTableFunction;
 
@@ -36,17 +36,19 @@ mod tests {
     async fn test_user_defined_table_function() -> Result<()> {
         let module = get_module()?;
 
+        let ctx = Arc::new(SessionContext::default());
+        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+
         let ffi_table_func = module
             .create_table_function()
             .ok_or(DataFusionError::NotImplemented(
             "External table function provider failed to implement create_table_function"
                 .to_string(),
-        ))?();
+        ))?(function_registry.into());
         let foreign_table_func: ForeignTableFunction = ffi_table_func.into();
 
         let udtf = Arc::new(foreign_table_func);
 
-        let ctx = SessionContext::default();
         ctx.register_udtf("my_range", udtf);
 
         let result = ctx

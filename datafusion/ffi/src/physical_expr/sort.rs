@@ -20,9 +20,10 @@ use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
 use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use std::sync::Arc;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -43,7 +44,7 @@ impl From<&PhysicalSortExpr> for FFI_PhysicalSortExpr {
 
 impl From<&FFI_PhysicalSortExpr> for PhysicalSortExpr {
     fn from(value: &FFI_PhysicalSortExpr) -> Self {
-        let expr = Arc::new(ForeignPhysicalExpr::from(value.expr.clone()));
+        let expr = <Arc<dyn PhysicalExpr>>::from(value.expr.clone());
         let options = SortOptions::from(&value.options);
 
         Self { expr, options }

@@ -35,22 +35,20 @@ use datafusion_proto::{
 use prost::Message;
 use tokio::runtime::Handle;
 
+use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
+use crate::session::{FFI_Session, ForeignSession};
 use crate::{
     arrow_wrappers::WrappedSchema,
     df_result,
     execution_plan::{FFI_ExecutionPlan, ForeignExecutionPlan},
     insert_op::FFI_InsertOp,
     rresult_return,
-    session::config::{FFI_SessionConfig, ForeignSessionConfig},
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };
-use datafusion::error::Result;
-use datafusion_common::DataFusionError;
-use datafusion_execution::TaskContext;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
-use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 ///
@@ -111,7 +109,7 @@ pub struct FFI_TableProvider {
     /// * `limit` - if specified, limit the number of rows returned
     pub scan: unsafe extern "C" fn(
         provider: &Self,
-        session_config: &FFI_SessionConfig,
+        session_config: &FFI_Session,
         projections: RVec<usize>,
         filters_serialized: RVec<u8>,
         limit: ROption<usize>,
@@ -134,7 +132,7 @@ pub struct FFI_TableProvider {
     pub insert_into:
         unsafe extern "C" fn(
             provider: &Self,
-            session_config: &FFI_SessionConfig,
+            session_config: &FFI_Session,
             input: &FFI_ExecutionPlan,
             insert_op: FFI_InsertOp,
         ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
@@ -211,7 +209,8 @@ unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
 ) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
-    let function_registry = rresult_return!(ForeignWeakFunctionRegistry::try_from(&provider.function_registry));
+    let function_registry =
+        ForeignWeakFunctionRegistry::from(&provider.function_registry);
     let private_data = provider.private_data as *const ProviderPrivateData;
     let provider = &(*private_data).provider;
 
@@ -227,15 +226,16 @@ unsafe extern "C" fn scan_fn_wrapper(
     filters_serialized: RVec<u8>,
     limit: ROption<usize>,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
-    let function_registry = ForeignWeakFunctionRegistry::try_from(&provider.function_registry);
+    let function_registry =
+        ForeignWeakFunctionRegistry::from(&provider.function_registry);
+    let session = ForeignSession::try_from(session);
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
-    let session_config = session_config.clone();
     let runtime = &(*private_data).runtime;
 
     async move {
-        let function_registry = rresult_return!(function_registry);
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
+        let session = rresult_return!(session);
+        // let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
         // let session = SessionStateBuilder::new()
         //     .with_default_features()
         //     .with_config(config.0)
@@ -263,13 +263,13 @@ unsafe extern "C" fn scan_fn_wrapper(
 
         let plan = rresult_return!(
             internal_provider
-                .scan(&ctx.state(), Some(&projections), &filters, limit.into())
+                .scan(&session, Some(&projections), &filters, limit.into())
                 .await
         );
 
         RResult::ROk(FFI_ExecutionPlan::new(
             plan,
-            ctx.task_ctx(),
+            session.task_ctx(),
             runtime.clone(),
         ))
     }
@@ -278,23 +278,25 @@ unsafe extern "C" fn scan_fn_wrapper(
 
 unsafe extern "C" fn insert_into_fn_wrapper(
     provider: &FFI_TableProvider,
-    session_config: &FFI_SessionConfig,
+    session: &FFI_Session,
     input: &FFI_ExecutionPlan,
     insert_op: FFI_InsertOp,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
-    let session_config = session_config.clone();
+    // let session_config = session_config.clone();
+    let session = ForeignSession::try_from(session);
     let input = input.clone();
     let runtime = &(*private_data).runtime;
 
     async move {
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
-        let session = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(config.0)
-            .build();
-        let ctx = SessionContext::new_with_state(session);
+        let session = rresult_return!(session);
+        // let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
+        // let session = SessionStateBuilder::new()
+        //     .with_default_features()
+        //     .with_config(config.0)
+        //     .build();
+        // let ctx = SessionContext::new_with_state(session);
 
         let input = rresult_return!(ForeignExecutionPlan::try_from(&input).map(Arc::new));
 
@@ -302,13 +304,13 @@ unsafe extern "C" fn insert_into_fn_wrapper(
 
         let plan = rresult_return!(
             internal_provider
-                .insert_into(&ctx.state(), input, insert_op)
+                .insert_into(&session, input, insert_op)
                 .await
         );
 
         RResult::ROk(FFI_ExecutionPlan::new(
             plan,
-            ctx.task_ctx(),
+            session.task_ctx(),
             runtime.clone(),
         ))
     }
@@ -335,6 +337,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         table_type: table_type_fn_wrapper,
         supports_filters_pushdown: provider.supports_filters_pushdown,
         insert_into: provider.insert_into,
+        function_registry: provider.function_registry.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
@@ -354,6 +357,7 @@ impl FFI_TableProvider {
         provider: Arc<dyn TableProvider + Send>,
         can_support_pushdown_filters: bool,
         runtime: Option<Handle>,
+        function_registry: FFI_WeakFunctionRegistry,
     ) -> Self {
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
@@ -366,6 +370,7 @@ impl FFI_TableProvider {
                 false => None,
             },
             insert_into: insert_into_fn_wrapper,
+            function_registry,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -418,7 +423,8 @@ impl TableProvider for ForeignTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session_config: FFI_SessionConfig = session.config().into();
+        // let session_config: FFI_SessionConfig = session.config().into();
+        let session = FFI_Session::new(session, self.0.function_registry.clone(), None);
 
         let projections: Option<RVec<usize>> =
             projection.map(|p| p.iter().map(|v| v.to_owned()).collect());
@@ -432,7 +438,7 @@ impl TableProvider for ForeignTableProvider {
         let plan = unsafe {
             let maybe_plan = (self.0.scan)(
                 &self.0,
-                &session_config,
+                &session,
                 projections.unwrap_or_default(),
                 filters_serialized,
                 limit.into(),
@@ -481,16 +487,18 @@ impl TableProvider for ForeignTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session_config: FFI_SessionConfig = session.config().into();
-
+        // let session_config: FFI_SessionConfig = session.config().into();
+        let task_ctx = session.task_ctx();
         let rc = Handle::try_current().ok();
-        let input =
-            FFI_ExecutionPlan::new(input, Arc::new(TaskContext::from(session)), rc);
+        let session =
+            FFI_Session::new(session, self.0.function_registry.clone(), rc.clone());
+
+        let input = FFI_ExecutionPlan::new(input, task_ctx, rc);
         let insert_op: FFI_InsertOp = insert_op.into();
 
         let plan = unsafe {
             let maybe_plan =
-                (self.0.insert_into)(&self.0, &session_config, &input, insert_op).await;
+                (self.0.insert_into)(&self.0, &session, &input, insert_op).await;
 
             ForeignExecutionPlan::try_from(&df_result!(maybe_plan)?)?
         };
@@ -501,10 +509,10 @@ impl TableProvider for ForeignTableProvider {
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::Schema;
-    use datafusion::prelude::{col, lit};
-
     use super::*;
+    use arrow::datatypes::Schema;
+    use datafusion::prelude::{col, lit, SessionContext};
+    use datafusion_expr::registry::FunctionRegistry;
 
     #[tokio::test]
     async fn test_round_trip_ffi_table_provider_scan() -> Result<()> {
@@ -527,12 +535,14 @@ mod tests {
             vec![Arc::new(Float32Array::from(vec![64.0]))],
         )?;
 
-        let ctx = SessionContext::new();
+        let ctx = Arc::new(SessionContext::new());
+        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
 
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
 
-        let ffi_provider = FFI_TableProvider::new(provider, true, None);
+        let ffi_provider =
+            FFI_TableProvider::new(provider, true, None, function_registry.into());
 
         let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
 
@@ -569,12 +579,14 @@ mod tests {
             vec![Arc::new(Float32Array::from(vec![64.0]))],
         )?;
 
-        let ctx = SessionContext::new();
+        let ctx = Arc::new(SessionContext::new());
+        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
 
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
 
-        let ffi_provider = FFI_TableProvider::new(provider, true, None);
+        let ffi_provider =
+            FFI_TableProvider::new(provider, true, None, function_registry.into());
 
         let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
 
@@ -616,11 +628,13 @@ mod tests {
             vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
         )?;
 
-        let ctx = SessionContext::new();
+        let ctx = Arc::new(SessionContext::new());
+        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
 
         let provider = Arc::new(MemTable::try_new(schema, vec![vec![batch1]])?);
 
-        let ffi_provider = FFI_TableProvider::new(provider, true, None);
+        let ffi_provider =
+            FFI_TableProvider::new(provider, true, None, function_registry.into());
 
         let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
 

@@ -57,5 +57,11 @@ pub extern "C" fn version() -> u64 {
     version.major
 }
 
+static LIBRARY_MARKER: u8 = 0;
+
+pub extern "C" fn get_library_marker_id() -> u64 {
+    &LIBRARY_MARKER as *const u8 as u64
+}
+
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);
