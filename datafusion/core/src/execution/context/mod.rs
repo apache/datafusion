@@ -72,8 +72,11 @@ use datafusion_common::{
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
 };
+use datafusion_execution::cache::cache_manager::DEFAULT_METADATA_CACHE_LIMIT;
 pub use datafusion_execution::config::SessionConfig;
-use datafusion_execution::disk_manager::DiskManagerBuilder;
+use datafusion_execution::disk_manager::{
+    DiskManagerBuilder, DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+};
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -1182,8 +1185,6 @@ impl SessionContext {
                 builder.memory_pool = None;
             }
             "max_temp_directory_size" => {
-                // default is 100 GB
-                const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024;
                 builder =
                     builder.with_max_temp_directory_size(DEFAULT_MAX_TEMP_DIRECTORY_SIZE);
             }
@@ -1191,8 +1192,6 @@ impl SessionContext {
                 builder.disk_manager_builder = Some(DiskManagerBuilder::default());
             }
             "metadata_cache_limit" => {
-                // default is 50 MB
-                const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024;
                 builder = builder.with_metadata_cache_limit(DEFAULT_METADATA_CACHE_LIMIT);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
