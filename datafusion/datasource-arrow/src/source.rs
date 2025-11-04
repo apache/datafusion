@@ -226,7 +226,7 @@ impl FileOpener for ArrowStreamOpener {
                 "ArrowStreamOpener does not support range-based reading"
             ));
         }
-        let object_store = self.object_store.clone();
+        let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
         Ok(Box::pin(async move {
             let r = object_store
