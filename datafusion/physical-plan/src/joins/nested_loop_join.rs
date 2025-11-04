@@ -1128,6 +1128,16 @@ impl NestedLoopJoinStream {
             Ok(false) => {
                 // Left exhausted, transition to FetchingRight
                 self.left_probe_idx = 0;
+
+                // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
+                if let (Ok(left_data), Some(right_batch)) =
+                    (self.get_left_data(), self.current_right_batch.as_ref())
+                {
+                    let left_rows = left_data.batch().num_rows();
+                    let right_rows = right_batch.num_rows();
+                    self.metrics.selectivity.add_total(left_rows * right_rows);
+                }
+
                 if self.should_track_unmatched_right {
                     debug_assert!(
                         self.current_right_batch_matched.is_some(),
@@ -1135,14 +1145,6 @@ impl NestedLoopJoinStream {
                     );
                     self.state = NLJState::EmitRightUnmatched;
                 } else {
-                    // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
-                    if let (Ok(left_data), Some(right_batch)) =
-                        (self.get_left_data(), self.current_right_batch.as_ref())
-                    {
-                        let left_rows = left_data.batch().num_rows();
-                        let right_rows = right_batch.num_rows();
-                        self.metrics.selectivity.add_total(left_rows * right_rows);
-                    }
                     self.current_right_batch = None;
                     self.state = NLJState::FetchingRight;
                 }
@@ -1166,16 +1168,6 @@ impl NestedLoopJoinStream {
                 && self.current_right_batch.is_some(),
             "This state is yielding output for unmatched rows in the current right batch, so both the right batch and the bitmap must be present"
         );
-
-        // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
-        if let (Ok(left_data), Some(right_batch)) =
-            (self.get_left_data(), self.current_right_batch.as_ref())
-        {
-            let left_rows = left_data.batch().num_rows();
-            let right_rows = right_batch.num_rows();
-            self.metrics.selectivity.add_total(left_rows * right_rows);
-        }
-
         // Construct the result batch for unmatched right rows using a utility function
         match self.process_right_unmatched() {
             Ok(Some(batch)) => {
