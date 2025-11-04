@@ -955,6 +955,16 @@ SELECT power(2::decimal(38, 0), 5000000000.1)
 query error Arrow error: Arithmetic overflow: Unsupported exp value
 SELECT power(2::decimal(38, 0), 5000000000)
 
+query ?T
+SELECT power(arrow_cast(2, 'Decimal32(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal32(5, 0)'), 4));
+----
+16 Decimal32(5, 0)
+
+query ?T
+SELECT power(arrow_cast(2, 'Decimal64(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal64(5, 0)'), 4));
+----
+16 Decimal64(5, 0)
+
 query RT
 SELECT power(2::decimal(76, 0), 4), arrow_typeof(power(2::decimal(76, 0), 4));
 ----
