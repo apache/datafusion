@@ -22,12 +22,12 @@ use arrow::array::{
     MutableArrayData, NullArray, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    ColumnarValue,ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
 
@@ -92,21 +92,6 @@ impl ScalarUDFImpl for SparkArray {
         ))))
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type())
-            .cloned()
-            .collect::<Vec<_>>();
-        let return_type = self.return_type(&data_types)?;
-        Ok(Arc::new(Field::new(
-            "this_field_name_is_irrelevant",
-            return_type,
-            false,
-        )))
-    }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(make_array_inner)(args.as_slice())
@@ -166,7 +151,6 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
                     .build_list_array(),
             ))
         }
-        DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
         _ => array_array::<i32>(arrays, data_type),
     }
 }
