@@ -136,6 +136,8 @@ pub struct FFI_PhysicalExpr {
     /// A [`ForeignExecutionPlan`] should never attempt to access this data.
     pub private_data: *mut c_void,
 
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
     pub library_marker_id: extern "C" fn() -> u64,
 }
 

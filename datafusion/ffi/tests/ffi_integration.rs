@@ -21,8 +21,8 @@
 mod tests {
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
+    use datafusion_catalog::CatalogProvider;
     use datafusion_expr::registry::FunctionRegistry;
-    use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
     use datafusion_ffi::table_provider::ForeignTableProvider;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
@@ -85,9 +85,9 @@ mod tests {
                     "External catalog provider failed to implement create_catalog"
                         .to_string(),
                 ))?(function_registry.into());
-        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 
-        let _ = ctx.register_catalog("fruit", Arc::new(foreign_catalog));
+        let _ = ctx.register_catalog("fruit", foreign_catalog);
 
         let df = ctx.table("fruit.apple.purchases").await?;
 

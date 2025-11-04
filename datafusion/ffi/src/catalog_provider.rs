@@ -73,6 +73,10 @@ pub struct FFI_CatalogProvider {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignCatalogProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_CatalogProvider {}
@@ -84,9 +88,9 @@ struct ProviderPrivateData {
 }
 
 impl FFI_CatalogProvider {
-    unsafe fn inner(&self) -> &Arc<dyn CatalogProvider + Send> {
+    fn inner(&self) -> &Arc<dyn CatalogProvider + Send> {
         let private_data = self.private_data as *const ProviderPrivateData;
-        &(*private_data).provider
+        unsafe { &(*private_data).provider }
     }
 
     unsafe fn runtime(&self) -> Option<Handle> {
@@ -186,6 +190,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         release: release_fn_wrapper,
         version: super::version,
         private_data,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -214,6 +219,7 @@ impl FFI_CatalogProvider {
             release: release_fn_wrapper,
             version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -228,9 +234,14 @@ pub struct ForeignCatalogProvider(FFI_CatalogProvider);
 unsafe impl Send for ForeignCatalogProvider {}
 unsafe impl Sync for ForeignCatalogProvider {}
 
-impl From<&FFI_CatalogProvider> for ForeignCatalogProvider {
+impl From<&FFI_CatalogProvider> for Arc<dyn CatalogProvider + Send> {
     fn from(provider: &FFI_CatalogProvider) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(provider.inner());
+        }
+
+        Arc::new(ForeignCatalogProvider(provider.clone()))
+            as Arc<dyn CatalogProvider + Send>
     }
 }
 
@@ -328,7 +339,7 @@ mod tests {
         let ffi_catalog =
             FFI_CatalogProvider::new(catalog, None, function_registry.into());
 
-        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 
         let prior_schema_names = foreign_catalog.schema_names();
         assert_eq!(prior_schema_names.len(), 1);
