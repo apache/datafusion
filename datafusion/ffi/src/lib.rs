@@ -59,6 +59,18 @@ pub extern "C" fn version() -> u64 {
 
 static LIBRARY_MARKER: u8 = 0;
 
+/// This utility is used to determine if two FFI structs are within
+/// the same library. It is possible that the interplay between
+/// foreign and local functions calls create one FFI struct that
+/// references another. It is helpful to determine if a foreign
+/// struct is truly foreign or in the same library. If we are in the
+/// same library, then we can access the underlying types directly.
+///
+/// This function works by checking the address of the library
+/// marker. Each library that implements the FFI code will have
+/// a different address for the marker. By checking the marker
+/// address we can determine if a struct is truly Foreign or is
+/// actually within the same originating library.
 pub extern "C" fn get_library_marker_id() -> u64 {
     &LIBRARY_MARKER as *const u8 as u64
 }
