@@ -1105,7 +1105,7 @@ async fn csv_explain_analyze_with_statistics() {
 }
 
 #[tokio::test]
-async fn nested_loop_join_selectivity_inner() {
+async fn nested_loop_join_selectivity() {
     for (join_type, expected_selectivity) in vec![
         ("INNER", "1% (1/100)"),
         ("LEFT", "10% (10/100)"),
