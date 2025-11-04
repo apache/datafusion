@@ -1130,6 +1130,7 @@ impl NestedLoopJoinStream {
                 self.left_probe_idx = 0;
 
                 // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
+                // If memory-limited execution is implemented, this logic must be updated accordingly.
                 if let (Ok(left_data), Some(right_batch)) =
                     (self.get_left_data(), self.current_right_batch.as_ref())
                 {
