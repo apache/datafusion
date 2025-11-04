@@ -16,11 +16,12 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::ToDFSchema;
 use datafusion_common::{Column, TableReference};
 use datafusion_expr::{logical_plan::LogicalPlan, projection_schema, Expr};
 use datafusion_optimizer::optimize_projections::is_projection_unnecessary;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn is_projection_unnecessary_old(
