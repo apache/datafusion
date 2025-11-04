@@ -36,7 +36,9 @@ use crate::joins::utils::{
     OnceAsync, OnceFut,
 };
 use crate::joins::SharedBitmapBuilder;
-use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, MetricsSet, RatioMetrics,
+};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
@@ -497,6 +499,9 @@ impl ExecutionPlan for NestedLoopJoinExec {
         }
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+        let selectivity = MetricBuilder::new(&self.metrics)
+            .with_type(MetricType::SUMMARY)
+            .ratio_metrics("selectivity", partition);
 
         // Initialization reservation for load of inner table
         let load_reservation =
@@ -536,6 +541,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             build_side_data,
             column_indices_after_projection,
             join_metrics,
+            selectivity,
             batch_size,
         )))
     }
@@ -750,6 +756,8 @@ pub(crate) struct NestedLoopJoinStream {
     pub(crate) column_indices: Vec<ColumnIndex>,
     /// Join execution metrics
     pub(crate) join_metrics: BuildProbeJoinMetrics,
+    /// Selectivity of the join: output_rows / (left_rows * right_rows)
+    pub(crate) selectivity: RatioMetrics,
 
     /// `batch_size` from configuration
     batch_size: usize,
@@ -1001,6 +1009,7 @@ impl NestedLoopJoinStream {
         left_data: OnceFut<JoinLeftData>,
         column_indices: Vec<ColumnIndex>,
         join_metrics: BuildProbeJoinMetrics,
+        selectivity: RatioMetrics,
         batch_size: usize,
     ) -> Self {
         Self {
@@ -1011,6 +1020,7 @@ impl NestedLoopJoinStream {
             column_indices,
             left_data,
             join_metrics,
+            selectivity,
             buffered_left_data: None,
             output_buffer: Box::new(BatchCoalescer::new(schema, batch_size)),
             batch_size,
@@ -1115,6 +1125,14 @@ impl NestedLoopJoinStream {
                     );
                     self.state = NLJState::EmitRightUnmatched;
                 } else {
+                    // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
+                    if let (Ok(left_data), Some(right_batch)) =
+                        (self.get_left_data(), self.current_right_batch.as_ref())
+                    {
+                        let left_rows = left_data.batch().num_rows();
+                        let right_rows = right_batch.num_rows();
+                        self.selectivity.add_total(left_rows * right_rows);
+                    }
                     self.current_right_batch = None;
                     self.state = NLJState::FetchingRight;
                 }
@@ -1138,6 +1156,15 @@ impl NestedLoopJoinStream {
                 && self.current_right_batch.is_some(),
             "This state is yielding output for unmatched rows in the current right batch, so both the right batch and the bitmap must be present"
         );
+
+        // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
+        if let (Ok(left_data), Some(right_batch)) =
+            (self.get_left_data(), self.current_right_batch.as_ref())
+        {
+            let left_rows = left_data.batch().num_rows();
+            let right_rows = right_batch.num_rows();
+            self.selectivity.add_total(left_rows * right_rows);
+        }
 
         // Construct the result batch for unmatched right rows using a utility function
         match self.process_right_unmatched() {
@@ -1456,6 +1483,10 @@ impl NestedLoopJoinStream {
                 // HACK: this is not part of `BaselineMetrics` yet, so update it
                 // manually
                 self.join_metrics.output_batches.add(1);
+
+                // Update output rows for selectivity metric
+                let output_rows = batch.num_rows();
+                self.selectivity.add_part(output_rows);
 
                 return Some(Poll::Ready(Some(Ok(batch))));
             }
