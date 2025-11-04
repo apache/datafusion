@@ -85,7 +85,7 @@ macro_rules! make_pow_fn {
         /// The power for a scaled integer `b` is
         ///
         /// ```text
-        /// (b*s) ^ e
+        /// (b * 10^(-s)) ^ e
         /// ```
         /// However, the result should be scaled back from scale 0 to scale `s`,
         /// which is done by multiplying by `10^s`.
