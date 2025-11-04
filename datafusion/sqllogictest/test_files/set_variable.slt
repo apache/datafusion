@@ -346,3 +346,17 @@ SET datafusion.runtime.temp_directory = './'
 
 statement ok
 RESET datafusion.runtime.temp_directory
+
+# test memory limit effect
+statement ok
+SET datafusion.runtime.memory_limit = '1K'
+
+# This query should fail with low memory
+statement error Not enough memory to continue external sort
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
