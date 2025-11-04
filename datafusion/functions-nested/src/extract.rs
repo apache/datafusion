@@ -639,6 +639,7 @@ where
         if array.is_null(row_index)
             || from_array.is_null(row_index)
             || to_array.is_null(row_index)
+            || stride.map_or(false, |s| s.is_null(row_index))
         {
             mutable.extend_nulls(1);
             offsets.push(offsets[row_index] + O::usize_as(1));
@@ -726,6 +727,7 @@ where
         if array.is_null(row_index)
             || from_array.is_null(row_index)
             || to_array.is_null(row_index)
+            || stride.map_or(false, |s| s.is_null(row_index))
         {
             null_builder.append_null();
             offsets.push(current_offset);
@@ -1323,6 +1325,32 @@ mod tests {
             actual,
             vec![vec![Some(1), None], vec![Some(3), Some(4)], Vec::new(),]
         );
+
+        // Test with NULL stride - should return NULL for rows with NULL stride
+        let stride_with_null = Int64Array::from(vec![Some(1), None, Some(1)]);
+        let result = general_list_view_array_slice::<i32>(
+            &array,
+            &from,
+            &to,
+            Some(&stride_with_null),
+        )?;
+        let result = result.as_ref().as_list_view::<i32>();
+
+        // First row: stride = 1, should return [1, None]
+        // Second row: stride = NULL, should return NULL
+        // Third row: stride = 1, empty array should return empty
+        assert!(!result.is_null(0)); // First row should not be null
+        assert!(result.is_null(1)); // Second row should be null (stride is NULL)
+        assert!(!result.is_null(2)); // Third row should not be null
+
+        let first_row: Vec<Option<i32>> = result
+            .value(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .iter()
+            .collect();
+        assert_eq!(first_row, vec![Some(1), None]);
 
         Ok(())
     }

@@ -1943,6 +1943,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), 5, 1, -2), array_slice(make_array(
 ----
 [5, 3, 1] [o, l, h]
 
+# Test NULL stride
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 1, 5, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 1, 5, NULL);
+----
+NULL NULL
+
+# Test NULL stride
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 1, 5, NULL),
+       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 1, 5, NULL);
+----
+NULL NULL
+
 query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 1, 2);
 ----
