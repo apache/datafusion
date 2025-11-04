@@ -47,7 +47,7 @@ async fn explain_analyze_baseline_metrics() {
                  UNION ALL \
                SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) AS b \
                LIMIT 3";
-
+    println!("running query: {sql}");
     let dataframe = ctx.sql(sql).await.unwrap();
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let task_ctx = ctx.task_ctx();
@@ -55,6 +55,8 @@ async fn explain_analyze_baseline_metrics() {
     let formatted = arrow::util::pretty::pretty_format_batches(&results)
         .unwrap()
         .to_string();
+
+    println!("Query Output:\n\n{formatted}");
 
     assert_metrics!(
         &formatted,
