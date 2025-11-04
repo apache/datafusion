@@ -356,6 +356,7 @@ mod test {
     #[tokio::test]
     async fn test_statistic_by_partition_of_union() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        #[allow(deprecated)]
         let union_exec: Arc<dyn ExecutionPlan> =
             Arc::new(UnionExec::new(vec![scan.clone(), scan]));
         let statistics = (0..union_exec.output_partitioning().partition_count())

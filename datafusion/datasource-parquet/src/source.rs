@@ -52,6 +52,7 @@ use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
+#[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::map_config_decryption_to_decryption;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
@@ -547,6 +548,7 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
+        #[cfg(feature = "parquet_encryption")]
         let file_decryption_properties = self
             .table_parquet_options()
             .crypto
@@ -582,6 +584,7 @@ impl FileSource for ParquetSource {
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             schema_adapter_factory,
             coerce_int96,
+            #[cfg(feature = "parquet_encryption")]
             file_decryption_properties,
             expr_adapter_factory,
             #[cfg(feature = "parquet_encryption")]

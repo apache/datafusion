@@ -304,6 +304,7 @@ pub fn sort_preserving_merge_exec_with_fetch(
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
+    #[allow(deprecated)]
     Arc::new(UnionExec::new(input))
 }
 

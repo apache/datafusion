@@ -99,6 +99,7 @@ pub(super) struct ParquetOpener {
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional parquet FileDecryptionProperties
+    #[cfg(feature = "parquet_encryption")]
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Rewrite expressions in the context of the file schema
     pub(crate) expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
@@ -155,10 +156,12 @@ impl FileOpener for ParquetOpener {
         let mut predicate_file_schema = Arc::clone(&self.logical_file_schema);
 
         let enable_page_index = self.enable_page_index;
+        #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
 
         Ok(Box::pin(async move {
+            #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
                 .get_file_decryption_properties(&file_location)
                 .await?;
@@ -544,6 +547,7 @@ where
 }
 
 #[derive(Default)]
+#[cfg_attr(not(feature = "parquet_encryption"), allow(dead_code))]
 struct EncryptionContext {
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -586,6 +590,7 @@ impl EncryptionContext {
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[allow(dead_code)]
 impl EncryptionContext {
     async fn get_file_decryption_properties(
         &self,
@@ -605,6 +610,7 @@ impl ParquetOpener {
     }
 
     #[cfg(not(feature = "parquet_encryption"))]
+    #[allow(dead_code)]
     fn get_encryption_context(&self) -> EncryptionContext {
         EncryptionContext::default()
     }
@@ -861,6 +867,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
@@ -950,6 +957,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
@@ -1055,6 +1063,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
@@ -1170,6 +1179,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: false, // note that this is false!
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
@@ -1286,6 +1296,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
