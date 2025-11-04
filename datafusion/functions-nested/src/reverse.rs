@@ -201,7 +201,7 @@ fn general_array_reverse<O: OffsetSizeTrait>(
 /// the list view array in the logical order, and reversing the order of the elements.
 /// We end up with a list view array where the elements are in order,
 /// even if the original array had elements out of order.
-fn list_view_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
+fn list_view_reverse<O: OffsetSizeTrait>(
     array: &GenericListViewArray<O>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
@@ -441,6 +441,24 @@ mod tests {
         )?;
         let reversed = list_view_values(result.as_list_view::<i32>());
         let expected: Vec<Option<Vec<i32>>> = vec![];
+        assert_eq!(expected, reversed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_list_view_all_nulls() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let offsets = ScalarBuffer::from(vec![0, 1, 2, 3]);
+        let sizes = ScalarBuffer::from(vec![0, 1, 1, 1]);
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let nulls = Some(NullBuffer::from(vec![false, false, false, false]));
+        let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
+        let result = list_view_reverse(
+            &list_view,
+            &Arc::new(Field::new("test", DataType::Int32, true)),
+        )?;
+        let reversed = list_view_values(result.as_list_view::<i32>());
+        let expected: Vec<Option<Vec<i32>>> = vec![None, None, None, None];
         assert_eq!(expected, reversed);
         Ok(())
     }
