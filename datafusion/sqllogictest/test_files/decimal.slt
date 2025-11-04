@@ -975,6 +975,25 @@ SELECT power(2.0, null)
 ----
 NULL
 
+# Array variants of power function
+query RR rowsort
+SELECT distinct c1*100000, power(c1*100000, 2) from decimal_simple;
+----
+1 1
+2 4
+3 9
+4 16
+5 25
+
+query RR rowsort
+SELECT distinct c1*100000, power(c1*100000, 2.0) from decimal_simple;
+----
+1 1
+2 4
+3 9
+4 16
+5 25
+
 # Set parse_float_as_decimal to false to test float parsing
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
