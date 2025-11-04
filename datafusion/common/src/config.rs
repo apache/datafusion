@@ -1647,9 +1647,9 @@ macro_rules! config_field {
                     Ok(())
                 } else {
                     $crate::error::_config_err!(
-                        "Cannot reset nested config value \"{}\" on {}",
-                        key,
-                        stringify!($t)
+                        "Config field is a scalar {} and does not have nested field \"{}\"",
+                        stringify!($t),
+                        key
                     )
                 }
             }
@@ -3096,7 +3096,7 @@ mod tests {
         let message = err.to_string();
         assert!(
             message.starts_with(
-                "Invalid or Unsupported Configuration: Cannot reset nested config value \"nested\" on bool"
+                "Invalid or Unsupported Configuration: Config field is a scalar bool and does not have nested field \"nested\""
             ),
             "unexpected error message: {message}"
         );
