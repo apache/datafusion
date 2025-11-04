@@ -310,12 +310,12 @@ impl DataFrame {
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
         let fields = columns
             .iter()
-            .map(|name| {
+            .flat_map(|name| {
                 self.plan
                     .schema()
-                    .qualified_field_with_unqualified_name(name)
+                    .qualified_fields_with_unqualified_name(name)
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         let expr: Vec<Expr> = fields
             .into_iter()
             .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
@@ -439,13 +439,12 @@ impl DataFrame {
     pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
         let fields_to_drop = columns
             .iter()
-            .map(|name| {
+            .flat_map(|name| {
                 self.plan
                     .schema()
-                    .qualified_field_with_unqualified_name(name)
+                    .qualified_fields_with_unqualified_name(name)
             })
-            .filter(|r| r.is_ok())
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         let expr: Vec<Expr> = self
             .plan
             .schema()
@@ -984,7 +983,7 @@ impl DataFrame {
         }));
 
         //collect recordBatch
-        let describe_record_batch = vec![
+        let describe_record_batch = [
             // count aggregation
             self.clone().aggregate(
                 vec![],
@@ -1654,7 +1653,19 @@ impl DataFrame {
     /// Note: This discards the [`SessionState`] associated with this
     /// [`DataFrame`] in favour of the one passed to [`TableProvider::scan`]
     pub fn into_view(self) -> Arc<dyn TableProvider> {
-        Arc::new(DataFrameTableProvider { plan: self.plan })
+        Arc::new(DataFrameTableProvider {
+            plan: self.plan,
+            table_type: TableType::Temporary,
+        })
+    }
+
+    /// See [`Self::into_view`]. The returned [`TableProvider`] will
+    /// create a transient table.
+    pub fn into_temporary_view(self) -> Arc<dyn TableProvider> {
+        Arc::new(DataFrameTableProvider {
+            plan: self.plan,
+            table_type: TableType::Temporary,
+        })
     }
 
     /// Return a DataFrame with the explanation of its plan so far.
@@ -2524,6 +2535,7 @@ macro_rules! dataframe {
 #[derive(Debug)]
 struct DataFrameTableProvider {
     plan: LogicalPlan,
+    table_type: TableType,
 }
 
 #[async_trait]
@@ -2549,7 +2561,7 @@ impl TableProvider for DataFrameTableProvider {
     }
 
     fn table_type(&self) -> TableType {
-        TableType::View
+        self.table_type
     }
 
     async fn scan(

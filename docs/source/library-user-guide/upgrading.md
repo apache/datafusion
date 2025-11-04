@@ -34,11 +34,11 @@ to version `57.0.0`, including several dependent crates such as `prost`,
 `tonic`, `pyo3`, and `substrait`. . See the [release
 notes](https://github.com/apache/arrow-rs/releases/tag/57.0.0) for more details.
 
-### `MSRV` updated to 1.87.0
+### `MSRV` updated to 1.88.0
 
-The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.88.0`].
 
-[`1.87.0`]: https://releases.rs/docs/1.87.0/
+[`1.88.0`]: https://releases.rs/docs/1.88.0/
 
 ### `FunctionRegistry` exposes two additional methods
 
@@ -133,20 +133,16 @@ The `projection` field in `FileScanConfig` has been renamed to `projection_exprs
 
 If you directly access the `projection` field:
 
-```rust
-# /* comment to avoid running
+```rust,ignore
 let config: FileScanConfig = ...;
 let projection = config.projection;
-# */
 ```
 
 You should update to:
 
-```rust
-# /* comment to avoid running
+```rust,ignore
 let config: FileScanConfig = ...;
 let projection_exprs = config.projection_exprs;
-# */
 ```
 
 **Impact on builders:**
@@ -168,12 +164,10 @@ Note: `with_projection()` still works but is deprecated and will be removed in a
 
 You can access column indices from `ProjectionExprs` using its methods if needed:
 
-```rust
-# /* comment to avoid running
+```rust,ignore
 let projection_exprs: ProjectionExprs = ...;
 // Get the column indices if the projection only contains simple column references
 let indices = projection_exprs.column_indices();
-# */
 ```
 
 ### `DESCRIBE query` support
@@ -181,6 +175,105 @@ let indices = projection_exprs.column_indices();
 `DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the
 _execution plan_ of the query. With this release, `DESCRIBE query` now outputs
 the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
+
+### `datafusion.execution.time_zone` default configuration changed
+
+The default value for `datafusion.execution.time_zone` previously was a string value of `+00:00` (GMT/Zulu time).
+This was changed to be an `Option<String>` with a default of `None`. If you want to change the timezone back
+to the previous value you can execute the sql:
+
+```sql
+SET
+TIMEZONE = '+00:00';
+```
+
+This change was made to better support using the default timezone in scalar UDF functions such as
+`now`, `current_date`, `current_time`, and `to_timestamp` among others.
+
+### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
+
+A new `TableSchema` struct has been introduced in the `datafusion-datasource` crate to better manage table schemas with partition columns. This struct helps distinguish between:
+
+- **File schema**: The schema of actual data files on disk
+- **Partition columns**: Columns derived from directory structure (e.g., Hive-style partitioning)
+- **Table schema**: The complete schema combining both file and partition columns
+
+As part of this change, the `FileSource::with_schema()` method signature has changed from accepting a `SchemaRef` to accepting a `TableSchema`.
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations will need to update their code
+- Users who only use built-in file sources (Parquet, CSV, JSON, AVRO, Arrow) are not affected
+
+**Migration guide for custom `FileSource` implementations:**
+
+```diff
+ use datafusion_datasource::file::FileSource;
+-use arrow::datatypes::SchemaRef;
++use datafusion_datasource::TableSchema;
+
+ impl FileSource for MyCustomSource {
+-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
++    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+         Arc::new(Self {
+-            schema: Some(schema),
++            // Use schema.file_schema() to get the file schema without partition columns
++            schema: Some(Arc::clone(schema.file_schema())),
+             ..self.clone()
+         })
+     }
+ }
+```
+
+For implementations that need access to partition columns:
+
+```rust,ignore
+fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+    Arc::new(Self {
+        file_schema: Arc::clone(schema.file_schema()),
+        partition_cols: schema.table_partition_cols().clone(),
+        table_schema: Arc::clone(schema.table_schema()),
+        ..self.clone()
+    })
+}
+```
+
+**Note**: Most `FileSource` implementations only need to store the file schema (without partition columns), as shown in the first example. The second pattern of storing all three schema components is typically only needed for advanced use cases where you need access to different schema representations for different operations (e.g., ParquetSource uses the file schema for building pruning predicates but needs the table schema for filter pushdown logic).
+
+**Using `TableSchema` directly:**
+
+If you're constructing a `FileScanConfig` or working with table schemas and partition columns, you can now use `TableSchema`:
+
+```rust
+use datafusion_datasource::TableSchema;
+use arrow::datatypes::{Schema, Field, DataType};
+use std::sync::Arc;
+
+// Create a TableSchema with partition columns
+let file_schema = Arc::new(Schema::new(vec![
+    Field::new("user_id", DataType::Int64, false),
+    Field::new("amount", DataType::Float64, false),
+]));
+
+let partition_cols = vec![
+    Arc::new(Field::new("date", DataType::Utf8, false)),
+    Arc::new(Field::new("region", DataType::Utf8, false)),
+];
+
+let table_schema = TableSchema::new(file_schema, partition_cols);
+
+// Access different schema representations
+let file_schema_ref = table_schema.file_schema();      // Schema without partition columns
+let full_schema = table_schema.table_schema();          // Complete schema with partition columns
+let partition_cols_ref = table_schema.table_partition_cols(); // Just the partition columns
+```
+
+### `AggregateUDFImpl::is_ordered_set_aggregate` has been renamed to `AggregateUDFImpl::supports_within_group_clause`
+
+This method has been renamed to better reflect the actual impact it has for aggregate UDF implementations.
+The accompanying `AggregateUDF::is_ordered_set_aggregate` has also been renamed to `AggregateUDF::supports_within_group_clause`.
+No functionality has been changed with regards to this method; it still refers only to permitting use of `WITHIN GROUP`
+SQL syntax for the aggregate function.
 
 ## DataFusion `50.0.0`
 

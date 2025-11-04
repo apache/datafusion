@@ -126,7 +126,7 @@ mod tests {
     fn test_roundtrip() {
         init_python();
 
-        let example_scalars = vec![
+        let example_scalars = [
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Int32(Some(23)),
             ScalarValue::Float64(Some(12.34)),

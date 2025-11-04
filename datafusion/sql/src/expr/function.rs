@@ -467,7 +467,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let mut args =
                     self.function_args_to_expr(args, schema, planner_context)?;
 
-                let order_by = if fm.is_ordered_set_aggregate() {
+                let order_by = if fm.supports_within_group_clause() {
                     let within_group = self.order_by_to_sort_expr(
                         within_group,
                         schema,

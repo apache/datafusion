@@ -64,15 +64,15 @@
 //! # use datafusion_expr::{col, lit, Expr};
 //! # use datafusion_proto::bytes::Serializeable;
 //! # fn main() -> Result<()>{
-//!  // Create a new `Expr` a < 32
-//!  let expr = col("a").lt(lit(5i32));
+//! // Create a new `Expr` a < 32
+//! let expr = col("a").lt(lit(5i32));
 //!
-//!  // Convert it to bytes (for sending over the network, etc.)
-//!  let bytes = expr.to_bytes()?;
+//! // Convert it to bytes (for sending over the network, etc.)
+//! let bytes = expr.to_bytes()?;
 //!
-//!  // Decode bytes from somewhere (over network, etc.) back to Expr
-//!  let decoded_expr = Expr::from_bytes(&bytes)?;
-//!  assert_eq!(expr, decoded_expr);
+//! // Decode bytes from somewhere (over network, etc.) back to Expr
+//! let decoded_expr = Expr::from_bytes(&bytes)?;
+//! assert_eq!(expr, decoded_expr);
 //! # Ok(())
 //! # }
 //! ```

@@ -243,6 +243,10 @@ name = "sql_planner"
 
 [[bench]]
 harness = false
+name = "sql_planner_extended"
+
+[[bench]]
+harness = false
 name = "sql_query_with_io"
 
 [[bench]]
