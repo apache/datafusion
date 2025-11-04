@@ -1115,8 +1115,7 @@ impl SessionContext {
     async fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
         let variable = stmt.variable;
         if variable.starts_with("datafusion.runtime.") {
-            self.reset_runtime_variable(&variable)?;
-            return Ok(());
+            return self.reset_runtime_variable(&variable);
         }
 
         let mut state = self.state.write();
