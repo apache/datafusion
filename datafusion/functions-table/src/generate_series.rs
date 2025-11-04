@@ -237,7 +237,6 @@ impl GenerateSeriesTable {
     pub fn as_generator(
         &self,
         batch_size: usize,
-        projection: Option<Vec<usize>>,
     ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
         let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
             GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
@@ -256,7 +255,6 @@ impl GenerateSeriesTable {
                 batch_size,
                 include_end: *include_end,
                 name,
-                projection,
             })),
             GenSeriesArgs::TimestampArgs {
                 start,
@@ -297,7 +295,6 @@ impl GenerateSeriesTable {
                     batch_size,
                     include_end: *include_end,
                     name,
-                    projection,
                 }))
             }
             GenSeriesArgs::DateArgs {
@@ -327,7 +324,6 @@ impl GenerateSeriesTable {
                 batch_size,
                 include_end: *include_end,
                 name,
-                projection,
             })),
         };
 
@@ -345,7 +341,6 @@ pub struct GenericSeriesState<T: SeriesValue> {
     current: T,
     include_end: bool,
     name: &'static str,
-    projection: Option<Vec<usize>>,
 }
 
 impl<T: SeriesValue> GenericSeriesState<T> {
@@ -401,11 +396,7 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
 
         let array = self.current.create_array(buf)?;
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
-        let projected = match self.projection.as_ref() {
-            Some(projection) => batch.project(projection)?,
-            None => batch,
-        };
-        Ok(Some(projected))
+        Ok(Some(batch))
     }
 }
 
@@ -481,14 +472,12 @@ impl TableProvider for GenerateSeriesTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let batch_size = state.config_options().execution.batch_size;
-        let schema = match projection {
-            Some(projection) => Arc::new(self.schema.project(projection)?),
-            None => self.schema(),
-        };
+        let generator = self.as_generator(batch_size)?;
 
-        let generator = self.as_generator(batch_size, projection.cloned())?;
-
-        Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
+        Ok(Arc::new(
+            LazyMemoryExec::try_new(self.schema(), vec![generator])?
+                .with_projection(projection.cloned()),
+        ))
     }
 }
 
