@@ -30,7 +30,9 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, not_impl_err, plan_datafusion_err, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, not_impl_err, plan_datafusion_err, Result, ScalarValue,
+};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::type_coercion::is_decimal;
@@ -171,7 +173,9 @@ where
     T: DecimalType,
 {
     if scale < 0 {
-        return not_impl_err!("Negative scale is not supported for power for decimal types");
+        return not_impl_err!(
+            "Negative scale is not supported for power for decimal types"
+        );
     }
     Ok(Arc::new(
         array
