@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow_wrappers::WrappedSchema;
-use crate::execution_plan::{FFI_ExecutionPlan, ForeignExecutionPlan};
+use crate::execution_plan::FFI_ExecutionPlan;
 use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
 use crate::session::config::{FFI_SessionConfig, ForeignSessionConfig};
 use crate::session::task::FFI_TaskContext;
@@ -460,9 +460,9 @@ impl Session for ForeignSession {
                 )
                 .await
             )?;
-            let physical_plan = ForeignExecutionPlan::try_from(&physical_plan)?;
+            let physical_plan = <Arc<dyn ExecutionPlan>>::try_from(&physical_plan)?;
 
-            Ok(Arc::new(physical_plan))
+            Ok(physical_plan)
         }
     }
 

@@ -40,7 +40,7 @@ use crate::session::{FFI_Session, ForeignSession};
 use crate::{
     arrow_wrappers::WrappedSchema,
     df_result,
-    execution_plan::{FFI_ExecutionPlan, ForeignExecutionPlan},
+    execution_plan::FFI_ExecutionPlan,
     insert_op::FFI_InsertOp,
     rresult_return,
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
@@ -291,14 +291,8 @@ unsafe extern "C" fn insert_into_fn_wrapper(
 
     async move {
         let session = rresult_return!(session);
-        // let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
-        // let session = SessionStateBuilder::new()
-        //     .with_default_features()
-        //     .with_config(config.0)
-        //     .build();
-        // let ctx = SessionContext::new_with_state(session);
 
-        let input = rresult_return!(ForeignExecutionPlan::try_from(&input).map(Arc::new));
+        let input = rresult_return!(<Arc<dyn ExecutionPlan>>::try_from(&input));
 
         let insert_op = InsertOp::from(insert_op);
 
@@ -445,10 +439,10 @@ impl TableProvider for ForeignTableProvider {
             )
             .await;
 
-            ForeignExecutionPlan::try_from(&df_result!(maybe_plan)?)?
+            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
         };
 
-        Ok(Arc::new(plan))
+        Ok(plan)
     }
 
     /// Tests whether the table provider can make use of a filter expression
@@ -500,10 +494,10 @@ impl TableProvider for ForeignTableProvider {
             let maybe_plan =
                 (self.0.insert_into)(&self.0, &session, &input, insert_op).await;
 
-            ForeignExecutionPlan::try_from(&df_result!(maybe_plan)?)?
+            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
         };
 
-        Ok(Arc::new(plan))
+        Ok(plan)
     }
 }
 
