@@ -4436,7 +4436,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
         value
             .into_iter()
             .fold(ScalarStructBuilder::new(), |builder, (name, value)| {
-                builder.with_name_and_scalar(name, value)
+                builder.with_name_and_scalar(name, &value)
             })
             .build()
             .unwrap()
@@ -4648,9 +4648,9 @@ impl fmt::Display for ScalarValue {
                 }
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            ScalarValue::List(arr) => fmt_list(arr.as_ref(), f)?,
+            ScalarValue::LargeList(arr) => fmt_list(arr.as_ref(), f)?,
+            ScalarValue::FixedSizeList(arr) => fmt_list(arr.as_ref(), f)?,
             ScalarValue::Date32(e) => format_option!(
                 f,
                 e.map(|v| {
@@ -4772,13 +4772,11 @@ impl fmt::Display for ScalarValue {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
-fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
+fn fmt_list(arr: &dyn Array, f: &mut fmt::Formatter) -> fmt::Result {
     // ScalarValue List, LargeList, FixedSizeList should always have a single element
     assert_eq!(arr.len(), 1);
     let options = FormatOptions::default().with_display_error(true);
-    let formatter =
-        ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+    let formatter = ArrayFormatter::try_new(arr, &options).unwrap();
     let value_formatter = formatter.value(0);
     write!(f, "{value_formatter}")
 }
@@ -8238,8 +8236,8 @@ mod tests {
         let field_b = Field::new("b", DataType::Utf8, true);
 
         let s = ScalarStructBuilder::new()
-            .with_scalar(field_a, ScalarValue::from(1i32))
-            .with_scalar(field_b, ScalarValue::Utf8(None))
+            .with_scalar(field_a, &ScalarValue::from(1i32))
+            .with_scalar(field_b, &ScalarValue::Utf8(None))
             .build()
             .unwrap();
 

@@ -1533,22 +1533,22 @@ fn round_trip_scalar_values_and_data_types() {
         ScalarStructBuilder::new()
             .with_scalar(
                 Field::new("a", DataType::Int32, true),
-                ScalarValue::from(23i32),
+                &ScalarValue::from(23i32),
             )
             .with_scalar(
                 Field::new("b", DataType::Boolean, false),
-                ScalarValue::from(false),
+                &ScalarValue::from(false),
             )
             .build()
             .unwrap(),
         ScalarStructBuilder::new()
             .with_scalar(
                 Field::new("a", DataType::Int32, true),
-                ScalarValue::from(23i32),
+                &ScalarValue::from(23i32),
             )
             .with_scalar(
                 Field::new("b", DataType::Boolean, false),
-                ScalarValue::from(false),
+                &ScalarValue::from(false),
             )
             .build()
             .unwrap(),

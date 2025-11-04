@@ -19,7 +19,3 @@
 
 set -ex
 cargo clippy --all-targets --workspace --features avro,pyarrow,integration-tests,extended_tests -- -D warnings
-
-# Update packages incrementally for stricter Clippy checks
-# TODO: add tracking issue for the remaining workspace packages like `datafusion-catalog`
-cargo clippy -p datafusion-common --all-targets --features avro,pyarrow,parquet_encryption,sql -- -D warnings -W clippy::needless_pass_by_value
