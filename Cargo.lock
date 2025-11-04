@@ -2091,13 +2091,10 @@ dependencies = [
  "bytes",
  "datafusion-common",
  "datafusion-datasource",
- "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "num-traits",
  "object_store",
- "serde_json",
 ]
 
 [[package]]
