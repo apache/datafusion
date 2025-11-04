@@ -4436,7 +4436,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
         value
             .into_iter()
             .fold(ScalarStructBuilder::new(), |builder, (name, value)| {
-                builder.with_name_and_scalar(name, &value)
+                builder.with_name_and_scalar(name, value)
             })
             .build()
             .unwrap()
@@ -8236,8 +8236,8 @@ mod tests {
         let field_b = Field::new("b", DataType::Utf8, true);
 
         let s = ScalarStructBuilder::new()
-            .with_scalar(field_a, &ScalarValue::from(1i32))
-            .with_scalar(field_b, &ScalarValue::Utf8(None))
+            .with_scalar(field_a, ScalarValue::from(1i32))
+            .with_scalar(field_b, ScalarValue::Utf8(None))
             .build()
             .unwrap();
 

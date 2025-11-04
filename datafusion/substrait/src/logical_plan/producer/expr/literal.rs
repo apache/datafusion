@@ -530,9 +530,9 @@ mod tests {
         let c2 = Field::new("c2", DataType::Utf8, true);
         round_trip_literal(
             ScalarStructBuilder::new()
-                .with_scalar(c0.to_owned(), &ScalarValue::Boolean(Some(true)))
-                .with_scalar(c1.to_owned(), &ScalarValue::Int32(Some(1)))
-                .with_scalar(c2.to_owned(), &ScalarValue::Utf8(None))
+                .with_scalar(c0.to_owned(), ScalarValue::Boolean(Some(true)))
+                .with_scalar(c1.to_owned(), ScalarValue::Int32(Some(1)))
+                .with_scalar(c2.to_owned(), ScalarValue::Utf8(None))
                 .build()?,
         )?;
         round_trip_literal(ScalarStructBuilder::new_null(vec![c0, c1, c2]))?;
