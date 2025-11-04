@@ -94,4 +94,4 @@ cargo run --example dataframe
 
 ## Distributed
 
-- [`flight_client.rs`](examples/flight/client.rs) and [`flight_server.rs`](examples/flight/server.rs): Run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol.
+- [`examples/flight/client.rs`](examples/flight/client.rs) and [`examples/flight/server.rs`](examples/flight/server.rs): Run DataFusion as a standalone process and execute SQL queries from a client using the Arrow Flight protocol.
