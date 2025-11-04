@@ -27,8 +27,8 @@ use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
-    ColumnarValue,ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 
 use crate::function::functions_nested_utils::make_scalar_function;
