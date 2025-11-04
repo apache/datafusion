@@ -1031,7 +1031,7 @@ impl SortMergeJoinStream {
         let mut join_streamed = false;
         // Whether to join buffered rows
         let mut join_buffered = false;
-        // For Mark join we store a dummy id to indicate the the row has a match
+        // For Mark join we store a dummy id to indicate the row has a match
         let mut mark_row_as_match = false;
 
         // determine whether we need to join streamed/buffered rows
@@ -1140,7 +1140,7 @@ impl SortMergeJoinStream {
             } else {
                 Some(self.buffered_data.scanning_batch_idx)
             };
-            // For Mark join we store a dummy id to indicate the the row has a match
+            // For Mark join we store a dummy id to indicate the row has a match
             let scanning_idx = mark_row_as_match.then_some(0);
 
             self.streamed_batch
