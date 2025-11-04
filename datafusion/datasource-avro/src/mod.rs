@@ -26,9 +26,19 @@
 
 //! An [Avro](https://avro.apache.org/) based [`FileSource`](datafusion_datasource::file::FileSource) implementation and related functionality.
 
-pub mod avro_to_arrow;
 pub mod file_format;
 pub mod source;
 
+use arrow::datatypes::Schema;
 pub use arrow_avro;
+use arrow_avro::reader::ReaderBuilder;
 pub use file_format::*;
+use std::io::{BufReader, Read};
+
+/// Read Avro schema given a reader
+pub fn read_avro_schema_from_reader<R: Read>(
+    reader: &mut R,
+) -> datafusion_common::Result<Schema> {
+    let avro_reader = ReaderBuilder::new().build(BufReader::new(reader))?;
+    Ok(avro_reader.schema().as_ref().clone())
+}

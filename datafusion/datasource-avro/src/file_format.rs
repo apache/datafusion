@@ -16,13 +16,12 @@
 // under the License.
 
 //! Apache Avro [`FileFormat`] abstractions
-// todo - Check if it can be replaced with arrow-avro
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::avro_to_arrow::read_avro_schema_from_reader;
+use crate::read_avro_schema_from_reader;
 use crate::source::AvroSource;
 
 use arrow::datatypes::Schema;
