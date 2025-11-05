@@ -1604,7 +1604,7 @@ impl Stream for PerPartitionStream {
                             return Poll::Ready(Some(Err(e)));
                         }
                         Poll::Ready(None) => {
-                            // Spill stream ended keep draining the memory channel
+                            // Spill stream ended, keep draining the memory channel
                             self.state = StreamState::ReadingMemory;
                         }
                         Poll::Pending => {
