@@ -645,6 +645,7 @@ mod tests {
     use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::StreamExt;
 
@@ -749,7 +750,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<Int32Array>()
                 .unwrap();
-            assert_eq!(col.value(0), i * 10, "Batch {} not in FIFO order", i);
+            assert_eq!(col.value(0), i * 10, "Batch {i} not in FIFO order");
         }
 
         Ok(())
@@ -903,8 +904,7 @@ mod tests {
         let file_count = metrics.spill_file_count.value();
         assert!(
             file_count >= 4,
-            "Should have created at least 4 files with multiple rotations (got {})",
-            file_count
+            "Should have created at least 4 files with multiple rotations (got {file_count})"
         );
         assert!(
             metrics.spilled_bytes.value() > 0,
@@ -930,8 +930,7 @@ mod tests {
             assert_eq!(
                 col.value(0),
                 i * 10,
-                "Batch {} not in correct order after rotations",
-                i
+                "Batch {i} not in correct order after rotations"
             );
         }
 
@@ -1073,7 +1072,7 @@ mod tests {
         let (mut writer, mut reader) = create_spill_channel(1024 * 1024);
 
         // Spawn writer task
-        let writer_handle = tokio::spawn(async move {
+        let writer_handle = SpawnedTask::spawn(async move {
             for i in 0..10 {
                 let batch = create_test_batch(i * 10, 10);
                 writer.push_batch(&batch).unwrap();
@@ -1083,7 +1082,7 @@ mod tests {
         });
 
         // Reader task (runs concurrently)
-        let reader_handle = tokio::spawn(async move {
+        let reader_handle = SpawnedTask::spawn(async move {
             let mut count = 0;
             for i in 0..10 {
                 let result = reader.next().await.unwrap().unwrap();
@@ -1122,7 +1121,7 @@ mod tests {
         let events = Arc::new(Mutex::new(vec![]));
         // Start reader first (will pend)
         let reader_events = Arc::clone(&events);
-        let reader_handle = tokio::spawn(async move {
+        let reader_handle = SpawnedTask::spawn(async move {
             reader_events.lock().push(ReadWriteEvent::ReadStart);
             let result = reader.next().await.unwrap().unwrap();
             reader_events
@@ -1240,8 +1239,7 @@ mod tests {
         let spilled_bytes_after = metrics.spilled_bytes.value();
         assert!(
             spilled_bytes_after > 0,
-            "Spilled bytes should be > 0 after writer is dropped (got {})",
-            spilled_bytes_after
+            "Spilled bytes should be > 0 after writer is dropped (got {spilled_bytes_after})"
         );
 
         // Verify reader can still read all batches

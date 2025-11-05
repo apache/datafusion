@@ -293,7 +293,7 @@ impl DiskManager {
 
         let dir_index = rng().random_range(0..local_dirs.len());
         Ok(RefCountedTempFile {
-            _parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
+            parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Arc::new(
                 Builder::new()
                     .tempfile_in(local_dirs[dir_index].as_ref())
@@ -326,7 +326,7 @@ impl DiskManager {
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
     /// it is not cleaned up prior to the NamedTempFile
-    _parent_temp_dir: Arc<TempDir>,
+    parent_temp_dir: Arc<TempDir>,
     /// The underlying temporary file, wrapped in Arc to allow cloning
     tempfile: Arc<NamedTempFile>,
     /// Tracks the current disk usage of this temporary file. See
@@ -339,7 +339,7 @@ pub struct RefCountedTempFile {
 impl Clone for RefCountedTempFile {
     fn clone(&self) -> Self {
         Self {
-            _parent_temp_dir: Arc::clone(&self._parent_temp_dir),
+            parent_temp_dir: Arc::clone(&self.parent_temp_dir),
             tempfile: Arc::clone(&self.tempfile),
             current_file_disk_usage: self.current_file_disk_usage,
             disk_manager: Arc::clone(&self.disk_manager),
