@@ -30,7 +30,7 @@ use arrow::{
 use datafusion_functions_nested::reverse::array_reverse_inner;
 
 fn array_reverse(array: &ArrayRef) -> ArrayRef {
-    black_box(array_reverse_inner(&[array.clone()]).unwrap())
+    black_box(array_reverse_inner(std::slice::from_ref(array)).unwrap())
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
