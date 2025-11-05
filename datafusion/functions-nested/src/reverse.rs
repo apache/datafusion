@@ -19,8 +19,8 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Capacities, FixedSizeListArray, GenericListArray,
-    GenericListViewArray, MutableArrayData, OffsetSizeTrait, UInt32Array,
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, GenericListViewArray,
+    OffsetSizeTrait, UInt32Array, UInt64Array,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::take;
@@ -155,11 +155,8 @@ fn general_array_reverse<O: OffsetSizeTrait>(
     field: &FieldRef,
 ) -> Result<ArrayRef> {
     let values = array.values();
-    let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
     let mut offsets = vec![O::usize_as(0)];
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+    let mut indices: Vec<O> = Vec::with_capacity(values.len());
 
     for (row_index, (&start, &end)) in array.offsets().iter().tuple_windows().enumerate()
     {
@@ -171,18 +168,34 @@ fn general_array_reverse<O: OffsetSizeTrait>(
 
         let mut index = end - O::one();
         while index >= start {
-            mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
+            indices.push(index);
             index = index - O::one();
         }
         let size = end - start;
         offsets.push(offsets[row_index] + size);
     }
 
-    let data = mutable.freeze();
+    // Materialize values from underlying array with take
+    let indices_array: ArrayRef = if O::IS_LARGE {
+        Arc::new(UInt64Array::from(
+            indices
+                .iter()
+                .map(|i| i.as_usize() as u64)
+                .collect::<Vec<_>>(),
+        ))
+    } else {
+        Arc::new(UInt32Array::from(
+            indices
+                .iter()
+                .map(|i| i.as_usize() as u32)
+                .collect::<Vec<_>>(),
+        ))
+    };
+    let values = take(&values, &indices_array, None)?;
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow::array::make_array(data),
+        values,
         array.nulls().cloned(),
     )?))
 }
@@ -231,7 +244,7 @@ fn list_view_reverse<O: OffsetSizeTrait>(
 
     // Materialize values from underlying array with take
     let indices_array: ArrayRef = if O::IS_LARGE {
-        Arc::new(arrow::array::UInt64Array::from(
+        Arc::new(UInt64Array::from(
             indices
                 .iter()
                 .map(|i| i.as_usize() as u64)
@@ -245,13 +258,12 @@ fn list_view_reverse<O: OffsetSizeTrait>(
                 .collect::<Vec<_>>(),
         ))
     };
-    let values_reversed = take(&values, &indices_array, None)?;
-
+    let values = take(&values, &indices_array, None)?;
     Ok(Arc::new(GenericListViewArray::<O>::try_new(
         Arc::clone(field),
         ScalarBuffer::from(new_offsets),
         ScalarBuffer::from(new_sizes),
-        values_reversed,
+        values,
         array.nulls().cloned(),
     )?))
 }
@@ -261,30 +273,29 @@ fn fixed_size_array_reverse(
     field: &FieldRef,
 ) -> Result<ArrayRef> {
     let values = array.values();
-    let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
     let value_length = array.value_length() as usize;
+    let mut indices: Vec<u64> = Vec::with_capacity(values.len());
 
     for row_index in 0..array.len() {
         // skip the null value
         if array.is_null(row_index) {
-            mutable.extend(0, 0, value_length);
+            indices.push(0);
             continue;
         }
         let start = row_index * value_length;
         let end = start + value_length;
         for idx in (start..end).rev() {
-            mutable.extend(0, idx, idx + 1);
+            indices.push(idx as u64);
         }
     }
 
-    let data = mutable.freeze();
+    // Materialize values from underlying array with take
+    let indices_array: ArrayRef = Arc::new(UInt64Array::from(indices));
+    let values = take(&values, &indices_array, None)?;
     Ok(Arc::new(FixedSizeListArray::try_new(
         Arc::clone(field),
         array.value_length(),
-        arrow::array::make_array(data),
+        values,
         array.nulls().cloned(),
     )?))
 }
