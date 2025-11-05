@@ -277,11 +277,13 @@ fn fixed_size_array_reverse(
     let mut indices: Vec<u64> = Vec::with_capacity(values.len());
 
     for row_index in 0..array.len() {
-        // skip the null value
+        // If the (sub) array is null, it doesn't matter what its values are, but
+        // we do need to insert `value_length` elements since it's a fixed size list
         if array.is_null(row_index) {
-            indices.push(0);
+            indices.extend(vec![0; value_length]);
             continue;
         }
+
         let start = row_index * value_length;
         let end = start + value_length;
         for idx in (start..end).rev() {
@@ -302,11 +304,11 @@ fn fixed_size_array_reverse(
 
 #[cfg(test)]
 mod tests {
-    use crate::reverse::list_view_reverse;
+    use crate::reverse::{fixed_size_array_reverse, list_view_reverse};
     use arrow::{
         array::{
-            AsArray, GenericListViewArray, Int32Array, LargeListViewArray, ListViewArray,
-            OffsetSizeTrait,
+            AsArray, FixedSizeListArray, GenericListViewArray, Int32Array,
+            LargeListViewArray, ListViewArray, OffsetSizeTrait,
         },
         buffer::{NullBuffer, ScalarBuffer},
         datatypes::{DataType, Field, Int32Type},
@@ -317,6 +319,13 @@ mod tests {
     fn list_view_values<O: OffsetSizeTrait>(
         array: &GenericListViewArray<O>,
     ) -> Vec<Option<Vec<i32>>> {
+        array
+            .iter()
+            .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
+            .collect()
+    }
+
+    fn fixed_size_list_values(array: &FixedSizeListArray) -> Vec<Option<Vec<i32>>> {
         array
             .iter()
             .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
@@ -458,6 +467,25 @@ mod tests {
         )?;
         let reversed = list_view_values(result.as_list_view::<i32>());
         let expected: Vec<Option<Vec<i32>>> = vec![None, None, None, None];
+        assert_eq!(expected, reversed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_fixed_size_list() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        let result = fixed_size_array_reverse(
+            &FixedSizeListArray::new(
+                field,
+                3,
+                values,
+                Some(NullBuffer::from(vec![true, false, true])),
+            ),
+            &Arc::new(Field::new("test", DataType::Int32, true)),
+        )?;
+        let reversed = fixed_size_list_values(result.as_fixed_size_list());
+        let expected = vec![Some(vec![3, 2, 1]), None, Some(vec![9, 8, 7])];
         assert_eq!(expected, reversed);
         Ok(())
     }
