@@ -79,7 +79,7 @@ postgres = [
     "tokio-postgres",
 ]
 parquet_encryption = [
-    "datafusion/parquet_encryption"
+    "datafusion/parquet_encryption",
 ]
 
 [dev-dependencies]
