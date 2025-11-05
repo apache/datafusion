@@ -73,8 +73,8 @@ impl SpillManager {
     }
 
     /// Returns the schema for batches managed by this SpillManager
-    pub fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     /// Creates a temporary file for in-progress operations, returning an error

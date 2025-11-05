@@ -313,11 +313,21 @@ impl DiskManager {
 /// must invoke [`Self::update_disk_usage`] to update the global disk usage counter.
 /// This ensures the disk manager can properly enforce usage limits configured by
 /// [`DiskManager::with_max_temp_directory_size`].
-#[derive(Debug, Clone)]
+///
+/// This type is Clone-able, allowing multiple references to the same underlying file.
+/// The file is deleted only when the last reference is dropped.
+///
+/// The parent temporary directory is also kept alive as long as any reference to
+/// this file exists, preventing premature cleanup of the directory.
+///
+/// Once all references to this file are dropped, the file is deleted, and the
+/// disk usage is subtracted from the disk manager's total.
+#[derive(Debug)]
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
     /// it is not cleaned up prior to the NamedTempFile
     _parent_temp_dir: Arc<TempDir>,
+    /// The underlying temporary file, wrapped in Arc to allow cloning
     tempfile: Arc<NamedTempFile>,
     /// Tracks the current disk usage of this temporary file. See
     /// [`Self::update_disk_usage`] for more details.
@@ -326,13 +336,24 @@ pub struct RefCountedTempFile {
     disk_manager: Arc<DiskManager>,
 }
 
+impl Clone for RefCountedTempFile {
+    fn clone(&self) -> Self {
+        Self {
+            _parent_temp_dir: Arc::clone(&self._parent_temp_dir),
+            tempfile: Arc::clone(&self.tempfile),
+            current_file_disk_usage: self.current_file_disk_usage,
+            disk_manager: Arc::clone(&self.disk_manager),
+        }
+    }
+}
+
 impl RefCountedTempFile {
     pub fn path(&self) -> &Path {
         self.tempfile.path()
     }
 
     pub fn inner(&self) -> &NamedTempFile {
-        &self.tempfile
+        self.tempfile.as_ref()
     }
 
     /// Updates the global disk usage counter after modifications to the underlying file.
