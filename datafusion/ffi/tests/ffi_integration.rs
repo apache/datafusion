@@ -35,7 +35,8 @@ mod tests {
         let table_provider_module = get_module()?;
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
         // By calling the code below, the table provided will be created within
         // the module's code.
@@ -76,7 +77,8 @@ mod tests {
     async fn test_catalog() -> Result<()> {
         let module = get_module()?;
         let ctx = Arc::new(SessionContext::default());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
         let ffi_catalog =
             module

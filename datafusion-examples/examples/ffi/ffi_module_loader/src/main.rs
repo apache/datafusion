@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let ctx = Arc::new(SessionContext::new());
-    let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+    let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
     // By calling the code below, the table provided will be created within
     // the module's code.

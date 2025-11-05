@@ -37,7 +37,8 @@ mod tests {
         let module = get_module()?;
 
         let ctx = Arc::new(SessionContext::default());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
         let ffi_table_func = module
             .create_table_function()

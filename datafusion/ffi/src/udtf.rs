@@ -22,13 +22,14 @@ use abi_stable::{
     StableAbi,
 };
 
-use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
+use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::{
     df_result, rresult_return,
     table_provider::{FFI_TableProvider, ForeignTableProvider},
 };
 use datafusion_catalog::{TableFunctionImpl, TableProvider};
 use datafusion_common::error::Result;
+use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::Expr;
 use datafusion_proto::{
     logical_plan::{
@@ -90,7 +91,9 @@ unsafe extern "C" fn call_fn_wrapper(
     args: RVec<u8>,
 ) -> RResult<FFI_TableProvider, RString> {
     let function_registry = udtf.function_registry.clone();
-    let foreign_registry = ForeignWeakFunctionRegistry::from(&function_registry);
+    let foreign_registry = rresult_return!(
+        <Arc<dyn FunctionRegistry + Send + Sync>>::try_from(&udtf.function_registry)
+    );
 
     let runtime = udtf.runtime();
     let udtf = udtf.inner();
@@ -101,7 +104,7 @@ unsafe extern "C" fn call_fn_wrapper(
 
     let args = rresult_return!(parse_exprs(
         proto_filters.expr.iter(),
-        &foreign_registry,
+        foreign_registry.as_ref(),
         &codec
     ));
 
@@ -306,7 +309,8 @@ mod tests {
         let original_udtf = Arc::new(TestUDTF {}) as Arc<dyn TableFunctionImpl>;
 
         let ctx = Arc::new(SessionContext::default());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
         let local_udtf: FFI_TableFunction = FFI_TableFunction::new(
             Arc::clone(&original_udtf),
             None,

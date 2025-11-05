@@ -35,7 +35,7 @@ use datafusion_proto::{
 use prost::Message;
 use tokio::runtime::Handle;
 
-use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
+use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::session::{FFI_Session, ForeignSession};
 use crate::{
     arrow_wrappers::WrappedSchema,
@@ -47,6 +47,7 @@ use crate::{
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::dml::InsertOp;
+use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 
@@ -181,7 +182,7 @@ unsafe extern "C" fn table_type_fn_wrapper(
 fn supports_filters_pushdown_internal(
     provider: &Arc<dyn TableProvider + Send>,
     filters_serialized: &[u8],
-    function_registry: &ForeignWeakFunctionRegistry,
+    function_registry: &dyn FunctionRegistry,
 ) -> Result<RVec<FFI_TableProviderFilterPushDown>> {
     let codec = DefaultLogicalExtensionCodec {};
 
@@ -209,14 +210,19 @@ unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
 ) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
-    let function_registry =
-        ForeignWeakFunctionRegistry::from(&provider.function_registry);
+    let function_registry = rresult_return!(
+        <Arc<dyn FunctionRegistry + Send + Sync>>::try_from(&provider.function_registry)
+    );
     let private_data = provider.private_data as *const ProviderPrivateData;
     let provider = &(*private_data).provider;
 
-    supports_filters_pushdown_internal(provider, &filters_serialized, &function_registry)
-        .map_err(|e| e.to_string().into())
-        .into()
+    supports_filters_pushdown_internal(
+        provider,
+        &filters_serialized,
+        function_registry.as_ref(),
+    )
+    .map_err(|e| e.to_string().into())
+    .into()
 }
 
 unsafe extern "C" fn scan_fn_wrapper(
@@ -227,13 +233,15 @@ unsafe extern "C" fn scan_fn_wrapper(
     limit: ROption<usize>,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
     let function_registry =
-        ForeignWeakFunctionRegistry::from(&provider.function_registry);
+        <Arc<dyn FunctionRegistry + Send + Sync>>::try_from(&provider.function_registry)
+            .expect("");
     let session = ForeignSession::try_from(session);
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
     let runtime = &(*private_data).runtime;
 
     async move {
+        // let function_registry = rresult_return!(function_registry);
         let session = rresult_return!(session);
         // let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
         // let session = SessionStateBuilder::new()
@@ -253,7 +261,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 
                 rresult_return!(parse_exprs(
                     proto_filters.expr.iter(),
-                    &function_registry,
+                    function_registry.as_ref(),
                     &codec
                 ))
             }
@@ -530,7 +538,8 @@ mod tests {
         )?;
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
@@ -574,7 +583,8 @@ mod tests {
         )?;
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
@@ -623,7 +633,8 @@ mod tests {
         )?;
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
         let provider = Arc::new(MemTable::try_new(schema, vec![vec![batch1]])?);
 

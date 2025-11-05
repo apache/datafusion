@@ -334,7 +334,8 @@ mod tests {
             .is_none());
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
         let ffi_catalog =
             FFI_CatalogProvider::new(catalog, None, function_registry.into());

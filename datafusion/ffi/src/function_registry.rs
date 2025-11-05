@@ -23,7 +23,7 @@ use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
-use datafusion_common::not_impl_err;
+use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::FunctionRegistry;
@@ -62,19 +62,28 @@ pub struct FFI_WeakFunctionRegistry {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignWeakFunctionRegistry`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_WeakFunctionRegistry {}
 unsafe impl Sync for FFI_WeakFunctionRegistry {}
 
 struct RegistryPrivateData {
-    registry: Weak<dyn FunctionRegistry + Send>,
+    registry: Weak<dyn FunctionRegistry + Send + Sync>,
 }
 
 impl FFI_WeakFunctionRegistry {
-    unsafe fn inner(&self) -> Result<Arc<dyn FunctionRegistry + Send>, RString> {
+    fn inner(&self) -> Result<Arc<dyn FunctionRegistry + Send + Sync>, DataFusionError> {
         let private_data = self.private_data as *const RegistryPrivateData;
-        (*private_data).registry.upgrade().ok_or_else(|| "Unable to access FunctionRegistry via FFI. Ensure owning object has not gone out of scope.".into())
+        unsafe {
+            (*private_data)
+                .registry
+                .upgrade()
+                .ok_or_else(|| exec_datafusion_err!("Unable to access FunctionRegistry via FFI. Ensure owning object has not gone out of scope."))
+        }
     }
 }
 
@@ -152,6 +161,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         release: release_fn_wrapper,
         version: super::version,
         private_data,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -161,9 +171,9 @@ impl Drop for FFI_WeakFunctionRegistry {
     }
 }
 
-impl From<Arc<dyn FunctionRegistry + Send>> for FFI_WeakFunctionRegistry {
+impl From<Arc<dyn FunctionRegistry + Send + Sync>> for FFI_WeakFunctionRegistry {
     /// Creates a new [`FFI_WeakFunctionRegistry`].
-    fn from(registry: Arc<dyn FunctionRegistry + Send>) -> Self {
+    fn from(registry: Arc<dyn FunctionRegistry + Send + Sync>) -> Self {
         let registry = Arc::downgrade(&registry);
         let private_data = Box::new(RegistryPrivateData { registry });
 
@@ -180,6 +190,7 @@ impl From<Arc<dyn FunctionRegistry + Send>> for FFI_WeakFunctionRegistry {
             release: release_fn_wrapper,
             version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -194,9 +205,14 @@ pub struct ForeignWeakFunctionRegistry(FFI_WeakFunctionRegistry);
 unsafe impl Send for ForeignWeakFunctionRegistry {}
 unsafe impl Sync for ForeignWeakFunctionRegistry {}
 
-impl From<&FFI_WeakFunctionRegistry> for ForeignWeakFunctionRegistry {
-    fn from(provider: &FFI_WeakFunctionRegistry) -> Self {
-        Self(provider.clone())
+impl TryFrom<&FFI_WeakFunctionRegistry> for Arc<dyn FunctionRegistry + Send + Sync> {
+    type Error = DataFusionError;
+    fn try_from(value: &FFI_WeakFunctionRegistry) -> Result<Self, Self::Error> {
+        if (value.library_marker_id)() == crate::get_library_marker_id() {
+            return value.inner();
+        }
+
+        Ok(Arc::new(ForeignWeakFunctionRegistry(value.clone())))
     }
 }
 

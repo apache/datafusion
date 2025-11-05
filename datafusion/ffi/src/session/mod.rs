@@ -17,7 +17,7 @@
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution_plan::FFI_ExecutionPlan;
-use crate::function_registry::{FFI_WeakFunctionRegistry, ForeignWeakFunctionRegistry};
+use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::session::config::{FFI_SessionConfig, ForeignSessionConfig};
 use crate::session::task::FFI_TaskContext;
 use crate::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
@@ -130,9 +130,10 @@ impl FFI_Session {
         (*private_data).session
     }
 
-    unsafe fn function_registry(&self) -> Arc<dyn FunctionRegistry> {
-        let registry = ForeignWeakFunctionRegistry::from(&self.function_registry);
-        Arc::new(registry) as Arc<dyn FunctionRegistry>
+    fn function_registry(
+        &self,
+    ) -> Result<Arc<dyn FunctionRegistry + Send + Sync>, DataFusionError> {
+        (&self.function_registry).try_into()
     }
 
     unsafe fn runtime(&self) -> &Option<Handle> {
@@ -182,7 +183,7 @@ unsafe extern "C" fn create_physical_expr_fn_wrapper(
     expr_serialized: RVec<u8>,
     schema: WrappedSchema,
 ) -> RResult<RVec<u8>, RString> {
-    let function_registry = session.function_registry();
+    let function_registry = rresult_return!(session.function_registry());
     let session = session.inner();
 
     let codec = DefaultLogicalExtensionCodec {};

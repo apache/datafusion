@@ -348,7 +348,8 @@ mod tests {
             .unwrap()
             .is_none());
         let ctx = Arc::new(SessionContext::new());
-        let function_registry = Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send>;
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
         let ffi_schema_provider =
             FFI_SchemaProvider::new(schema_provider, None, function_registry.into());
