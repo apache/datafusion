@@ -53,6 +53,7 @@ roadmap using GitHub issues, approximately quarterly, and invite you to join the
 discussion.
 
 For more information:
+
 1. [Search for issues labeled `roadmap`](https://github.com/apache/datafusion/issues?q=is%3Aissue%20%20%20roadmap)
 2. [DataFusion Road Map: Q1 2026](https://github.com/apache/datafusion/issues/18494)
 3. [DataFusion Road Map: Q3-Q4 2025](https://github.com/apache/datafusion/issues/15878)
