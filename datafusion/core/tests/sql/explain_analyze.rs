@@ -1110,3 +1110,33 @@ async fn csv_explain_analyze_with_statistics() {
         ", statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]"
     );
 }
+
+#[tokio::test]
+async fn nested_loop_join_selectivity() {
+    for (join_type, expected_selectivity) in [
+        ("INNER", "1% (1/100)"),
+        ("LEFT", "10% (10/100)"),
+        ("RIGHT", "10% (10/100)"),
+        // 1 match + 9 left + 9 right = 19
+        ("FULL", "19% (19/100)"),
+    ] {
+        let ctx = SessionContext::new();
+        let sql = format!(
+            "EXPLAIN ANALYZE SELECT * \
+                FROM generate_series(1, 10) as t1(a) \
+                {join_type} JOIN generate_series(1, 10) as t2(b) \
+                ON (t1.a + t2.b) = 20"
+        );
+
+        let actual = execute_to_batches(&ctx, sql.as_str()).await;
+        let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+            .unwrap()
+            .to_string();
+
+        assert_metrics!(
+            &formatted,
+            "NestedLoopJoinExec",
+            &format!("selectivity={expected_selectivity}")
+        );
+    }
+}
