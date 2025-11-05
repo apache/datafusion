@@ -104,13 +104,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Create a placeholder expression
-    /// This is the same as Postgres's prepare statement syntax in which a placeholder starts with `$` sign and then
-    /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
+    /// Both named (`$foo`) and positional (`$1`, `$2`, ...) placeholder styles are supported.
     fn create_placeholder_expr(
         param: String,
         param_data_types: &[FieldRef],
     ) -> Result<Expr> {
-        // Parse the placeholder as a number because it is the only support from sqlparser and postgres
+        // Try to parse the placeholder as a number. If the placeholder does not have a valid
+        // positional value, assume we have a named placeholder.
         let index = param[1..].parse::<usize>();
         let idx = match index {
             Ok(0) => {
