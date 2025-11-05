@@ -134,7 +134,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             format!("${}", pos + 1),
                             param_data_types.get(pos).cloned(),
                         ))),
-                        None => plan_err!("Invalid placeholder: {param}"),
+                        None => plan_err!("Unknown placeholder: {param}"),
                     }
                 };
             }
