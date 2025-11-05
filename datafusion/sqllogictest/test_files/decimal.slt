@@ -1044,3 +1044,10 @@ query I
 SELECT power(2, null)
 ----
 NULL
+
+# Specifically avoid power of int to float
+query error Cannot use float exponent for integer base for function power
+SELECT power(2, 4.0)
+
+query error Cannot use float exponent for integer base for function power
+SELECT power(2, 4.1)

@@ -232,14 +232,13 @@ impl ScalarUDFImpl for PowerFunc {
         let exponent = &args.args[1];
 
         let arr: ArrayRef = match (base.data_type(), exponent.data_type()) {
-            (DataType::Float64, _) => {
+            (DataType::Float64, _) =>
                 calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
                     &base,
                     exponent,
                     |b, e| Ok(f64::powf(b, e)),
-                )?
-            }
-            (DataType::Int64, _) => {
+                )?,
+            (DataType::Int64, DataType::Int64) =>
                 calculate_binary_math::<Int64Type, Int64Type, Int64Type, _>(
                     &base,
                     exponent,
@@ -249,7 +248,11 @@ impl ScalarUDFImpl for PowerFunc {
                             "Exponent {e} in integer computation is out of bounds."
                         ))),
                     },
-                )?
+                )?,
+            (DataType::Int64, DataType::Float64) => {
+                return exec_err!(
+                    "Cannot use float exponent for integer base for function power"
+                )
             }
             (DataType::Decimal32(precision, scale), DataType::Int64) => rescale_decimal(
                     calculate_binary_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
