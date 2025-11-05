@@ -128,7 +128,7 @@ unsafe extern "C" fn register_schema_fn_wrapper(
     schema: &FFI_SchemaProvider,
 ) -> RResult<ROption<FFI_SchemaProvider>, RString> {
     let runtime = provider.runtime();
-    let schema = Arc::new(ForeignSchemaProvider::from(schema));
+    let schema = <Arc<dyn SchemaProvider + Send>>::from(schema);
 
     let returned_schema = rresult_return!(provider
         .inner()
@@ -271,7 +271,8 @@ impl CatalogProvider for ForeignCatalogProvider {
                 (self.0.schema)(&self.0, name.into()).into();
 
             maybe_provider.map(|provider| {
-                Arc::new(ForeignSchemaProvider(provider)) as Arc<dyn SchemaProvider>
+                <Arc<dyn SchemaProvider + Send>>::from(&provider)
+                    as Arc<dyn SchemaProvider>
             })
         }
     }
@@ -294,8 +295,9 @@ impl CatalogProvider for ForeignCatalogProvider {
                 df_result!((self.0.register_schema)(&self.0, name.into(), schema))?
                     .into();
 
-            Ok(returned_schema
-                .map(|s| Arc::new(ForeignSchemaProvider(s)) as Arc<dyn SchemaProvider>))
+            Ok(returned_schema.map(|s| {
+                <Arc<dyn SchemaProvider + Send>>::from(&s) as Arc<dyn SchemaProvider>
+            }))
         }
     }
 
@@ -309,8 +311,9 @@ impl CatalogProvider for ForeignCatalogProvider {
                 df_result!((self.0.deregister_schema)(&self.0, name.into(), cascade))?
                     .into();
 
-            Ok(returned_schema
-                .map(|s| Arc::new(ForeignSchemaProvider(s)) as Arc<dyn SchemaProvider>))
+            Ok(returned_schema.map(|s| {
+                <Arc<dyn SchemaProvider + Send>>::from(&s) as Arc<dyn SchemaProvider>
+            }))
         }
     }
 }

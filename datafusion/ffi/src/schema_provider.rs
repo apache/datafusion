@@ -79,6 +79,10 @@ pub struct FFI_SchemaProvider {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignSchemaProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_SchemaProvider {}
@@ -90,9 +94,9 @@ struct ProviderPrivateData {
 }
 
 impl FFI_SchemaProvider {
-    unsafe fn inner(&self) -> &Arc<dyn SchemaProvider + Send> {
+    fn inner(&self) -> &Arc<dyn SchemaProvider + Send> {
         let private_data = self.private_data as *const ProviderPrivateData;
-        &(*private_data).provider
+        unsafe { &(*private_data).provider }
     }
 
     unsafe fn runtime(&self) -> Option<Handle> {
@@ -194,6 +198,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         deregister_table: deregister_table_fn_wrapper,
         table_exist: table_exist_fn_wrapper,
         function_registry: provider.function_registry.clone(),
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -225,6 +230,7 @@ impl FFI_SchemaProvider {
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
             function_registry,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -239,9 +245,13 @@ pub struct ForeignSchemaProvider(pub FFI_SchemaProvider);
 unsafe impl Send for ForeignSchemaProvider {}
 unsafe impl Sync for ForeignSchemaProvider {}
 
-impl From<&FFI_SchemaProvider> for ForeignSchemaProvider {
+impl From<&FFI_SchemaProvider> for Arc<dyn SchemaProvider + Send> {
     fn from(provider: &FFI_SchemaProvider) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(provider.inner());
+        }
+
+        Arc::new(ForeignSchemaProvider(provider.clone()))
     }
 }
 
@@ -354,7 +364,7 @@ mod tests {
         let ffi_schema_provider =
             FFI_SchemaProvider::new(schema_provider, None, function_registry.into());
 
-        let foreign_schema_provider: ForeignSchemaProvider =
+        let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =
             (&ffi_schema_provider).into();
 
         let prior_table_names = foreign_schema_provider.table_names();
