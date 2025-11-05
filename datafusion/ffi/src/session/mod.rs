@@ -18,7 +18,7 @@
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::function_registry::FFI_WeakFunctionRegistry;
-use crate::session::config::{FFI_SessionConfig, ForeignSessionConfig};
+use crate::session::config::FFI_SessionConfig;
 use crate::session::task::FFI_TaskContext;
 use crate::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
 use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
@@ -366,7 +366,7 @@ impl TryFrom<&FFI_Session> for ForeignSession {
                 table_options_from_rhashmap((session.table_options)(session));
 
             let config = (session.config)(session);
-            let config = ForeignSessionConfig::try_from(&config)?.0;
+            let config = SessionConfig::try_from(&config)?;
 
             let scalar_functions = (session.scalar_functions)(session)
                 .into_iter()

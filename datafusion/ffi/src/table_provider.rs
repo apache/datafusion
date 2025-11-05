@@ -241,14 +241,7 @@ unsafe extern "C" fn scan_fn_wrapper(
     let runtime = &(*private_data).runtime;
 
     async move {
-        // let function_registry = rresult_return!(function_registry);
         let session = rresult_return!(session);
-        // let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
-        // let session = SessionStateBuilder::new()
-        //     .with_default_features()
-        //     .with_config(config.0)
-        //     .build();
-        // let ctx = SessionContext::new_with_state(session);
 
         let filters = match filters_serialized.is_empty() {
             true => vec![],

@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::session::config::{FFI_SessionConfig, ForeignSessionConfig};
+use crate::session::config::FFI_SessionConfig;
 use crate::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
 use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
 use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 use abi_stable::pmr::ROption;
 use abi_stable::std_types::RHashMap;
 use abi_stable::{std_types::RString, StableAbi};
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
@@ -145,9 +146,8 @@ impl From<FFI_TaskContext> for TaskContext {
             let task_id = (ffi_ctx.task_id)(&ffi_ctx).map(|s| s.to_string()).into();
             let sesion_id = (ffi_ctx.session_id)(&ffi_ctx).into();
             let session_config = (ffi_ctx.session_config)(&ffi_ctx);
-            let session_config = ForeignSessionConfig::try_from(&session_config)
-                .map(|v| v.0)
-                .unwrap_or_default();
+            let session_config =
+                SessionConfig::try_from(&session_config).unwrap_or_default();
 
             let scalar_functions = (ffi_ctx.scalar_functions)(&ffi_ctx)
                 .into_iter()

@@ -57,7 +57,6 @@ pub struct FFI_SessionConfig {
     pub release: unsafe extern "C" fn(arg: &mut Self),
 
     /// Internal data. This is only to be accessed by the provider of the plan.
-    /// A [`ForeignSessionConfig`] should never attempt to access this data.
     pub private_data: *mut c_void,
 }
 
@@ -148,10 +147,8 @@ impl Drop for FFI_SessionConfig {
 /// A wrapper struct for accessing [`SessionConfig`] across a FFI boundary.
 /// The [`SessionConfig`] will be generated from a hash map of the config
 /// options in the provider and will be reconstructed on this side of the
-/// interface.s
-pub struct ForeignSessionConfig(pub SessionConfig);
-
-impl TryFrom<&FFI_SessionConfig> for ForeignSessionConfig {
+/// interface.
+impl TryFrom<&FFI_SessionConfig> for SessionConfig {
     type Error = DataFusionError;
 
     fn try_from(config: &FFI_SessionConfig) -> Result<Self, Self::Error> {
@@ -162,7 +159,7 @@ impl TryFrom<&FFI_SessionConfig> for ForeignSessionConfig {
             options_map.insert(kv_pair.0.to_string(), kv_pair.1.to_string());
         });
 
-        Ok(Self(SessionConfig::from_string_hash_map(&options_map)?))
+        SessionConfig::from_string_hash_map(&options_map)
     }
 }
 
@@ -177,11 +174,11 @@ mod tests {
 
         let ffi_config: FFI_SessionConfig = (&session_config).into();
 
-        let foreign_config: ForeignSessionConfig = (&ffi_config).try_into()?;
+        let foreign_config: SessionConfig = (&ffi_config).try_into()?;
 
-        let returned_options = foreign_config.0.options().entries();
+        let returned_options = foreign_config.options().entries();
 
-        assert!(original_options.len() == returned_options.len());
+        assert_eq!(original_options.len(), returned_options.len());
 
         Ok(())
     }
