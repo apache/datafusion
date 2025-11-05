@@ -294,9 +294,11 @@ impl DiskManager {
         let dir_index = rng().random_range(0..local_dirs.len());
         Ok(RefCountedTempFile {
             _parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
-            tempfile: Builder::new()
-                .tempfile_in(local_dirs[dir_index].as_ref())
-                .map_err(DataFusionError::IoError)?,
+            tempfile: Arc::new(
+                Builder::new()
+                    .tempfile_in(local_dirs[dir_index].as_ref())
+                    .map_err(DataFusionError::IoError)?,
+            ),
             current_file_disk_usage: 0,
             disk_manager: Arc::clone(self),
         })
@@ -311,12 +313,12 @@ impl DiskManager {
 /// must invoke [`Self::update_disk_usage`] to update the global disk usage counter.
 /// This ensures the disk manager can properly enforce usage limits configured by
 /// [`DiskManager::with_max_temp_directory_size`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
     /// it is not cleaned up prior to the NamedTempFile
     _parent_temp_dir: Arc<TempDir>,
-    tempfile: NamedTempFile,
+    tempfile: Arc<NamedTempFile>,
     /// Tracks the current disk usage of this temporary file. See
     /// [`Self::update_disk_usage`] for more details.
     current_file_disk_usage: u64,

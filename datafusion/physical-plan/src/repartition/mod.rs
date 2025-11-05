@@ -34,9 +34,6 @@ use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
-use crate::repartition::distributor_channels::{
-    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
-};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::SpillPool;
@@ -52,7 +49,7 @@ use datafusion_common::utils::transpose;
 use datafusion_common::{internal_err, ColumnStatistics, HashMap};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryConsumer};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -65,6 +62,7 @@ use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
 use parking_lot::Mutex;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 mod distributor_channels;
 
@@ -79,13 +77,88 @@ enum RepartitionBatch {
 }
 
 type MaybeBatch = Option<Result<RepartitionBatch>>;
-type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
-type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
+type InputPartitionsToCurrentPartitionSender =
+    Vec<UnboundedDistributionSender<MaybeBatch>>;
+type InputPartitionsToCurrentPartitionReceiver =
+    Vec<UnboundedDistributionReceiver<MaybeBatch>>;
+
+/// Wrapper around tokio UnboundedSender to match DistributionSender interface
+struct UnboundedDistributionSender<T> {
+    inner: UnboundedSender<T>,
+}
+
+// Implement Clone manually without requiring T: Clone
+impl<T> Clone for UnboundedDistributionSender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<T> UnboundedDistributionSender<T> {
+    fn send(&self, value: T) -> UnboundedSendFuture {
+        UnboundedSendFuture {
+            is_err: self.inner.send(value).is_err(),
+        }
+    }
+}
+
+struct UnboundedSendFuture {
+    is_err: bool,
+}
+
+impl std::future::Future for UnboundedSendFuture {
+    type Output = Result<(), ()>;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Unbounded send is immediate, so always ready
+        if self.is_err {
+            Poll::Ready(Err(()))
+        } else {
+            Poll::Ready(Ok(()))
+        }
+    }
+}
+
+/// Wrapper around tokio UnboundedReceiver to match DistributionReceiver interface
+struct UnboundedDistributionReceiver<T> {
+    inner: UnboundedReceiver<T>,
+}
+
+impl<T: Send> UnboundedDistributionReceiver<T> {
+    fn recv(
+        &mut self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Option<T>> + Send + '_>> {
+        Box::pin(self.inner.recv())
+    }
+}
+
+/// Create unbounded channels without backpressure
+fn unbounded_channels<T>(
+    n: usize,
+) -> (
+    Vec<UnboundedDistributionSender<T>>,
+    Vec<UnboundedDistributionReceiver<T>>,
+) {
+    let channels: Vec<_> = (0..n)
+        .map(|_| {
+            let (tx, rx) = unbounded_channel();
+            (
+                UnboundedDistributionSender { inner: tx },
+                UnboundedDistributionReceiver { inner: rx },
+            )
+        })
+        .collect();
+
+    let (senders, receivers): (Vec<_>, Vec<_>) = channels.into_iter().unzip();
+    (senders, receivers)
+}
 
 /// Output channel with its associated memory reservation and spill pool
 #[derive(Clone)]
 struct OutputChannel {
-    sender: DistributionSender<MaybeBatch>,
+    sender: UnboundedDistributionSender<MaybeBatch>,
     reservation: SharedMemoryReservation,
     spill_pool: Arc<Mutex<SpillPool>>,
 }
@@ -219,17 +292,22 @@ impl RepartitionExecState {
         let spill_manager = Arc::new(spill_manager);
 
         let (txs, rxs) = if preserve_order {
-            let (txs, rxs) =
-                partition_aware_channels(num_input_partitions, num_output_partitions);
+            // Create unbounded channels for each input->output pair
+            let mut txs_all = vec![];
+            let mut rxs_all = vec![];
+            for _ in 0..num_input_partitions {
+                let (txs_row, rxs_row) = unbounded_channels(num_output_partitions);
+                txs_all.push(txs_row);
+                rxs_all.push(rxs_row);
+            }
             // Take transpose of senders and receivers. `state.channels` keeps track of entries per output partition
-            let txs = transpose(txs);
-            let rxs = transpose(rxs);
+            let txs = transpose(txs_all);
+            let rxs = transpose(rxs_all);
             (txs, rxs)
         } else {
             // create one channel per *output* partition
-            // note we use a custom channel that ensures there is always data for each receiver
-            // but limits the amount of buffering if required.
-            let (txs, rxs) = channels(num_output_partitions);
+            // Using unbounded channels to avoid backpressure/deadlock with spilling
+            let (txs, rxs) = unbounded_channels(num_output_partitions);
             // Clone sender for each input partitions
             let txs = txs
                 .into_iter()
@@ -244,7 +322,7 @@ impl RepartitionExecState {
             let reservation = Arc::new(Mutex::new(
                 MemoryConsumer::new(format!("{name}[{partition}]"))
                     .with_can_spill(true)
-                    .register(context.memory_pool()),
+                    .register(&(Arc::new(GreedyMemoryPool::new(1)) as Arc<_>)),
             ));
 
             // Create one SpillPool per input partition for this output partition
@@ -799,16 +877,13 @@ impl ExecutionPlan for RepartitionExec {
                     .map(|(idx, receiver)| {
                         let spill_pool = Arc::clone(&spill_pools[idx]);
                         let spill_stream = SpillPool::reader(Arc::clone(&spill_pool));
-
-                        Box::pin(PerPartitionStream {
-                            schema: Arc::clone(&schema_captured),
+                        Box::pin(PerPartitionStream::new(
+                            Arc::clone(&schema_captured),
                             receiver,
-                            _drop_helper: Arc::clone(&abort_helper),
-                            reservation: Arc::clone(&reservation),
-                            spill_pool,
+                            Arc::clone(&abort_helper),
+                            Arc::clone(&reservation),
                             spill_stream,
-                            input_finished: false,
-                        }) as SendableRecordBatchStream
+                        )) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
                 // Note that receiver size (`rx.len()`) and `num_input_partitions` are same.
@@ -834,18 +909,14 @@ impl ExecutionPlan for RepartitionExec {
                 let spill_pool = Arc::clone(&spill_pools[0]);
                 let spill_stream = SpillPool::reader(Arc::clone(&spill_pool));
 
-                Ok(Box::pin(RepartitionStream {
-                    num_input_partitions,
-                    num_input_partitions_processed: 0,
-                    schema: input.schema(),
-                    input: rx.swap_remove(0),
-                    _drop_helper: abort_helper,
+                Ok(Box::pin(RepartitionStream::new(
+                    input.schema(),
+                    rx.swap_remove(0),
+                    abort_helper,
                     reservation,
-                    spill_pool,
                     spill_stream,
-                    all_inputs_finished: false,
-                    state: StreamState::ReadingMemory,
-                }) as SendableRecordBatchStream)
+                    num_input_partitions,
+                )) as SendableRecordBatchStream)
             }
         })
         .try_flatten();
@@ -1120,32 +1191,34 @@ impl RepartitionExec {
                         match channel.reservation.lock().try_grow(size) {
                             Ok(_) => {
                                 // Memory available - send in-memory batch
+                                eprintln!("[SEND] Partition {}: Sending Memory batch with {} rows", partition, batch.num_rows());
                                 (RepartitionBatch::Memory(batch), true)
                             }
                             Err(_) => {
                                 // We're memory limited - spill to SpillPool
                                 // SpillPool handles file handle reuse and rotation
+                                eprintln!("[SEND] Partition {}: Spilling batch with {} rows", partition, batch.num_rows());
                                 {
                                     let mut pool = channel.spill_pool.lock();
                                     pool.push_batch(&batch)?;
-                                    // Flush immediately to make the batch available for reading
-                                    // This is necessary for order-preserving repartition where
-                                    // the reader needs immediate access to spilled data
-                                    pool.flush()?;
                                 }
-
                                 // Send marker indicating batch was spilled
                                 (RepartitionBatch::Spilled, false)
                             }
                         };
 
+                    eprintln!("[SEND] Partition {}: About to send {:?} to channel", partition,
+                             if is_memory_batch { "Memory" } else { "Spilled" });
                     if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
+                        eprintln!("[SEND] Partition {}: Send failed, receiver hung up", partition);
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         // Only shrink memory if it was a memory batch
                         if is_memory_batch {
                             channel.reservation.lock().shrink(size);
                         }
                         output_channels.remove(&partition);
+                    } else {
+                        eprintln!("[SEND] Partition {}: Send completed successfully", partition);
                     }
                 }
                 timer.done();
@@ -1175,6 +1248,14 @@ impl RepartitionExec {
             }
         }
 
+        // Flush all spill pools now that input is done
+        eprintln!("[SEND] Flushing all spill pools for {} output channels", output_channels.len());
+        for (partition, channel) in output_channels.iter() {
+            let mut pool = channel.spill_pool.lock();
+            eprintln!("[SEND] Flushing spill pool for partition {}", partition);
+            pool.flush()?;
+        }
+
         Ok(())
     }
 
@@ -1185,7 +1266,7 @@ impl RepartitionExec {
     /// channels.
     async fn wait_for_task(
         input_task: SpawnedTask<Result<()>>,
-        txs: HashMap<usize, DistributionSender<MaybeBatch>>,
+        txs: HashMap<usize, UnboundedDistributionSender<MaybeBatch>>,
     ) {
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
@@ -1217,7 +1298,9 @@ impl RepartitionExec {
             // Input task completed successfully
             Ok(Ok(())) => {
                 // notify each output partition that this input partition has no more data
-                for (_, tx) in txs {
+                eprintln!("[SEND] Input task completed, sending None to {} output partitions", txs.len());
+                for (partition, tx) in txs {
+                    eprintln!("[SEND] Sending None to partition {}", partition);
                     tx.send(None).await.ok();
                 }
             }
@@ -1236,17 +1319,11 @@ enum StreamState {
 }
 
 struct RepartitionStream {
-    /// Number of input partitions that will be sending batches to this output channel
-    num_input_partitions: usize,
-
-    /// Number of input partitions that have finished sending batches to this output channel
-    num_input_partitions_processed: usize,
-
     /// Schema wrapped by Arc
     schema: SchemaRef,
 
     /// channel containing the repartitioned batches
-    input: DistributionReceiver<MaybeBatch>,
+    input: UnboundedDistributionReceiver<MaybeBatch>,
 
     /// Handle to ensure background tasks are killed when no longer needed.
     _drop_helper: Arc<Vec<SpawnedTask<()>>>,
@@ -1254,17 +1331,35 @@ struct RepartitionStream {
     /// Memory reservation.
     reservation: SharedMemoryReservation,
 
-    /// SpillPool for batched spilling with FIFO semantics (shared for writing)
-    spill_pool: Arc<Mutex<SpillPool>>,
-
     /// Infinite stream for reading from the spill pool
     spill_stream: SendableRecordBatchStream,
 
-    /// Flag indicating all inputs have finished
-    all_inputs_finished: bool,
-
     /// Current state of the stream (reading from memory or spill)
     state: StreamState,
+
+    /// Number of input partitions that have not yet finished
+    remaining_partitions: usize,
+}
+
+impl RepartitionStream {
+    fn new(
+        schema: SchemaRef,
+        input: UnboundedDistributionReceiver<MaybeBatch>,
+        drop_helper: Arc<Vec<SpawnedTask<()>>>,
+        reservation: SharedMemoryReservation,
+        spill_stream: SendableRecordBatchStream,
+        num_input_partitions: usize,
+    ) -> Self {
+        Self {
+            schema,
+            input,
+            _drop_helper: drop_helper,
+            reservation,
+            spill_stream,
+            state: StreamState::ReadingMemory,
+            remaining_partitions: num_input_partitions,
+        }
+    }
 }
 
 impl Stream for RepartitionStream {
@@ -1277,26 +1372,25 @@ impl Stream for RepartitionStream {
         use futures::StreamExt;
 
         loop {
+            eprintln!("[RepartitionStream] State: {:?}, remaining_partitions: {}",
+                     self.state, self.remaining_partitions);
             match self.state {
                 StreamState::ReadingMemory => {
-                    // If all inputs are finished, switch to draining spill stream only
-                    if self.all_inputs_finished {
-                        // Verify pool is finalized before draining
-                        if !self.spill_pool.lock().is_finalized() {
-                            return Poll::Ready(Some(Err(DataFusionError::Internal(
-                                "Spill pool not finalized despite all inputs finishing"
-                                    .to_string(),
-                            ))));
-                        }
-                        // Transition to reading spilled to drain remaining data
-                        self.state = StreamState::ReadingSpilled;
-                        continue;
-                    }
-
                     // Poll the memory channel for next message
                     let value = match self.input.recv().poll_unpin(cx) {
-                        Poll::Ready(v) => v,
+                        Poll::Ready(v) => {
+                            eprintln!("[RepartitionStream] Memory channel poll returned: {:?}",
+                                     match &v {
+                                         Some(Some(Ok(RepartitionBatch::Memory(_)))) => "Some(Some(Ok(Memory)))",
+                                         Some(Some(Ok(RepartitionBatch::Spilled))) => "Some(Some(Ok(Spilled)))",
+                                         Some(Some(Err(_))) => "Some(Some(Err))",
+                                         Some(None) => "Some(None)",
+                                         None => "None",
+                                     });
+                            v
+                        }
                         Poll::Pending => {
+                            eprintln!("[RepartitionStream] Memory channel poll returned: Pending");
                             // Nothing from channel, wait
                             return Poll::Pending;
                         }
@@ -1305,6 +1399,7 @@ impl Stream for RepartitionStream {
                     match value {
                         Some(Some(v)) => match v {
                             Ok(RepartitionBatch::Memory(batch)) => {
+                                eprintln!("[RepartitionStream] Returning memory batch with {} rows", batch.num_rows());
                                 // Release memory and return batch
                                 self.reservation
                                     .lock()
@@ -1312,6 +1407,7 @@ impl Stream for RepartitionStream {
                                 return Poll::Ready(Some(Ok(batch)));
                             }
                             Ok(RepartitionBatch::Spilled) => {
+                                eprintln!("[RepartitionStream] Received Spilled marker, transitioning to ReadingSpilled");
                                 // Batch was spilled, transition to reading from spill stream
                                 // We must block on spill stream until we get the batch
                                 // to preserve ordering
@@ -1319,35 +1415,25 @@ impl Stream for RepartitionStream {
                                 continue;
                             }
                             Err(e) => {
+                                eprintln!("[RepartitionStream] Returning error");
                                 return Poll::Ready(Some(Err(e)));
                             }
                         },
                         Some(None) => {
                             // One input partition finished
-                            self.num_input_partitions_processed += 1;
-
-                            if self.num_input_partitions
-                                == self.num_input_partitions_processed
-                            {
-                                // All input partitions have finished sending batches
-                                // Flush and finalize the SpillPool
-                                {
-                                    let mut pool = self.spill_pool.lock();
-                                    if let Err(e) = pool.flush() {
-                                        return Poll::Ready(Some(Err(e)));
-                                    }
-                                    pool.finalize();
-                                } // Drop the lock before continuing
-                                self.all_inputs_finished = true;
-                                // Transition to draining spilled batches
-                                self.state = StreamState::ReadingSpilled;
-                                continue;
-                            } else {
-                                // Other partitions still have data to send
-                                continue;
+                            self.remaining_partitions -= 1;
+                            eprintln!("[RepartitionStream] Input partition finished, remaining: {}",
+                                     self.remaining_partitions);
+                            if self.remaining_partitions == 0 {
+                                eprintln!("[RepartitionStream] All input partitions finished, ending stream");
+                                // All input partitions finished
+                                return Poll::Ready(None);
                             }
+                            // Continue to poll for more data from other partitions
+                            continue;
                         }
                         None => {
+                            eprintln!("[RepartitionStream] Channel closed unexpectedly");
                             // Channel closed unexpectedly
                             return Poll::Ready(None);
                         }
@@ -1355,25 +1441,24 @@ impl Stream for RepartitionStream {
                 }
                 StreamState::ReadingSpilled => {
                     // Poll spill stream for the spilled batch
-                    // Do NOT poll channel in this state - we must wait for the spilled batch
                     match self.spill_stream.poll_next_unpin(cx) {
                         Poll::Ready(Some(Ok(batch))) => {
-                            // Got the spilled batch, return it and transition back to reading memory
-                            // unless all inputs are finished (in which case stay in ReadingSpilled
-                            // to drain remaining spilled batches)
-                            if !self.all_inputs_finished {
-                                self.state = StreamState::ReadingMemory;
-                            }
+                            eprintln!("[RepartitionStream] Got spilled batch with {} rows, transitioning to ReadingMemory",
+                                     batch.num_rows());
+                            self.state = StreamState::ReadingMemory;
                             return Poll::Ready(Some(Ok(batch)));
                         }
                         Poll::Ready(Some(Err(e))) => {
+                            eprintln!("[RepartitionStream] Spill stream returned error");
                             return Poll::Ready(Some(Err(e)));
                         }
                         Poll::Ready(None) => {
-                            // Spill stream ended - all spilled data has been read
-                            return Poll::Ready(None);
+                            eprintln!("[RepartitionStream] Spill stream ended, transitioning to ReadingMemory");
+                            // Spill stream ended keep draining the memory channel
+                            self.state = StreamState::ReadingMemory;
                         }
                         Poll::Pending => {
+                            eprintln!("[RepartitionStream] Spill stream poll returned: Pending");
                             // Spilled batch not ready yet, must wait
                             // This preserves ordering by blocking until spill data arrives
                             return Poll::Pending;
@@ -1399,7 +1484,7 @@ struct PerPartitionStream {
     schema: SchemaRef,
 
     /// channel containing the repartitioned batches
-    receiver: DistributionReceiver<MaybeBatch>,
+    receiver: UnboundedDistributionReceiver<MaybeBatch>,
 
     /// Handle to ensure background tasks are killed when no longer needed.
     _drop_helper: Arc<Vec<SpawnedTask<()>>>,
@@ -1407,14 +1492,30 @@ struct PerPartitionStream {
     /// Memory reservation.
     reservation: SharedMemoryReservation,
 
-    /// SpillPool for batched spilling with FIFO semantics (shared for writing)
-    spill_pool: Arc<Mutex<SpillPool>>,
-
     /// Infinite stream for reading from the spill pool
     spill_stream: SendableRecordBatchStream,
 
-    /// Flag indicating input partition has finished
-    input_finished: bool,
+    /// Internal state indicating if we are reading from memory or spill stream
+    state: StreamState,
+}
+
+impl PerPartitionStream {
+    fn new(
+        schema: SchemaRef,
+        receiver: UnboundedDistributionReceiver<MaybeBatch>,
+        drop_helper: Arc<Vec<SpawnedTask<()>>>,
+        reservation: SharedMemoryReservation,
+        spill_stream: SendableRecordBatchStream,
+    ) -> Self {
+        Self {
+            schema,
+            receiver,
+            _drop_helper: drop_helper,
+            reservation,
+            spill_stream,
+            state: StreamState::ReadingMemory,
+        }
+    }
 }
 
 impl Stream for PerPartitionStream {
@@ -1427,82 +1528,89 @@ impl Stream for PerPartitionStream {
         use futures::StreamExt;
 
         loop {
-            // First, check if there's a spilled batch available
-            match self.spill_stream.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(batch))) => {
-                    // Got a spilled batch
-                    return Poll::Ready(Some(Ok(batch)));
-                }
-                Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(e)));
-                }
-                Poll::Ready(None) => {
-                    // Spill stream ended - all spilled data has been read
-                    // Only end the stream if input is also finished
-                    if self.input_finished {
-                        return Poll::Ready(None);
-                    }
-                    // Otherwise, continue to check the channel for new data
-                }
-                Poll::Pending => {
-                    // No spilled data available yet (async I/O in progress)
-                    if self.input_finished {
-                        // Input finished, but spill stream might have data being read
-                        // Wait for the async I/O to complete
-                        return Poll::Pending;
-                    }
-                    // Spill stream is pending but not finished
-                    // Fall through to check the channel
-                }
-            }
+            eprintln!("[PerPartitionStream] State: {:?}", self.state);
+            match self.state {
+                StreamState::ReadingMemory => {
+                    // Poll the memory channel for next message
+                    let value = match self.receiver.recv().poll_unpin(cx) {
+                        Poll::Ready(v) => {
+                            eprintln!("[PerPartitionStream] Memory channel poll returned: {:?}",
+                                     match &v {
+                                         Some(Some(Ok(RepartitionBatch::Memory(_)))) => "Some(Some(Ok(Memory)))",
+                                         Some(Some(Ok(RepartitionBatch::Spilled))) => "Some(Some(Ok(Spilled)))",
+                                         Some(Some(Err(_))) => "Some(Some(Err))",
+                                         Some(None) => "Some(None)",
+                                         None => "None",
+                                     });
+                            v
+                        }
+                        Poll::Pending => {
+                            eprintln!("[PerPartitionStream] Memory channel poll returned: Pending");
+                            // Nothing from channel, wait
+                            return Poll::Pending;
+                        }
+                    };
 
-            // If input is finished, don't poll channel anymore - just wait for spill stream
-            if self.input_finished {
-                return Poll::Pending;
-            }
-
-            // Try to get next item from channel
-            let value = match self.receiver.recv().poll_unpin(cx) {
-                Poll::Ready(v) => v,
-                Poll::Pending => {
-                    // Nothing from channel either, wait
-                    return Poll::Pending;
+                    match value {
+                        Some(Some(v)) => match v {
+                            Ok(RepartitionBatch::Memory(batch)) => {
+                                eprintln!("[PerPartitionStream] Returning memory batch with {} rows", batch.num_rows());
+                                // Release memory and return batch
+                                self.reservation
+                                    .lock()
+                                    .shrink(batch.get_array_memory_size());
+                                return Poll::Ready(Some(Ok(batch)));
+                            }
+                            Ok(RepartitionBatch::Spilled) => {
+                                eprintln!("[PerPartitionStream] Received Spilled marker, transitioning to ReadingSpilled");
+                                // Batch was spilled, transition to reading from spill stream
+                                // We must block on spill stream until we get the batch
+                                // to preserve ordering
+                                self.state = StreamState::ReadingSpilled;
+                                continue;
+                            }
+                            Err(e) => {
+                                eprintln!("[PerPartitionStream] Returning error");
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        },
+                        Some(None) => {
+                            eprintln!("[PerPartitionStream] Received None, ending stream");
+                            return Poll::Ready(None);
+                        }
+                        None => {
+                            eprintln!("[PerPartitionStream] Channel closed unexpectedly");
+                            // Channel closed unexpectedly
+                            return Poll::Ready(None);
+                        }
+                    }
                 }
-            };
-
-            match value {
-                Some(Some(v)) => match v {
-                    Ok(RepartitionBatch::Memory(batch)) => {
-                        // Release memory and return
-                        self.reservation
-                            .lock()
-                            .shrink(batch.get_array_memory_size());
-                        return Poll::Ready(Some(Ok(batch)));
-                    }
-                    Ok(RepartitionBatch::Spilled) => {
-                        // Batch was spilled, it's available in spill_stream
-                        // Loop back to poll spill_stream again
-                        continue;
-                    }
-                    Err(e) => {
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                },
-                Some(None) => {
-                    // Input partition has finished sending batches
-                    // Flush and finalize the SpillPool
-                    {
-                        let mut pool = self.spill_pool.lock();
-                        if let Err(e) = pool.flush() {
+                StreamState::ReadingSpilled => {
+                    // Poll spill stream for the spilled batch
+                    match self.spill_stream.poll_next_unpin(cx) {
+                        Poll::Ready(Some(Ok(batch))) => {
+                            eprintln!("[PerPartitionStream] Got spilled batch with {} rows, transitioning to ReadingMemory",
+                                     batch.num_rows());
+                            self.state = StreamState::ReadingMemory;
+                            return Poll::Ready(Some(Ok(batch)));
+                        }
+                        Poll::Ready(Some(Err(e))) => {
+                            eprintln!("[PerPartitionStream] Spill stream returned error");
                             return Poll::Ready(Some(Err(e)));
                         }
-                        pool.finalize();
-                    } // Drop the lock before continuing
-                    self.input_finished = true;
-                    // Continue to drain any remaining spilled batches
-                    continue;
+                        Poll::Ready(None) => {
+                            eprintln!("[PerPartitionStream] Spill stream ended, transitioning to ReadingMemory");
+                            // Spill stream ended keep draining the memory channel
+                            self.state = StreamState::ReadingMemory;
+                        }
+                        Poll::Pending => {
+                            eprintln!("[PerPartitionStream] Spill stream poll returned: Pending");
+                            // Spilled batch not ready yet, must wait
+                            // This preserves ordering by blocking until spill data arrives
+                            return Poll::Pending;
+                        }
+                    }
                 }
-                None => return Poll::Ready(None),
             }
         }
     }

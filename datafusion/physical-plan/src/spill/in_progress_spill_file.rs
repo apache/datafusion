@@ -118,6 +118,10 @@ impl InProgressSpillFile {
         Ok(self.in_progress_file.take())
     }
 
+    pub fn file(&self) -> Option<&RefCountedTempFile> {
+        self.in_progress_file.as_ref()
+    }
+
     /// Returns the number of batches written to this file
     pub fn batch_count(&self) -> usize {
         self.batch_count

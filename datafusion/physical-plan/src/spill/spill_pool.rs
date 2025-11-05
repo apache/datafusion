@@ -20,6 +20,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::task::Waker;
+use futures::{Stream, StreamExt};
 
 use parking_lot::Mutex;
 
@@ -148,16 +149,121 @@ pub struct SpillPool {
     /// Typically initialized from the configuration option
     /// `datafusion.execution.max_spill_file_size_bytes`.
     max_file_size_bytes: usize,
-    /// Queue of spill files (front = oldest, back = newest)
-    files: VecDeque<RefCountedTempFile>,
-    /// Current file being written to (if any)
-    current_write_file: Option<InProgressSpillFile>,
     /// SpillManager for creating files and tracking metrics
     spill_manager: Arc<SpillManager>,
     /// Wakers to notify when new data is available for readers
     wakers: Vec<Waker>,
-    /// Flag indicating no more writes will occur
-    finalized: bool,
+}
+
+/// Shared state between writer and readers for an active spill file.
+/// Protected by a Mutex to coordinate between concurrent readers and the writer.
+struct ActiveSpillFileShared {
+    /// Writer handle - taken (set to None) when finish() is called
+    writer: Option<InProgressSpillFile>,
+    /// Path to the spill file for creating readers
+    file_path: RefCountedTempFile,
+    /// Schema for creating readers
+    schema: SchemaRef,
+    /// Total number of batches written to this file
+    batches_written: usize,
+    /// Whether the writer has finished writing to this file
+    writer_finished: bool,
+}
+
+/// Reader state for a SpillFile (owned by individual SpillFile instances).
+/// This is kept separate from the shared state to avoid holding locks during I/O.
+struct SpillFileReader {
+    /// The actual stream reading from disk
+    stream: SendableRecordBatchStream,
+    /// Number of batches this reader has consumed
+    batches_read: usize,
+}
+
+// impl SpillFile {
+//     fn poll_next(&mut self) -> Option<Result<RecordBatch>> {
+//         match self {
+//             SpillFile::InProgress(active) => {
+//                 // If there are no unread batches, we cannot read yet
+//                 if active.unread_batches == 0 {
+//                     return None;
+//                 }
+//             },
+//             SpillFile::Completed(stream) => stream.next().await,
+//         }
+//     }
+// }
+
+struct SpillFile {
+    /// Shared coordination state (contains writer and batch counts)
+    shared: Arc<Mutex<ActiveSpillFileShared>>,
+    /// Reader state (lazy-initialized, owned by this SpillFile)
+    reader: Option<SpillFileReader>,
+    /// Spill manager for creating readers
+    spill_manager: Arc<SpillManager>,
+}
+
+impl Stream for SpillFile {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+
+        // Step 1: Lock shared state and check coordination
+        let (should_read, file_path, schema, batches_written) = {
+            let shared = self.shared.lock();
+
+            // Determine if we can read
+            let batches_read = self.reader.as_ref().map_or(0, |r| r.batches_read);
+
+            if batches_read < shared.batches_written {
+                // More data available to read
+                (true, shared.file_path.clone(), Arc::clone(&shared.schema), shared.batches_written)
+            } else if shared.writer_finished {
+                // No more data and writer is done - EOF
+                return Poll::Ready(None);
+            } else {
+                // Caught up to writer, but writer still active - wait
+                return Poll::Pending;
+            }
+        }; // Lock released here
+
+        // Step 2: Lazy-create reader stream if needed
+        if self.reader.is_none() && should_read {
+            match self.spill_manager.read_spill_as_stream(file_path, None) {
+                Ok(stream) => {
+                    self.reader = Some(SpillFileReader {
+                        stream,
+                        batches_read: 0,
+                    });
+                }
+                Err(e) => return Poll::Ready(Some(Err(e))),
+            }
+        }
+
+        // Step 3: Poll the reader stream (no lock held)
+        if let Some(reader) = &mut self.reader {
+            match reader.stream.poll_next_unpin(cx) {
+                Poll::Ready(Some(Ok(batch))) => {
+                    // Successfully read a batch - increment counter
+                    reader.batches_read += 1;
+                    Poll::Ready(Some(Ok(batch)))
+                }
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => {
+                    // Stream exhausted unexpectedly
+                    // This shouldn't happen if coordination is correct, but handle gracefully
+                    Poll::Ready(None)
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        } else {
+            // Should not reach here, but handle gracefully
+            Poll::Ready(None)
+        }
+    }
 }
 
 impl SpillPool {
@@ -168,26 +274,7 @@ impl SpillPool {
     /// * `max_file_size_bytes` - Maximum size per file before rotation (e.g., 100MB)
     /// * `spill_manager` - Manager for file creation and metrics
     pub fn new(max_file_size_bytes: usize, spill_manager: Arc<SpillManager>) -> Self {
-        Self {
-            max_file_size_bytes,
-            files: VecDeque::new(),
-            current_write_file: None,
-            spill_manager,
-            wakers: Vec::new(),
-            finalized: false,
-        }
-    }
-
-    /// Marks the pool as finalized, indicating no more writes will occur.
-    /// This allows readers to know when to stop waiting for more data.
-    pub fn finalize(&mut self) {
-        self.finalized = true;
-        self.wake(); // Wake readers to check finalized status
-    }
-
-    /// Returns true if the pool has been finalized
-    pub fn is_finalized(&self) -> bool {
-        self.finalized
+        todo!()
     }
 
     /// Creates a stream reader for this pool.
@@ -217,42 +304,7 @@ impl SpillPool {
     ///
     /// Returns an error if disk I/O fails or disk quota is exceeded.
     pub fn push_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        if batch.num_rows() == 0 {
-            // Skip empty batches
-            return Ok(());
-        }
-
-        let batch_size = batch.get_array_memory_size();
-
-        // Check if we need to rotate to a new file
-        let needs_rotation = if let Some(ref file) = self.current_write_file {
-            // Rotate if adding this batch would exceed the max file size
-            file.estimated_size() + batch_size > self.max_file_size_bytes
-        } else {
-            // No current file, need to create one
-            true
-        };
-
-        if needs_rotation && self.current_write_file.is_some() {
-            // Finish current file and add to queue
-            self.finish_current_file()?;
-        }
-
-        // Create new file if needed
-        if self.current_write_file.is_none() {
-            self.current_write_file =
-                Some(self.spill_manager.create_in_progress_file("SpillPool")?);
-        }
-
-        // Append batch to current file
-        if let Some(ref mut file) = self.current_write_file {
-            file.append_batch(batch)?;
-        }
-
-        // Wake any waiting readers
-        self.wake();
-
-        Ok(())
+        todo!()
     }
 
     /// Registers a waker to be notified when new data is available
@@ -269,45 +321,6 @@ impl SpillPool {
             waker.wake();
         }
     }
-
-    /// Finalizes the current write file and adds it to the files queue.
-    ///
-    /// This is called automatically when files reach the size limit, but can
-    /// also be called explicitly to ensure all pending data is available for reading.
-    pub fn flush(&mut self) -> Result<()> {
-        if self.current_write_file.is_some() {
-            self.finish_current_file()?;
-        }
-        Ok(())
-    }
-
-    // Private helper methods
-
-    /// Finishes the current write file and moves it to the files queue.
-    fn finish_current_file(&mut self) -> Result<()> {
-        if let Some(mut file) = self.current_write_file.take() {
-            // Finish writing to get the final file
-            let finished_file = file.finish()?;
-
-            if let Some(temp_file) = finished_file {
-                // Add to queue
-                self.files.push_back(temp_file);
-            }
-
-            // Wake any waiting readers since a new complete file is available
-            self.wake();
-        }
-
-        Ok(())
-    }
-}
-
-impl Drop for SpillPool {
-    fn drop(&mut self) {
-        // Flush any pending writes to ensure metrics are accurate
-        // We ignore errors here since Drop doesn't allow returning errors
-        let _ = self.flush();
-    }
 }
 
 /// A stream that reads from a SpillPool in FIFO order.
@@ -320,10 +333,9 @@ impl Drop for SpillPool {
 struct SpillPoolStream {
     /// Shared reference to the spill pool
     spill_pool: Arc<Mutex<SpillPool>>,
-    /// Current stream being read from
-    current_stream: Option<SendableRecordBatchStream>,
-    /// Schema for the batches
+    /// Schema of the spilled data
     schema: SchemaRef,
+    // Other state?
 }
 
 impl SpillPoolStream {
@@ -333,772 +345,23 @@ impl SpillPoolStream {
     ///
     /// * `spill_pool` - Shared reference to the pool to read from
     pub fn new(spill_pool: Arc<Mutex<SpillPool>>) -> Self {
-        let schema = {
-            let pool = spill_pool.lock();
-            pool.spill_manager.schema()
-        };
-
-        Self {
-            spill_pool,
-            current_stream: None,
-            schema,
-        }
+        todo!()
     }
 }
 
-impl futures::Stream for SpillPoolStream {
+impl Stream for SpillPoolStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        use futures::StreamExt;
-        use std::task::Poll;
-
-        loop {
-            // If we have a current stream, try to read from it
-            if let Some(stream) = &mut self.current_stream {
-                match stream.poll_next_unpin(cx) {
-                    Poll::Ready(Some(Ok(batch))) => {
-                        return Poll::Ready(Some(Ok(batch)));
-                    }
-                    Poll::Ready(Some(Err(e))) => {
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                    Poll::Ready(None) => {
-                        // Current stream exhausted (finished reading a completed file)
-                        self.current_stream = None;
-                        // Continue loop to try getting next file
-                    }
-                    Poll::Pending => {
-                        // Stream not ready yet
-                        return Poll::Pending;
-                    }
-                }
-            }
-
-            // No current stream, try to get the next file to read
-            // Only read from completed files in the queue
-            let mut pool = self.spill_pool.lock();
-
-            if let Some(file) = pool.files.pop_front() {
-                // We have a completed file to read
-                let spill_manager = Arc::clone(&pool.spill_manager);
-                drop(pool); // Release lock before creating stream
-
-                match spill_manager.read_spill_as_stream(file, None) {
-                    Ok(stream) => {
-                        self.current_stream = Some(stream);
-                        // Continue loop to poll the new stream
-                    }
-                    Err(e) => {
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                }
-            } else {
-                // No completed files available
-                let is_finalized = pool.is_finalized();
-                if is_finalized {
-                    // Pool is finalized and no more files - we're done
-                    return Poll::Ready(None);
-                }
-                // Register waker and wait for more files
-                pool.register_waker(cx.waker().clone());
-                return Poll::Pending;
-            }
-        }
+        todo!();
     }
 }
 
 impl RecordBatchStream for SpillPoolStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common_runtime::SpawnedTask;
-    use datafusion_execution::runtime_env::RuntimeEnv;
-    use futures::StreamExt;
-    use std::task::Poll;
-    use tokio;
-
-    // ============================================================================
-    // Test Utilities
-    // ============================================================================
-
-    fn create_test_schema() -> SchemaRef {
-        Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]))
-    }
-
-    fn create_test_batch(start: i32, count: usize) -> RecordBatch {
-        let schema = create_test_schema();
-        let a: ArrayRef = Arc::new(Int32Array::from(
-            (start..start + count as i32).collect::<Vec<_>>(),
-        ));
-        let b: ArrayRef = Arc::new(Int32Array::from(
-            (start * 10..start * 10 + count as i32 * 10)
-                .step_by(10)
-                .collect::<Vec<_>>(),
-        ));
-        RecordBatch::try_new(schema, vec![a, b]).unwrap()
-    }
-
-    fn create_spill_pool(max_file_size: usize) -> SpillPool {
-        let env = Arc::new(RuntimeEnv::default());
-        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let schema = create_test_schema();
-        let spill_manager =
-            Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
-
-        SpillPool::new(max_file_size, spill_manager)
-    }
-
-    /// Helper to collect all batches from a stream
-    async fn collect_batches(
-        mut stream: SendableRecordBatchStream,
-    ) -> Result<Vec<RecordBatch>> {
-        let mut batches = Vec::new();
-        while let Some(result) = stream.next().await {
-            batches.push(result?);
-        }
-        Ok(batches)
-    }
-
-    // ============================================================================
-    // Basic Functionality Tests
-    // ============================================================================
-
-    #[tokio::test]
-    async fn test_empty_pool_stream() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-        pool.finalize(); // Mark as done with no data
-
-        let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool);
-
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 0);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_single_batch() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-
-        // Push one batch
-        let batch1 = create_test_batch(0, 10);
-        pool.push_batch(&batch1)?;
-        pool.flush()?;
-        pool.finalize();
-
-        let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool);
-
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].num_rows(), 10);
-        assert_eq!(batches[0].num_columns(), 2);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_multiple_batches_single_file() -> Result<()> {
-        let mut pool = create_spill_pool(10 * 1024 * 1024); // Large file size
-
-        // Push multiple batches
-        for i in 0..5 {
-            let batch = create_test_batch(i * 10, 10);
-            pool.push_batch(&batch)?;
-        }
-        pool.flush()?;
-        pool.finalize();
-
-        let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool);
-
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 5);
-
-        // Verify FIFO order
-        for (i, batch) in batches.iter().enumerate() {
-            assert_eq!(batch.num_rows(), 10);
-            let col_a = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            assert_eq!(col_a.value(0), (i as i32) * 10);
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_file_rotation_on_size_limit() -> Result<()> {
-        // Small file size to force rotation
-        let mut pool = create_spill_pool(500); // ~500 bytes
-
-        // Push multiple batches - should create multiple files
-        for i in 0..10 {
-            let batch = create_test_batch(i * 5, 5);
-            pool.push_batch(&batch)?;
-        }
-        pool.flush()?;
-        pool.finalize();
-
-        let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool);
-
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 10);
-
-        // Verify all batches in FIFO order
-        for (i, batch) in batches.iter().enumerate() {
-            let col_a = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            assert_eq!(col_a.value(0), (i as i32) * 5);
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_empty_batches_skipped() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-
-        let batch1 = create_test_batch(0, 10);
-        let empty_batch = RecordBatch::new_empty(create_test_schema());
-        let batch2 = create_test_batch(10, 10);
-
-        pool.push_batch(&batch1)?;
-        pool.push_batch(&empty_batch)?; // Should be skipped
-        pool.push_batch(&batch2)?;
-        pool.flush()?;
-        pool.finalize();
-
-        let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool);
-
-        let batches = collect_batches(stream).await?;
-        // Should only have 2 batches (empty one skipped)
-        assert_eq!(batches.len(), 2);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_large_batches() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-
-        // Create larger batches
-        let batch1 = create_test_batch(0, 1000);
-        let batch2 = create_test_batch(1000, 1000);
-
-        pool.push_batch(&batch1)?;
-        pool.push_batch(&batch2)?;
-        pool.flush()?;
-        pool.finalize();
-
-        let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool);
-
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].num_rows(), 1000);
-        assert_eq!(batches[1].num_rows(), 1000);
-
-        Ok(())
-    }
-
-    // ============================================================================
-    // Stream API Tests
-    // ============================================================================
-
-    #[tokio::test]
-    async fn test_stream_blocks_when_no_data() -> Result<()> {
-        let pool = create_spill_pool(1024 * 1024);
-
-        let pool = Arc::new(Mutex::new(pool));
-        let mut stream = SpillPool::reader(Arc::clone(&pool));
-
-        // Poll should return Pending since no data and not finalized
-        let poll_result = futures::poll!(stream.next());
-        assert!(matches!(poll_result, Poll::Pending));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_stream_wakes_on_push() -> Result<()> {
-        let pool = create_spill_pool(1024 * 1024);
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        let pool_clone = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(pool_clone);
-
-        // Spawn a task that will push data after a delay
-        let writer_pool = Arc::clone(&pool_arc);
-        let _writer = SpawnedTask::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            let mut pool = writer_pool.lock();
-            pool.push_batch(&create_test_batch(0, 10)).unwrap();
-            pool.flush().unwrap();
-            pool.finalize();
-        });
-
-        // This should wait for data and then return it
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 1);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_stream_wakes_on_flush() -> Result<()> {
-        let pool = create_spill_pool(1024 * 1024);
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        let pool_clone = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(pool_clone);
-
-        // Push without flush first
-        {
-            let mut pool = pool_arc.lock();
-            pool.push_batch(&create_test_batch(0, 10)).unwrap();
-            // Don't flush yet - data is in current_write_file
-        }
-
-        // Spawn task to flush after delay
-        let writer_pool = Arc::clone(&pool_arc);
-        let _writer = SpawnedTask::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            let mut pool = writer_pool.lock();
-            pool.flush().unwrap();
-            pool.finalize();
-        });
-
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 1);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_stream_wakes_on_finalize() -> Result<()> {
-        let pool = create_spill_pool(1024 * 1024);
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        let pool_clone = Arc::clone(&pool_arc);
-        let mut stream = SpillPool::reader(pool_clone);
-
-        // First poll should be pending
-        let poll_result = futures::poll!(stream.next());
-        assert!(matches!(poll_result, Poll::Pending));
-
-        // Finalize after delay
-        let writer_pool = Arc::clone(&pool_arc);
-        let _writer = SpawnedTask::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            writer_pool.lock().finalize();
-        });
-
-        // Stream should eventually return None
-        let result = stream.next().await;
-        assert!(result.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_finalize_before_flush() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-
-        // Push data but DON'T flush
-        pool.push_batch(&create_test_batch(0, 10))?;
-        pool.finalize(); // Finalize without flush
-
-        let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool);
-
-        // Data in current_write_file should still be lost since not flushed
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 0);
-
-        Ok(())
-    }
-
-    // ============================================================================
-    // Concurrent Reader/Writer Tests
-    // ============================================================================
-
-    #[tokio::test]
-    async fn test_concurrent_push_and_read() -> Result<()> {
-        let pool = create_spill_pool(1024 * 1024);
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        let writer_pool = Arc::clone(&pool_arc);
-        let writer = SpawnedTask::spawn(async move {
-            for i in 0..10 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                let mut pool = writer_pool.lock();
-                pool.push_batch(&create_test_batch(i * 10, 10)).unwrap();
-                pool.flush().unwrap();
-            }
-            writer_pool.lock().finalize();
-        });
-
-        let reader_pool = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(reader_pool);
-        let reader = SpawnedTask::spawn(async move { collect_batches(stream).await });
-
-        // Wait for both tasks
-        writer.await.unwrap();
-        let batches = reader.await.unwrap()?;
-
-        assert_eq!(batches.len(), 10);
-        for (i, batch) in batches.iter().enumerate() {
-            let col_a = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            assert_eq!(col_a.value(0), (i as i32) * 10);
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_reader_catches_up_to_writer() -> Result<()> {
-        let pool = create_spill_pool(1024 * 1024);
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        // Start reader before any data is written
-        let reader_pool = Arc::clone(&pool_arc);
-        let mut stream = SpillPool::reader(reader_pool);
-
-        // Should return pending
-        let poll_result = futures::poll!(stream.next());
-        assert!(matches!(poll_result, Poll::Pending));
-
-        // Now add data
-        {
-            let mut pool = pool_arc.lock();
-            pool.push_batch(&create_test_batch(0, 10))?;
-            pool.flush()?;
-            pool.finalize();
-        }
-
-        // Now stream should have data
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 1);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_multiple_readers_same_pool() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-
-        // Push some batches
-        for i in 0..5 {
-            pool.push_batch(&create_test_batch(i * 10, 10))?;
-        }
-        pool.flush()?;
-        pool.finalize();
-
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        // Create two readers
-        let stream1 = SpillPool::reader(Arc::clone(&pool_arc));
-        let stream2 = SpillPool::reader(Arc::clone(&pool_arc));
-
-        // Read from both concurrently
-        let reader1 = SpawnedTask::spawn(async move { collect_batches(stream1).await });
-        let reader2 = SpawnedTask::spawn(async move { collect_batches(stream2).await });
-
-        let batches1 = reader1.await.unwrap()?;
-        let batches2 = reader2.await.unwrap()?;
-
-        // Each reader should consume different batches (pop_front removes from queue)
-        // The total number should be 5, but distributed between readers
-        let total = batches1.len() + batches2.len();
-        assert_eq!(total, 5);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_file_cutover_during_read() -> Result<()> {
-        let pool = create_spill_pool(500); // Small size for rotation
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        let writer_pool = Arc::clone(&pool_arc);
-        let writer = SpawnedTask::spawn(async move {
-            // Write multiple batches that will cause rotation
-            for i in 0..8 {
-                {
-                    let mut pool = writer_pool.lock();
-                    pool.push_batch(&create_test_batch(i * 5, 5)).unwrap();
-                    pool.flush().unwrap();
-                } // Drop lock before sleep
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            }
-            writer_pool.lock().finalize();
-        });
-
-        // Read concurrently
-        let reader_pool = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(reader_pool);
-        let reader = SpawnedTask::spawn(async move { collect_batches(stream).await });
-
-        writer.await.unwrap();
-        let batches = reader.await.unwrap()?;
-
-        // Should get all 8 batches despite file rotation
-        assert_eq!(batches.len(), 8);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_file_cutover_during_write() -> Result<()> {
-        let mut pool = create_spill_pool(300); // Very small to force frequent rotation
-
-        // Push batches that will definitely cause rotation
-        for i in 0..5 {
-            let batch = create_test_batch(i * 10, 10);
-            pool.push_batch(&batch)?;
-            // Don't flush after each - let rotation happen naturally
-        }
-        pool.flush()?;
-        pool.finalize();
-
-        let pool = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool);
-
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 5);
-
-        Ok(())
-    }
-
-    // ============================================================================
-    // Garbage Collection Tests
-    // ============================================================================
-
-    #[tokio::test]
-    async fn test_file_cleanup_after_read() -> Result<()> {
-        let mut pool = create_spill_pool(500);
-
-        // Create multiple files
-        for i in 0..5 {
-            pool.push_batch(&create_test_batch(i * 10, 10))?;
-            pool.flush()?; // Each batch in its own file
-        }
-
-        // Verify files exist before reading
-        let initial_file_count = pool.files.len();
-        assert_eq!(initial_file_count, 5);
-
-        pool.finalize();
-
-        let pool_arc = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(Arc::clone(&pool_arc));
-
-        // Read all batches
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 5);
-
-        // All files should be consumed (dropped from queue)
-        let final_file_count = pool_arc.lock().files.len();
-        assert_eq!(final_file_count, 0);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cleanup_with_rotation() -> Result<()> {
-        let pool = create_spill_pool(400);
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        // Write and read concurrently
-        let writer_pool = Arc::clone(&pool_arc);
-        let writer = SpawnedTask::spawn(async move {
-            for i in 0..10 {
-                {
-                    let mut pool = writer_pool.lock();
-                    pool.push_batch(&create_test_batch(i * 10, 10)).unwrap();
-                    pool.flush().unwrap();
-                } // Drop lock before sleep
-                tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-            }
-            writer_pool.lock().finalize();
-        });
-
-        let reader_pool = Arc::clone(&pool_arc);
-        let stream = SpillPool::reader(reader_pool);
-        let reader = SpawnedTask::spawn(async move {
-            let mut batches = Vec::new();
-            let mut stream = stream;
-            while let Some(result) = stream.next().await {
-                batches.push(result.unwrap());
-                // Small delay to let writer create more files
-                tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
-            }
-            batches
-        });
-
-        writer.await.unwrap();
-        let batches = reader.await.unwrap();
-
-        assert_eq!(batches.len(), 10);
-
-        // All files should be cleaned up
-        let final_file_count = pool_arc.lock().files.len();
-        assert_eq!(final_file_count, 0);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cleanup_with_unflushed_file() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-
-        // Create some flushed files
-        for i in 0..3 {
-            pool.push_batch(&create_test_batch(i * 10, 10))?;
-            pool.flush()?;
-        }
-
-        // Add unflushed data
-        pool.push_batch(&create_test_batch(30, 10))?;
-        // Don't flush!
-
-        // current_write_file should have data
-        assert!(pool.current_write_file.is_some());
-        assert_eq!(pool.files.len(), 3);
-
-        pool.finalize();
-
-        let pool_arc = Arc::new(Mutex::new(pool));
-        let stream = SpillPool::reader(pool_arc);
-
-        // Should only get the 3 flushed batches
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 3);
-
-        Ok(())
-    }
-
-    // ============================================================================
-    // Edge Cases & Error Handling Tests
-    // ============================================================================
-
-    #[tokio::test]
-    async fn test_interleaved_flush() -> Result<()> {
-        let pool = create_spill_pool(1024 * 1024);
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        // Push → flush
-        {
-            let mut pool = pool_arc.lock();
-            pool.push_batch(&create_test_batch(0, 10))?;
-            pool.flush()?;
-        }
-
-        // Read one batch
-        let stream = SpillPool::reader(Arc::clone(&pool_arc));
-        let mut stream = stream;
-        let batch1 = stream.next().await.unwrap()?;
-        assert_eq!(batch1.num_rows(), 10);
-
-        // Push → flush again
-        {
-            let mut pool = pool_arc.lock();
-            pool.push_batch(&create_test_batch(10, 10))?;
-            pool.flush()?;
-        }
-
-        // Read second batch from same stream
-        let batch2 = stream.next().await.unwrap()?;
-        assert_eq!(batch2.num_rows(), 10);
-
-        // Finalize and verify stream ends
-        pool_arc.lock().finalize();
-        let batch3 = stream.next().await;
-        assert!(batch3.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_flush_empty_pool() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-
-        // Flush with no data should be no-op
-        pool.flush()?;
-        pool.flush()?; // Multiple flushes
-
-        assert_eq!(pool.files.len(), 0);
-        assert!(pool.current_write_file.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_finalize_idempotent() -> Result<()> {
-        let mut pool = create_spill_pool(1024 * 1024);
-
-        pool.push_batch(&create_test_batch(0, 10))?;
-        pool.flush()?;
-
-        // Multiple finalize calls should be safe
-        pool.finalize();
-        assert!(pool.is_finalized());
-        pool.finalize();
-        assert!(pool.is_finalized());
-        pool.finalize();
-        assert!(pool.is_finalized());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_drop_flushes_current_file() -> Result<()> {
-        let pool = create_spill_pool(1024 * 1024);
-        let pool_arc = Arc::new(Mutex::new(pool));
-
-        // Push without flush
-        {
-            let mut pool = pool_arc.lock();
-            pool.push_batch(&create_test_batch(0, 10)).unwrap();
-            pool.flush().unwrap();
-            pool.finalize();
-        }
-
-        // Drop should trigger flush in Drop impl
-        // (though in this case we already flushed)
-
-        let stream = SpillPool::reader(pool_arc);
-        let batches = collect_batches(stream).await?;
-        assert_eq!(batches.len(), 1);
-
-        Ok(())
     }
 }
