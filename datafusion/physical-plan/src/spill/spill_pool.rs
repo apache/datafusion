@@ -142,7 +142,7 @@ impl SpillPoolWriter {
 
             let writer = spill_manager.create_in_progress_file("SpillPool")?;
             // Clone the file so readers can access it immediately
-            let file = writer.file().unwrap().clone();
+            let file = writer.file().expect("InProgressSpillFile should always have a file when it is first created").clone();
 
             let file_shared = Arc::new(Mutex::new(ActiveSpillFileShared {
                 writer: Some(writer),
@@ -671,6 +671,18 @@ mod tests {
         channel(max_file_size, spill_manager)
     }
 
+    fn create_spill_channel_with_metrics(
+        max_file_size: usize,
+    ) -> (SpillPoolWriter, SendableRecordBatchStream, SpillMetrics) {
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let schema = create_test_schema();
+        let spill_manager = Arc::new(SpillManager::new(env, metrics.clone(), schema));
+
+        let (writer, reader) = channel(max_file_size, spill_manager);
+        (writer, reader, metrics)
+    }
+
     #[tokio::test]
     async fn test_basic_write_and_read() -> Result<()> {
         let (mut writer, mut reader) = create_spill_channel(1024 * 1024);
@@ -783,12 +795,30 @@ mod tests {
         let batch1 = create_test_batch(0, 10);
         let batch_size = batch1.get_array_memory_size() + 1;
 
-        let (mut writer, mut reader) = create_spill_channel(batch_size);
+        let (mut writer, mut reader, metrics) =
+            create_spill_channel_with_metrics(batch_size);
 
         // Write first batch (should fit in first file)
         writer.push_batch(&batch1)?;
 
-        // Write second batch (should trigger rotation to second file)
+        // Check metrics after first batch - file created but not finalized yet
+        assert_eq!(
+            metrics.spill_file_count.value(),
+            1,
+            "Should have created 1 file after first batch"
+        );
+        assert_eq!(
+            metrics.spilled_bytes.value(),
+            0,
+            "Spilled bytes should be 0 before file finalization"
+        );
+        assert_eq!(
+            metrics.spilled_rows.value(),
+            10,
+            "Should have spilled 10 rows from first batch"
+        );
+
+        // Write second batch (should trigger rotation - finalize first file)
         let batch2 = create_test_batch(10, 10);
         assert!(
             batch2.get_array_memory_size() <= batch_size,
@@ -802,12 +832,49 @@ mod tests {
         );
         writer.push_batch(&batch2)?;
 
-        // Read both batches
+        // Check metrics after rotation - first file finalized, but second file not created yet
+        // (new file created lazily on next push_batch call)
+        assert_eq!(
+            metrics.spill_file_count.value(),
+            1,
+            "Should still have 1 file (second file not created until next write)"
+        );
+        assert!(
+            metrics.spilled_bytes.value() > 0,
+            "Spilled bytes should be > 0 after first file finalized (got {})",
+            metrics.spilled_bytes.value()
+        );
+        assert_eq!(
+            metrics.spilled_rows.value(),
+            20,
+            "Should have spilled 20 total rows (10 + 10)"
+        );
+
+        // Write a third batch to confirm rotation occurred (creates second file)
+        let batch3 = create_test_batch(20, 5);
+        writer.push_batch(&batch3)?;
+
+        // Now check that second file was created
+        assert_eq!(
+            metrics.spill_file_count.value(),
+            2,
+            "Should have created 2 files after writing to new file"
+        );
+        assert_eq!(
+            metrics.spilled_rows.value(),
+            25,
+            "Should have spilled 25 total rows (10 + 10 + 5)"
+        );
+
+        // Read all three batches
         let result1 = reader.next().await.unwrap()?;
         assert_eq!(result1.num_rows(), 10);
 
         let result2 = reader.next().await.unwrap()?;
         assert_eq!(result2.num_rows(), 10);
+
+        let result3 = reader.next().await.unwrap()?;
+        assert_eq!(result3.num_rows(), 5);
 
         Ok(())
     }
@@ -821,13 +888,34 @@ mod tests {
         let batch_size = batches[0].get_array_memory_size() * 2 + 1;
 
         // Very small max_file_size to force frequent rotations
-        let (mut writer, mut reader) = create_spill_channel(batch_size);
+        let (mut writer, mut reader, metrics) =
+            create_spill_channel_with_metrics(batch_size);
 
         // Write many batches to cause multiple rotations
         for i in 0..10 {
             let batch = create_test_batch(i * 10, 10);
             writer.push_batch(&batch)?;
         }
+
+        // Check metrics after all writes - should have multiple files due to rotations
+        // With batch_size = 2 * one_batch + 1, each file fits ~2 batches before rotating
+        // 10 batches should create multiple files (exact count depends on rotation timing)
+        let file_count = metrics.spill_file_count.value();
+        assert!(
+            file_count >= 4,
+            "Should have created at least 4 files with multiple rotations (got {})",
+            file_count
+        );
+        assert!(
+            metrics.spilled_bytes.value() > 0,
+            "Spilled bytes should be > 0 after rotations (got {})",
+            metrics.spilled_bytes.value()
+        );
+        assert_eq!(
+            metrics.spilled_rows.value(),
+            100,
+            "Should have spilled 100 total rows (10 batches * 10 rows)"
+        );
 
         // Read all batches and verify order
         for i in 0..10 {
@@ -853,11 +941,23 @@ mod tests {
     #[tokio::test]
     async fn test_single_batch_larger_than_limit() -> Result<()> {
         // Very small limit
-        let (mut writer, mut reader) = create_spill_channel(100);
+        let (mut writer, mut reader, metrics) = create_spill_channel_with_metrics(100);
 
         // Write a batch that exceeds the limit
         let large_batch = create_test_batch(0, 100);
         writer.push_batch(&large_batch)?;
+
+        // Check metrics after large batch - should trigger rotation immediately
+        assert_eq!(
+            metrics.spill_file_count.value(),
+            1,
+            "Should have created 1 file for large batch"
+        );
+        assert_eq!(
+            metrics.spilled_rows.value(),
+            100,
+            "Should have spilled 100 rows from large batch"
+        );
 
         // Should still write and read successfully
         let result = reader.next().await.unwrap()?;
@@ -866,6 +966,18 @@ mod tests {
         // Next batch should go to a new file
         let batch2 = create_test_batch(100, 10);
         writer.push_batch(&batch2)?;
+
+        // Check metrics after second batch - should have rotated to a new file
+        assert_eq!(
+            metrics.spill_file_count.value(),
+            2,
+            "Should have created 2 files after rotation"
+        );
+        assert_eq!(
+            metrics.spilled_rows.value(),
+            110,
+            "Should have spilled 110 total rows (100 + 10)"
+        );
 
         let result2 = reader.next().await.unwrap()?;
         assert_eq!(result2.num_rows(), 10);
@@ -896,12 +1008,46 @@ mod tests {
         let batch_size = batch.get_array_memory_size();
 
         // Set max_file_size to exactly the batch size
-        let (mut writer, mut reader) = create_spill_channel(batch_size);
+        let (mut writer, mut reader, metrics) =
+            create_spill_channel_with_metrics(batch_size);
 
-        // Write two batches
+        // Write first batch (exactly at the size limit)
         writer.push_batch(&batch)?;
+
+        // Check metrics after first batch - should NOT rotate yet (size == limit, not >)
+        assert_eq!(
+            metrics.spill_file_count.value(),
+            1,
+            "Should have created 1 file after first batch at exact boundary"
+        );
+        assert_eq!(
+            metrics.spilled_rows.value(),
+            10,
+            "Should have spilled 10 rows from first batch"
+        );
+
+        // Write second batch (exceeds the limit, should trigger rotation)
         let batch2 = create_test_batch(10, 10);
         writer.push_batch(&batch2)?;
+
+        // Check metrics after second batch - rotation triggered, first file finalized
+        // Note: second file not created yet (lazy creation on next write)
+        assert_eq!(
+            metrics.spill_file_count.value(),
+            1,
+            "Should still have 1 file after rotation (second file created lazily)"
+        );
+        assert_eq!(
+            metrics.spilled_rows.value(),
+            20,
+            "Should have spilled 20 total rows (10 + 10)"
+        );
+        // Verify first file was finalized by checking spilled_bytes
+        assert!(
+            metrics.spilled_bytes.value() > 0,
+            "Spilled bytes should be > 0 after file finalization (got {})",
+            metrics.spilled_bytes.value()
+        );
 
         // Both should be readable
         let result1 = reader.next().await.unwrap()?;
@@ -909,6 +1055,15 @@ mod tests {
 
         let result2 = reader.next().await.unwrap()?;
         assert_eq!(result2.num_rows(), 10);
+
+        // Spill another batch, now we should see the second file created
+        let batch3 = create_test_batch(20, 5);
+        writer.push_batch(&batch3)?;
+        assert_eq!(
+            metrics.spill_file_count.value(),
+            2,
+            "Should have created 2 files after writing to new file"
+        );
 
         Ok(())
     }
