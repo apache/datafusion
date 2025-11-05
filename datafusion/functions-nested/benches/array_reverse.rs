@@ -19,15 +19,19 @@
 extern crate criterion;
 extern crate arrow;
 
-use std::sync::Arc;
+use std::{hint::black_box, sync::Arc};
 
 use crate::criterion::Criterion;
 use arrow::{
-    array::{FixedSizeListArray, Int32Array, ListArray, ListViewArray},
+    array::{ArrayRef, FixedSizeListArray, Int32Array, ListArray, ListViewArray},
     buffer::{OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field},
 };
 use datafusion_functions_nested::reverse::array_reverse_inner;
+
+fn array_reverse(array: &ArrayRef) -> ArrayRef {
+    black_box(array_reverse_inner(&[array.clone()]).unwrap())
+}
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Construct large arrays for benchmarking
@@ -37,36 +41,36 @@ fn criterion_benchmark(c: &mut Criterion) {
     let offsets = ScalarBuffer::from(offsets);
     let sizes: Vec<i32> = vec![step_size as i32; array_len / step_size];
     let values = (0..array_len as i32).collect::<Vec<i32>>();
-    let list_array = ListArray::new(
+    let list_array: ArrayRef = Arc::new(ListArray::new(
         Arc::new(Field::new("a", DataType::Int32, false)),
         OffsetBuffer::new(offsets.clone()),
         Arc::new(Int32Array::from(values.clone())),
         None,
-    );
-    let fixed_size_list_array = FixedSizeListArray::new(
+    ));
+    let fixed_size_list_array: ArrayRef = Arc::new(FixedSizeListArray::new(
         Arc::new(Field::new("a", DataType::Int32, false)),
         step_size as i32,
         Arc::new(Int32Array::from(values.clone())),
         None,
-    );
-    let list_view_array = ListViewArray::new(
+    ));
+    let list_view_array: ArrayRef = Arc::new(ListViewArray::new(
         Arc::new(Field::new("a", DataType::Int32, false)),
         offsets,
         ScalarBuffer::from(sizes),
         Arc::new(Int32Array::from(values)),
         None,
-    );
+    ));
 
     c.bench_function("array_reverse_list", |b| {
-        b.iter(|| array_reverse_inner(&[Arc::new(list_array.clone())]))
+        b.iter(|| array_reverse(&list_array))
     });
 
     c.bench_function("array_reverse_fixed_size_list", |b| {
-        b.iter(|| array_reverse_inner(&[Arc::new(fixed_size_list_array.clone())]))
+        b.iter(|| array_reverse(&fixed_size_list_array))
     });
 
     c.bench_function("array_reverse_list_view", |b| {
-        b.iter(|| array_reverse_inner(&[Arc::new(list_view_array.clone())]))
+        b.iter(|| array_reverse(&list_view_array))
     });
 }
 
