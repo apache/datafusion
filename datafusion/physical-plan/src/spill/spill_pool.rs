@@ -72,6 +72,12 @@ impl SpillPoolShared {
 }
 
 /// Writer for a spill pool. Provides exclusive write access with FIFO semantics.
+///
+/// Created by [`channel`]. See that function for architecture diagrams and usage examples.
+///
+/// The writer automatically manages file rotation based on the `max_file_size_bytes`
+/// configured in [`channel`]. When dropped, it finalizes the current file so readers
+/// can access all written data.
 pub struct SpillPoolWriter {
     /// Maximum size in bytes before rotating to a new file
     max_file_size_bytes: usize,
@@ -86,6 +92,35 @@ impl SpillPoolWriter {
     ///
     /// If the current file would exceed `max_file_size_bytes` after adding
     /// this batch, the file is finalized and a new one is started.
+    ///
+    /// See [`channel`] for overall architecture and examples.
+    ///
+    /// # File Rotation Logic
+    ///
+    /// ```text
+    /// push_batch()
+    ///      │
+    ///      ▼
+    /// Current file exists?
+    ///      │
+    ///      ├─ No ──▶ Create new file ──▶ Add to shared queue
+    ///      │                               Wake readers
+    ///      ▼
+    /// Write batch to current file
+    ///      │
+    ///      ▼
+    /// estimated_size > max_file_size_bytes?
+    ///      │
+    ///      ├─ No ──▶ Keep current file for next batch
+    ///      │
+    ///      ▼
+    /// Yes: finish() current file
+    ///      Mark writer_finished = true
+    ///      Wake readers
+    ///      │
+    ///      ▼
+    /// Next push_batch() creates new file
+    /// ```
     ///
     /// # Errors
     ///
@@ -194,29 +229,139 @@ impl Drop for SpillPoolWriter {
 /// write access, and the reader can consume batches in FIFO order. The reader
 /// can start reading immediately while the writer continues to write more data.
 ///
+/// # Architecture
+///
+/// ```text
+/// ┌─────────────────────────────────────────────────────────────────────────┐
+/// │                            SpillPool                                    │
+/// │                                                                         │
+/// │  Writer Side              Shared State              Reader Side         │
+/// │  ───────────              ────────────              ───────────         │
+/// │                                                                         │
+/// │  SpillPoolWriter    ┌────────────────────┐    SpillPoolReader           │
+/// │       │             │  VecDeque<File>    │          │                   │
+/// │       │             │  ┌────┐┌────┐      │          │                   │
+/// │  push_batch()       │  │ F1 ││ F2 │ ...  │      next().await            │
+/// │       │             │  └────┘└────┘      │          │                   │
+/// │       ▼             │   (FIFO order)     │          ▼                   │
+/// │  ┌─────────┐        │                    │    ┌──────────┐              │
+/// │  │Current  │───────▶│ Coordination:      │◀───│ Current  │              │
+/// │  │Write    │        │ - Wakers           │    │ Read     │              │
+/// │  │File     │        │ - Batch counts     │    │ File     │              │
+/// │  └─────────┘        │ - Writer status    │    └──────────┘              │
+/// │       │             └────────────────────┘          │                   │
+/// │       │                                              │                  │
+/// │  Size > limit?                                Read all batches?         │
+/// │       │                                              │                  │
+/// │       ▼                                              ▼                  │
+/// │  Rotate to new file                            Pop from queue           │
+/// └─────────────────────────────────────────────────────────────────────────┘
+///
+/// Writer produces → Shared FIFO queue → Reader consumes
+/// ```
+///
+/// # File State Machine
+///
+/// Each file in the pool coordinates between writer and reader:
+///
+/// ```text
+///                Writer View              Reader View
+///                ───────────              ───────────
+///
+/// Created        writer: Some(..)         batches_read: 0
+///                batches_written: 0       (waiting for data)
+///                       │
+///                       ▼
+/// Writing        append_batch()           Can read if:
+///                batches_written++        batches_read < batches_written
+///                wake readers
+///                       │                        │
+///                       │                        ▼
+///                ┌──────┴──────┐          poll_next() → batch
+///                │             │          batches_read++
+///                ▼             ▼
+///          Size > limit?  More data?
+///                │             │
+///                │             └─▶ Yes ──▶ Continue writing
+///                ▼
+///          finish()                   Reader catches up:
+///          writer_finished = true     batches_read == batches_written
+///          wake readers                       │
+///                │                            ▼
+///                └─────────────────────▶ Returns Poll::Ready(None)
+///                                       File complete, pop from queue
+/// ```
+///
 /// # Arguments
 ///
-/// * `max_file_size_bytes` - Maximum size per file before rotation
-/// * `spill_manager` - Manager for file creation and metrics
+/// * `max_file_size_bytes` - Maximum size per file before rotation. When a file
+///   exceeds this size, the writer automatically rotates to a new file.
+/// * `spill_manager` - Manager for file creation and metrics tracking
 ///
 /// # Returns
 ///
-/// A tuple of `(SpillPoolWriter, SpillPoolReader)` that share the same underlying pool
+/// A tuple of `(SpillPoolWriter, SendableRecordBatchStream)` that share the same
+/// underlying pool. The reader is returned as a stream for immediate use with
+/// async stream combinators.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use std::sync::Arc;
+/// use arrow::array::{ArrayRef, Int32Array};
+/// use arrow::datatypes::{DataType, Field, Schema};
+/// use arrow::record_batch::RecordBatch;
+/// use datafusion_execution::runtime_env::RuntimeEnv;
+/// use futures::StreamExt;
+///
+/// # use datafusion_physical_plan::spill::spill_pool;
+/// # use datafusion_physical_plan::spill::SpillManager; // Re-exported for doctests
+/// # use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
+/// #
+/// # #[tokio::main]
+/// # async fn main() -> datafusion_common::Result<()> {
+/// # // Setup for the example (typically comes from TaskContext in production)
+/// # let env = Arc::new(RuntimeEnv::default());
+/// # let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+/// # let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+/// # let spill_manager = Arc::new(SpillManager::new(env, metrics, schema.clone()));
+/// #
+/// // Create channel with 1MB file size limit
 /// let (mut writer, mut reader) = spill_pool::channel(1024 * 1024, spill_manager);
 ///
-/// // Writer writes batches
-/// writer.push_batch(&batch)?;
+/// // Spawn writer task to produce batches
+/// let write_handle = tokio::spawn(async move {
+///     for i in 0..5 {
+///         let array: ArrayRef = Arc::new(Int32Array::from(vec![i; 100]));
+///         let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+///         writer.push_batch(&batch).unwrap();
+///     }
+///     // Writer dropped here, finalizing current file
+/// });
 ///
-/// // Reader consumes batches (can happen concurrently)
+/// // Reader consumes batches in FIFO order (can run concurrently with writer)
+/// let mut batches_read = 0;
 /// while let Some(result) = reader.next().await {
 ///     let batch = result?;
+///     batches_read += 1;
 ///     // Process batch...
+///     if batches_read == 5 {
+///         break; // Got all expected batches
+///     }
 /// }
+///
+/// write_handle.await.unwrap();
+/// assert_eq!(batches_read, 5);
+/// # Ok(())
+/// # }
 /// ```
+///
+/// # Use Cases
+///
+/// - **Backpressure handling**: Writer can continue producing while reader is slow
+/// - **Memory management**: Files automatically rotate based on size limits
+/// - **Concurrent I/O**: Reader and writer operate independently with async coordination
+/// - **FIFO semantics**: Batches are consumed in the exact order they were written
 pub fn channel(
     max_file_size_bytes: usize,
     spill_manager: Arc<SpillManager>,
@@ -278,20 +423,6 @@ struct SpillFileReader {
     /// Number of batches this reader has consumed
     batches_read: usize,
 }
-
-// impl SpillFile {
-//     fn poll_next(&mut self) -> Option<Result<RecordBatch>> {
-//         match self {
-//             SpillFile::InProgress(active) => {
-//                 // If there are no unread batches, we cannot read yet
-//                 if active.unread_batches == 0 {
-//                     return None;
-//                 }
-//             },
-//             SpillFile::Completed(stream) => stream.next().await,
-//         }
-//     }
-// }
 
 struct SpillFile {
     /// Shared coordination state (contains writer and batch counts)
@@ -382,11 +513,21 @@ impl Stream for SpillFile {
 
 /// A stream that reads from a SpillPool in FIFO order.
 ///
-/// The stream automatically handles file rotation and reads from completed files.
-/// When no completed files are available, it returns `Poll::Pending` and waits
-/// for the writer to complete more files.
+/// Created by [`channel`]. See that function for architecture diagrams and usage examples.
 ///
-/// The stream will never end, it is an infinite stream.
+/// The stream automatically handles file rotation and reads from completed files.
+/// When no data is available, it returns `Poll::Pending` and registers a waker to
+/// be notified when the writer produces more data.
+///
+/// # Infinite Stream Semantics
+///
+/// This stream never returns `None` (`Poll::Ready(None)`) on its own - it will keep
+/// waiting for the writer to produce more data. The stream ends only when:
+/// - The reader is dropped
+/// - The writer is dropped AND all queued data has been consumed
+///
+/// This makes it suitable for continuous streaming scenarios where the writer may
+/// produce data intermittently.
 pub struct SpillPoolReader {
     /// Shared reference to the spill pool
     shared: Arc<Mutex<SpillPoolShared>>,

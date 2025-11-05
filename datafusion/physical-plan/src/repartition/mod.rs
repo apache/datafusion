@@ -68,13 +68,62 @@ use distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
 };
 
-/// A batch in the repartition queue - either in memory or spilled to disk
+/// A batch in the repartition queue - either in memory or spilled to disk.
+///
+/// This enum represents the two states a batch can be in during repartitioning.
+/// The decision to spill is made based on memory availability when sending a batch
+/// to an output partition.
+///
+/// # Batch Flow with Spilling
+///
+/// ```text
+/// Input Stream ──▶ Partition Logic ──▶ try_grow()
+///                                            │
+///                            ┌───────────────┴────────────────┐
+///                            │                                │
+///                            ▼                                ▼
+///                   try_grow() succeeds            try_grow() fails
+///                   (Memory Available)              (Memory Pressure)
+///                            │                                │
+///                            ▼                                ▼
+///                  RepartitionBatch::Memory         spill_writer.push_batch()
+///                  (batch held in memory)           (batch written to disk)
+///                            │                                │
+///                            │                                ▼
+///                            │                      RepartitionBatch::Spilled
+///                            │                      (marker - no batch data)
+///                            │                                │
+///                            └────────┬───────────────────────┘
+///                                     │
+///                                     ▼
+///                              Send to channel
+///                                     │
+///                                     ▼
+///                            Output Stream (poll)
+///                                     │
+///                      ┌──────────────┴─────────────┐
+///                      │                            │
+///                      ▼                            ▼
+///         RepartitionBatch::Memory      RepartitionBatch::Spilled
+///         Return batch immediately       Poll spill_stream (blocks)
+///                      │                            │
+///                      └────────┬───────────────────┘
+///                               │
+///                               ▼
+///                          Return batch
+///                    (FIFO order preserved)
+/// ```
+///
+/// See [`RepartitionExec`] for overall architecture and [`StreamState`] for
+/// the state machine that handles reading these batches.
 #[derive(Debug)]
 enum RepartitionBatch {
     /// Batch held in memory (counts against memory reservation)
     Memory(RecordBatch),
-    /// Marker indicating a batch was spilled to the partition's SpillPool
-    /// The actual batch can be retrieved by reading from the SpillPoolStream
+    /// Marker indicating a batch was spilled to the partition's SpillPool.
+    /// The actual batch can be retrieved by reading from the SpillPoolStream.
+    /// This variant contains no data itself - it's just a signal to the reader
+    /// to fetch the next batch from the spill stream.
     Spilled,
 }
 
@@ -89,7 +138,27 @@ struct OutputChannel {
     spill_writer: SpillPoolWriter,
 }
 
-/// Channels and resources for a single output partition
+/// Channels and resources for a single output partition.
+///
+/// Each output partition has channels to receive data from all input partitions.
+/// To handle memory pressure, each (input, output) pair gets its own
+/// [`SpillPool`](crate::spill::spill_pool) channel via [`spill_pool::channel`].
+///
+/// # Structure
+///
+/// For an output partition receiving from N input partitions:
+/// - `tx`: N senders (one per input) for sending batches to this output
+/// - `rx`: N receivers (one per input) for receiving batches at this output
+/// - `spill_writers`: N spill writers (one per input) for writing spilled data
+/// - `spill_readers`: N spill readers (one per input) for reading spilled data
+///
+/// This 1:1 mapping between input partitions and spill channels ensures that
+/// batches from each input are processed in FIFO order, even when some batches
+/// are spilled to disk and others remain in memory.
+///
+/// See [`RepartitionExec`] for the overall N×M architecture.
+///
+/// [`spill_pool::channel`]: crate::spill::spill_pool::channel
 struct PartitionChannels {
     /// Senders for each input partition to send data to this output partition
     tx: InputPartitionsToCurrentPartitionSender,
@@ -97,11 +166,11 @@ struct PartitionChannels {
     rx: InputPartitionsToCurrentPartitionReceiver,
     /// Memory reservation for this output partition
     reservation: SharedMemoryReservation,
-    /// Spill writers for writing spilled data - one per input partition (FIFO semantics)
-    /// Wrapped in Option so they can be moved out when creating OutputChannels
+    /// Spill writers for writing spilled data - one per input partition (FIFO semantics).
+    /// Wrapped in Option so they can be moved out when creating OutputChannels.
     spill_writers: Vec<Option<SpillPoolWriter>>,
-    /// Spill readers for reading spilled data - one per input partition (FIFO semantics)
-    /// Each (input, output) pair gets its own reader to maintain proper ordering
+    /// Spill readers for reading spilled data - one per input partition (FIFO semantics).
+    /// Each (input, output) pair gets its own reader to maintain proper ordering.
     spill_readers: Vec<SendableRecordBatchStream>,
 }
 
@@ -538,6 +607,38 @@ impl BatchPartitioner {
 /// If more than one stream is being repartitioned, the output will be some
 /// arbitrary interleaving (and thus unordered) unless
 /// [`Self::with_preserve_order`] specifies otherwise.
+///
+/// # Spilling Architecture
+///
+/// RepartitionExec uses [`SpillPool`](crate::spill::spill_pool) channels to handle
+/// memory pressure during repartitioning. Each (input partition, output partition)
+/// pair gets its own SpillPool channel for FIFO ordering.
+///
+/// ```text
+/// Input Partitions (N)          Output Partitions (M)
+/// ────────────────────          ─────────────────────
+///
+///    Input 0 ──┐                      ┌──▶ Output 0
+///              │  ┌──────────────┐    │
+///              ├─▶│ SpillPool    │────┤
+///              │  │ [In0→Out0]   │    │
+///    Input 1 ──┤  └──────────────┘    ├──▶ Output 1
+///              │                       │
+///              │  ┌──────────────┐    │
+///              ├─▶│ SpillPool    │────┤
+///              │  │ [In1→Out0]   │    │
+///    Input 2 ──┤  └──────────────┘    ├──▶ Output 2
+///              │                      │
+///              │       ... (N×M SpillPools total)
+///              │                      │
+///              │  ┌──────────────┐    │
+///              └─▶│ SpillPool    │────┘
+///                 │ [InN→OutM]   │
+///                 └──────────────┘
+///
+/// Each SpillPool maintains FIFO order for its (input, output) pair.
+/// See `RepartitionBatch` for details on the memory/spill decision logic.
+/// ```
 ///
 /// # Footnote
 ///
@@ -1216,13 +1317,54 @@ impl RepartitionExec {
     }
 }
 
-/// State for tracking whether we're reading from memory channel or spill stream
+/// State for tracking whether we're reading from memory channel or spill stream.
+///
+/// This state machine ensures proper ordering when batches are mixed between memory
+/// and spilled storage. When a [`RepartitionBatch::Spilled`] marker is received,
+/// the stream must block on the spill stream until the corresponding batch arrives.
+///
+/// # State Machine
+///
+/// ```text
+///                        ┌─────────────────┐
+///                   ┌───▶│  ReadingMemory  │◀───┐
+///                   │    └────────┬────────┘    │
+///                   │             │             │
+///                   │     Poll channel          │
+///                   │             │             │
+///                   │  ┌──────────┼─────────────┐
+///                   │  │          │             │
+///                   │  ▼          ▼             │
+///                   │ Memory   Spilled          │
+///       Got batch   │ batch    marker           │
+///       from spill  │  │          │             │
+///                   │  │          ▼             │
+///                   │  │  ┌──────────────────┐  │
+///                   │  │  │ ReadingSpilled   │  │
+///                   │  │  └────────┬─────────┘  │
+///                   │  │           │            │
+///                   │  │   Poll spill_stream    │
+///                   │  │           │            │
+///                   │  │           ▼            │
+///                   │  │      Get batch         │
+///                   │  │           │            │
+///                   └──┴───────────┴────────────┘
+///                                  │
+///                                  ▼
+///                           Return batch
+///                     (Order preserved within
+///                      (input, output) pair)
+/// ```
+///
+/// The transition to `ReadingSpilled` blocks further channel polling to maintain
+/// FIFO ordering - we cannot read the next item from the channel until the spill
+/// stream provides the current batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StreamState {
     /// Reading from the memory channel (normal operation)
     ReadingMemory,
-    /// Waiting for a spilled batch from the spill stream
-    /// Must not poll channel until spilled batch is received
+    /// Waiting for a spilled batch from the spill stream.
+    /// Must not poll channel until spilled batch is received to preserve ordering.
     ReadingSpilled,
 }
 
