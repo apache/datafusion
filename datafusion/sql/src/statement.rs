@@ -1228,7 +1228,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None => None,
                 };
                 let last_non_default = match args.as_ref() {
-                    Some(arg) => arg.iter().rev().position(|t| t.default_expr.is_none()),
+                    Some(arg) => arg
+                        .iter()
+                        .rev()
+                        .position(|t| t.default_expr.is_none())
+                        .map(|reverse_pos| arg.len() - reverse_pos - 1),
                     None => None,
                 };
                 if let (Some(pos_default), Some(pos_non_default)) =

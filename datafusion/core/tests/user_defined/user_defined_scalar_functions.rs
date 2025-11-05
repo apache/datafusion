@@ -1174,9 +1174,15 @@ async fn create_scalar_function_from_sql_statement_named_arguments() -> Result<(
     let bad_expression_sql = r#"
     CREATE FUNCTION bad_expression_fun(DOUBLE, b DOUBLE)
         RETURNS DOUBLE
-        RETURN $1 $b
+        RETURN $1 + $b
     "#;
-    assert!(ctx.sql(bad_expression_sql).await.is_err());
+    let err = ctx
+        .sql(bad_expression_sql)
+        .await
+        .expect_err("cannot mix named and positional style");
+    let expected = "Error during planning: All function arguments must use either named or positional style.";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
     Ok(())
 }
 
@@ -1243,9 +1249,15 @@ async fn create_scalar_function_from_sql_statement_default_arguments() -> Result
     let bad_expression_sql = r#"
     CREATE FUNCTION bad_expression_fun(a DOUBLE DEFAULT 2.0, b DOUBLE)
         RETURNS DOUBLE
-        RETURN $a $b
+        RETURN $a + $b
     "#;
-    assert!(ctx.sql(bad_expression_sql).await.is_err());
+    let err = ctx
+        .sql(bad_expression_sql)
+        .await
+        .expect_err("non-default argument cannot follow default argument");
+    let expected =
+        "Error during planning: Non-default arguments cannot follow default arguments.";
+    assert!(expected.starts_with(&err.strip_backtrace()));
     Ok(())
 }
 
