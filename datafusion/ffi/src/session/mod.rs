@@ -114,20 +114,24 @@ pub struct FFI_Session {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignSession`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_Session {}
 unsafe impl Sync for FFI_Session {}
 
 struct SessionPrivateData<'a> {
-    session: &'a (dyn Session + Send),
+    session: &'a (dyn Session + Send + Sync),
     runtime: Option<Handle>,
 }
 
 impl FFI_Session {
-    unsafe fn inner(&self) -> &(dyn Session + Send) {
+    fn inner(&self) -> &(dyn Session + Send + Sync) {
         let private_data = self.private_data as *const SessionPrivateData;
-        (*private_data).session
+        unsafe { (*private_data).session }
     }
 
     fn function_registry(
@@ -300,6 +304,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_Session) -> FFI_Session {
         release: release_fn_wrapper,
         version: super::version,
         private_data,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -312,7 +317,7 @@ impl Drop for FFI_Session {
 impl FFI_Session {
     /// Creates a new [`FFI_Session`].
     pub fn new(
-        session: &(dyn Session + Send),
+        session: &(dyn Session + Send + Sync),
         function_registry: FFI_WeakFunctionRegistry,
         runtime: Option<Handle>,
     ) -> Self {
@@ -335,6 +340,7 @@ impl FFI_Session {
             release: release_fn_wrapper,
             version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -357,6 +363,15 @@ pub struct ForeignSession {
 
 unsafe impl Send for ForeignSession {}
 unsafe impl Sync for ForeignSession {}
+
+impl FFI_Session {
+    pub fn as_local(&self) -> Option<&(dyn Session + Send + Sync)> {
+        if (self.library_marker_id)() == crate::get_library_marker_id() {
+            return Some(self.inner());
+        }
+        None
+    }
+}
 
 impl TryFrom<&FFI_Session> for ForeignSession {
     type Error = DataFusionError;

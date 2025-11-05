@@ -285,13 +285,14 @@ unsafe extern "C" fn insert_into_fn_wrapper(
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
-    // let session_config = session_config.clone();
-    let session = ForeignSession::try_from(session);
+    let session = session.clone();
     let input = input.clone();
     let runtime = &(*private_data).runtime;
 
     async move {
-        let session = rresult_return!(session);
+        let local_session = session.as_local();
+        let foreign_session = rresult_return!(ForeignSession::try_from(&session));
+        let session = local_session.unwrap_or(&foreign_session);
 
         let input = rresult_return!(<Arc<dyn ExecutionPlan>>::try_from(&input));
 
@@ -299,7 +300,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
 
         let plan = rresult_return!(
             internal_provider
-                .insert_into(&session, input, insert_op)
+                .insert_into(session, input, insert_op)
                 .await
         );
 
