@@ -28,7 +28,6 @@ use arrow::datatypes::{
     Decimal64Type, DecimalType, Float64Type, Int64Type,
 };
 use arrow::error::ArrowError;
-use arrow_buffer::i256;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, Result, ScalarValue,
@@ -78,90 +77,80 @@ impl PowerFunc {
     }
 }
 
-macro_rules! make_pow_fn {
-    ($t:ty, $name_int:ident, $name_float:ident) => {
-        /// Binary function to calculate a math power to integer exponent
-        /// for scaled integer types.
-        ///
-        /// Formula
-        /// The power for a scaled integer `b` is
-        ///
-        /// ```text
-        /// (b * 10^(-s)) ^ e
-        /// ```
-        /// However, the result should be scaled back from scale 0 to scale `s`,
-        /// which is done by multiplying by `10^s`.
-        /// At the end, the formula is:
-        ///
-        /// ```text
-        ///   b^e * 10^(-s * e) * 10^s = b^e / 10^(s * (e-1))
-        /// ```
-        /// Example of 2.5 ^ 4 = 39:
-        ///   2.5 is represented as 25 with scale 1
-        ///   The unscaled result is 25^4 = 390625
-        ///   Scale it back to 1: 390625 / 10^4 = 39
-        ///
-        /// Returns error if base is invalid
-        fn $name_int(base: $t, scale: i8, exp: i64) -> Result<$t, ArrowError> {
-            let scale: u32 = scale.try_into().map_err(|_| {
-                ArrowError::NotYetImplemented(format!(
-                    "Negative scale is not yet supported value: {scale}"
-                ))
-            })?;
-            if exp == 0 {
-                // Edge case to provide 1 as result (10^s with scale)
-                let result: $t = <$t>::from(10).checked_pow(scale).ok_or(
-                    ArrowError::ArithmeticOverflow(format!(
-                        "Cannot make unscale factor for {scale} and {exp}"
-                    )),
-                )?;
-                return Ok(result);
-            }
-            let exp: u32 = exp.try_into().map_err(|_| {
-                ArrowError::ArithmeticOverflow(format!("Unsupported exp value: {exp}"))
-            })?;
-            let powered: $t = base.pow_checked(exp).map_err(|_| {
-                ArrowError::ArithmeticOverflow(format!(
-                    "Cannot raise base {base} to exp {exp}"
-                ))
-            })?;
-            let unscale_factor: $t = <$t>::from(10)
-                .checked_pow(scale * (exp - 1))
-                .ok_or(ArrowError::ArithmeticOverflow(format!(
-                    "Cannot make unscale factor for {scale} and {exp}"
-                )))?;
+/// Binary function to calculate a math power to integer exponent
+/// for scaled integer types.
+///
+/// Formula
+/// The power for a scaled integer `b` is
+///
+/// ```text
+/// (b * 10^(-s)) ^ e
+/// ```
+/// However, the result should be scaled back from scale 0 to scale `s`,
+/// which is done by multiplying by `10^s`.
+/// At the end, the formula is:
+///
+/// ```text
+///   b^e * 10^(-s * e) * 10^s = b^e / 10^(s * (e-1))
+/// ```
+/// Example of 2.5 ^ 4 = 39:
+///   2.5 is represented as 25 with scale 1
+///   The unscaled result is 25^4 = 390625
+///   Scale it back to 1: 390625 / 10^4 = 39
+///
+/// Returns error if base is invalid
+fn pow_decimal_int<T>(base: T, scale: i8, exp: i64) -> Result<T, ArrowError>
+where
+    T: From<i32> + ArrowNativeTypeOp,
+{
+    let scale: u32 = scale.try_into().map_err(|_| {
+        ArrowError::NotYetImplemented(format!(
+            "Negative scale is not yet supported value: {scale}"
+        ))
+    })?;
+    if exp == 0 {
+        // Edge case to provide 1 as result (10^s with scale)
+        let result: T = T::from(10).pow_checked(scale).map_err(|_| {
+            ArrowError::ArithmeticOverflow(format!(
+                "Cannot make unscale factor for {scale} and {exp}"
+            ))
+        })?;
+        return Ok(result);
+    }
+    let exp: u32 = exp.try_into().map_err(|_| {
+        ArrowError::ArithmeticOverflow(format!("Unsupported exp value: {exp}"))
+    })?;
+    let powered: T = base.pow_checked(exp).map_err(|_| {
+        ArrowError::ArithmeticOverflow(format!("Cannot raise base {base:?} to exp {exp}"))
+    })?;
+    let unscale_factor: T = T::from(10).pow_checked(scale * (exp - 1)).map_err(|_| {
+        ArrowError::ArithmeticOverflow(format!(
+            "Cannot make unscale factor for {scale} and {exp}"
+        ))
+    })?;
 
-            powered
-                .checked_div(unscale_factor)
-                .ok_or(ArrowError::ArithmeticOverflow(format!(
-                    "Cannot divide in power"
-                )))
-        }
-
-        /// Binary function to calculate a math power to float exponent
-        /// for scaled integer types.
-        /// Returns error if exponent is negative or non-integer
-        fn $name_float(base: $t, scale: i8, exp: f64) -> Result<$t, ArrowError> {
-            if !exp.is_finite() || exp.trunc() != exp {
-                return Err(ArrowError::ComputeError(format!(
-                    "Cannot use non-integer exp: {exp}"
-                )));
-            }
-            if exp < 0f64 || exp >= u32::MAX as f64 {
-                return Err(ArrowError::ArithmeticOverflow(format!(
-                    "Unsupported exp value: {exp}"
-                )));
-            }
-            $name_int(base, scale, exp as i64)
-        }
-    };
+    powered.div_checked(unscale_factor)
 }
 
-// Generate functions for numeric types
-make_pow_fn!(i32, pow_decimal32_int, pow_decimal32_float);
-make_pow_fn!(i64, pow_decimal64_int, pow_decimal64_float);
-make_pow_fn!(i128, pow_decimal128_int, pow_decimal128_float);
-make_pow_fn!(i256, pow_decimal256_int, pow_decimal256_float);
+/// Binary function to calculate a math power to float exponent
+/// for scaled integer types.
+/// Returns error if exponent is negative or non-integer, or base invalid
+fn pow_decimal_float<T>(base: T, scale: i8, exp: f64) -> Result<T, ArrowError>
+where
+    T: From<i32> + ArrowNativeTypeOp,
+{
+    if !exp.is_finite() || exp.trunc() != exp {
+        return Err(ArrowError::ComputeError(format!(
+            "Cannot use non-integer exp: {exp}"
+        )));
+    }
+    if exp < 0f64 || exp >= u32::MAX as f64 {
+        return Err(ArrowError::ArithmeticOverflow(format!(
+            "Unsupported exp value: {exp}"
+        )));
+    }
+    pow_decimal_int(base, scale, exp as i64)
+}
 
 /// Helper function to set precision and scale on a decimal array
 fn rescale_decimal<T>(
@@ -266,7 +255,7 @@ impl ScalarUDFImpl for PowerFunc {
                     calculate_binary_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
                         &base,
                         exponent,
-                        |b, e| pow_decimal32_int(b, *scale, e),
+                        |b, e| pow_decimal_int(b, *scale, e),
                     )?,
                     *precision,
                     *scale,
@@ -275,7 +264,7 @@ impl ScalarUDFImpl for PowerFunc {
                     calculate_binary_math::<Decimal32Type, Float64Type, Decimal32Type, _>(
                         &base,
                         exponent,
-                        |b, e| pow_decimal32_float(b, *scale, e),
+                        |b, e| pow_decimal_float(b, *scale, e),
                     )?,
                     *precision,
                     *scale,
@@ -285,7 +274,7 @@ impl ScalarUDFImpl for PowerFunc {
                     calculate_binary_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
                         &base,
                         exponent,
-                        |b, e| pow_decimal64_int(b, *scale, e),
+                        |b, e| pow_decimal_int(b, *scale, e),
                     )?,
                     *precision,
                     *scale,
@@ -294,7 +283,7 @@ impl ScalarUDFImpl for PowerFunc {
                     calculate_binary_math::<Decimal64Type, Float64Type, Decimal64Type, _>(
                         &base,
                         exponent,
-                        |b, e| pow_decimal64_float(b, *scale, e),
+                        |b, e| pow_decimal_float(b, *scale, e),
                     )?,
                     *precision,
                     *scale,
@@ -304,7 +293,7 @@ impl ScalarUDFImpl for PowerFunc {
                     calculate_binary_math::<Decimal128Type, Int64Type, Decimal128Type, _>(
                         &base,
                         exponent,
-                        |b, e| pow_decimal128_int(b, *scale, e),
+                        |b, e| pow_decimal_int(b, *scale, e),
                     )?,
                     *precision,
                     *scale,
@@ -316,7 +305,7 @@ impl ScalarUDFImpl for PowerFunc {
                         Decimal128Type,
                         _,
                     >(&base, exponent, |b, e| {
-                        pow_decimal128_float(b, *scale, e)
+                        pow_decimal_float(b, *scale, e)
                     })?,
                     *precision,
                     *scale,
@@ -325,7 +314,7 @@ impl ScalarUDFImpl for PowerFunc {
                     calculate_binary_math::<Decimal256Type, Int64Type, Decimal256Type, _>(
                         &base,
                         exponent,
-                        |b, e| pow_decimal256_int(b, *scale, e),
+                        |b, e| pow_decimal_int(b, *scale, e),
                     )?,
                     *precision,
                     *scale,
@@ -337,7 +326,7 @@ impl ScalarUDFImpl for PowerFunc {
                         Decimal256Type,
                         _,
                     >(&base, exponent, |b, e| {
-                        pow_decimal256_float(b, *scale, e)
+                        pow_decimal_float(b, *scale, e)
                     })?,
                     *precision,
                     *scale,
@@ -642,21 +631,21 @@ mod tests {
     #[test]
     fn test_pow_decimal128_helper() {
         // Expression: 2.5 ^ 4 = 39.0625
-        assert_eq!(pow_decimal128_int(25, 1, 4).unwrap(), i128::from(390));
-        assert_eq!(pow_decimal128_int(2500, 3, 4).unwrap(), i128::from(39062));
-        assert_eq!(pow_decimal128_int(25000, 4, 4).unwrap(), i128::from(390625));
+        assert_eq!(pow_decimal_int(25, 1, 4).unwrap(), i128::from(390));
+        assert_eq!(pow_decimal_int(2500, 3, 4).unwrap(), i128::from(39062));
+        assert_eq!(pow_decimal_int(25000, 4, 4).unwrap(), i128::from(390625));
 
         // Expression: 25 ^ 4 = 390625
-        assert_eq!(pow_decimal128_int(25, 0, 4).unwrap(), i128::from(390625));
+        assert_eq!(pow_decimal_int(25, 0, 4).unwrap(), i128::from(390625));
 
         // Expressions for edge cases
-        assert_eq!(pow_decimal128_int(25, 1, 1).unwrap(), i128::from(25));
-        assert_eq!(pow_decimal128_int(25, 0, 1).unwrap(), i128::from(25));
-        assert_eq!(pow_decimal128_int(25, 0, 0).unwrap(), i128::from(1));
-        assert_eq!(pow_decimal128_int(25, 1, 0).unwrap(), i128::from(10));
+        assert_eq!(pow_decimal_int(25, 1, 1).unwrap(), i128::from(25));
+        assert_eq!(pow_decimal_int(25, 0, 1).unwrap(), i128::from(25));
+        assert_eq!(pow_decimal_int(25, 0, 0).unwrap(), i128::from(1));
+        assert_eq!(pow_decimal_int(25, 1, 0).unwrap(), i128::from(10));
 
         assert_eq!(
-            pow_decimal128_int(25, -1, 4).unwrap_err().to_string(),
+            pow_decimal_int(25, -1, 4).unwrap_err().to_string(),
             "Not yet implemented: Negative scale is not yet supported value: -1"
         );
     }
