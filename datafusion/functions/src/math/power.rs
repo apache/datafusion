@@ -242,15 +242,15 @@ impl ScalarUDFImpl for PowerFunc {
         let base = &args.args[0].to_array(args.number_rows)?;
         let exponent = &args.args[1];
 
-        let arr: ArrayRef = match base.data_type() {
-            DataType::Float64 => {
+        let arr: ArrayRef = match (base.data_type(), exponent.data_type()) {
+            (DataType::Float64, _) => {
                 calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
                     &base,
                     exponent,
                     |b, e| Ok(f64::powf(b, e)),
                 )?
             }
-            DataType::Int64 => {
+            (DataType::Int64, _) => {
                 calculate_binary_math::<Int64Type, Int64Type, Int64Type, _>(
                     &base,
                     exponent,
@@ -262,8 +262,7 @@ impl ScalarUDFImpl for PowerFunc {
                     },
                 )?
             }
-            DataType::Decimal32(precision, scale) => match exponent.data_type() {
-                DataType::Int64 => rescale_decimal(
+            (DataType::Decimal32(precision, scale), DataType::Int64) => rescale_decimal(
                     calculate_binary_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
                         &base,
                         exponent,
@@ -272,7 +271,7 @@ impl ScalarUDFImpl for PowerFunc {
                     *precision,
                     *scale,
                 )?,
-                DataType::Float64 => rescale_decimal(
+            (DataType::Decimal32(precision, scale), DataType::Float64) => rescale_decimal(
                     calculate_binary_math::<Decimal32Type, Float64Type, Decimal32Type, _>(
                         &base,
                         exponent,
@@ -281,12 +280,8 @@ impl ScalarUDFImpl for PowerFunc {
                     *precision,
                     *scale,
                 )?,
-                other => {
-                    return exec_err!("Unsupported data type {other:?} for exponent")
-                }
-            },
-            DataType::Decimal64(precision, scale) => match exponent.data_type() {
-                DataType::Int64 => rescale_decimal(
+            (DataType::Decimal64(precision, scale), DataType::Int64) =>
+                rescale_decimal(
                     calculate_binary_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
                         &base,
                         exponent,
@@ -295,7 +290,7 @@ impl ScalarUDFImpl for PowerFunc {
                     *precision,
                     *scale,
                 )?,
-                DataType::Float64 => rescale_decimal(
+            (DataType::Decimal64(precision, scale), DataType::Float64) => rescale_decimal(
                     calculate_binary_math::<Decimal64Type, Float64Type, Decimal64Type, _>(
                         &base,
                         exponent,
@@ -304,12 +299,8 @@ impl ScalarUDFImpl for PowerFunc {
                     *precision,
                     *scale,
                 )?,
-                other => {
-                    return exec_err!("Unsupported data type {other:?} for exponent")
-                }
-            },
-            DataType::Decimal128(precision, scale) => match exponent.data_type() {
-                DataType::Int64 => rescale_decimal(
+            (DataType::Decimal128(precision, scale), DataType::Int64) =>
+                rescale_decimal(
                     calculate_binary_math::<Decimal128Type, Int64Type, Decimal128Type, _>(
                         &base,
                         exponent,
@@ -318,7 +309,7 @@ impl ScalarUDFImpl for PowerFunc {
                     *precision,
                     *scale,
                 )?,
-                DataType::Float64 => rescale_decimal(
+            (DataType::Decimal128(precision, scale), DataType::Float64) => rescale_decimal(
                     calculate_binary_math::<
                         Decimal128Type,
                         Float64Type,
@@ -330,12 +321,7 @@ impl ScalarUDFImpl for PowerFunc {
                     *precision,
                     *scale,
                 )?,
-                other => {
-                    return exec_err!("Unsupported data type {other:?} for exponent")
-                }
-            },
-            DataType::Decimal256(precision, scale) => match exponent.data_type() {
-                DataType::Int64 => rescale_decimal(
+            (DataType::Decimal256(precision, scale),DataType::Int64) => rescale_decimal(
                     calculate_binary_math::<Decimal256Type, Int64Type, Decimal256Type, _>(
                         &base,
                         exponent,
@@ -344,7 +330,7 @@ impl ScalarUDFImpl for PowerFunc {
                     *precision,
                     *scale,
                 )?,
-                DataType::Float64 => rescale_decimal(
+                (DataType::Decimal256(precision, scale), DataType::Float64) => rescale_decimal(
                     calculate_binary_math::<
                         Decimal256Type,
                         Float64Type,
@@ -356,14 +342,9 @@ impl ScalarUDFImpl for PowerFunc {
                     *precision,
                     *scale,
                 )?,
-
-                other => {
-                    return exec_err!("Unsupported data type {other:?} for exponent")
-                }
-            },
-            other => {
+            (base_type, exp_type) => {
                 return exec_err!(
-                    "Unsupported base data type {other:?} for function {}",
+                    "Unsupported data types for base {base_type:?} and exponent {exp_type:?} for function {}",
                     self.name()
                 )
             }
