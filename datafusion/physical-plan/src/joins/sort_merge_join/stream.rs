@@ -1462,7 +1462,6 @@ impl SortMergeJoinStream {
     fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
         let record_batch =
             concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
-        self.join_metrics.output_batches().add(1);
         self.join_metrics
             .baseline_metrics()
             .record_output(record_batch.num_rows());
