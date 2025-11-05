@@ -639,7 +639,7 @@ where
         if array.is_null(row_index)
             || from_array.is_null(row_index)
             || to_array.is_null(row_index)
-            || stride.map_or(false, |s| s.is_null(row_index))
+            || stride.is_some_and(|s| s.is_null(row_index))
         {
             mutable.extend_nulls(1);
             offsets.push(offsets[row_index] + O::usize_as(1));
@@ -727,7 +727,7 @@ where
         if array.is_null(row_index)
             || from_array.is_null(row_index)
             || to_array.is_null(row_index)
-            || stride.map_or(false, |s| s.is_null(row_index))
+            || stride.is_some_and(|s| s.is_null(row_index))
         {
             null_builder.append_null();
             offsets.push(current_offset);
