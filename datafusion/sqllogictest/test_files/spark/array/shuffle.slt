@@ -22,7 +22,7 @@ SELECT array_sort(shuffle([1, 2, 3, 4, 5, NULL])) = [NULL,1, 2, 3, 4, 5];
 true
 
 query B
-SELECT shuffle([1, 2, 3, 4, 5, NULL]) != [1, 2, 3, 4, 5, NULL];
+SELECT shuffle([1, 2, 3, 4, 5, NULL], 1) != [1, 2, 3, 4, 5, NULL];
 ----
 true
 
@@ -34,7 +34,7 @@ SELECT array_sort(shuffle(['a', 'b', 'c', 'd', 'e', 'f'])) = ['a', 'b', 'c', 'd'
 true
 
 query B
-SELECT shuffle(['a', 'b', 'c', 'd', 'e', 'f']) != ['a', 'b', 'c', 'd', 'e', 'f'];;
+SELECT shuffle(['a', 'b', 'c', 'd', 'e', 'f'], 1) != ['a', 'b', 'c', 'd', 'e', 'f'];;
 ----
 true
 
@@ -63,7 +63,7 @@ SELECT array_sort(shuffle(arrow_cast([1, 2, NULL, 3, 4, 5], 'FixedSizeList(6, In
 true
 
 query B
-SELECT shuffle(arrow_cast([1, 2, NULL, 3, 4, 5], 'FixedSizeList(6, Int64)')) != [1, 2, NULL, 3, 4, 5];
+SELECT shuffle(arrow_cast([1, 2, NULL, 3, 4, 5], 'FixedSizeList(6, Int64)'), 1) != [1, 2, NULL, 3, 4, 5];
 ----
 true
 
