@@ -94,21 +94,21 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
 /// Evaluates expressions against a record batch.
 /// This will convert the resulting ColumnarValues to ArrayRefs,
-/// duplicating any ScalarValues that may have been returned.
-/// This function does not perform any checks that the resulting arrays
-/// have the same length as the record batch.
-// NOTE: This means that this should not be called on expressions that may return
-// arrays of different lengths (e.g. filtering/flattening etc).
-// Also, consider avoiding this if your code can use optimizations for ScalarValues.
+/// duplicating any ScalarValues that may have been returned,
+/// and validating that the returned arrays all have the same
+/// number of rows as the input batch.
 #[inline]
-pub fn evaluate_expressions_to_arrays(
-    exprs: &[Arc<dyn PhysicalExpr>],
+pub fn evaluate_expressions_to_arrays<'a>(
+    exprs: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
     batch: &RecordBatch,
 ) -> Result<Vec<ArrayRef>> {
     let num_rows = batch.num_rows();
     exprs
-        .iter()
-        .map(|e| e.evaluate(batch).and_then(|col| col.into_array(num_rows)))
+        .into_iter()
+        .map(|e| {
+            e.evaluate(batch)
+                .and_then(|col| col.into_array_of_size(num_rows))
+        })
         .collect::<Result<Vec<ArrayRef>>>()
 }
 

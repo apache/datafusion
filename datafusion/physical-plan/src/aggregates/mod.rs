@@ -1496,23 +1496,14 @@ pub fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    let exprs: Vec<ArrayRef> = group_by
-        .expr
-        .iter()
-        .map(|(expr, _)| {
-            let value = expr.evaluate(batch)?;
-            value.into_array(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let null_exprs: Vec<ArrayRef> = group_by
-        .null_expr
-        .iter()
-        .map(|(expr, _)| {
-            let value = expr.evaluate(batch)?;
-            value.into_array(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let exprs = evaluate_expressions_to_arrays(
+        group_by.expr.iter().map(|(expr, _)| expr),
+        batch,
+    )?;
+    let null_exprs = evaluate_expressions_to_arrays(
+        group_by.null_expr.iter().map(|(expr, _)| expr),
+        batch,
+    )?;
 
     group_by
         .groups

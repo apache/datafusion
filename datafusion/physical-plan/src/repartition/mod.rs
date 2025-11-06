@@ -384,7 +384,8 @@ impl BatchPartitioner {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
-                    let arrays = evaluate_expressions_to_arrays(exprs, &batch)?;
+                    let arrays =
+                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
 
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);

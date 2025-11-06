@@ -113,10 +113,10 @@ impl ColumnarValue {
         }
     }
 
-    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
-    /// number of rows. [`Self::Scalar`] is converted by repeating the same
-    /// scalar multiple times which is not as efficient as handling the scalar
-    /// directly.
+    /// Convert any [`Self::Scalar`] into an Arrow [`ArrayRef`] with the specified
+    /// number of rows  by repeating the same scalar multiple times,
+    /// which is not as efficient as handling the scalar directly.
+    /// [`Self::Array`] will just be returned as is.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -135,6 +135,36 @@ impl ColumnarValue {
     /// number of rows. [`Self::Scalar`] is converted by repeating the same
     /// scalar multiple times which is not as efficient as handling the scalar
     /// directly.
+    /// This validates that [`Self::Array`], if it exists, has the expected length.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size or
+    /// if the array length does not match the expected length
+    pub fn into_array_of_size(self, num_rows: usize) -> Result<ArrayRef> {
+        match self {
+            ColumnarValue::Array(array) => {
+                if array.len() == num_rows {
+                    Ok(array)
+                } else {
+                    internal_err!(
+                        "Array length {} does not match expected length {}",
+                        array.len(),
+                        num_rows
+                    )
+                }
+            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+        }
+    }
+
+    /// Convert any [`Self::Scalar`] into an Arrow [`ArrayRef`] with the specified
+    /// number of rows  by repeating the same scalar multiple times,
+    /// which is not as efficient as handling the scalar directly.
+    /// [`Self::Array`] will just be returned as is.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -147,6 +177,36 @@ impl ColumnarValue {
             ColumnarValue::Array(array) => Arc::clone(array),
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
         })
+    }
+
+    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
+    /// scalar multiple times which is not as efficient as handling the scalar
+    /// directly.
+    /// This validates that [`Self::Array`], if it exists, has the expected length.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size or
+    /// if the array length does not match the expected length
+    pub fn to_array_of_size(&self, num_rows: usize) -> Result<ArrayRef> {
+        match self {
+            ColumnarValue::Array(array) => {
+                if array.len() == num_rows {
+                    Ok(Arc::clone(array))
+                } else {
+                    internal_err!(
+                        "Array length {} does not match expected length {}",
+                        array.len(),
+                        num_rows
+                    )
+                }
+            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+        }
     }
 
     /// Null columnar values are implemented as a null array in order to pass batch
