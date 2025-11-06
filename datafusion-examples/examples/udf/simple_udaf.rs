@@ -135,8 +135,9 @@ impl Accumulator for GeometricMean {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// In this example we register `GeometricMean`
+/// as user defined aggregate function and invoke it via the DataFrame API and SQL
+pub async fn simple_udaf() -> Result<()> {
     let ctx = create_context()?;
 
     // here is where we define the UDAF. We also declare its signature:

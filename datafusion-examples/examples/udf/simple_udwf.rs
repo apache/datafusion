@@ -42,8 +42,7 @@ async fn create_context() -> Result<SessionContext> {
 }
 
 /// In this example we will declare a user defined window function that computes a moving average and then run it using SQL
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn simple_udwf() -> Result<()> {
     let ctx = create_context().await?;
 
     // here is where we define the UDWF. We also declare its signature:
