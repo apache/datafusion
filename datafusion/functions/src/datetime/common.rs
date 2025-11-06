@@ -93,7 +93,7 @@ impl ConfiguredTimeZone {
     }
 
     pub(crate) fn from_config(config: &ConfigOptions) -> Self {
-        match Self::parse(&config.execution.time_zone) {
+        match Self::parse(config.execution.time_zone.as_deref().unwrap_or("")) {
             Ok(Some(tz)) => tz,
             _ => Self::utc(),
         }
