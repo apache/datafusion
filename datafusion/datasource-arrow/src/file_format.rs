@@ -62,7 +62,9 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use object_store::{GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore};
+use object_store::{
+    path::Path, GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore,
+};
 use tokio::io::AsyncWriteExt;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
@@ -185,35 +187,24 @@ impl FileFormat for ArrowFormat {
         state: &dyn Session,
         conf: FileScanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let is_stream_format = if let Some(first_group) = conf.file_groups.first() {
-            if let Some(first_file) = first_group.files().first() {
-                let object_store =
-                    state.runtime_env().object_store(&conf.object_store_url)?;
+        let object_store = state.runtime_env().object_store(&conf.object_store_url)?;
+        let object_location = &conf
+            .file_groups
+            .first()
+            .ok_or_else(|| internal_datafusion_err!("No files found in file group"))?
+            .files()
+            .first()
+            .ok_or_else(|| internal_datafusion_err!("No files found in file group"))?
+            .object_meta
+            .location;
 
-                let get_opts = GetOptions {
-                    range: Some(GetRange::Bounded(0..6)),
-                    ..Default::default()
-                };
-                let result = object_store
-                    .get_opts(&first_file.object_meta.location, get_opts)
-                    .await?;
-                let bytes = result.bytes().await?;
-
-                // assume stream format if the file is too short
-                // or the file does not start with the magic number
-                bytes.len() < 6 || bytes[0..6] != ARROW_MAGIC
-            } else {
-                false // no files, default to file format
-            }
-        } else {
-            false // no file groups, default to file format
-        };
-
-        let source: Arc<dyn FileSource> = if is_stream_format {
-            Arc::new(ArrowStreamSource::default())
-        } else {
-            Arc::new(ArrowFileSource::default())
-        };
+        let source: Arc<dyn FileSource> =
+            match is_object_in_arrow_ipc_file_format(object_store, object_location).await
+            {
+                Ok(true) => Arc::new(ArrowFileSource::default()),
+                Ok(false) => Arc::new(ArrowStreamSource::default()),
+                Err(e) => Err(e)?,
+            };
 
         let config = FileScanConfigBuilder::from(conf)
             .with_source(source)
@@ -497,6 +488,22 @@ async fn collect_at_least_n_bytes(
         .into());
     }
     Ok(buf)
+}
+
+async fn is_object_in_arrow_ipc_file_format(
+    store: Arc<dyn ObjectStore>,
+    object_location: &Path,
+) -> Result<bool> {
+    let get_opts = GetOptions {
+        range: Some(GetRange::Bounded(0..6)),
+        ..Default::default()
+    };
+    let bytes = store
+        .get_opts(object_location, get_opts)
+        .await?
+        .bytes()
+        .await?;
+    Ok(bytes.len() >= 6 && bytes[0..6] == ARROW_MAGIC)
 }
 
 #[cfg(test)]
