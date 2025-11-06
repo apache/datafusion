@@ -489,4 +489,21 @@ mod tests {
         assert_eq!(expected, reversed);
         Ok(())
     }
+
+    #[test]
+    fn test_reverse_fixed_size_list_empty() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let empty_array: Vec<i32> = vec![];
+        let values = Arc::new(Int32Array::from(empty_array));
+        let nulls = None;
+        let fixed_size_list = FixedSizeListArray::new(field, 3, values, nulls);
+        let result = fixed_size_array_reverse(
+            &fixed_size_list,
+            &Arc::new(Field::new("test", DataType::Int32, true)),
+        )?;
+        let reversed = fixed_size_list_values(result.as_fixed_size_list());
+        let expected: Vec<Option<Vec<i32>>> = vec![];
+        assert_eq!(expected, reversed);
+        Ok(())
+    }
 }
