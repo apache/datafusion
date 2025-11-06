@@ -21,7 +21,7 @@ use std::fmt::Display;
 use std::hash::Hash;
 
 use crate::type_coercion::aggregates::NUMERICS;
-use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Decimal128Type, DecimalType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{internal_err, plan_err, Result};
@@ -333,9 +333,10 @@ pub enum TypeSignatureClass {
     Interval,
     Duration,
     Native(LogicalTypeRef),
-    // TODO:
-    // Numeric
     Integer,
+    Float,
+    Decimal,
+    Numeric,
     /// Encompasses both the native Binary as well as arbitrarily sized FixedSizeBinary types
     Binary,
 }
@@ -378,6 +379,9 @@ impl TypeSignatureClass {
             TypeSignatureClass::Binary => {
                 vec![DataType::Binary]
             }
+            TypeSignatureClass::Decimal => vec![Decimal128Type::DEFAULT_TYPE],
+            TypeSignatureClass::Float => vec![DataType::Float64],
+            TypeSignatureClass::Numeric => vec![DataType::Float64],
         }
     }
 
@@ -395,6 +399,9 @@ impl TypeSignatureClass {
             TypeSignatureClass::Duration if logical_type.is_duration() => true,
             TypeSignatureClass::Integer if logical_type.is_integer() => true,
             TypeSignatureClass::Binary if logical_type.is_binary() => true,
+            TypeSignatureClass::Decimal if logical_type.is_decimal() => true,
+            TypeSignatureClass::Float if logical_type.is_float() => true,
+            TypeSignatureClass::Numeric if logical_type.is_numeric() => true,
             _ => false,
         }
     }
@@ -426,6 +433,15 @@ impl TypeSignatureClass {
                 Ok(origin_type.to_owned())
             }
             TypeSignatureClass::Binary if native_type.is_binary() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Decimal if native_type.is_decimal() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Float if native_type.is_float() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Numeric if native_type.is_numeric() => {
                 Ok(origin_type.to_owned())
             }
             _ if native_type.is_null() => Ok(origin_type.to_owned()),

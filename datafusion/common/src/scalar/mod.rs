@@ -4563,6 +4563,7 @@ impl_try_from!(UInt8, u8);
 impl_try_from!(UInt16, u16);
 impl_try_from!(UInt32, u32);
 impl_try_from!(UInt64, u64);
+impl_try_from!(Float16, f16);
 impl_try_from!(Float32, f32);
 impl_try_from!(Float64, f64);
 impl_try_from!(Boolean, bool);

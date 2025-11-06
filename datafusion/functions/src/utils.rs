@@ -140,6 +140,7 @@ where
     F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
     R::Native: TryFrom<ScalarValue>,
 {
+    let right = right.cast_to(&R::DATA_TYPE, None)?;
     Ok(match right {
         ColumnarValue::Scalar(scalar) => {
             let right_value: R::Native =
@@ -151,14 +152,12 @@ where
                     ))
                 })?;
             let left_array = left.as_primitive::<L>();
-            // Bind right value
             let result =
                 left_array.try_unary::<_, O, _>(|lvalue| fun(lvalue, right_value))?;
             Arc::new(result) as _
         }
         ColumnarValue::Array(right) => {
-            let right_casted = arrow::compute::cast(&right, &R::DATA_TYPE)?;
-            let right_array = right_casted.as_primitive::<R>();
+            let right_array = right.as_primitive::<R>();
 
             // Types are compatible even they are decimals with different scale or precision
             let result = if PrimitiveArray::<L>::is_compatible(&L::DATA_TYPE) {
