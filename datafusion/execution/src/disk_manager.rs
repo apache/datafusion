@@ -98,10 +98,11 @@ impl DiskManagerBuilder {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum DiskManagerMode {
     /// Create a new [DiskManager] that creates temporary files within
     /// a temporary directory chosen by the OS
+    #[default]
     OsTmpDirectory,
 
     /// Create a new [DiskManager] that creates temporary files within
@@ -113,21 +114,17 @@ pub enum DiskManagerMode {
     Disabled,
 }
 
-impl Default for DiskManagerMode {
-    fn default() -> Self {
-        Self::OsTmpDirectory
-    }
-}
-
 /// Configuration for temporary disk access
+#[allow(deprecated)]
 #[deprecated(since = "48.0.0", note = "Use DiskManagerBuilder instead")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum DiskManagerConfig {
     /// Use the provided [DiskManager] instance
     Existing(Arc<DiskManager>),
 
     /// Create a new [DiskManager] that creates temporary files within
     /// a temporary directory chosen by the OS
+    #[default]
     NewOs,
 
     /// Create a new [DiskManager] that creates temporary files within
@@ -136,13 +133,6 @@ pub enum DiskManagerConfig {
 
     /// Disable disk manager, attempts to create temporary files will error
     Disabled,
-}
-
-#[allow(deprecated)]
-impl Default for DiskManagerConfig {
-    fn default() -> Self {
-        Self::NewOs
-    }
 }
 
 #[allow(deprecated)]

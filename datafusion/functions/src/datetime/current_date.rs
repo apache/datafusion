@@ -36,7 +36,9 @@ Returns the current date in the session time zone.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 "#,
-    syntax_example = "current_date()"
+    syntax_example = r#"current_date()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_date();"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentDateFunc {
@@ -106,7 +108,14 @@ impl ScalarUDFImpl for CurrentDateFunc {
         let days = info
             .execution_props()
             .config_options()
-            .and_then(|config| config.execution.time_zone.parse::<Tz>().ok())
+            .and_then(|config| {
+                config
+                    .execution
+                    .time_zone
+                    .as_ref()
+                    .map(|tz| tz.parse::<Tz>().ok())
+            })
+            .flatten()
             .map_or_else(
                 || datetime_to_days(&now_ts),
                 |tz| {

@@ -32,6 +32,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion::physical_plan::metrics::MetricType;
 use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -919,7 +920,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         schema,
         file_source,
     )
-    .with_projection(Some(vec![0, 1]))
+    .with_projection_indices(Some(vec![0, 1]))
     .with_file_group(FileGroup::new(vec![file_group]))
     .with_table_partition_cols(vec![Field::new(
         "part".to_string(),
@@ -1436,6 +1437,7 @@ fn roundtrip_analyze() -> Result<()> {
     roundtrip_test(Arc::new(AnalyzeExec::new(
         false,
         false,
+        vec![MetricType::SUMMARY, MetricType::DEV],
         input,
         Arc::new(schema),
     )))
@@ -1714,7 +1716,7 @@ fn roundtrip_unnest() -> Result<()> {
         vec![2, 4],
         output_schema,
         options,
-    );
+    )?;
     roundtrip_test(Arc::new(unnest))
 }
 
@@ -1812,7 +1814,7 @@ async fn roundtrip_projection_source() -> Result<()> {
         1024,
     )])])
     .with_statistics(statistics)
-    .with_projection(Some(vec![0, 1, 2]))
+    .with_projection_indices(Some(vec![0, 1, 2]))
     .build();
 
     let filter = Arc::new(

@@ -419,7 +419,9 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                     stats_max_value_arr.push(None);
                 };
                 compression_arr.push(format!("{:?}", column.compression()));
-                encodings_arr.push(format!("{:?}", column.encodings()));
+                // need to collect into Vec to format
+                let encodings: Vec<_> = column.encodings().collect();
+                encodings_arr.push(format!("{:?}", encodings));
                 index_page_offset_arr.push(column.index_page_offset());
                 dictionary_page_offset_arr.push(column.dictionary_page_offset());
                 data_page_offset_arr.push(column.data_page_offset());

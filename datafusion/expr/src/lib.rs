@@ -44,6 +44,7 @@ mod udaf;
 mod udf;
 mod udwf;
 
+pub mod arguments;
 pub mod conditional_expressions;
 pub mod execution_props;
 pub mod expr;

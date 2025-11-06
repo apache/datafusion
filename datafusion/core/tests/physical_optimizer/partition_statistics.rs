@@ -17,6 +17,7 @@
 
 #[cfg(test)]
 mod test {
+    use insta::assert_snapshot;
     use std::sync::Arc;
 
     use arrow::array::{Int32Array, RecordBatch};
@@ -606,21 +607,21 @@ mod test {
             .build()
             .map(Arc::new)?];
 
-        let aggregate_exec_partial = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by.clone(),
-            aggr_expr.clone(),
-            vec![None],
-            Arc::clone(&scan),
-            scan_schema.clone(),
-        )?) as _;
+        let aggregate_exec_partial: Arc<dyn ExecutionPlan> =
+            Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                aggr_expr.clone(),
+                vec![None],
+                Arc::clone(&scan),
+                scan_schema.clone(),
+            )?) as _;
 
-        let mut plan_string = get_plan_string(&aggregate_exec_partial);
-        let _ = plan_string.swap_remove(1);
-        let expected_plan = vec![
-            "AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",
-        ];
-        assert_eq!(plan_string, expected_plan);
+        let plan_string = get_plan_string(&aggregate_exec_partial).swap_remove(0);
+        assert_snapshot!(
+            plan_string,
+            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
+        );
 
         let p0_statistics = aggregate_exec_partial.partition_statistics(Some(0))?;
 
@@ -710,7 +711,10 @@ mod test {
         )?) as _;
 
         let agg_plan = get_plan_string(&agg_partial).remove(0);
-        assert_eq!("AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",agg_plan);
+        assert_snapshot!(
+            agg_plan,
+            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
+        );
 
         let empty_stat = Statistics {
             num_rows: Precision::Exact(0),

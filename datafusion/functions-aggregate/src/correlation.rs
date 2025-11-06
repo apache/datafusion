@@ -88,7 +88,9 @@ impl Correlation {
             signature: Signature::exact(
                 vec![DataType::Float64, DataType::Float64],
                 Volatility::Immutable,
-            ),
+            )
+            .with_parameter_names(vec!["y".to_string(), "x".to_string()])
+            .expect("valid parameter names for corr"),
         }
     }
 }
