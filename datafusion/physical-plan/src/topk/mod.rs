@@ -259,7 +259,7 @@ impl TopK {
         // If only a single sort key, and filters out 80% of the rows based on `k` and batch size
         // and dynamic filter is not very selective or no filter at all, we can optimize
         // use sort_to_indices to get the top indices from the input batch
-        let twenty_percent_rows = (num_rows as f64 * 0.2) as f64;
+        let twenty_percent_rows = num_rows as f64 * 0.2;
         if sort_keys.len() == 1 && (self.heap.k as f64) < twenty_percent_rows && (true_count as f64 > twenty_percent_rows * 1.5) {
             let array = sort_keys[0].as_ref();
             let options = self.expr[0].options;
