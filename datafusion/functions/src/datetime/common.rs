@@ -301,15 +301,6 @@ fn has_offset_marker(value: &str) -> bool {
             }
             // Check for timezone offset (+/-HHMM or +/-HH:MM)
             '+' | '-' => {
-                // Skip scientific notation (e.g., 1.5e+10)
-                if i > 0 {
-                    let prev = bytes[i - 1] as char;
-                    if prev == 'e' || prev == 'E' {
-                        i += 1;
-                        continue;
-                    }
-                }
-
                 if is_valid_offset_at(bytes, i, len) {
                     return true;
                 }
