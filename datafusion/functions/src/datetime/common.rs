@@ -649,7 +649,6 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 ///
 #[inline]
-#[allow(dead_code)]
 pub(crate) fn string_to_timestamp_nanos_formatted(
     s: &str,
     format: &str,
