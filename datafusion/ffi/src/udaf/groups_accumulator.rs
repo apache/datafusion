@@ -84,6 +84,10 @@ pub struct FFI_GroupsAccumulator {
     /// Internal data. This is only to be accessed by the provider of the accumulator.
     /// A [`ForeignGroupsAccumulator`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_GroupsAccumulator {}
@@ -234,6 +238,7 @@ impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
 
             release: release_fn_wrapper,
             private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -258,9 +263,18 @@ pub struct ForeignGroupsAccumulator {
 unsafe impl Send for ForeignGroupsAccumulator {}
 unsafe impl Sync for ForeignGroupsAccumulator {}
 
-impl From<FFI_GroupsAccumulator> for ForeignGroupsAccumulator {
+impl From<FFI_GroupsAccumulator> for Box<dyn GroupsAccumulator> {
     fn from(accumulator: FFI_GroupsAccumulator) -> Self {
-        Self { accumulator }
+        if (accumulator.library_marker_id)() == crate::get_library_marker_id() {
+            unsafe {
+                let private_data = Box::from_raw(
+                    accumulator.private_data as *mut GroupsAccumulatorPrivateData,
+                );
+                private_data.accumulator
+            }
+        } else {
+            Box::new(ForeignGroupsAccumulator { accumulator })
+        }
     }
 }
 
@@ -434,14 +448,14 @@ mod tests {
     };
     use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
 
-    use super::{FFI_EmitTo, FFI_GroupsAccumulator, ForeignGroupsAccumulator};
+    use super::{FFI_EmitTo, FFI_GroupsAccumulator};
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
         let boxed_accum: Box<dyn GroupsAccumulator> =
             Box::new(BooleanGroupsAccumulator::new(|a, b| a && b, true));
         let ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
-        let mut foreign_accum: ForeignGroupsAccumulator = ffi_accum.into();
+        let mut foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
 
         // Send in an array to evaluate. We want a mean of 30 and standard deviation of 4.
         let values = create_array!(Boolean, vec![true, true, true, false, true, true]);
