@@ -273,8 +273,7 @@ impl TopK {
                 Some(options),
                 Some(self.heap.k),
             )?));
-        }
-        if true_count < num_rows {
+        } else if true_count < num_rows {
             // Indices in `set_indices` should be correct if filter contains nulls
             // So we prepare the filter here. Note this is also done in the `FilterBuilder`
             // so there is no overhead to do this here.
