@@ -371,12 +371,12 @@ impl Drop for SpillPoolWriter {
 /// ```
 ///
 /// # Why rotate files?
-/// 
+///
 /// File rotation ensures we don't end up with unreferenced disk usage.
 /// If we used a single file for all spilled data, we would end up with
 /// unreferenced data at the beginning of the file that has already been read
 /// by readers but we can't delete because you can't truncate from the start of a file.
-/// 
+///
 /// Consider the case of a query like `SELECT * FROM large_table WHERE false`.
 /// Obviously this query produces no output rows, but if we had a spilling operator
 /// in the middle of this query between the scan and the filter it would see the entire
