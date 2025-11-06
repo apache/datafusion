@@ -25,6 +25,7 @@ mod regex;
 pub mod simplify_exprs;
 mod simplify_predicates;
 mod unwrap_cast;
+mod unwrap_date_part;
 mod utils;
 
 // backwards compatibility
