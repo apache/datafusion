@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn to_timestamp_respects_execution_timezone() -> Result<()> {
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = "-05:00".into();
+        options.execution.time_zone = Some("-05:00".to_string());
         let udf = ToTimestampFunc::new_with_config(&options);
         let field = Field::new("arg", Utf8, true).into();
 
@@ -885,7 +885,7 @@ mod tests {
             Field::new("f", Timestamp(Nanosecond, None), true).into();
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = "Invalid/Timezone".into();
+        options.execution.time_zone = Some("Invalid/Timezone".to_string());
         let udf = ToTimestampFunc::new_with_config(&options);
 
         let explicit_args = datafusion_expr::ScalarFunctionArgs {
@@ -938,7 +938,7 @@ mod tests {
             Field::new("f", Timestamp(Nanosecond, None), true).into();
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = "Invalid/Timezone".into();
+        options.execution.time_zone = Some("Invalid/Timezone".to_string());
         let udf = ToTimestampFunc::new_with_config(&options);
 
         let make_args = |value: &str, format: &str| datafusion_expr::ScalarFunctionArgs {

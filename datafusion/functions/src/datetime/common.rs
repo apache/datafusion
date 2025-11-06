@@ -976,7 +976,7 @@ mod tests {
     #[test]
     fn from_config_blank_timezone_defaults_to_utc() {
         let mut config = ConfigOptions::default();
-        config.execution.time_zone.clear();
+        config.execution.time_zone = None;
 
         let timezone = ConfiguredTimeZone::from_config(&config);
         assert_eq!(timezone, ConfiguredTimeZone::utc());
