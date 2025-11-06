@@ -1192,7 +1192,7 @@ async fn create_scalar_function_from_sql_statement_default_arguments() -> Result
     let ctx = SessionContext::new().with_function_factory(function_factory.clone());
 
     let sql = r#"
-    CREATE FUNCTION better_add(a DOUBLE DEFAULT 2.0, b DOUBLE DEFAULT 2.0)
+    CREATE FUNCTION better_add(a DOUBLE = 2.0, b DOUBLE = 2.0)
         RETURNS DOUBLE
         RETURN $a + $b
     "#;
@@ -1244,10 +1244,32 @@ async fn create_scalar_function_from_sql_statement_default_arguments() -> Result
     );
 
     assert!(ctx.sql("select better_add(2.0, 2.0, 2.0)").await.is_err());
+    assert!(ctx.sql("drop function better_add").await.is_ok());
+
+    // works with positional style
+    let sql = r#"
+    CREATE FUNCTION better_add(DOUBLE, DOUBLE = 2.0)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+    assert!(ctx.sql(sql).await.is_ok());
+
+    assert!(ctx.sql("select better_add()").await.is_err());
+    let result = ctx.sql("select better_add(2.0)").await?.collect().await?;
+    assert_batches_eq!(
+        &[
+            "+------------------------+",
+            "| better_add(Float64(2)) |",
+            "+------------------------+",
+            "| 4.0                    |",
+            "+------------------------+",
+        ],
+        &result
+    );
 
     // non-default argument cannot follow default argument
     let bad_expression_sql = r#"
-    CREATE FUNCTION bad_expression_fun(a DOUBLE DEFAULT 2.0, b DOUBLE)
+    CREATE FUNCTION bad_expression_fun(a DOUBLE = 2.0, b DOUBLE)
         RETURNS DOUBLE
         RETURN $a + $b
     "#;
@@ -1257,6 +1279,20 @@ async fn create_scalar_function_from_sql_statement_default_arguments() -> Result
         .expect_err("non-default argument cannot follow default argument");
     let expected =
         "Error during planning: Non-default arguments cannot follow default arguments.";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // FIXME: The `DEFAULT` syntax does not work with positional params
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE DEFAULT 2.0)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+    let err = ctx
+        .sql(bad_expression_sql)
+        .await
+        .expect_err("sqlparser error");
+    let expected =
+        "SQL error: ParserError(\"Expected: ), found: 2.0 at Line: 2, Column: 63\")";
     assert!(expected.starts_with(&err.strip_backtrace()));
     Ok(())
 }
