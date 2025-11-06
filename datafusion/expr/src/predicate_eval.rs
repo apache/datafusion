@@ -21,14 +21,23 @@ use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, ExprSchema, ScalarValue};
 use datafusion_expr_common::operator::Operator;
+use std::ops::{BitAnd, BitOr, Not};
 
 /// Represents the possible values for SQL's three valued logic.
-/// `Option<bool>` is not used for this since `None` is used by
-/// [const_eval_predicate] to represent inconclusive answers.
-pub(super) enum TriStateBool {
+enum TriStateBool {
     True,
     False,
     Uncertain,
+}
+
+impl From<Option<bool>> for TriStateBool {
+    fn from(value: Option<bool>) -> Self {
+        match value {
+            None => Uncertain,
+            Some(true) => True,
+            Some(false) => False,
+        }
+    }
 }
 
 impl TryFrom<&ScalarValue> for TriStateBool {
@@ -50,12 +59,77 @@ impl TryFrom<&ScalarValue> for TriStateBool {
     }
 }
 
+impl TriStateBool {
+    fn is_null(&self) -> TriStateBool {
+        match self {
+            True | False => False,
+            Uncertain => True,
+        }
+    }
+
+    fn is_true(&self) -> TriStateBool {
+        match self {
+            True => True,
+            Uncertain | False => False,
+        }
+    }
+
+    fn is_false(&self) -> TriStateBool {
+        match self {
+            False => True,
+            Uncertain | True => False,
+        }
+    }
+
+    fn is_unknown(&self) -> TriStateBool {
+        match self {
+            Uncertain => True,
+            True | False => False,
+        }
+    }
+}
+
+impl Not for TriStateBool {
+    type Output = TriStateBool;
+
+    fn not(self) -> Self::Output {
+        match self {
+            True => False,
+            False => True,
+            Uncertain => Uncertain,
+        }
+    }
+}
+
+impl BitAnd for TriStateBool {
+    type Output = TriStateBool;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (False, _) | (_, False) => False,
+            (Uncertain, _) | (_, Uncertain) => Uncertain,
+            (True, True) => True,
+        }
+    }
+}
+
+impl BitOr for TriStateBool {
+    type Output = TriStateBool;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (True, _) | (_, True) => True,
+            (Uncertain, _) | (_, Uncertain) => Uncertain,
+            (False, False) => False,
+        }
+    }
+}
+
 /// Attempts to partially constant-evaluate a predicate under SQL three-valued logic.
 ///
 /// Semantics of the return value:
-/// - `Some(True)`      => predicate is provably true
-/// - `Some(False)`     => predicate is provably false
-/// - `Some(Uncertain)` => predicate is provably unknown (i.e., can only be NULL)
+/// - `Some(true)`      => predicate is provably true
+/// - `Some(false)`     => predicate is provably false
 /// - `None`            => inconclusive with available static information
 ///
 /// The evaluation is conservative and only uses:
@@ -67,17 +141,18 @@ impl TryFrom<&ScalarValue> for TriStateBool {
 /// It does not evaluate user-defined functions.
 pub(super) fn const_eval_predicate<F>(
     predicate: &Expr,
-    input_schema: &dyn ExprSchema,
     evaluates_to_null: F,
-) -> Option<TriStateBool>
+    input_schema: &dyn ExprSchema,
+) -> Option<bool>
 where
-    F: Fn(&Expr) -> TriStateBool,
+    F: Fn(&Expr) -> Option<bool>,
 {
     PredicateConstEvaluator {
         input_schema,
         evaluates_to_null,
     }
     .const_eval_predicate(predicate)
+    .map(|b| matches!(b, True))
 }
 
 pub(super) struct PredicateConstEvaluator<'a, F> {
@@ -87,24 +162,22 @@ pub(super) struct PredicateConstEvaluator<'a, F> {
 
 impl<F> PredicateConstEvaluator<'_, F>
 where
-    F: Fn(&Expr) -> TriStateBool,
+    F: Fn(&Expr) -> Option<bool>,
 {
     fn const_eval_predicate(&self, predicate: &Expr) -> Option<TriStateBool> {
         match predicate {
             Expr::Literal(scalar, _) => TriStateBool::try_from(scalar).ok(),
             Expr::IsNotNull(e) => {
                 if let Ok(false) = e.nullable(self.input_schema) {
-                    // If `e` is not nullable, then `e IS NOT NULL` is always true
+                    // If `e` is not nullable -> `e IS NOT NULL` is true
                     return Some(True);
                 }
 
                 match e.get_type(self.input_schema) {
-                    Ok(DataType::Boolean) => match self.const_eval_predicate(e) {
-                        Some(True) | Some(False) => Some(True),
-                        Some(Uncertain) => Some(False),
-                        None => None,
-                    },
-                    Ok(_) => match self.is_null(e) {
+                    Ok(DataType::Boolean) => {
+                        self.const_eval_predicate(e).map(|b| b.is_null())
+                    }
+                    Ok(_) => match self.evaluates_to_null(e) {
                         True => Some(False),
                         False => Some(True),
                         Uncertain => None,
@@ -114,17 +187,15 @@ where
             }
             Expr::IsNull(e) => {
                 if let Ok(false) = e.nullable(self.input_schema) {
-                    // If `e` is not nullable, then `e IS NULL` is always false
+                    // If `e` is not nullable -> `e IS NULL` is false
                     return Some(False);
                 }
 
                 match e.get_type(self.input_schema) {
-                    Ok(DataType::Boolean) => match self.const_eval_predicate(e) {
-                        Some(True) | Some(False) => Some(False),
-                        Some(Uncertain) => Some(True),
-                        None => None,
-                    },
-                    Ok(_) => match self.is_null(e) {
+                    Ok(DataType::Boolean) => {
+                        self.const_eval_predicate(e).map(|b| !b.is_null())
+                    }
+                    Ok(_) => match self.evaluates_to_null(e) {
                         True => Some(True),
                         False => Some(False),
                         Uncertain => None,
@@ -132,42 +203,15 @@ where
                     Err(_) => None,
                 }
             }
-            Expr::IsTrue(e) => match self.const_eval_predicate(e) {
-                Some(True) => Some(True),
-                Some(_) => Some(False),
-                None => None,
-            },
-            Expr::IsNotTrue(e) => match self.const_eval_predicate(e) {
-                Some(True) => Some(False),
-                Some(_) => Some(True),
-                None => None,
-            },
-            Expr::IsFalse(e) => match self.const_eval_predicate(e) {
-                Some(False) => Some(True),
-                Some(_) => Some(False),
-                None => None,
-            },
-            Expr::IsNotFalse(e) => match self.const_eval_predicate(e) {
-                Some(False) => Some(False),
-                Some(_) => Some(True),
-                None => None,
-            },
-            Expr::IsUnknown(e) => match self.const_eval_predicate(e) {
-                Some(Uncertain) => Some(True),
-                Some(_) => Some(False),
-                None => None,
-            },
-            Expr::IsNotUnknown(e) => match self.const_eval_predicate(e) {
-                Some(Uncertain) => Some(False),
-                Some(_) => Some(True),
-                None => None,
-            },
-            Expr::Not(e) => match self.const_eval_predicate(e) {
-                Some(True) => Some(False),
-                Some(False) => Some(True),
-                Some(Uncertain) => Some(Uncertain),
-                None => None,
-            },
+            Expr::IsTrue(e) => self.const_eval_predicate(e).map(|b| b.is_true()),
+            Expr::IsNotTrue(e) => self.const_eval_predicate(e).map(|b| !b.is_true()),
+            Expr::IsFalse(e) => self.const_eval_predicate(e).map(|b| b.is_false()),
+            Expr::IsNotFalse(e) => self.const_eval_predicate(e).map(|b| !b.is_false()),
+            Expr::IsUnknown(e) => self.const_eval_predicate(e).map(|b| b.is_unknown()),
+            Expr::IsNotUnknown(e) => {
+                self.const_eval_predicate(e).map(|b| !b.is_unknown())
+            }
+            Expr::Not(e) => self.const_eval_predicate(e).map(|b| !b),
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::And,
@@ -178,11 +222,8 @@ where
                     self.const_eval_predicate(right),
                 ) {
                     (Some(False), _) | (_, Some(False)) => Some(False),
-                    (Some(True), Some(True)) => Some(True),
-                    (Some(Uncertain), Some(_)) | (Some(_), Some(Uncertain)) => {
-                        Some(Uncertain)
-                    }
-                    _ => None,
+                    (None, _) | (_, None) => None,
+                    (Some(l), Some(r)) => Some(l & r),
                 }
             }
             Expr::BinaryExpr(BinaryExpr {
@@ -195,14 +236,11 @@ where
                     self.const_eval_predicate(right),
                 ) {
                     (Some(True), _) | (_, Some(True)) => Some(True),
-                    (Some(False), Some(False)) => Some(False),
-                    (Some(Uncertain), Some(_)) | (Some(_), Some(Uncertain)) => {
-                        Some(Uncertain)
-                    }
-                    _ => None,
+                    (None, _) | (_, None) => None,
+                    (Some(l), Some(r)) => Some(l | r),
                 }
             }
-            e => match self.is_null(e) {
+            e => match self.evaluates_to_null(e) {
                 True => Some(Uncertain),
                 _ => None,
             },
@@ -213,13 +251,17 @@ where
     ///
     /// This function returns:
     /// - `True` if `expr` is provably `NULL`
-    /// - `False` if `expr` can provably not `NULL`
+    /// - `False` if `expr` is provably not `NULL`
     /// - `Uncertain` if the result is inconclusive
-    fn is_null(&self, expr: &Expr) -> TriStateBool {
+    fn evaluates_to_null(&self, expr: &Expr) -> TriStateBool {
         match expr {
-            Expr::Literal(ScalarValue::Null, _) => {
+            Expr::Literal(s, _) => {
                 // Literal null is obviously null
-                True
+                if s.is_null() {
+                    True
+                } else {
+                    False
+                }
             }
             Expr::Alias(_)
             | Expr::Between(_)
@@ -232,17 +274,18 @@ where
                 // These expressions are null if any of their direct children is null
                 // If any child is inconclusive, the result for this expression is also inconclusive
                 let mut is_null = False;
-                let _ = expr.apply_children(|child| match self.is_null(child) {
-                    True => {
-                        is_null = True;
-                        Ok(TreeNodeRecursion::Stop)
-                    }
-                    False => Ok(TreeNodeRecursion::Continue),
-                    Uncertain => {
-                        is_null = Uncertain;
-                        Ok(TreeNodeRecursion::Stop)
-                    }
-                });
+                let _ =
+                    expr.apply_children(|child| match self.evaluates_to_null(child) {
+                        True => {
+                            is_null = True;
+                            Ok(TreeNodeRecursion::Stop)
+                        }
+                        False => Ok(TreeNodeRecursion::Continue),
+                        Uncertain => {
+                            is_null = Uncertain;
+                            Ok(TreeNodeRecursion::Stop)
+                        }
+                    });
                 is_null
             }
             e => {
@@ -250,8 +293,8 @@ where
                     // If `expr` is not nullable, we can be certain `expr` is not null
                     False
                 } else {
-                    // Finally, ask the callback if it knows the nullability of `expr`
-                    (self.evaluates_to_null)(e)
+                    // Finally, ask the callback if it knows the nullness of `expr`
+                    (self.evaluates_to_null)(e).into()
                 }
             }
         }

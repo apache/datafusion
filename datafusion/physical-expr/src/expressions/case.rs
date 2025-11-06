@@ -17,8 +17,7 @@
 
 use super::{Column, Literal};
 use crate::expressions::case::ResultState::{Complete, Empty, Partial};
-use crate::expressions::try_cast;
-use crate::expressions::{try_cast, BinaryExpr, IsNotNullExpr, IsNullExpr, NotExpr};
+use crate::expressions::{lit, try_cast};
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
@@ -39,14 +38,9 @@ use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
-use super::{Column, Literal};
-use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
-use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -1290,18 +1284,39 @@ impl PhysicalExpr for CaseExpr {
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
         // this expression is nullable if any of the input expressions are nullable
-        let then_nullable = self
+        let any_nullable_thens = !self
             .body
             .when_then_expr
             .iter()
-            .filter(|(w, t)| {
-                // Disregard branches where we can determine statically that the predicate
-                // is always false when the then expression would evaluate to null
-                const_result_when_value_is_null(w.as_ref(), t.as_ref()).unwrap_or(true)
+            .filter_map(|(w, t)| {
+                match t.nullable(input_schema) {
+                    // Branches with a then expression that is not nullable can be skipped
+                    Ok(false) => None,
+                    // Pass on error determining nullability verbatim
+                    Err(e) => Some(Err(e)),
+                    // For branches with a nullable 'then' expression, try to determine
+                    // using const evaluation if the branch will be taken when
+                    // the 'then' expression evaluates to null.
+                    Ok(true) => {
+                        let is_null =
+                            |expr: &dyn PhysicalExpr /* Type */| expr.dyn_eq(t.as_ref());
+
+                        match const_eval_predicate(w, is_null, input_schema) {
+                            // Const evaluation was inconclusive or determined the branch
+                            // would be taken
+                            Ok(None) | Ok(Some(true)) => Some(Ok(())),
+                            // Const evaluation proves the branch will never be taken.
+                            // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                            Ok(Some(false)) => None,
+                            Err(e) => Some(Err(e)),
+                        }
+                    }
+                }
             })
-            .map(|(_, t)| t.nullable(input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        if then_nullable.contains(&true) {
+            .collect::<Result<Vec<_>>>()?
+            .is_empty();
+
+        if any_nullable_thens {
             Ok(true)
         } else if let Some(e) = &self.body.else_expr {
             e.nullable(input_schema)
@@ -1406,52 +1421,50 @@ impl PhysicalExpr for CaseExpr {
     }
 }
 
-/// Determines if the given `predicate` can be const evaluated if `value` were to evaluate to `NULL`.
-/// Returns a `Some` value containing the const result if so; otherwise returns `None`.
-fn const_result_when_value_is_null(
-    predicate: &dyn PhysicalExpr,
-    value: &dyn PhysicalExpr,
-) -> Option<bool> {
-    let predicate_any = predicate.as_any();
-    if let Some(not_null) = predicate_any.downcast_ref::<IsNotNullExpr>() {
-        if not_null.arg().as_ref().dyn_eq(value) {
-            Some(false)
-        } else {
-            None
-        }
-    } else if let Some(null) = predicate_any.downcast_ref::<IsNullExpr>() {
-        if null.arg().as_ref().dyn_eq(value) {
-            Some(true)
-        } else {
-            None
-        }
-    } else if let Some(not) = predicate_any.downcast_ref::<NotExpr>() {
-        const_result_when_value_is_null(not.arg().as_ref(), value).map(|b| !b)
-    } else if let Some(binary) = predicate_any.downcast_ref::<BinaryExpr>() {
-        match binary.op() {
-            Operator::And => {
-                let l = const_result_when_value_is_null(binary.left().as_ref(), value);
-                let r = const_result_when_value_is_null(binary.right().as_ref(), value);
-                match (l, r) {
-                    (Some(l), Some(r)) => Some(l && r),
-                    (Some(l), None) => Some(l),
-                    (None, Some(r)) => Some(r),
-                    _ => None,
-                }
+/// Attempts to const evaluate the given `predicate` with the assumption that `value` evaluates to `NULL`.
+/// Returns:
+/// - `Some(true)` if the predicate evaluates to a truthy value.
+/// - `Some(false)` if the predicate evaluates to a falsy value.
+/// - `None` if the predicate could not be evaluated.
+fn const_eval_predicate<F>(
+    predicate: &Arc<dyn PhysicalExpr>,
+    evaluates_to_null: F,
+    input_schema: &Schema,
+) -> Result<Option<bool>>
+where
+    F: Fn(&dyn PhysicalExpr) -> bool,
+{
+    // Replace `value` with `NULL` in `predicate`
+    let with_null = Arc::clone(predicate)
+        .transform_down(|e| {
+            if evaluates_to_null(e.as_ref()) {
+                let data_type = e.data_type(input_schema)?;
+                let null_literal = lit(ScalarValue::try_new_null(&data_type)?);
+                Ok(Transformed::yes(null_literal))
+            } else {
+                Ok(Transformed::no(e))
             }
-            Operator::Or => {
-                let l = const_result_when_value_is_null(binary.left().as_ref(), value);
-                let r = const_result_when_value_is_null(binary.right().as_ref(), value);
-                match (l, r) {
-                    (Some(l), Some(r)) => Some(l || r),
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    } else {
-        None
-    }
+        })?
+        .data;
+
+    // Create a dummy record with no columns and one row
+    let batch = RecordBatch::try_new_with_options(
+        Arc::new(Schema::empty()),
+        vec![],
+        &RecordBatchOptions::new().with_row_count(Some(1)),
+    )?;
+
+    // Evaluate the predicate and interpret the result as a boolean
+    let result = match with_null.evaluate(&batch) {
+        // An error during evaluation means we couldn't const evaluate the predicate, so return `None`
+        Err(_) => None,
+        Ok(ColumnarValue::Array(array)) => Some(
+            ScalarValue::try_from_array(array.as_ref(), 0)?
+                .cast_to(&DataType::Boolean)?,
+        ),
+        Ok(ColumnarValue::Scalar(scalar)) => Some(scalar.cast_to(&DataType::Boolean)?),
+    };
+    Ok(result.map(|v| matches!(v, ScalarValue::Boolean(Some(true)))))
 }
 
 /// Create a CASE expression
@@ -1476,6 +1489,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
+    use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
@@ -2390,11 +2404,7 @@ mod tests {
 
         assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
         assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
-        assert_nullability(
-            when_then_else(&foo_eq_zero, &foo, &zero)?,
-            &schema,
-            col_is_nullable,
-        );
+        assert_not_nullable(when_then_else(&foo_eq_zero, &foo, &zero)?, &schema);
 
         assert_not_nullable(
             when_then_else(
@@ -2424,7 +2434,7 @@ mod tests {
             &schema,
         );
 
-        assert_nullability(
+        assert_not_nullable(
             when_then_else(
                 &binary(
                     Arc::clone(&foo_is_not_null),
@@ -2436,10 +2446,9 @@ mod tests {
                 &zero,
             )?,
             &schema,
-            col_is_nullable,
         );
 
-        assert_nullability(
+        assert_not_nullable(
             when_then_else(
                 &binary(
                     Arc::clone(&foo_eq_zero),
@@ -2451,13 +2460,12 @@ mod tests {
                 &zero,
             )?,
             &schema,
-            col_is_nullable,
         );
 
         assert_nullability(
             when_then_else(
                 &binary(
-                    Arc::clone(&foo_is_not_null),
+                    Arc::clone(&foo_is_null),
                     Operator::Or,
                     Arc::clone(&foo_eq_zero),
                     &schema,
@@ -2474,7 +2482,7 @@ mod tests {
                 &binary(
                     binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?,
                     Operator::Or,
-                    Arc::clone(&foo_is_not_null),
+                    Arc::clone(&foo_is_null),
                     &schema,
                 )?,
                 &foo,

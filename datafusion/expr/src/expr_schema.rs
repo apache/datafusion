@@ -21,7 +21,6 @@ use crate::expr::{
     InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
-use crate::predicate_eval::TriStateBool;
 use crate::type_coercion::functions::{
     data_types_with_scalar_udf, fields_with_aggregate_udf, fields_with_window_udf,
 };
@@ -291,33 +290,31 @@ impl ExprSchemable for Expr {
                         match t.nullable(input_schema) {
                             // Branches with a then expression that is not nullable can be skipped
                             Ok(false) => None,
-                            // Pass error determining nullability on verbatim
+                            // Pass on error determining nullability verbatim
                             Err(e) => Some(Err(e)),
-                            // For branches with a nullable then expressions try to determine
+                            // For branches with a nullable 'then' expression, try to determine
                             // using limited const evaluation if the branch will be taken when
-                            // the then expression evaluates to null.
+                            // the 'then' expression evaluates to null.
                             Ok(true) => {
-                                let const_result = predicate_eval::const_eval_predicate(
-                                    w,
-                                    input_schema,
-                                    |expr| {
-                                        if expr.eq(t) {
-                                            TriStateBool::True
-                                        } else {
-                                            TriStateBool::Uncertain
-                                        }
-                                    },
-                                );
+                                let is_null = |expr: &Expr /* Type */| {
+                                    if expr.eq(t) {
+                                        Some(true)
+                                    } else {
+                                        None
+                                    }
+                                };
 
-                                match const_result {
+                                match predicate_eval::const_eval_predicate(
+                                    w,
+                                    is_null,
+                                    input_schema,
+                                ) {
                                     // Const evaluation was inconclusive or determined the branch
                                     // would be taken
-                                    None | Some(TriStateBool::True) => Some(Ok(())),
+                                    None | Some(true) => Some(Ok(())),
                                     // Const evaluation proves the branch will never be taken.
-                                    // The most common pattern for this is
-                                    // `WHEN x IS NOT NULL THEN x`.
-                                    Some(TriStateBool::False)
-                                    | Some(TriStateBool::Uncertain) => None,
+                                    // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                                    Some(false) => None,
                                 }
                             }
                         }
