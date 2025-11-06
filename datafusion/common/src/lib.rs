@@ -20,6 +20,9 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// This lint rule is enforced in `../Cargo.toml`, but it's okay to skip them in tests
+// See details in https://github.com/apache/datafusion/issues/18503
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 mod column;
 mod dfschema;
