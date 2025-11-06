@@ -1185,7 +1185,7 @@ mod test {
         Err(ArrowError::SchemaError("bar".to_string()).into())
     }
 
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn do_root_test(e: DataFusionError, exp: DataFusionError) {
         let e = e.find_root();
 

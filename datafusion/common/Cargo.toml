@@ -37,6 +37,9 @@ all-features = true
 # moves.
 # Reference: <https://rust-lang.github.io/rust-clippy/master/index.html#needless_pass_by_value>
 needless_pass_by_value = "deny"
+# Make sure fast / cheap clones on Arc are explicit:
+# https://github.com/apache/datafusion/issues/11143
+clone_on_ref_ptr = "deny"
 
 [lib]
 name = "datafusion_common"

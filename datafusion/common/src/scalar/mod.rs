@@ -5567,7 +5567,7 @@ mod tests {
     }
 
     // Verifies that ScalarValue has the same behavior with compute kernel when it overflows.
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn check_scalar_add_overflow<T>(left: ScalarValue, right: ScalarValue)
     where
         T: ArrowNumericType,
@@ -7097,7 +7097,7 @@ mod tests {
     /// 1. convert to a `ScalarValue`
     /// 2. Convert `ScalarValue` back to an `ArrayRef`
     /// 3. Compare the original array (sliced) and new array for equality
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn round_trip_through_scalar(arr: ArrayRef) {
         for i in 0..arr.len() {
             // convert Scalar --> Array
@@ -7570,7 +7570,7 @@ mod tests {
     }
 
     // mimics how casting work on scalar values by `casting` `scalar` to `desired_type`
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn check_scalar_cast(scalar: ScalarValue, desired_type: DataType) {
         // convert from scalar --> Array to call cast
         let scalar_array = scalar.to_array().expect("Failed to convert to array");

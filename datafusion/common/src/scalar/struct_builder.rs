@@ -83,7 +83,7 @@ impl ScalarStructBuilder {
     }
 
     /// Add the specified field and `ScalarValue` to the struct.
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn with_scalar(self, field: impl IntoFieldRef, value: ScalarValue) -> Self {
         // valid scalar value should not fail
         let array = value.to_array().unwrap();
