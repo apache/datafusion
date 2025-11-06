@@ -289,9 +289,7 @@ impl SchemaProvider for ForeignSchemaProvider {
             let table: Option<FFI_TableProvider> =
                 df_result!((self.0.table)(&self.0, name.into()).await)?.into();
 
-            let table = table.as_ref().map(|t| {
-                Arc::new(ForeignTableProvider::from(t)) as Arc<dyn TableProvider>
-            });
+            let table = table.as_ref().map(<Arc<dyn TableProvider>>::from);
 
             Ok(table)
         }

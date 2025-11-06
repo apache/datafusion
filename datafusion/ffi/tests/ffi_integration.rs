@@ -21,9 +21,8 @@
 mod tests {
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
-    use datafusion_catalog::CatalogProvider;
+    use datafusion_catalog::{CatalogProvider, TableProvider};
     use datafusion_expr::registry::FunctionRegistry;
-    use datafusion_ffi::table_provider::ForeignTableProvider;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
@@ -48,10 +47,10 @@ mod tests {
 
         // In order to access the table provider within this executable, we need to
         // turn it into a `ForeignTableProvider`.
-        let foreign_table_provider: ForeignTableProvider = (&ffi_table_provider).into();
+        let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_table_provider).into();
 
         // Display the data to show the full cycle works.
-        ctx.register_table("external_table", Arc::new(foreign_table_provider))?;
+        ctx.register_table("external_table", foreign_table_provider)?;
         let df = ctx.table("external_table").await?;
         let results = df.collect().await?;
 

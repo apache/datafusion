@@ -23,8 +23,8 @@ use datafusion::{
 };
 
 use abi_stable::library::{development_utils::compute_library_path, RootModule};
+use datafusion::catalog::TableProvider;
 use datafusion::execution::FunctionRegistry;
-use datafusion_ffi::table_provider::ForeignTableProvider;
 use ffi_module_interface::TableProviderModuleRef;
 
 #[tokio::main]
@@ -54,10 +54,10 @@ async fn main() -> Result<()> {
 
     // In order to access the table provider within this executable, we need to
     // turn it into a `ForeignTableProvider`.
-    let foreign_table_provider: ForeignTableProvider = (&ffi_table_provider).into();
+    let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_table_provider).into();
 
     // Display the data to show the full cycle works.
-    ctx.register_table("external_table", Arc::new(foreign_table_provider))?;
+    ctx.register_table("external_table", foreign_table_provider)?;
     let df = ctx.table("external_table").await?;
     df.show().await?;
 

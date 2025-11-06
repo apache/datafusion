@@ -153,34 +153,44 @@ pub struct FFI_TableProvider {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignExecutionPlan`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_TableProvider {}
 unsafe impl Sync for FFI_TableProvider {}
 
 struct ProviderPrivateData {
-    provider: Arc<dyn TableProvider + Send>,
+    provider: Arc<dyn TableProvider + Send + Sync>,
     runtime: Option<Handle>,
 }
 
-unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
-    let private_data = provider.private_data as *const ProviderPrivateData;
-    let provider = &(*private_data).provider;
+impl FFI_TableProvider {
+    fn inner(&self) -> &Arc<dyn TableProvider + Send + Sync> {
+        let private_data = self.private_data as *const ProviderPrivateData;
+        unsafe { &(*private_data).provider }
+    }
 
-    provider.schema().into()
+    fn runtime(&self) -> &Option<Handle> {
+        let private_data = self.private_data as *const ProviderPrivateData;
+        unsafe { &(*private_data).runtime }
+    }
+}
+
+unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
+    provider.inner().schema().into()
 }
 
 unsafe extern "C" fn table_type_fn_wrapper(
     provider: &FFI_TableProvider,
 ) -> FFI_TableType {
-    let private_data = provider.private_data as *const ProviderPrivateData;
-    let provider = &(*private_data).provider;
-
-    provider.table_type().into()
+    provider.inner().table_type().into()
 }
 
 fn supports_filters_pushdown_internal(
-    provider: &Arc<dyn TableProvider + Send>,
+    provider: &Arc<dyn TableProvider + Send + Sync>,
     filters_serialized: &[u8],
     function_registry: &dyn FunctionRegistry,
 ) -> Result<RVec<FFI_TableProviderFilterPushDown>> {
@@ -213,11 +223,9 @@ unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     let function_registry = rresult_return!(
         <Arc<dyn FunctionRegistry + Send + Sync>>::try_from(&provider.function_registry)
     );
-    let private_data = provider.private_data as *const ProviderPrivateData;
-    let provider = &(*private_data).provider;
 
     supports_filters_pushdown_internal(
-        provider,
+        provider.inner(),
         &filters_serialized,
         function_registry.as_ref(),
     )
@@ -236,9 +244,8 @@ unsafe extern "C" fn scan_fn_wrapper(
         <Arc<dyn FunctionRegistry + Send + Sync>>::try_from(&provider.function_registry)
             .expect("");
     let session = ForeignSession::try_from(session);
-    let private_data = provider.private_data as *mut ProviderPrivateData;
-    let internal_provider = &(*private_data).provider;
-    let runtime = &(*private_data).runtime;
+    let internal_provider = Arc::clone(provider.inner());
+    let runtime = provider.runtime().clone();
 
     async move {
         let session = rresult_return!(session);
@@ -283,11 +290,10 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     input: &FFI_ExecutionPlan,
     insert_op: FFI_InsertOp,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
-    let private_data = provider.private_data as *mut ProviderPrivateData;
-    let internal_provider = &(*private_data).provider;
+    let internal_provider = Arc::clone(provider.inner());
     let session = session.clone();
     let input = input.clone();
-    let runtime = &(*private_data).runtime;
+    let runtime = provider.runtime().clone();
 
     async move {
         let local_session = session.as_local();
@@ -338,6 +344,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         release: release_fn_wrapper,
         version: super::version,
         private_data,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -350,7 +357,7 @@ impl Drop for FFI_TableProvider {
 impl FFI_TableProvider {
     /// Creates a new [`FFI_TableProvider`].
     pub fn new(
-        provider: Arc<dyn TableProvider + Send>,
+        provider: Arc<dyn TableProvider + Send + Sync>,
         can_support_pushdown_filters: bool,
         runtime: Option<Handle>,
         function_registry: FFI_WeakFunctionRegistry,
@@ -371,6 +378,7 @@ impl FFI_TableProvider {
             release: release_fn_wrapper,
             version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -385,9 +393,13 @@ pub struct ForeignTableProvider(pub FFI_TableProvider);
 unsafe impl Send for ForeignTableProvider {}
 unsafe impl Sync for ForeignTableProvider {}
 
-impl From<&FFI_TableProvider> for ForeignTableProvider {
+impl From<&FFI_TableProvider> for Arc<dyn TableProvider> {
     fn from(provider: &FFI_TableProvider) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(provider.inner()) as Arc<dyn TableProvider>
+        } else {
+            Arc::new(ForeignTableProvider(provider.clone()))
+        }
     }
 }
 
@@ -541,9 +553,9 @@ mod tests {
         let ffi_provider =
             FFI_TableProvider::new(provider, true, None, function_registry.into());
 
-        let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
+        let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
 
-        ctx.register_table("t", Arc::new(foreign_table_provider))?;
+        ctx.register_table("t", foreign_table_provider)?;
 
         let df = ctx.table("t").await?;
 
@@ -586,9 +598,9 @@ mod tests {
         let ffi_provider =
             FFI_TableProvider::new(provider, true, None, function_registry.into());
 
-        let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
+        let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
 
-        ctx.register_table("t", Arc::new(foreign_table_provider))?;
+        ctx.register_table("t", foreign_table_provider)?;
 
         let result = ctx
             .sql("INSERT INTO t VALUES (128.0);")
@@ -635,9 +647,9 @@ mod tests {
         let ffi_provider =
             FFI_TableProvider::new(provider, true, None, function_registry.into());
 
-        let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
+        let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
 
-        ctx.register_table("t", Arc::new(foreign_table_provider))?;
+        ctx.register_table("t", foreign_table_provider)?;
 
         let result = ctx
             .sql("SELECT COUNT(*) as cnt FROM t")

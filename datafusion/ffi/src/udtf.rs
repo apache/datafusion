@@ -23,10 +23,7 @@ use abi_stable::{
 };
 
 use crate::function_registry::FFI_WeakFunctionRegistry;
-use crate::{
-    df_result, rresult_return,
-    table_provider::{FFI_TableProvider, ForeignTableProvider},
-};
+use crate::{df_result, rresult_return, table_provider::FFI_TableProvider};
 use datafusion_catalog::{TableFunctionImpl, TableProvider};
 use datafusion_common::error::Result;
 use datafusion_expr::registry::FunctionRegistry;
@@ -205,9 +202,8 @@ impl TableFunctionImpl for ForeignTableFunction {
         let table_provider = unsafe { (self.0.call)(&self.0, filters_serialized) };
 
         let table_provider = df_result!(table_provider)?;
-        let table_provider: ForeignTableProvider = (&table_provider).into();
 
-        Ok(Arc::new(table_provider))
+        Ok((&table_provider).into())
     }
 }
 
