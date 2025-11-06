@@ -258,7 +258,8 @@ impl TopK {
         }
         // If only a single sort key, and filters out 80% of the rows and existing filter is not very selective,
         // use sort_to_indices to get the top indices from the input batch
-        if sort_keys.len() == 1 && (self.heap.k as f64) < 0.2 * (num_rows as f64) && (true_count > self.heap.k * 2) {
+        let twenty_percent_rows = (num_rows as f64 * 0.2) as usize;
+        if sort_keys.len() == 1 && (self.heap.k as f64) < twenty_percent_rows && (true_count > twenty_percent_rows as f64 * 1.5) {
             let array = sort_keys[0].as_ref();
             selected_rows = Some(TopKSelection::Indices(sort_to_indices(array, None, Some(self.heap.k))?));
         }
