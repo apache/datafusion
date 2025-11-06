@@ -162,7 +162,7 @@ mod tests {
     fn test_all_positional() {
         let param_names = vec!["a".to_string(), "b".to_string()];
 
-        let args = vec![lit(1), lit("hello")];
+        let args = vec![lit(&1), lit(&"hello")];
         let arg_names = vec![None, None];
 
         let result =
@@ -174,7 +174,7 @@ mod tests {
     fn test_all_named() {
         let param_names = vec!["a".to_string(), "b".to_string()];
 
-        let args = vec![lit(1), lit("hello")];
+        let args = vec![lit(&1), lit(&"hello")];
         let arg_names = vec![Some("a".to_string()), Some("b".to_string())];
 
         let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
@@ -186,7 +186,7 @@ mod tests {
         let param_names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
 
         // Call with: func(c => 3.0, a => 1, b => "hello")
-        let args = vec![lit(3.0), lit(1), lit("hello")];
+        let args = vec![lit(&3.0), lit(&1), lit(&"hello")];
         let arg_names = vec![
             Some("c".to_string()),
             Some("a".to_string()),
@@ -197,9 +197,9 @@ mod tests {
 
         // Should be reordered to [a, b, c] = [1, "hello", 3.0]
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0], lit(1));
-        assert_eq!(result[1], lit("hello"));
-        assert_eq!(result[2], lit(3.0));
+        assert_eq!(result[0], lit(&1));
+        assert_eq!(result[1], lit(&"hello"));
+        assert_eq!(result[2], lit(&3.0));
     }
 
     #[test]
@@ -207,16 +207,16 @@ mod tests {
         let param_names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
 
         // Call with: func(1, c => 3.0, b => "hello")
-        let args = vec![lit(1), lit(3.0), lit("hello")];
+        let args = vec![lit(&1), lit(&3.0), lit(&"hello")];
         let arg_names = vec![None, Some("c".to_string()), Some("b".to_string())];
 
         let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
 
         // Should be reordered to [a, b, c] = [1, "hello", 3.0]
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0], lit(1));
-        assert_eq!(result[1], lit("hello"));
-        assert_eq!(result[2], lit(3.0));
+        assert_eq!(result[0], lit(&1));
+        assert_eq!(result[1], lit(&"hello"));
+        assert_eq!(result[2], lit(&3.0));
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
         let param_names = vec!["a".to_string(), "b".to_string()];
 
         // Call with: func(a => 1, "hello") - ERROR
-        let args = vec![lit(1), lit("hello")];
+        let args = vec![lit(&1), lit(&"hello")];
         let arg_names = vec![Some("a".to_string()), None];
 
         let result = resolve_function_arguments(&param_names, args, arg_names);
@@ -240,7 +240,7 @@ mod tests {
         let param_names = vec!["a".to_string(), "b".to_string()];
 
         // Call with: func(x => 1, b => "hello") - ERROR
-        let args = vec![lit(1), lit("hello")];
+        let args = vec![lit(&1), lit(&"hello")];
         let arg_names = vec![Some("x".to_string()), Some("b".to_string())];
 
         let result = resolve_function_arguments(&param_names, args, arg_names);
@@ -256,7 +256,7 @@ mod tests {
         let param_names = vec!["a".to_string(), "b".to_string()];
 
         // Call with: func(a => 1, a => 2) - ERROR
-        let args = vec![lit(1), lit(2)];
+        let args = vec![lit(&1), lit(&2)];
         let arg_names = vec![Some("a".to_string()), Some("a".to_string())];
 
         let result = resolve_function_arguments(&param_names, args, arg_names);
@@ -272,7 +272,7 @@ mod tests {
         let param_names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
 
         // Call with: func(a => 1, c => 3.0) - missing 'b'
-        let args = vec![lit(1), lit(3.0)];
+        let args = vec![lit(&1), lit(&3.0)];
         let arg_names = vec![Some("a".to_string()), Some("c".to_string())];
 
         let result = resolve_function_arguments(&param_names, args, arg_names);

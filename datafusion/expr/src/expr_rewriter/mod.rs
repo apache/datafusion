@@ -390,7 +390,7 @@ mod test {
                     } else {
                         utf8_val
                     };
-                    Ok(Transformed::yes(lit_with_metadata(utf8_val, metadata)))
+                    Ok(Transformed::yes(lit_with_metadata(&utf8_val, metadata)))
                 }
                 // otherwise, return None
                 _ => Ok(Transformed::no(expr)),
@@ -399,19 +399,19 @@ mod test {
 
         // rewrites "foo" --> "bar"
         let rewritten = col("state")
-            .eq(lit("foo"))
+            .eq(lit(&"foo"))
             .transform(transformer)
             .data()
             .unwrap();
-        assert_eq!(rewritten, col("state").eq(lit("bar")));
+        assert_eq!(rewritten, col("state").eq(lit(&"bar")));
 
         // doesn't rewrite
         let rewritten = col("state")
-            .eq(lit("baz"))
+            .eq(lit(&"baz"))
             .transform(transformer)
             .data()
             .unwrap();
-        assert_eq!(rewritten, col("state").eq(lit("baz")));
+        assert_eq!(rewritten, col("state").eq(lit(&"baz")));
     }
 
     #[test]
@@ -486,7 +486,7 @@ mod test {
     #[test]
     fn rewriter_visit() {
         let mut rewriter = RecordingRewriter::default();
-        col("state").eq(lit("CO")).rewrite(&mut rewriter).unwrap();
+        col("state").eq(lit(&"CO")).rewrite(&mut rewriter).unwrap();
 
         assert_eq!(
             rewriter.v,
@@ -514,7 +514,7 @@ mod test {
         );
 
         // change literal type from i32 to i64
-        test_rewrite(col("a").add(lit(1i32)), col("a").add(lit(1i64)));
+        test_rewrite(col("a").add(lit(&1i32)), col("a").add(lit(&1i64)));
 
         // test preserve qualifier
         test_rewrite(

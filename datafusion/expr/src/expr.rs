@@ -3661,9 +3661,9 @@ mod test {
     #[test]
     fn format_case_when() -> Result<()> {
         let expr = case(col("a"))
-            .when(lit(1), lit(true))
-            .when(lit(0), lit(false))
-            .otherwise(lit(ScalarValue::Null))?;
+            .when(lit(&1), lit(&true))
+            .when(lit(&0), lit(&false))
+            .otherwise(lit(&ScalarValue::Null))?;
         let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
         assert_eq!(expected, format!("{expr}"));
         Ok(())
@@ -3687,9 +3687,9 @@ mod test {
     fn test_partial_ord() {
         // Test validates that partial ord is defined for Expr, not
         // intended to exhaustively test all possibilities
-        let exp1 = col("a") + lit(1);
-        let exp2 = col("a") + lit(2);
-        let exp3 = !(col("a") + lit(2));
+        let exp1 = col("a") + lit(&1);
+        let exp2 = col("a") + lit(&2);
+        let exp3 = !(col("a") + lit(&2));
 
         assert!(exp1 < exp2);
         assert!(exp3 > exp2);
@@ -3708,7 +3708,7 @@ mod test {
 
         // multiple columns
         {
-            let expr = col("a") + col("b") + lit(1);
+            let expr = col("a") + col("b") + lit(&1);
             let columns = expr.column_refs();
             assert_eq!(2, columns.len());
             assert!(columns.contains(&Column::from_name("a")));
@@ -3721,35 +3721,35 @@ mod test {
     #[test]
     fn test_logical_ops() {
         assert_eq!(
-            format!("{}", lit(1u32).eq(lit(2u32))),
+            format!("{}", lit(&1u32).eq(lit(&2u32))),
             "UInt32(1) = UInt32(2)"
         );
         assert_eq!(
-            format!("{}", lit(1u32).not_eq(lit(2u32))),
+            format!("{}", lit(&1u32).not_eq(lit(&2u32))),
             "UInt32(1) != UInt32(2)"
         );
         assert_eq!(
-            format!("{}", lit(1u32).gt(lit(2u32))),
+            format!("{}", lit(&1u32).gt(lit(&2u32))),
             "UInt32(1) > UInt32(2)"
         );
         assert_eq!(
-            format!("{}", lit(1u32).gt_eq(lit(2u32))),
+            format!("{}", lit(&1u32).gt_eq(lit(&2u32))),
             "UInt32(1) >= UInt32(2)"
         );
         assert_eq!(
-            format!("{}", lit(1u32).lt(lit(2u32))),
+            format!("{}", lit(&1u32).lt(lit(&2u32))),
             "UInt32(1) < UInt32(2)"
         );
         assert_eq!(
-            format!("{}", lit(1u32).lt_eq(lit(2u32))),
+            format!("{}", lit(&1u32).lt_eq(lit(&2u32))),
             "UInt32(1) <= UInt32(2)"
         );
         assert_eq!(
-            format!("{}", lit(1u32).and(lit(2u32))),
+            format!("{}", lit(&1u32).and(lit(&2u32))),
             "UInt32(1) AND UInt32(2)"
         );
         assert_eq!(
-            format!("{}", lit(1u32).or(lit(2u32))),
+            format!("{}", lit(&1u32).or(lit(&2u32))),
             "UInt32(1) OR UInt32(2)"
         );
     }
@@ -3896,7 +3896,7 @@ mod test {
             format!(
                 "{}",
                 SchemaDisplay(
-                    &lit(1).alias_qualified("table_name".into(), "column_name")
+                    &lit(&1).alias_qualified("table_name".into(), "column_name")
                 )
             ),
             "table_name.column_name"
@@ -3908,7 +3908,7 @@ mod test {
         assert_eq!(
             format!(
                 "{}",
-                SchemaDisplay(&lit(1).alias_qualified(None::<&str>, "column_name"))
+                SchemaDisplay(&lit(&1).alias_qualified(None::<&str>, "column_name"))
             ),
             "column_name"
         );
@@ -3949,7 +3949,7 @@ mod test {
     fn test_accept_exprs() {
         fn accept_exprs<E: AsRef<Expr>>(_: &[E]) {}
 
-        let expr = || -> Expr { lit(1) };
+        let expr = || -> Expr { lit(&1) };
 
         // Call accept_exprs with owned expressions
         let owned_exprs = vec![expr(), expr()];

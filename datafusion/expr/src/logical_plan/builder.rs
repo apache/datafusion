@@ -642,9 +642,9 @@ impl LogicalPlanBuilder {
         let skip_expr = if skip == 0 {
             None
         } else {
-            Some(lit(skip as i64))
+            Some(lit(&(skip as i64)))
         };
-        let fetch_expr = fetch.map(|f| lit(f as i64));
+        let fetch_expr = fetch.map(|f| lit(&(f as i64)));
         self.limit_by_expr(skip_expr, fetch_expr)
     }
 
@@ -2200,7 +2200,7 @@ mod tests {
     fn plan_builder_simple() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-                .filter(col("state").eq(lit("CO")))?
+                .filter(col("state").eq(lit(&"CO")))?
                 .project(vec![col("id")])?
                 .build()?;
 
@@ -2318,7 +2318,7 @@ mod tests {
     fn plan_builder_simple_distinct() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-                .filter(col("state").eq(lit("CO")))?
+                .filter(col("state").eq(lit(&"CO")))?
                 .project(vec![col("id")])?
                 .distinct()?
                 .build()?;
@@ -2691,7 +2691,7 @@ mod tests {
 
     #[test]
     fn test_union_after_join() -> Result<()> {
-        let values = vec![vec![lit(1)]];
+        let values = vec![vec![lit(&1)]];
 
         let left = LogicalPlanBuilder::values(values.clone())?
             .alias("left")?
@@ -2816,8 +2816,8 @@ mod tests {
                 .collect();
         let metadata = FieldMetadata::from(metadata);
         let values = LogicalPlanBuilder::values(vec![
-            vec![lit_with_metadata(1, Some(metadata.clone()))],
-            vec![lit_with_metadata(2, Some(metadata.clone()))],
+            vec![lit_with_metadata(&1, Some(metadata.clone()))],
+            vec![lit_with_metadata(&2, Some(metadata.clone()))],
         ])?
         .build()?;
         assert_eq!(*values.schema().field(0).metadata(), metadata.to_hashmap());
@@ -2829,8 +2829,8 @@ mod tests {
                 .collect();
         let metadata2 = FieldMetadata::from(metadata2);
         assert!(LogicalPlanBuilder::values(vec![
-            vec![lit_with_metadata(1, Some(metadata.clone()))],
-            vec![lit_with_metadata(2, Some(metadata2.clone()))],
+            vec![lit_with_metadata(&1, Some(metadata.clone()))],
+            vec![lit_with_metadata(&2, Some(metadata2.clone()))],
         ])
         .is_err());
 

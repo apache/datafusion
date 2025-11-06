@@ -260,7 +260,7 @@ impl WindowFrame {
                 // ORDER BY clause is present but has more than one column,
                 // it is unchanged. Note that this follows PostgreSQL behavior.
                 if order_by.is_empty() {
-                    order_by.push(lit(1u64).sort(true, false));
+                    order_by.push(lit(&(1u64)).sort(true, false));
                 }
             }
             WindowFrameUnits::Range if order_by.len() != 1 => {

@@ -31,8 +31,12 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
-[lints]
-workspace = true
+[lints] # Overrides / extends workspace.lints
+[lints.clippy]
+# Avoid unnecessary clones for performance, okay to ignore for tests or intentional
+# moves.
+# Reference: <https://rust-lang.github.io/rust-clippy/master/index.html#needless_pass_by_value>
+needless_pass_by_value = "deny"
 
 [lib]
 name = "datafusion_expr"

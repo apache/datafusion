@@ -21,11 +21,11 @@ use crate::Expr;
 use datafusion_common::{metadata::FieldMetadata, ScalarValue};
 
 /// Create a literal expression
-pub fn lit<T: Literal>(n: T) -> Expr {
+pub fn lit<T: Literal>(n: &T) -> Expr {
     n.lit()
 }
 
-pub fn lit_with_metadata<T: Literal>(n: T, metadata: Option<FieldMetadata>) -> Expr {
+pub fn lit_with_metadata<T: Literal>(n: &T, metadata: Option<FieldMetadata>) -> Expr {
     let Some(metadata) = metadata else {
         return n.lit();
     };
@@ -45,7 +45,7 @@ pub fn lit_with_metadata<T: Literal>(n: T, metadata: Option<FieldMetadata>) -> E
 }
 
 /// Create a literal timestamp expression
-pub fn lit_timestamp_nano<T: TimestampLiteral>(n: T) -> Expr {
+pub fn lit_timestamp_nano<T: TimestampLiteral>(n: &T) -> Expr {
     n.lit_timestamp_nano()
 }
 
@@ -202,24 +202,24 @@ mod test {
 
     #[test]
     fn test_lit_nonzero() {
-        let expr = col("id").eq(lit(NonZeroU32::new(1).unwrap()));
-        let expected = col("id").eq(lit(ScalarValue::UInt32(Some(1))));
+        let expr = col("id").eq(lit(&NonZeroU32::new(1).unwrap()));
+        let expected = col("id").eq(lit(&ScalarValue::UInt32(Some(1))));
         assert_eq!(expr, expected);
     }
 
     #[test]
     fn test_lit_timestamp_nano() {
-        let expr = col("time").eq(lit_timestamp_nano(10)); // 10 is an implicit i32
+        let expr = col("time").eq(lit_timestamp_nano(&10)); // 10 is an implicit i32
         let expected =
-            col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10), None)));
+            col("time").eq(lit(&ScalarValue::TimestampNanosecond(Some(10), None)));
         assert_eq!(expr, expected);
 
         let i: i64 = 10;
-        let expr = col("time").eq(lit_timestamp_nano(i));
+        let expr = col("time").eq(lit_timestamp_nano(&i));
         assert_eq!(expr, expected);
 
         let i: u32 = 10;
-        let expr = col("time").eq(lit_timestamp_nano(i));
+        let expr = col("time").eq(lit_timestamp_nano(&i));
         assert_eq!(expr, expected);
     }
 }

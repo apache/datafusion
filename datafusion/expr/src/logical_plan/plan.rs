@@ -3473,7 +3473,7 @@ impl Aggregate {
             input.schema().metadata().clone(),
         )?;
 
-        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+        Self::try_new_with_schema(input, group_expr, aggr_expr, &Arc::new(schema))
     }
 
     /// Create a new aggregate operator using the provided schema to avoid the overhead of
@@ -3485,7 +3485,7 @@ impl Aggregate {
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
-        schema: DFSchemaRef,
+        schema: &DFSchemaRef,
     ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return plan_err!(
@@ -3505,7 +3505,7 @@ impl Aggregate {
         }
 
         let aggregate_func_dependencies =
-            calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
+            calc_func_dependencies_for_aggregate(&group_expr, &input, schema.as_ref())?;
         let new_schema = schema.as_ref().clone();
         let schema = Arc::new(
             new_schema.with_functional_dependencies(aggregate_func_dependencies)?,
@@ -4742,7 +4742,7 @@ mod tests {
 
         table_scan(TableReference::none(), &schema, Some(vec![0, 1]))
             .unwrap()
-            .filter(col("state").eq(lit("CO")))
+            .filter(col("state").eq(lit(&"CO")))
             .unwrap()
             .project(vec![col("id")])
             .unwrap()
@@ -4839,7 +4839,7 @@ mod tests {
                     vec![col("foo")],
                     vec![col("bar")],
                 ]))],
-                vec![count(lit(true))],
+                vec![count(lit(&true))],
             )
             .unwrap()
             .build()
@@ -4912,7 +4912,7 @@ mod tests {
         let col = schema.field_names()[0].clone();
 
         let filter =
-            Filter::try_new(Expr::Column(col.into()).eq(lit(1i32)), scan).unwrap();
+            Filter::try_new(Expr::Column(col.into()).eq(lit(&1i32)), scan).unwrap();
         assert!(filter.is_scalar());
     }
 
@@ -4930,7 +4930,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let external_filter = col("foo").eq(lit(true));
+        let external_filter = col("foo").eq(lit(&true));
 
         // after transformation, because plan is not the same anymore,
         // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs
@@ -5057,7 +5057,7 @@ mod tests {
         let subquery_plan =
             table_scan(TableReference::none(), &subquery_schema, Some(vec![0]))
                 .unwrap()
-                .filter(col("sub_id").eq(lit(0)))
+                .filter(col("sub_id").eq(lit(&0)))
                 .unwrap()
                 .build()
                 .unwrap();
@@ -5066,7 +5066,7 @@ mod tests {
 
         let plan = table_scan(TableReference::none(), &schema, Some(vec![0]))
             .unwrap()
-            .filter(col("id").eq(lit(0)))
+            .filter(col("id").eq(lit(&0)))
             .unwrap()
             .project(vec![col("id"), scalar_subquery(Arc::new(subquery_plan))])
             .unwrap()
@@ -5283,11 +5283,11 @@ mod tests {
             )?;
             let LogicalPlan::Join(join) = join.with_new_exprs(
                 vec![
-                    binary_expr(col("t1.a"), Operator::Plus, lit(1)),
-                    binary_expr(col("t2.a"), Operator::Plus, lit(2)),
+                    binary_expr(col("t1.a"), Operator::Plus, lit(&1)),
+                    binary_expr(col("t2.a"), Operator::Plus, lit(&2)),
                     col("t1.b"),
                     col("t2.b"),
-                    lit(true),
+                    lit(&true),
                 ],
                 join.inputs().into_iter().cloned().collect(),
             )?
@@ -5298,13 +5298,13 @@ mod tests {
                 join.on,
                 vec![
                     (
-                        binary_expr(col("t1.a"), Operator::Plus, lit(1)),
-                        binary_expr(col("t2.a"), Operator::Plus, lit(2))
+                        binary_expr(col("t1.a"), Operator::Plus, lit(&1)),
+                        binary_expr(col("t2.a"), Operator::Plus, lit(&2))
                     ),
                     (col("t1.b"), (col("t2.b")))
                 ]
             );
-            assert_eq!(join.filter, Some(lit(true)));
+            assert_eq!(join.filter, Some(lit(&true)));
         }
 
         Ok(())
@@ -5625,7 +5625,7 @@ mod tests {
                 Arc::new(left_plan.clone()),
                 Arc::new(right_plan.clone()),
                 vec![(col("t1.id"), col("t2.id"))],
-                Some(col("t1.value").gt(lit(5.0))),
+                Some(col("t1.value").gt(lit(&5.0))),
                 join_type,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,

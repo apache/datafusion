@@ -178,7 +178,7 @@ impl ExprSchemable for Expr {
                             },
                             utils::generate_signature_error_msg(
                                 func.name(),
-                                func.signature().clone(),
+                                func.signature(),
                                 &data_types
                             )
                         )
@@ -525,7 +525,7 @@ impl ExprSchemable for Expr {
                             },
                             utils::generate_signature_error_msg(
                                 func.name(),
-                                func.signature().clone(),
+                                func.signature(),
                                 &arg_types,
                             )
                         )
@@ -554,7 +554,7 @@ impl ExprSchemable for Expr {
                             },
                             utils::generate_signature_error_msg(
                                 func.name(),
-                                func.signature().clone(),
+                                func.signature(),
                                 &arg_types,
                             )
                         )
@@ -684,7 +684,7 @@ impl Expr {
                             },
                             utils::generate_signature_error_msg(
                                 fun.name(),
-                                fun.signature(),
+                                &fun.signature(),
                                 &data_types
                             )
                         )
@@ -712,7 +712,7 @@ impl Expr {
                             },
                             utils::generate_signature_error_msg(
                                 fun.name(),
-                                fun.signature(),
+                                &fun.signature(),
                                 &data_types
                             )
                         )
@@ -779,14 +779,14 @@ mod tests {
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
-            let expr = lit(ScalarValue::Null).$EXPR_TYPE();
+            let expr = lit(&ScalarValue::Null).$EXPR_TYPE();
             assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
         }};
     }
 
     #[test]
     fn expr_schema_nullability() {
-        let expr = col("foo").eq(lit(1));
+        let expr = col("foo").eq(lit(&1));
         assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
         assert!(expr
             .nullable(&MockExprSchema::new().with_nullable(true))
@@ -810,16 +810,16 @@ mod tests {
                 .with_nullable(nullable)
         };
 
-        let expr = col("foo").between(lit(1), lit(2));
+        let expr = col("foo").between(lit(&1), lit(&2));
         assert!(!expr.nullable(&get_schema(false)).unwrap());
         assert!(expr.nullable(&get_schema(true)).unwrap());
 
-        let null = lit(ScalarValue::Int32(None));
+        let null = lit(&ScalarValue::Int32(None));
 
-        let expr = col("foo").between(null.clone(), lit(2));
+        let expr = col("foo").between(null.clone(), lit(&2));
         assert!(expr.nullable(&get_schema(false)).unwrap());
 
-        let expr = col("foo").between(lit(1), null.clone());
+        let expr = col("foo").between(lit(&1), null.clone());
         assert!(expr.nullable(&get_schema(false)).unwrap());
 
         let expr = col("foo").between(null.clone(), null);
@@ -834,7 +834,7 @@ mod tests {
                 .with_nullable(nullable)
         };
 
-        let expr = col("foo").in_list(vec![lit(1); 5], false);
+        let expr = col("foo").in_list(vec![lit(&1); 5], false);
         assert!(!expr.nullable(&get_schema(false)).unwrap());
         assert!(expr.nullable(&get_schema(true)).unwrap());
         // Testing nullable() returns an error.
@@ -842,12 +842,12 @@ mod tests {
             .nullable(&get_schema(false).with_error_on_nullable(true))
             .is_err());
 
-        let null = lit(ScalarValue::Int32(None));
-        let expr = col("foo").in_list(vec![null, lit(1)], false);
+        let null = lit(&ScalarValue::Int32(None));
+        let expr = col("foo").in_list(vec![null, lit(&1)], false);
         assert!(expr.nullable(&get_schema(false)).unwrap());
 
         // Testing on long list
-        let expr = col("foo").in_list(vec![lit(1); 6], false);
+        let expr = col("foo").in_list(vec![lit(&1); 6], false);
         assert!(expr.nullable(&get_schema(false)).unwrap());
     }
 
@@ -859,11 +859,11 @@ mod tests {
                 .with_nullable(nullable)
         };
 
-        let expr = col("foo").like(lit("bar"));
+        let expr = col("foo").like(lit(&"bar"));
         assert!(!expr.nullable(&get_schema(false)).unwrap());
         assert!(expr.nullable(&get_schema(true)).unwrap());
 
-        let expr = col("foo").like(lit(ScalarValue::Utf8(None)));
+        let expr = col("foo").like(lit(&ScalarValue::Utf8(None)));
         assert!(expr.nullable(&get_schema(false)).unwrap());
     }
 

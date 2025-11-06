@@ -354,7 +354,7 @@ fn get_excluded_columns(
 /// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
 fn get_exprs_except_skipped(
     schema: &DFSchema,
-    columns_to_skip: HashSet<Column>,
+    columns_to_skip: &HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema.iter().map(Expr::from).collect::<Vec<Expr>>()
@@ -419,7 +419,7 @@ pub fn expand_wildcard(
     };
     // Add each excluded `Column` to columns_to_skip
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(schema, columns_to_skip))
+    Ok(get_exprs_except_skipped(schema, &columns_to_skip))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
@@ -464,7 +464,7 @@ pub fn expand_qualified_wildcard(
     columns_to_skip.extend(excluded_columns);
     Ok(get_exprs_except_skipped(
         &qualified_dfschema,
-        columns_to_skip,
+        &columns_to_skip,
     ))
 }
 
@@ -930,7 +930,7 @@ pub fn find_valid_equijoin_key_pair(
 /// ```
 pub fn generate_signature_error_msg(
     func_name: &str,
-    func_signature: Signature,
+    func_signature: &Signature,
     input_expr_types: &[DataType],
 ) -> String {
     let candidate_signatures = func_signature
@@ -1555,8 +1555,8 @@ mod tests {
 
     #[test]
     fn test_split_conjunction_two() {
-        let expr = col("a").eq(lit(5)).and(col("b"));
-        let expr1 = col("a").eq(lit(5));
+        let expr = col("a").eq(lit(&5)).and(col("b"));
+        let expr1 = col("a").eq(lit(&5));
         let expr2 = col("b");
 
         let result = split_conjunction(&expr);
@@ -1565,8 +1565,8 @@ mod tests {
 
     #[test]
     fn test_split_conjunction_alias() {
-        let expr = col("a").eq(lit(5)).and(col("b").alias("the_alias"));
-        let expr1 = col("a").eq(lit(5));
+        let expr = col("a").eq(lit(&5)).and(col("b").alias("the_alias"));
+        let expr1 = col("a").eq(lit(&5));
         let expr2 = col("b"); // has no alias
 
         let result = split_conjunction(&expr);
@@ -1575,7 +1575,7 @@ mod tests {
 
     #[test]
     fn test_split_conjunction_or() {
-        let expr = col("a").eq(lit(5)).or(col("b"));
+        let expr = col("a").eq(lit(&5)).or(col("b"));
         let result = split_conjunction(&expr);
         assert_eq!(result, vec![&expr]);
     }
@@ -1589,14 +1589,14 @@ mod tests {
     #[test]
     fn test_split_binary_owned_two() {
         assert_eq!(
-            split_binary_owned(col("a").eq(lit(5)).and(col("b")), Operator::And),
-            vec![col("a").eq(lit(5)), col("b")]
+            split_binary_owned(col("a").eq(lit(&5)).and(col("b")), Operator::And),
+            vec![col("a").eq(lit(&5)), col("b")]
         );
     }
 
     #[test]
     fn test_split_binary_owned_different_op() {
-        let expr = col("a").eq(lit(5)).or(col("b"));
+        let expr = col("a").eq(lit(&5)).or(col("b"));
         assert_eq!(
             // expr is connected by OR, but pass in AND
             split_binary_owned(expr.clone(), Operator::And),
@@ -1613,17 +1613,17 @@ mod tests {
     #[test]
     fn test_split_conjunction_owned_two() {
         assert_eq!(
-            split_conjunction_owned(col("a").eq(lit(5)).and(col("b"))),
-            vec![col("a").eq(lit(5)), col("b")]
+            split_conjunction_owned(col("a").eq(lit(&5)).and(col("b"))),
+            vec![col("a").eq(lit(&5)), col("b")]
         );
     }
 
     #[test]
     fn test_split_conjunction_owned_alias() {
         assert_eq!(
-            split_conjunction_owned(col("a").eq(lit(5)).and(col("b").alias("the_alias"))),
+            split_conjunction_owned(col("a").eq(lit(&5)).and(col("b").alias("the_alias"))),
             vec![
-                col("a").eq(lit(5)),
+                col("a").eq(lit(&5)),
                 // no alias on b
                 col("b"),
             ]
@@ -1666,7 +1666,7 @@ mod tests {
 
     #[test]
     fn test_split_conjunction_owned_or() {
-        let expr = col("a").eq(lit(5)).or(col("b"));
+        let expr = col("a").eq(lit(&5)).or(col("b"));
         assert_eq!(split_conjunction_owned(expr.clone()), vec![expr]);
     }
 
@@ -1724,7 +1724,7 @@ mod tests {
         .expect("valid parameter names");
 
         // Generate error message with only 1 argument provided
-        let error_msg = generate_signature_error_msg("substr", sig, &[DataType::Utf8]);
+        let error_msg = generate_signature_error_msg("substr", &sig, &[DataType::Utf8]);
 
         assert!(
             error_msg.contains("str: Utf8, start_pos: Int64"),
@@ -1743,7 +1743,7 @@ mod tests {
             Volatility::Immutable,
         );
 
-        let error_msg = generate_signature_error_msg("my_func", sig, &[DataType::Int32]);
+        let error_msg = generate_signature_error_msg("my_func", &sig, &[DataType::Int32]);
 
         assert!(
             error_msg.contains("Any, Any"),
