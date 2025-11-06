@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Spill pool for managing spill files with FIFO semantics.
-
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -223,11 +221,27 @@ impl Drop for SpillPoolWriter {
     }
 }
 
-/// Creates a paired writer and reader for a spill pool with channel-like semantics.
+/// Creates a paired writer and reader for a spill pool with SPSC (single-producer, single-consumer)
+/// semantics.
 ///
 /// This is the recommended way to create a spill pool. The writer has exclusive
 /// write access, and the reader can consume batches in FIFO order. The reader
 /// can start reading immediately while the writer continues to write more data.
+///
+/// Internally this coordinates rotating spill files based on size limits, and
+/// handles asynchronous notification between the writer and reader using wakers.
+/// This ensures that we manage disk usage efficiently while allowing concurrent
+/// I/O between the writer and reader.
+///
+/// # Data Flow Overview
+///
+/// 1. Writer write batch `B0` to F1
+/// 2. Writer write batch `B1` to F1, notices the size limit exceeded, finishes F1.
+/// 3. Reader read `B0` from F1
+/// 4. Reader read `B1`, no more batch to read -> wait on the waker
+/// 5. Writer write batch `B2` to a new file `F2`, wake up the waiting reader.
+/// 6. Reader read `B2` from F2.
+/// 7. Repeat until writer is dropped.
 ///
 /// # Architecture
 ///
@@ -356,12 +370,21 @@ impl Drop for SpillPoolWriter {
 /// # }
 /// ```
 ///
-/// # Use Cases
-///
-/// - **Backpressure handling**: Writer can continue producing while reader is slow
-/// - **Memory management**: Files automatically rotate based on size limits
-/// - **Concurrent I/O**: Reader and writer operate independently with async coordination
-/// - **FIFO semantics**: Batches are consumed in the exact order they were written
+/// # Why rotate files?
+/// 
+/// File rotation ensures we don't end up with unreferenced disk usage.
+/// If we used a single file for all spilled data, we would end up with
+/// unreferenced data at the beginning of the file that has already been read
+/// by readers but we can't delete because you can't truncate from the start of a file.
+/// 
+/// Consider the case of a query like `SELECT * FROM large_table WHERE false`.
+/// Obviously this query produces no output rows, but if we had a spilling operator
+/// in the middle of this query between the scan and the filter it would see the entire
+/// `large_table` flow through it and thus would spill all of that data to disk.
+/// So we'd end up using up to `size(large_table)` bytes of disk space.
+/// If instead we use file rotation, and as long as the readers can keep up with the writer,
+/// then we can ensure that once a file is fully read by all readers it can be deleted,
+/// thus bounding the maximum disk usage to roughly `max_file_size_bytes`.
 pub fn channel(
     max_file_size_bytes: usize,
     spill_manager: Arc<SpillManager>,
