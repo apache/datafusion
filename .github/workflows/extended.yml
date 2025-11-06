@@ -123,7 +123,7 @@ jobs:
             --lib \
             --tests \
             --bins \
-            --features avro,json,backtrace,extended_tests,recursive_protection
+            --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
       - name: Verify Working Directory Clean
         run: git diff --exit-code
       - name: Cleanup
