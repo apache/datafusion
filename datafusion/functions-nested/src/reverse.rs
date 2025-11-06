@@ -272,28 +272,19 @@ fn fixed_size_array_reverse(
     array: &FixedSizeListArray,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
-    let values = array.values();
-    let value_length = array.value_length() as usize;
-    let mut indices: Vec<u64> = Vec::with_capacity(values.len());
+    let values: &Arc<dyn Array> = array.values();
 
-    for row_index in 0..array.len() {
-        // If the (sub) array is null, it doesn't matter what its values are, but
-        // we do need to insert `value_length` elements since it's a fixed size list
-        if array.is_null(row_index) {
-            indices.extend(vec![0; value_length]);
-            continue;
-        }
-
-        let start = row_index * value_length;
-        let end = start + value_length;
-        for idx in (start..end).rev() {
-            indices.push(idx as u64);
-        }
+    // Since each fixed size list in the physical array is the same size and we keep the order
+    // of the fixed size lists, we can reverse the indices for each fixed size list.
+    let mut indices: Vec<u64> = (0..values.len() as u64).collect();
+    for chunk in indices.chunks_mut(array.value_length() as usize) {
+        chunk.reverse();
     }
 
     // Materialize values from underlying array with take
     let indices_array: ArrayRef = Arc::new(UInt64Array::from(indices));
     let values = take(&values, &indices_array, None)?;
+
     Ok(Arc::new(FixedSizeListArray::try_new(
         Arc::clone(field),
         array.value_length(),
