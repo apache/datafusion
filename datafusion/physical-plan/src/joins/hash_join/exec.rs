@@ -788,19 +788,23 @@ impl DisplayAs for HashJoinExec {
     }
 }
 
-// TODO(crystal): double check if this is correct
 fn find_filter_pushdown_sides(join_type: JoinType) -> JoinSide {
+    // This represents the side that will receive the dynamic filter and apply the bounds.
+    // The other side will be the build side where we collect the bounds from.
+    // Bounds accumulator only collect join key range from ON clause.
     match join_type {
         JoinType::Inner => JoinSide::Right,
         JoinType::Left => JoinSide::Right,
         JoinType::Right => JoinSide::Left,
-        JoinType::Full => JoinSide::None,
         JoinType::LeftSemi => JoinSide::Right,
         JoinType::RightSemi => JoinSide::Left,
         JoinType::LeftAnti => JoinSide::Right,
         JoinType::RightAnti => JoinSide::Left,
         JoinType::LeftMark => JoinSide::Right,
         JoinType::RightMark => JoinSide::Left,
+        // Full outer join cannot have dynamic filter pushdown because all rows on both
+        // sides are preserved.
+        JoinType::Full => JoinSide::None,
     }
 }
 
