@@ -184,13 +184,34 @@ tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
 
 [workspace.lints.clippy]
-# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
+# Detects large stack-allocated futures that may cause stack overflow crashes
 large_futures = "warn"
+
+# General lint improvements
 used_underscore_binding = "warn"
 or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
 inefficient_to_string = "warn"
+
+# 🔹 Newly added rule to prevent unnecessary value passing
+needless_pass_by_value = "warn"
+
+# Restrict unsafe or discouraged async methods
+disallowed-methods = [
+    { path = "tokio::task::spawn", reason = "To provide cancel-safety, use `SpawnedTask::spawn` instead (https://github.com/apache/datafusion/issues/6513)" },
+    { path = "tokio::task::spawn_blocking", reason = "To provide cancel-safety, use `SpawnedTask::spawn_blocking` instead (https://github.com/apache/datafusion/issues/6513)" },
+]
+
+# Restrict specific types for WASM compatibility and consistency
+disallowed-types = [
+    { path = "std::time::Instant", reason = "Use `datafusion_common::instant::Instant` instead for WASM compatibility" },
+]
+
+# Adjust thresholds for Clippy lints
+future-size-threshold = 10000    # Default: 16384
+large-error-threshold = 70       # Default: 128
+
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
