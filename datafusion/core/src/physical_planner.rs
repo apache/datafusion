@@ -60,6 +60,7 @@ use crate::schema_equivalence::schema_satisfied_by;
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
+use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
@@ -2516,7 +2517,9 @@ impl<'a> OptimizationInvariantChecker<'a> {
         previous_schema: Arc<Schema>,
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
-        if self.rule.schema_check() && plan.schema() != previous_schema {
+        if self.rule.schema_check()
+            && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
+        {
             internal_err!("PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
                 self.rule.name(),
                 previous_schema,
@@ -2530,6 +2533,33 @@ impl<'a> OptimizationInvariantChecker<'a> {
 
         Ok(())
     }
+}
+
+/// Checks if the change from `old` schema to `new` is allowed or not.
+/// The current implementation only allows nullability of individual fields to change
+/// from 'nullable' to 'not nullable'.
+fn is_allowed_schema_change(old: &Schema, new: &Schema) -> bool {
+    if new.metadata != old.metadata {
+        return false;
+    }
+
+    if new.fields.len() != old.fields.len() {
+        return false;
+    }
+
+    let new_fields = new.fields.iter().map(|f| f.as_ref());
+    let old_fields = old.fields.iter().map(|f| f.as_ref());
+    old_fields
+        .zip(new_fields)
+        .all(|(old, new)| is_allowed_field_change(old, new))
+}
+
+fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> bool {
+    new_field.name() == old_field.name()
+        && new_field.data_type() == old_field.data_type()
+        && new_field.metadata() == old_field.metadata()
+        && (new_field.is_nullable() == old_field.is_nullable()
+            || !new_field.is_nullable())
 }
 
 impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
