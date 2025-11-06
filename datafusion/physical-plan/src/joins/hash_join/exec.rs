@@ -238,7 +238,6 @@ impl JoinLeftData {
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
-///
 /// ```
 ///
 /// 2. the **probe phase** where the tuples of the probe side are streamed
@@ -273,7 +272,6 @@ impl JoinLeftData {
 ///     └────────────┘                                            └────────────┘
 ///
 ///        build side                                                probe side
-///
 /// ```
 ///
 /// # Example "Optimal" Plans

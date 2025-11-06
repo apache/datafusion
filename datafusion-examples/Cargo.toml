@@ -33,18 +33,6 @@ rust-version = { workspace = true }
 workspace = true
 
 [[example]]
-name = "flight_sql_server"
-path = "examples/flight/flight_sql_server.rs"
-
-[[example]]
-name = "flight_server"
-path = "examples/flight/flight_server.rs"
-
-[[example]]
-name = "flight_client"
-path = "examples/flight/flight_client.rs"
-
-[[example]]
 name = "dataframe_to_s3"
 path = "examples/external_dependency/dataframe-to-s3.rs"
 
@@ -81,7 +69,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
-tonic = "0.13.1"
+tonic = "0.14"
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
 url = { workspace = true }

@@ -60,7 +60,15 @@ impl ScalarAndMetadata {
         target_type: &DataType,
     ) -> Result<Self, DataFusionError> {
         let new_value = self.value().cast_to(target_type)?;
-        Ok(ScalarAndMetadata::new(new_value, self.metadata.clone()))
+        Ok(Self::new(new_value, self.metadata.clone()))
+    }
+}
+
+/// create a new ScalarAndMetadata from a ScalarValue without
+/// any metadata
+impl From<ScalarValue> for ScalarAndMetadata {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(value, None)
     }
 }
 
@@ -163,7 +171,6 @@ pub fn format_type_and_metadata(
 /// // Add any metadata from `FieldMetadata` to `Field`
 /// let updated_field = metadata.add_to_field(field);
 /// ```
-///
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct FieldMetadata {
     /// The inner metadata of a literal expression, which is a map of string

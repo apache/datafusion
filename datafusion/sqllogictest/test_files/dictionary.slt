@@ -85,7 +85,7 @@ f1 Float64 YES
 f2 Utf8 YES
 f3 Utf8 YES
 f4 Float64 YES
-time Timestamp(Nanosecond, None) YES
+time Timestamp(ns) YES
 
 # in list with dictionary input
 query BBB
@@ -157,7 +157,7 @@ DESCRIBE m2;
 type Dictionary(Int32, Utf8) YES
 tag_id Dictionary(Int32, Utf8) YES
 f5 Float64 YES
-time Timestamp(Nanosecond, None) YES
+time Timestamp(ns) YES
 
 query I
 select count(*) from m1 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00';

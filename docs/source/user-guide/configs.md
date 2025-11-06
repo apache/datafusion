@@ -77,11 +77,11 @@ The following configuration settings are available:
 | datafusion.execution.coalesce_batches                                   | true                      | When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | datafusion.execution.collect_statistics                                 | true                      | Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Applies to the default `ListingTableProvider` in DataFusion. Defaults to true.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | datafusion.execution.target_partitions                                  | 0                         | Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| datafusion.execution.time_zone                                          | +00:00                    | The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| datafusion.execution.time_zone                                          | NULL                      | The default time zone Some functions, e.g. `now` return timestamps in this time zone                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | datafusion.execution.parquet.enable_page_index                          | true                      | (reading) If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | datafusion.execution.parquet.pruning                                    | true                      | (reading) If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | datafusion.execution.parquet.skip_metadata                              | true                      | (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| datafusion.execution.parquet.metadata_size_hint                         | NULL                      | (reading) If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| datafusion.execution.parquet.metadata_size_hint                         | 524288                    | (reading) If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer Default setting to 512 KiB, which should be sufficient for most parquet files, it can reduce one I/O operation per parquet file. If the metadata is larger than the hint, two reads will still be performed.                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | datafusion.execution.parquet.pushdown_filters                           | false                     | (reading) If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called "late materialization".                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | datafusion.execution.parquet.reorder_filters                            | false                     | (reading) If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | datafusion.execution.parquet.schema_force_view_types                    | true                      | (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`, and `Binary/BinaryLarge` with `BinaryView`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -253,3 +253,63 @@ SET datafusion.execution.batch_size = 1024;
 ```
 
 [`fairspillpool`]: https://docs.rs/datafusion/latest/datafusion/execution/memory_pool/struct.FairSpillPool.html
+
+## Join Queries
+
+Currently Apache Datafusion supports the following join algorithms:
+
+- Nested Loop Join
+- Sort Merge Join
+- Hash Join
+- Symmetric Hash Join
+- Piecewise Merge Join (experimental)
+
+The physical planner will choose the appropriate algorithm based on the statistics + join
+condition of the two tables.
+
+# Join Algorithm Optimizer Configurations
+
+You can modify join optimization behavior in your queries by setting specific configuration values.
+Use the following command to update a configuration:
+
+```sql
+SET datafusion.optimizer.<configuration_name>;
+```
+
+Example
+
+```sql
+SET datafusion.optimizer.prefer_hash_join = false;
+```
+
+Adjusting the following configuration values influences how the optimizer selects the join algorithm
+used to execute your SQL query:
+
+## Join Optimizer Configurations
+
+Adjusting the following configuration values influences how the optimizer selects the join algorithm
+used to execute your SQL query.
+
+### allow_symmetric_joins_without_pruning (bool, default = true)
+
+Controls whether symmetric hash joins are allowed for unbounded data sources even when their inputs
+lack ordering or filtering.
+
+- If disabled, the `SymmetricHashJoin` operator cannot prune its internal buffers to be produced only at the end of execution.
+
+### prefer_hash_join (bool, default = true)
+
+Determines whether the optimizer prefers Hash Join over Sort Merge Join during physical plan selection.
+
+- true: favors HashJoin for faster execution when sufficient memory is available.
+- false: allows SortMergeJoin to be chosen when more memory-efficient execution is needed.
+
+### enable_piecewise_merge_join (bool, default = false)
+
+Enables the experimental Piecewise Merge Join algorithm.
+
+- When enabled, the physical planner may select PiecewiseMergeJoin if there is exactly one range
+  filter in the join condition.
+- Piecewise Merge Join is faster than Nested Loop Join performance wise for single range filter
+  except for cases where it is joining two large tables (num_rows > 100,000) that are approximately
+  equal in size.

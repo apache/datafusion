@@ -110,9 +110,11 @@ struct ConsumingInputStreamsState {
 }
 
 /// Inner state of [`RepartitionExec`].
+#[derive(Default)]
 enum RepartitionExecState {
     /// Not initialized yet. This is the default state stored in the RepartitionExec node
     /// upon instantiation.
+    #[default]
     NotInitialized,
     /// Input streams are initialized, but they are still not being consumed. The node
     /// transitions to this state when the arrow's RecordBatch stream is created in
@@ -121,12 +123,6 @@ enum RepartitionExecState {
     /// The input streams are being consumed. The node transitions to this state when
     /// the first message in the arrow's RecordBatch stream is consumed.
     ConsumingInputStreams(ConsumingInputStreamsState),
-}
-
-impl Default for RepartitionExecState {
-    fn default() -> Self {
-        Self::NotInitialized
-    }
 }
 
 impl Debug for RepartitionExecState {
@@ -476,10 +472,10 @@ impl BatchPartitioner {
 ///        │                  │                  │
 ///        │                  │                  │
 ///        │                  │                  │
-///┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-///│    GroupBy    │  │    GroupBy    │  │    GroupBy    │
-///│   (Partial)   │  │   (Partial)   │  │   (Partial)   │
-///└───────────────┘  └───────────────┘  └───────────────┘
+/// ┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+/// │    GroupBy    │  │    GroupBy    │  │    GroupBy    │
+/// │   (Partial)   │  │   (Partial)   │  │   (Partial)   │
+/// └───────────────┘  └───────────────┘  └───────────────┘
 ///        ▲                  ▲                  ▲
 ///        └──────────────────┼──────────────────┘
 ///                           │
@@ -498,7 +494,7 @@ impl BatchPartitioner {
 ///     ╲               ╱           ╲               ╱
 ///      '─.         ,─'             '─.         ,─'
 ///         `───────'                   `───────'
-///```
+/// ```
 ///
 /// # Error Handling
 ///
@@ -2158,7 +2154,6 @@ mod test {
     ///
     /// `$EXPECTED_PLAN_LINES`: input plan
     /// `$PLAN`: the plan to optimized
-    ///
     macro_rules! assert_plan {
         ($PLAN: expr,  @ $EXPECTED: expr) => {
             let formatted = crate::displayable($PLAN).indent(true).to_string();

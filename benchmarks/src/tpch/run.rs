@@ -92,6 +92,15 @@ pub struct RunOpt {
     #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
 
+    /// If true then Piecewise Merge Join can be used, if false then it will opt for Nested Loop Join
+    /// True by default.
+    #[structopt(
+        short = "j",
+        long = "enable_piecewise_merge_join",
+        default_value = "false"
+    )]
+    enable_piecewise_merge_join: BoolDefaultTrue,
+
     /// Mark the first column of each table as sorted in ascending order.
     /// The tables should have been created with the `--sort` option for this to have any effect.
     #[structopt(short = "t", long = "sorted")]
@@ -112,6 +121,8 @@ impl RunOpt {
             .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
+        config.options_mut().optimizer.enable_piecewise_merge_join =
+            self.enable_piecewise_merge_join;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         // register tables
@@ -379,6 +390,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            enable_piecewise_merge_join: false,
             sorted: false,
         };
         opt.register_tables(&ctx).await?;
@@ -416,6 +428,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            enable_piecewise_merge_join: false,
             sorted: false,
         };
         opt.register_tables(&ctx).await?;

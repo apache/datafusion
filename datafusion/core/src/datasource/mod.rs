@@ -45,6 +45,7 @@ pub use datafusion_catalog::view;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
+pub use datafusion_datasource::table_schema;
 pub use datafusion_execution::object_store;
 pub use datafusion_physical_expr::create_ordering;
 

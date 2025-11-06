@@ -37,7 +37,9 @@ use datafusion_catalog::information_schema::{
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
-use datafusion_common::config::{ConfigExtension, ConfigOptions, Dialect, TableOptions};
+#[cfg(feature = "sql")]
+use datafusion_common::config::Dialect;
+use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
@@ -114,12 +116,12 @@ use uuid::Uuid;
 /// # use std::sync::Arc;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-///     let state = SessionStateBuilder::new()
-///         .with_config(SessionConfig::new())
-///         .with_runtime_env(Arc::new(RuntimeEnv::default()))
-///         .with_default_features()
-///         .build();
-///     Ok(())
+/// let state = SessionStateBuilder::new()
+///     .with_config(SessionConfig::new())
+///     .with_runtime_env(Arc::new(RuntimeEnv::default()))
+///     .with_default_features()
+///     .build();
+/// Ok(())
 /// # }
 /// ```
 ///

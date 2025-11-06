@@ -92,11 +92,12 @@ pub fn to_substrait_rel(
             };
 
             let mut select_struct = None;
-            if let Some(projection) = file_config.projection.as_ref() {
+            if let Some(projection) = file_config.projection_exprs.as_ref() {
                 let struct_items = projection
-                    .iter()
+                    .column_indices()
+                    .into_iter()
                     .map(|index| StructItem {
-                        field: *index as i32,
+                        field: index as i32,
                         // FIXME: duckdb sets this to None, but it's not clear why.
                         // https://github.com/duckdb/substrait/blob/b6f56643cb11d52de0e32c24a01dfd5947df62be/src/to_substrait.cpp#L1191
                         child: None,

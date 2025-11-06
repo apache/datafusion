@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
+use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
 use std::sync::Arc;
 
 use arrow_flight::{PollInfo, SchemaAsIpc};
@@ -106,6 +106,7 @@ impl FlightService for FlightServiceImpl {
 
                 // add an initial FlightData message that sends schema
                 let options = arrow::ipc::writer::IpcWriteOptions::default();
+                let mut compression_context = CompressionContext::default();
                 let schema_flight_data = SchemaAsIpc::new(&schema, &options);
 
                 let mut flights = vec![FlightData::from(schema_flight_data)];
@@ -115,7 +116,7 @@ impl FlightService for FlightServiceImpl {
 
                 for batch in &results {
                     let (flight_dictionaries, flight_batch) = encoder
-                        .encoded_batch(batch, &mut tracker, &options)
+                        .encode(batch, &mut tracker, &options, &mut compression_context)
                         .map_err(|e: ArrowError| Status::internal(e.to_string()))?;
 
                     flights.extend(flight_dictionaries.into_iter().map(Into::into));
@@ -193,8 +194,7 @@ fn to_tonic_err(e: datafusion::error::DataFusionError) -> Status {
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
 /// Parquet files and executing SQL queries against them on a remote server.
 /// This example is run along-side the example `flight_client`.
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn server() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "0.0.0.0:50051".parse()?;
     let service = FlightServiceImpl {};
 

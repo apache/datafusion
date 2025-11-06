@@ -133,7 +133,6 @@ impl ExternalSorterMetrics {
 ///    └─────┘
 ///
 /// in_mem_batches
-///
 /// ```
 ///
 /// # When data does not fit in available memory

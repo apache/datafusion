@@ -44,6 +44,7 @@ on:
       - 'datafusion/physical*/**/*.rs'
       - 'datafusion/expr*/**/*.rs'
       - 'datafusion/optimizer/**/*.rs'
+      - 'datafusion-testing'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -168,7 +169,7 @@ jobs:
           rust-version: stable
       - name: Run sqllogictest
         run: |
-          cargo test --features backtrace --profile release-nonlto --test sqllogictests -- --include-sqlite
+          cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
 
 
