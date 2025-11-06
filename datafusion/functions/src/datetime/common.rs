@@ -647,7 +647,6 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 /// defined by `chrono`.
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-///
 #[inline]
 pub(crate) fn string_to_timestamp_nanos_formatted(
     s: &str,
@@ -689,7 +688,6 @@ pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
 /// defined by `chrono`.
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-///
 #[inline]
 pub(crate) fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
     Ok(string_to_datetime_formatted(&Utc, s, format)?

@@ -338,17 +338,13 @@ pub type FileOpenFuture =
     BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch>>>>;
 
 /// Describes the behavior of the `FileStream` if file opening or scanning fails
+#[derive(Default)]
 pub enum OnError {
     /// Fail the entire stream and return the underlying error
+    #[default]
     Fail,
     /// Continue scanning, ignoring the failed file
     Skip,
-}
-
-impl Default for OnError {
-    fn default() -> Self {
-        Self::Fail
-    }
 }
 
 /// Generic API for opening a file using an [`ObjectStore`] and resolving to a

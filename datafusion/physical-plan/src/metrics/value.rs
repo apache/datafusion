@@ -430,6 +430,92 @@ impl PruningMetrics {
     }
 }
 
+/// Counters tracking ratio metrics (e.g. matched vs total)
+///
+/// The counters are thread-safe and shared across clones.
+#[derive(Debug, Clone, Default)]
+pub struct RatioMetrics {
+    part: Arc<AtomicUsize>,
+    total: Arc<AtomicUsize>,
+}
+
+impl RatioMetrics {
+    /// Create a new [`RatioMetrics`]
+    pub fn new() -> Self {
+        Self {
+            part: Arc::new(AtomicUsize::new(0)),
+            total: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Add `n` to the numerator (`part`) value
+    pub fn add_part(&self, n: usize) {
+        self.part.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Add `n` to the denominator (`total`) value
+    pub fn add_total(&self, n: usize) {
+        self.total.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Merge the value from `other` into `self`
+    pub fn merge(&self, other: &Self) {
+        self.add_part(other.part());
+        self.add_total(other.total());
+    }
+
+    /// Return the numerator (`part`) value
+    pub fn part(&self) -> usize {
+        self.part.load(Ordering::Relaxed)
+    }
+
+    /// Return the denominator (`total`) value
+    pub fn total(&self) -> usize {
+        self.total.load(Ordering::Relaxed)
+    }
+}
+
+impl PartialEq for RatioMetrics {
+    fn eq(&self, other: &Self) -> bool {
+        self.part() == other.part() && self.total() == other.total()
+    }
+}
+
+/// Format a float number with `digits` most significant numbers.
+///
+/// fmt_significant(12.5) -> "12"
+/// fmt_significant(0.0543) -> "0.054"
+/// fmt_significant(0.000123) -> "0.00012"
+fn fmt_significant(mut x: f64, digits: usize) -> String {
+    if x == 0.0 {
+        return "0".to_string();
+    }
+
+    let exp = x.abs().log10().floor(); // exponent of first significant digit
+    let scale = 10f64.powf(-(exp - (digits as f64 - 1.0)));
+    x = (x * scale).round() / scale; // round to N significant digits
+    format!("{x}")
+}
+
+impl Display for RatioMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let part = self.part();
+        let total = self.total();
+
+        if total == 0 {
+            if part == 0 {
+                write!(f, "N/A (0/0)")
+            } else {
+                write!(f, "N/A ({part}/0)")
+            }
+        } else {
+            let percentage = (part as f64 / total as f64) * 100.0;
+
+            write!(f, "{}% ({part}/{total})", fmt_significant(percentage, 2))
+        }
+    }
+}
+
 /// Possible values for a [super::Metric].
 ///
 /// Among other differences, the metric types have different ways to
@@ -499,6 +585,11 @@ pub enum MetricValue {
         name: Cow<'static, str>,
         pruning_metrics: PruningMetrics,
     },
+    /// Metrics that should be displayed as ratio like (42%)
+    Ratio {
+        name: Cow<'static, str>,
+        ratio_metrics: RatioMetrics,
+    },
     Custom {
         /// The provided name of this metric
         name: Cow<'static, str>,
@@ -564,6 +655,30 @@ impl PartialEq for MetricValue {
                 timestamp == other
             }
             (
+                MetricValue::PruningMetrics {
+                    name,
+                    pruning_metrics,
+                },
+                MetricValue::PruningMetrics {
+                    name: other_name,
+                    pruning_metrics: other_pruning_metrics,
+                },
+            ) => {
+                name == other_name
+                    && pruning_metrics.pruned() == other_pruning_metrics.pruned()
+                    && pruning_metrics.matched() == other_pruning_metrics.matched()
+            }
+            (
+                MetricValue::Ratio {
+                    name,
+                    ratio_metrics,
+                },
+                MetricValue::Ratio {
+                    name: other_name,
+                    ratio_metrics: other_ratio_metrics,
+                },
+            ) => name == other_name && ratio_metrics == other_ratio_metrics,
+            (
                 MetricValue::Custom { name, value },
                 MetricValue::Custom {
                     name: other_name,
@@ -593,6 +708,7 @@ impl MetricValue {
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
             Self::PruningMetrics { name, .. } => name.borrow(),
+            Self::Ratio { name, .. } => name.borrow(),
             Self::Custom { name, .. } => name.borrow(),
         }
     }
@@ -625,6 +741,8 @@ impl MetricValue {
             // like `PruningMetrics`, this function is not supposed to get called.
             // Metrics aggregation for them are implemented inside `MetricsSet` directly.
             Self::PruningMetrics { .. } => 0,
+            // Should not be used. See comments in `PruningMetrics` for details.
+            Self::Ratio { .. } => 0,
             Self::Custom { value, .. } => value.as_usize(),
         }
     }
@@ -657,6 +775,10 @@ impl MetricValue {
             Self::PruningMetrics { name, .. } => Self::PruningMetrics {
                 name: name.clone(),
                 pruning_metrics: PruningMetrics::new(),
+            },
+            Self::Ratio { name, .. } => Self::Ratio {
+                name: name.clone(),
+                ratio_metrics: RatioMetrics::new(),
             },
             Self::Custom { name, value } => Self::Custom {
                 name: name.clone(),
@@ -724,6 +846,15 @@ impl MetricValue {
                 pruning_metrics.add_matched(matched);
             }
             (
+                Self::Ratio { ratio_metrics, .. },
+                Self::Ratio {
+                    ratio_metrics: other_ratio_metrics,
+                    ..
+                },
+            ) => {
+                ratio_metrics.merge(other_ratio_metrics);
+            }
+            (
                 Self::Custom { value, .. },
                 Self::Custom {
                     value: other_value, ..
@@ -770,9 +901,10 @@ impl MetricValue {
             Self::Count { .. } => 12,
             Self::Gauge { .. } => 13,
             Self::Time { .. } => 14,
-            Self::StartTimestamp(_) => 15, // show timestamps last
-            Self::EndTimestamp(_) => 16,
-            Self::Custom { .. } => 17,
+            Self::Ratio { .. } => 15,
+            Self::StartTimestamp(_) => 16, // show timestamps last
+            Self::EndTimestamp(_) => 17,
+            Self::Custom { .. } => 18,
         }
     }
 
@@ -816,6 +948,7 @@ impl Display for MetricValue {
             } => {
                 write!(f, "{pruning_metrics}")
             }
+            Self::Ratio { ratio_metrics, .. } => write!(f, "{ratio_metrics}"),
             Self::Custom { name, value } => {
                 write!(f, "name:{name} {value}")
             }
@@ -968,6 +1101,32 @@ mod tests {
         for value in &values {
             assert_eq!("1.042µs", value.to_string(), "value {value:?}");
         }
+    }
+
+    #[test]
+    fn test_display_ratio() {
+        let ratio_metrics = RatioMetrics::new();
+        let ratio = MetricValue::Ratio {
+            name: Cow::Borrowed("ratio_metric"),
+            ratio_metrics: ratio_metrics.clone(),
+        };
+
+        assert_eq!("N/A (0/0)", ratio.to_string());
+
+        ratio_metrics.add_part(10);
+        assert_eq!("N/A (10/0)", ratio.to_string());
+
+        ratio_metrics.add_total(40);
+        assert_eq!("25% (10/40)", ratio.to_string());
+
+        let tiny_ratio_metrics = RatioMetrics::new();
+        let tiny_ratio = MetricValue::Ratio {
+            name: Cow::Borrowed("tiny_ratio_metric"),
+            ratio_metrics: tiny_ratio_metrics.clone(),
+        };
+        tiny_ratio_metrics.add_part(1);
+        tiny_ratio_metrics.add_total(3000);
+        assert_eq!("0.033% (1/3000)", tiny_ratio.to_string());
     }
 
     #[test]
