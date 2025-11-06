@@ -61,12 +61,9 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[]",
-        "metrics=[output_rows=3, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=Partial, gby=[]",
-        "output_bytes="
+        "metrics=[output_rows=3, elapsed_compute=",
+        "output_bytes=",
+        "output_batches="
     );
 
     assert_metrics!(
@@ -78,22 +75,16 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "output_bytes="
-    );
-    assert_metrics!(
-        &formatted,
-        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "metrics=[output_rows=99, elapsed_compute="
+        "metrics=[output_rows=5, elapsed_compute=",
+        "output_bytes=",
+        "output_batches="
     );
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "output_bytes="
+        "metrics=[output_rows=99, elapsed_compute=",
+        "output_bytes=",
+        "output_batches="
     );
     assert_metrics!(
         &formatted,
@@ -103,31 +94,31 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "ProjectionExec: expr=[]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(&formatted, "ProjectionExec: expr=[]", "output_bytes=");
-    assert_metrics!(
-        &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "metrics=[output_rows=5, elapsed_compute"
+        "metrics=[output_rows=5, elapsed_compute=",
+        "output_bytes=",
+        "output_batches="
     );
     assert_metrics!(
         &formatted,
         "CoalesceBatchesExec: target_batch_size=4096",
-        "output_bytes="
+        "metrics=[output_rows=5, elapsed_compute",
+        "output_bytes=",
+        "output_batches="
     );
     assert_metrics!(
         &formatted,
         "UnionExec",
-        "metrics=[output_rows=3, elapsed_compute="
+        "metrics=[output_rows=3, elapsed_compute=",
+        "output_bytes=",
+        "output_batches="
     );
-    assert_metrics!(&formatted, "UnionExec", "output_bytes=");
     assert_metrics!(
         &formatted,
         "WindowAggExec",
-        "metrics=[output_rows=1, elapsed_compute="
+        "metrics=[output_rows=1, elapsed_compute=",
+        "output_bytes=",
+        "output_batches="
     );
-    assert_metrics!(&formatted, "WindowAggExec", "output_bytes=");
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
