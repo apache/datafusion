@@ -64,7 +64,7 @@ pub struct BaselineMetrics {
     /// Issue: <https://github.com/apache/datafusion/issues/16841>
     output_bytes: Count,
 
-    /// output batches: the total batch count
+    /// output batches: the total output batch count
     output_batches: Count,
     // Remember to update `docs/source/user-guide/metrics.md` when updating comments
     // or adding new metrics
