@@ -995,6 +995,11 @@ impl ScalarFunctionWrapper {
                         Self::parse_placeholder_identifier(&placeholder.id)?;
                     if placeholder_position < args.len() {
                         Transformed::yes(args[placeholder_position].clone())
+                    } else if placeholder_position >= defaults.len() {
+                        exec_err!(
+                            "Invalid placeholder, out of range: {}",
+                            placeholder.id
+                        )?
                     } else {
                         match defaults[placeholder_position] {
                             Some(ref default) => Transformed::yes(default.clone()),
@@ -1136,6 +1141,23 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
         RETURN $1 + $3
     "#;
     assert!(ctx.sql(bad_definition_sql).await.is_err());
+
+    // FIXME: Definitions with invalid placeholders are allowed, fail at runtime
+    let bad_expression_sql = r#"
+    CREATE FUNCTION better_add(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + $3
+    "#;
+    assert!(ctx.sql(bad_expression_sql).await.is_ok());
+
+    let err = ctx
+        .sql("select better_add(2.0, 2.0)")
+        .await?
+        .collect()
+        .await
+        .expect_err("unknown placeholder");
+    let expected = "Optimizer rule 'simplify_expressions' failed\ncaused by\nExecution error: Invalid placeholder, out of range: $3";
+    assert!(expected.starts_with(&err.strip_backtrace()));
 
     Ok(())
 }
