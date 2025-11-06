@@ -80,7 +80,7 @@ impl LogFunc {
         );
         Self {
             signature: Signature::one_of(
-                // Ensure decimals have precendence over floats since we have
+                // Ensure decimals have precedence over floats since we have
                 // a native decimal implementation for log
                 vec![
                     // log(value)
