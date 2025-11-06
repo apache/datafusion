@@ -1274,7 +1274,7 @@ pub fn ensure_distribution(
                     child = add_merge_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    if add_roundrobin {
+                    if add_roundrobin && !hash_necessary {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
