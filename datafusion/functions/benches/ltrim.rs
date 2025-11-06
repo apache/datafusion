@@ -20,14 +20,15 @@ extern crate criterion;
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use criterion::{
-    black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
-    Criterion, SamplingMode,
+    criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup, Criterion,
+    SamplingMode,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
 use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+use std::hint::black_box;
 use std::{fmt, sync::Arc};
 
 #[derive(Clone, Copy)]
@@ -100,7 +101,6 @@ pub fn create_string_array_and_characters(
 /// Outputs:
 ///   - testing string array
 ///   - trimmed characters
-///
 fn create_args(
     size: usize,
     characters: &str,

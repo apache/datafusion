@@ -1912,7 +1912,7 @@ select * from t_with_user where user = 'foo';
 statement count 0
 create table t_with_current_time(a int, current_time text) as values (1,'now'), (2,null), (3,'later');
 
-# here it's clear the the column was meant
+# here it's clear the column was meant
 query B
 select t_with_current_time.current_time is not null from t_with_current_time;
 ----

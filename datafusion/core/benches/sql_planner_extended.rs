@@ -27,6 +27,7 @@ use datafusion_expr::{cast, col, lit, not, try_cast, when};
 use datafusion_functions::expr_fn::{
     btrim, length, regexp_like, regexp_replace, to_timestamp, upper,
 };
+use std::hint::black_box;
 use std::ops::Rem;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -223,9 +224,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {
             let df_clone = df.clone();
-            criterion::black_box(
-                rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
-            );
+            black_box(rt.block_on(async { df_clone.into_optimized_plan().unwrap() }));
         })
     });
 }
