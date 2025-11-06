@@ -510,6 +510,17 @@ fn is_timezone_name(token: &str) -> bool {
         return true;
     }
 
+    // Common timezone abbreviations (not exhaustive).
+    // These are often used with trailing offsets like "PST+8".
+    const COMMON_ABBREVIATIONS: [&str; 8] =
+        ["pst", "pdt", "est", "edt", "cst", "cdt", "mst", "mdt"];
+    if COMMON_ABBREVIATIONS
+        .iter()
+        .any(|abbr| token.eq_ignore_ascii_case(abbr))
+    {
+        return true;
+    }
+
     // Check IANA timezone database
     if Tz::from_str(token).is_ok() {
         return true;
@@ -1080,5 +1091,23 @@ mod tests {
         let expected3 =
             string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
         assert_eq!(result3, expected3);
+    }
+
+    #[test]
+    fn detects_named_timezones_with_trailing_offsets() {
+        use super::{has_named_timezone, is_timezone_name};
+
+        // IANA timezone names with trailing numeric offsets should be
+        // recognized after trimming the trailing signs/digits.
+        assert!(is_timezone_name("America/Los_Angeles+8"));
+        // also accept abbreviated timezone names with trailing offsets
+        assert!(is_timezone_name("PST+8"));
+        assert!(is_timezone_name("Europe/London-1"));
+        assert!(is_timezone_name("UTC+0"));
+
+        // Embedded tokens should also be detected by the token scanner
+        assert!(has_named_timezone("2024-01-01T12:00:00 Europe/London+05"));
+        assert!(has_named_timezone("Meeting at 12:00 PST+8"));
+        assert!(has_named_timezone("Event at 12:00 Europe/London-1"));
     }
 }
