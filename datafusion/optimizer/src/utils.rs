@@ -23,8 +23,11 @@ use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use arrow::array::{new_null_array, Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::{Column, DFSchema, Result, ScalarValue};
+use datafusion_common::{
+    qualified_name, Column, DFSchema, DFSchemaRef, Result, ScalarValue,
+};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::{logical_plan::LogicalPlan, ColumnarValue, Expr};
@@ -149,6 +152,73 @@ fn evaluate_expr_with_null_column<'a>(
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let mut expr_rewrite = TypeCoercionRewriter { schema };
     expr.rewrite(&mut expr_rewrite).data()
+}
+
+/// Replaces columns by their name in the provided expression.
+///
+/// Replaces all column references in the expression tree by looking up their names
+/// in the provided HashMap and replacing them with the corresponding expression.
+///
+/// # Arguments
+///
+/// * `e` - The expression to transform
+/// * `replace_map` - A map from column names (flat_name) to replacement expressions
+///
+/// # Returns
+///
+/// The transformed expression with columns replaced according to the map
+pub fn replace_cols_by_name(
+    e: Expr,
+    replace_map: &HashMap<String, Expr>,
+) -> Result<Expr> {
+    e.transform_up(|expr| {
+        Ok(if let Expr::Column(c) = &expr {
+            match replace_map.get(&c.flat_name()) {
+                Some(new_c) => Transformed::yes(new_c.clone()),
+                None => Transformed::no(expr),
+            }
+        } else {
+            Transformed::no(expr)
+        })
+    })
+    .data()
+}
+
+/// Builds a replace map for rewriting column qualifiers from an output schema to an input schema.
+///
+/// This function creates a mapping from qualified column names in the output schema
+/// to their corresponding Column expressions in the input schema. This is useful when
+/// pushing expressions through operators like SubqueryAlias or Union that change
+/// column qualifiers.
+///
+/// # Arguments
+///
+/// * `output_schema` - The schema with output qualifiers (e.g., alias or union name)
+/// * `input_schema` - The schema with input qualifiers (e.g., underlying table name)
+///
+/// # Returns
+///
+/// A HashMap mapping qualified output column names to input Column expressions
+///
+/// # Example
+///
+/// For a SubqueryAlias "subquery" over table "test":
+/// - Input: "test.a" (from input_schema)
+/// - Output: "subquery.a" (from output_schema)
+/// - Map: {"subquery.a" -> Column("test", "a")}
+pub(crate) fn build_schema_remapping(
+    output_schema: &DFSchemaRef,
+    input_schema: &DFSchemaRef,
+) -> HashMap<String, Expr> {
+    let mut replace_map = HashMap::new();
+    for (i, (input_qualifier, input_field)) in input_schema.iter().enumerate() {
+        let (output_qualifier, output_field) = output_schema.qualified_field(i);
+        replace_map.insert(
+            qualified_name(output_qualifier, output_field.name()),
+            Expr::Column(Column::new(input_qualifier.cloned(), input_field.name())),
+        );
+    }
+    replace_map
 }
 
 #[cfg(test)]

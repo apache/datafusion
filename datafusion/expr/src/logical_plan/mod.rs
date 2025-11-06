@@ -41,8 +41,9 @@ pub use plan::{
     projection_schema, Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct,
     DistinctOn, EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter,
     Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
-    Projection, RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
+    Projection, RecursiveQuery, Repartition, ScanOrdering, SkipType, Sort,
+    StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
+    Unnest, Values, Window,
 };
 pub use statement::{
     Deallocate, Execute, Prepare, SetVariable, Statement, TransactionAccessMode,
@@ -54,3 +55,5 @@ pub use datafusion_common::format::ExplainFormat;
 pub use display::display_schema;
 
 pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
+
+pub use tree_node::LogicalPlanContext;
