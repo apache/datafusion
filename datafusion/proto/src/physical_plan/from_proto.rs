@@ -572,7 +572,9 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
     fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
         Ok(PartitionedFile {
             object_meta: ObjectMeta {
-                location: Path::from(val.path.as_str()),
+                location: Path::parse(val.path.as_str()).map_err(|e| {
+                    proto_error(format!("Invalid object_store path: {e}"))
+                })?,
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
                 size: val.size,
                 e_tag: None,
@@ -692,5 +694,57 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             keep_partition_by_columns: conf.keep_partition_by_columns,
             file_extension: conf.file_extension.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use datafusion_datasource::PartitionedFile;
+    use object_store::path::Path;
+    use object_store::ObjectMeta;
+
+    #[test]
+    fn partitioned_file_path_roundtrip_percent_encoded() {
+        let path_str = "foo/foo%2Fbar/baz%252Fqux";
+        let pf = PartitionedFile {
+            object_meta: ObjectMeta {
+                location: Path::parse(path_str).unwrap(),
+                last_modified: Utc.timestamp_nanos(1_000),
+                size: 42,
+                e_tag: None,
+                version: None,
+            },
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+            extensions: None,
+            metadata_size_hint: None,
+        };
+
+        let proto = protobuf::PartitionedFile::try_from(&pf).unwrap();
+        assert_eq!(proto.path, path_str);
+
+        let pf2 = PartitionedFile::try_from(&proto).unwrap();
+        assert_eq!(pf2.object_meta.location.as_ref(), path_str);
+        assert_eq!(pf2.object_meta.location, pf.object_meta.location);
+        assert_eq!(pf2.object_meta.size, pf.object_meta.size);
+        assert_eq!(pf2.object_meta.last_modified, pf.object_meta.last_modified);
+    }
+
+    #[test]
+    fn partitioned_file_from_proto_invalid_path() {
+        let proto = protobuf::PartitionedFile {
+            path: "foo//bar".to_string(),
+            size: 1,
+            last_modified_ns: 0,
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+        };
+
+        let err = PartitionedFile::try_from(&proto).unwrap_err();
+        assert!(err.to_string().contains("Invalid object_store path"));
     }
 }

@@ -302,6 +302,15 @@ jobs:
             --features serde,avro,json,backtrace,integration-tests,parquet_encryption
       - name: Verify Working Directory Clean
         run: git diff --exit-code
+        # Check no temporary directories created during test.
+        # `false/` folder is excuded for rust cache.
+      - name: Verify Working Directory Clean (No Untracked Files)
+        run: |
+          STATUS="$(git status --porcelain | sed -e '/^?? false\/$/d' -e '/^?? false$/d')"
+          if [ -n "$STATUS" ]; then
+            echo "$STATUS"
+            exit 1
+          fi
 
   # datafusion-cli tests
   linux-test-datafusion-cli:
@@ -425,7 +434,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@41ef8c65f4034ff24ab1cc2cef52f3000bcf9523  # v2.62.40
+        uses: taiki-e/install-action@f535147c22906d77695e11cb199e764aa610a4fc  # v2.62.46
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -466,7 +475,7 @@ jobs:
           export RUST_MIN_STACK=20971520
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
           cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test --features backtrace --profile ci --package datafusion-sqllogictest --test sqllogictests
+          INCLUDE_TPCH=true cargo test --features backtrace,parquet_encryption --profile ci --package datafusion-sqllogictest --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -752,7 +761,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@41ef8c65f4034ff24ab1cc2cef52f3000bcf9523  # v2.62.40
+        uses: taiki-e/install-action@f535147c22906d77695e11cb199e764aa610a4fc  # v2.62.46
         with:
           tool: cargo-msrv
 
@@ -797,4 +806,4 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           persist-credentials: false
-      - uses: crate-ci/typos@80c8a4945eec0f6d464eaf9e65ed98ef085283d1  # v1.38.1
+      - uses: crate-ci/typos@07d900b8fa1097806b8adb6391b0d3e0ac2fdea7  # v1.39.0

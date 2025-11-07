@@ -236,8 +236,9 @@ async fn create_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// In this example we register `SmoothItUdf` as user defined window function
+/// and invoke it via the DataFrame API and SQL
+pub async fn advanced_udwf() -> Result<()> {
     let ctx = create_context().await?;
     let smooth_it = WindowUDF::from(SmoothItUdf::new());
     ctx.register_udwf(smooth_it.clone());

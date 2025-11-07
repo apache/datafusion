@@ -486,4 +486,9 @@ impl NativeType {
     pub fn is_binary(&self) -> bool {
         matches!(self, NativeType::Binary | NativeType::FixedSizeBinary(_))
     }
+
+    #[inline]
+    pub fn is_null(&self) -> bool {
+        matches!(self, NativeType::Null)
+    }
 }

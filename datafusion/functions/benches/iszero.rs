@@ -22,10 +22,11 @@ use arrow::{
     datatypes::{Float32Type, Float64Type},
     util::bench_util::create_primitive_array,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::iszero;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {

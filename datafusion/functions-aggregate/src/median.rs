@@ -162,7 +162,7 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        let dt = acc_args.exprs[0].data_type(acc_args.schema)?;
+        let dt = acc_args.expr_fields[0].data_type().clone();
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),
@@ -196,7 +196,7 @@ impl AggregateUDFImpl for Median {
             );
         }
 
-        let dt = args.exprs[0].data_type(args.schema)?;
+        let dt = args.expr_fields[0].data_type().clone();
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
@@ -302,7 +302,6 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 /// of groups before final evaluation.
 /// So values in each group will be stored in a `Vec<T>`, and the total group values
 /// will be actually organized as a `Vec<Vec<T>>`.
-///
 #[derive(Debug)]
 struct MedianGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,

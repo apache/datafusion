@@ -571,7 +571,18 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
                 ConstSimplifyResult::NotSimplified(s, m) => {
                     Ok(Transformed::no(Expr::Literal(s, m)))
                 }
-                ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
+                ConstSimplifyResult::SimplifyRuntimeError(err, expr) => {
+                    // For CAST expressions with literal inputs, propagate the error at plan time rather than deferring to execution time.
+                    // This provides clearer error messages and fails fast.
+                    if let Expr::Cast(Cast { ref expr, .. })
+                    | Expr::TryCast(TryCast { ref expr, .. }) = expr
+                    {
+                        if matches!(expr.as_ref(), Expr::Literal(_, _)) {
+                            return Err(err);
+                        }
+                    }
+                    // For other expressions (like CASE, COALESCE), preserve the original
+                    // to allow short-circuit evaluation at execution time
                     Ok(Transformed::yes(expr))
                 }
             },
@@ -711,35 +722,12 @@ impl<'a> ConstEvaluator<'a> {
                 } else {
                     // Non-ListArray
                     match ScalarValue::try_from_array(&a, 0) {
-                        Ok(s) => {
-                            // TODO: support the optimization for `Map` type after support impl hash for it
-                            if matches!(&s, ScalarValue::Map(_)) {
-                                ConstSimplifyResult::SimplifyRuntimeError(
-                                    DataFusionError::NotImplemented("Const evaluate for Map type is still not supported".to_string()),
-                                    expr,
-                                )
-                            } else {
-                                ConstSimplifyResult::Simplified(s, metadata)
-                            }
-                        }
+                        Ok(s) => ConstSimplifyResult::Simplified(s, metadata),
                         Err(err) => ConstSimplifyResult::SimplifyRuntimeError(err, expr),
                     }
                 }
             }
-            ColumnarValue::Scalar(s) => {
-                // TODO: support the optimization for `Map` type after support impl hash for it
-                if matches!(&s, ScalarValue::Map(_)) {
-                    ConstSimplifyResult::SimplifyRuntimeError(
-                        DataFusionError::NotImplemented(
-                            "Const evaluate for Map type is still not supported"
-                                .to_string(),
-                        ),
-                        expr,
-                    )
-                } else {
-                    ConstSimplifyResult::Simplified(s, metadata)
-                }
-            }
+            ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s, metadata),
         }
     }
 }
@@ -4966,6 +4954,56 @@ mod tests {
                 None
             ))
         );
+    }
+
+    #[test]
+    fn simplify_cast_literal() {
+        // Test that CAST(literal) expressions are evaluated at plan time
+
+        // CAST(123 AS Int64) should become 123i64
+        let expr = Expr::Cast(Cast::new(Box::new(lit(123i32)), DataType::Int64));
+        let expected = lit(123i64);
+        assert_eq!(simplify(expr), expected);
+
+        // CAST(1761630189642 AS Timestamp(Nanosecond, Some("+00:00")))
+        // Integer to timestamp cast
+        let expr = Expr::Cast(Cast::new(
+            Box::new(lit(1761630189642i64)),
+            DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Nanosecond,
+                Some("+00:00".into()),
+            ),
+        ));
+        // Should evaluate to a timestamp literal
+        let result = simplify(expr);
+        match result {
+            Expr::Literal(ScalarValue::TimestampNanosecond(Some(val), tz), _) => {
+                assert_eq!(val, 1761630189642i64);
+                assert_eq!(tz.as_deref(), Some("+00:00"));
+            }
+            other => panic!("Expected TimestampNanosecond literal, got: {other:?}"),
+        }
+
+        // Test CAST of invalid string to timestamp - should return an error at plan time
+        // This represents the case from the issue: CAST(Utf8("1761630189642") AS Timestamp)
+        // "1761630189642" is NOT a valid timestamp string format
+        let expr = Expr::Cast(Cast::new(
+            Box::new(lit("1761630189642")),
+            DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Nanosecond,
+                Some("+00:00".into()),
+            ),
+        ));
+
+        // The simplification should now fail with an error at plan time
+        let schema = test_schema();
+        let props = ExecutionProps::new();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+        let result = simplifier.simplify(expr);
+        assert!(result.is_err(), "Expected error for invalid cast");
+        let err_msg = result.unwrap_err().to_string();
+        assert_contains!(err_msg, "Error parsing timestamp");
     }
 
     fn if_not_null(expr: Expr, then: bool) -> Expr {
