@@ -225,6 +225,7 @@ impl ScalarUDFImpl for LogFunc {
             }
             // TODO: native log support for decimal 32 & 64; right now upcast
             //       to decimal128 to calculate
+            //       https://github.com/apache/datafusion/issues/17555
             DataType::Decimal32(precision, scale)
             | DataType::Decimal64(precision, scale) => {
                 calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
@@ -363,6 +364,7 @@ mod tests {
         assert_eq!(
             log_decimal128(value, 0, 2.0).unwrap(),
             // TODO: see we're losing our decimal points compared to above
+            //       https://github.com/apache/datafusion/issues/18524
             116.0
         );
     }
