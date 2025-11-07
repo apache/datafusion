@@ -39,8 +39,8 @@ struct SpillPoolShared {
     files: VecDeque<Arc<Mutex<ActiveSpillFileShared>>>,
     /// SpillManager for creating files and tracking metrics
     spill_manager: Arc<SpillManager>,
-    /// Pool-level wakers to notify when new files are available
-    wakers: Vec<Waker>,
+    /// Pool-level waker to notify when new files are available (SPSC: only one reader)
+    waker: Option<Waker>,
     /// Whether the writer has been dropped (no more files will be added)
     writer_dropped: bool,
 }
@@ -51,22 +51,19 @@ impl SpillPoolShared {
         Self {
             files: VecDeque::new(),
             spill_manager,
-            wakers: Vec::new(),
+            waker: None,
             writer_dropped: false,
         }
     }
 
     /// Registers a waker to be notified when new data is available (pool-level)
     fn register_waker(&mut self, waker: Waker) {
-        // Only register if not already present (avoid duplicates)
-        if !self.wakers.iter().any(|w| w.will_wake(&waker)) {
-            self.wakers.push(waker);
-        }
+        self.waker = Some(waker);
     }
 
-    /// Wakes all pool-level readers
+    /// Wakes the pool-level reader
     fn wake(&mut self) {
-        for waker in self.wakers.drain(..) {
+        if let Some(waker) = self.waker.take() {
             waker.wake();
         }
     }
@@ -152,7 +149,7 @@ impl SpillPoolWriter {
                 batches_written: 0,
                 estimated_size: 0,
                 writer_finished: false,
-                wakers: Vec::new(),
+                waker: None,
             }));
 
             // Push to shared queue and keep reference for writing
@@ -177,8 +174,8 @@ impl SpillPoolWriter {
                 file_shared.estimated_size += batch_size;
             }
 
-            // Wake readers waiting on this specific file
-            file_shared.wake_all();
+            // Wake reader waiting on this specific file
+            file_shared.wake();
 
             // Check if we need to rotate
             let needs_rotation = file_shared.estimated_size > self.max_file_size_bytes;
@@ -190,8 +187,8 @@ impl SpillPoolWriter {
                 }
                 // Mark as finished so readers know not to wait for more data
                 file_shared.writer_finished = true;
-                // Wake readers waiting on this file (it's now finished)
-                file_shared.wake_all();
+                // Wake reader waiting on this file (it's now finished)
+                file_shared.wake();
             } else {
                 // Release lock
                 drop(file_shared);
@@ -219,8 +216,8 @@ impl Drop for SpillPoolWriter {
             // Mark as finished so readers know not to wait for more data
             file_shared.writer_finished = true;
 
-            // Wake readers waiting on this file (it's now finished)
-            file_shared.wake_all();
+            // Wake reader waiting on this file (it's now finished)
+            file_shared.wake();
         }
 
         // Mark writer as dropped and wake pool-level readers
@@ -427,22 +424,19 @@ struct ActiveSpillFileShared {
     estimated_size: usize,
     /// Whether the writer has finished writing to this file
     writer_finished: bool,
-    /// Wakers for readers waiting on this specific file
-    wakers: Vec<Waker>,
+    /// Waker for reader waiting on this specific file (SPSC: only one reader)
+    waker: Option<Waker>,
 }
 
 impl ActiveSpillFileShared {
     /// Registers a waker to be notified when new data is written to this file
     fn register_waker(&mut self, waker: Waker) {
-        // Only register if not already present (avoid duplicates)
-        if !self.wakers.iter().any(|w| w.will_wake(&waker)) {
-            self.wakers.push(waker);
-        }
+        self.waker = Some(waker);
     }
 
-    /// Wakes all readers waiting on this file
-    fn wake_all(&mut self) {
-        for waker in self.wakers.drain(..) {
+    /// Wakes the reader waiting on this file
+    fn wake(&mut self) {
+        if let Some(waker) = self.waker.take() {
             waker.wake();
         }
     }
