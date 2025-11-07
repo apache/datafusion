@@ -332,7 +332,7 @@ pub struct RefCountedTempFile {
     /// Tracks the current disk usage of this temporary file. See
     /// [`Self::update_disk_usage`] for more details.
     ///
-    /// This is wrapped in Arc<AtomicU64> so that all clones share the same
+    /// This is wrapped in `Arc<AtomicU64>` so that all clones share the same
     /// disk usage tracking, preventing incorrect accounting when clones are dropped.
     current_file_disk_usage: Arc<AtomicU64>,
     /// The disk manager that created and manages this temporary file
