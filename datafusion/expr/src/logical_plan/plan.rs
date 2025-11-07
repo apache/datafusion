@@ -46,7 +46,8 @@ use crate::utils::{
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable,
-    LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
+    LogicalPlanBuilder, Operator, Prepare, BatchedTableFunctionSource, TableProviderFilterPushDown,
+    TableSource,
     WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
 };
 
@@ -288,6 +289,12 @@ pub enum LogicalPlan {
     /// Unnest a column that contains a nested list type such as an
     /// ARRAY. This is used to implement SQL `UNNEST`
     Unnest(Unnest),
+    /// LATERAL table function call that produces rows for each input row.
+    /// This is used to implement SQL LATERAL joins with table functions.
+    LateralBatchedTableFunction(LateralBatchedTableFunction),
+    /// Standalone batched table function call with constant arguments.
+    /// This is used for direct table function calls like `SELECT * FROM func(1, 2)`.
+    StandaloneBatchedTableFunction(StandaloneBatchedTableFunction),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
 }
@@ -350,6 +357,13 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                schema, ..
+            }) => schema,
+            LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
+                schema,
+                ..
+            }) => schema,
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
@@ -365,7 +379,8 @@ impl LogicalPlan {
             | LogicalPlan::Projection(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::Join(_) => self
+            | LogicalPlan::Join(_)
+            | LogicalPlan::LateralBatchedTableFunction(_) => self
                 .inputs()
                 .iter()
                 .map(|input| input.schema().as_ref())
@@ -471,6 +486,9 @@ impl LogicalPlan {
             LogicalPlan::Copy(copy) => vec![&copy.input],
             LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction { input, .. }) => {
+                vec![input]
+            }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 static_term,
                 recursive_term,
@@ -481,7 +499,8 @@ impl LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => vec![],
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::StandaloneBatchedTableFunction { .. } => vec![],
         }
     }
 
@@ -594,7 +613,9 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Unnest(_) => Ok(None),
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::LateralBatchedTableFunction(_)
+            | LogicalPlan::StandaloneBatchedTableFunction(_) => Ok(None),
         }
     }
 
@@ -742,6 +763,8 @@ impl LogicalPlan {
             LogicalPlan::EmptyRelation(_) => Ok(self),
             LogicalPlan::Statement(_) => Ok(self),
             LogicalPlan::DescribeTable(_) => Ok(self),
+            LogicalPlan::LateralBatchedTableFunction(_) => Ok(self),
+            LogicalPlan::StandaloneBatchedTableFunction(_) => Ok(self),
             LogicalPlan::Unnest(Unnest {
                 input,
                 exec_columns,
@@ -1135,6 +1158,51 @@ impl LogicalPlan {
                 self.assert_no_inputs(inputs)?;
                 Ok(self.clone())
             }
+            LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
+                function_name,
+                source,
+                schema,
+                projection,
+                filters,
+                fetch,
+                ..
+            }) => {
+                self.assert_no_inputs(inputs)?;
+                Ok(LogicalPlan::StandaloneBatchedTableFunction(
+                    StandaloneBatchedTableFunction {
+                        function_name: function_name.clone(),
+                        source: Arc::clone(source),
+                        args: expr,
+                        schema: Arc::clone(schema),
+                        projection: projection.clone(),
+                        filters: filters.clone(),
+                        fetch: *fetch,
+                    },
+                ))
+            }
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                function_name,
+                source,
+                schema,
+                table_function_schema,
+                projection,
+                filters,
+                fetch,
+                ..
+            }) => {
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                    input: Arc::new(input),
+                    function_name: function_name.clone(),
+                    source: Arc::clone(source),
+                    args: expr.to_vec(),
+                    schema: Arc::clone(schema),
+                    table_function_schema: Arc::clone(table_function_schema),
+                    projection: projection.clone(),
+                    filters: filters.clone(),
+                    fetch: *fetch,
+                }))
+            }
             LogicalPlan::Unnest(Unnest {
                 exec_columns: columns,
                 options,
@@ -1377,6 +1445,8 @@ impl LogicalPlan {
             ) => input.max_rows(),
             LogicalPlan::Values(v) => Some(v.values.len()),
             LogicalPlan::Unnest(_) => None,
+            LogicalPlan::LateralBatchedTableFunction(_) => None,
+            LogicalPlan::StandaloneBatchedTableFunction(_) => None,
             LogicalPlan::Ddl(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
@@ -2097,6 +2167,38 @@ impl LogicalPlan {
                             expr_vec_fmt!(list_type_columns),
                             expr_vec_fmt!(struct_type_columns)
                         )
+                    }
+                    LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                        function_name,
+                        args,
+                        projection,
+                        filters,
+                        ..
+                    }) => {
+                        write!(f, "LateralBatchedTableFunction: {}({})", function_name, expr_vec_fmt!(args))?;
+                        if let Some(proj) = projection {
+                            write!(f, ", projection={:?}", proj)?;
+                        }
+                        if !filters.is_empty() {
+                            write!(f, ", filters=[{}]", expr_vec_fmt!(filters))?;
+                        }
+                        Ok(())
+                    }
+                    LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
+                        function_name,
+                        args,
+                        projection,
+                        filters,
+                        ..
+                    }) => {
+                        write!(f, "StandaloneBatchedTableFunction: {}({})", function_name, expr_vec_fmt!(args))?;
+                        if let Some(proj) = projection {
+                            write!(f, ", projection={:?}", proj)?;
+                        }
+                        if !filters.is_empty() {
+                            write!(f, ", filters=[{}]", expr_vec_fmt!(filters))?;
+                        }
+                        Ok(())
                     }
                 }
             }
@@ -4296,6 +4398,167 @@ fn get_unnested_list_datatype_recursive(
     };
 
     internal_err!("trying to unnest on invalid data type {data_type}")
+}
+
+/// Standalone batched table function call with constant arguments.
+///
+/// This represents a direct call to a batched table function where all arguments
+/// are constants (not correlated with any outer table). The function is invoked once
+/// and returns a set of rows.
+///
+/// # Example SQL
+/// ```sql
+/// SELECT * FROM generate_series(1, 10)
+/// ```
+#[derive(Clone)]
+pub struct StandaloneBatchedTableFunction {
+    /// Name of the table function to call
+    pub function_name: String,
+    /// The source of the batched table function
+    pub source: Arc<dyn BatchedTableFunctionSource>,
+    /// Expressions for table function arguments (should be constants for standalone mode)
+    pub args: Vec<Expr>,
+    /// The output schema (only table function output columns)
+    pub schema: DFSchemaRef,
+    /// Optional column indices to use as a projection
+    pub projection: Option<Vec<usize>>,
+    /// Optional expressions to be used as filters by the table function
+    pub filters: Vec<Expr>,
+    /// Optional limit to push down to the function (number of rows to fetch)
+    pub fetch: Option<usize>,
+}
+
+impl Debug for StandaloneBatchedTableFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StandaloneBatchedTableFunction")
+            .field("function_name", &self.function_name)
+            .field("source", &"...")
+            .field("args", &self.args)
+            .field("schema", &self.schema)
+            .field("projection", &self.projection)
+            .field("filters", &self.filters)
+            .field("fetch", &self.fetch)
+            .finish()
+    }
+}
+
+impl PartialEq for StandaloneBatchedTableFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.function_name == other.function_name
+            && self.args == other.args
+            && self.projection == other.projection
+            && self.filters == other.filters
+            && self.fetch == other.fetch
+    }
+}
+
+impl Eq for StandaloneBatchedTableFunction {}
+
+// Manual implementation needed because of `source` and `schema` fields. Comparison excludes these fields.
+impl PartialOrd for StandaloneBatchedTableFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.function_name.partial_cmp(&other.function_name) {
+            Some(Ordering::Equal) => self.args.partial_cmp(&other.args),
+            cmp => cmp,
+        }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+impl Hash for StandaloneBatchedTableFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.function_name.hash(state);
+        self.args.hash(state);
+        self.projection.hash(state);
+        self.filters.hash(state);
+        self.fetch.hash(state);
+    }
+}
+
+/// Lateral table function call
+///
+/// Evaluates a table function for each row from the input plan.
+/// This is used to implement SQL LATERAL joins with table functions.
+///
+/// # Example SQL
+/// ```sql
+/// SELECT * FROM t, LATERAL generate_series(1, t.x)
+/// ```
+#[derive(Clone)]
+pub struct LateralBatchedTableFunction {
+    /// The incoming logical plan (the "outer" table)
+    pub input: Arc<LogicalPlan>,
+    /// Name of the table function to call
+    pub function_name: String,
+    /// The source of the batched table function
+    pub source: Arc<dyn BatchedTableFunctionSource>,
+    /// Expressions for table function arguments (can reference input columns)
+    pub args: Vec<Expr>,
+    /// The output schema (input columns + table function output columns)
+    pub schema: DFSchemaRef,
+    /// Table function output schema only (excludes input columns).
+    /// Used by the physical executor to properly combine batches.
+    pub table_function_schema: DFSchemaRef,
+    /// Optional column indices to use as a projection
+    pub projection: Option<Vec<usize>>,
+    /// Optional expressions to be used as filters by the table function
+    pub filters: Vec<Expr>,
+    /// Optional limit to push down to the function (number of rows to fetch)
+    pub fetch: Option<usize>,
+}
+
+impl Debug for LateralBatchedTableFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LateralBatchedTableFunction")
+            .field("function_name", &self.function_name)
+            .field("source", &"...")
+            .field("args", &self.args)
+            .field("schema", &self.schema)
+            .field("projection", &self.projection)
+            .field("filters", &self.filters)
+            .field("fetch", &self.fetch)
+            .finish()
+    }
+}
+
+impl PartialEq for LateralBatchedTableFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.input == other.input
+            && self.function_name == other.function_name
+            && self.args == other.args
+            && self.projection == other.projection
+            && self.filters == other.filters
+            && self.fetch == other.fetch
+    }
+}
+
+impl Eq for LateralBatchedTableFunction {}
+
+// Manual implementation needed because of `source` and `schema` fields. Comparison excludes these fields.
+impl PartialOrd for LateralBatchedTableFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.function_name.partial_cmp(&other.function_name) {
+            Some(Ordering::Equal) => match self.input.partial_cmp(&other.input) {
+                Some(Ordering::Equal) => self.args.partial_cmp(&other.args),
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+impl Hash for LateralBatchedTableFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.input.hash(state);
+        self.function_name.hash(state);
+        self.args.hash(state);
+        self.projection.hash(state);
+        self.filters.hash(state);
+        self.fetch.hash(state);
+    }
 }
 
 #[cfg(test)]

@@ -1784,6 +1784,12 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
+            LogicalPlan::LateralBatchedTableFunction(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for LateralBatchedTableFunction",
+            )),
+            LogicalPlan::StandaloneBatchedTableFunction(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for StandaloneBatchedTableFunction",
+            )),
             LogicalPlan::RecursiveQuery(recursive) => {
                 let static_term = LogicalPlanNode::try_from_logical_plan(
                     recursive.static_term.as_ref(),

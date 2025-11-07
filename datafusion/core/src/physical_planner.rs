@@ -29,7 +29,8 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
+    Aggregate, EmptyRelation, Join, LateralBatchedTableFunction, Projection, Sort,
+    StandaloneBatchedTableFunction, TableScan, Unnest, Values, Window,
 };
 use crate::logical_expr::{
     Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType, Repartition,
@@ -60,6 +61,7 @@ use crate::schema_equivalence::schema_satisfied_by;
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
+use datafusion_catalog::batched_function::BatchedTableFunctionExec;
 use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
@@ -500,6 +502,51 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let output_schema = Arc::clone(output_schema.inner());
                 self.plan_describe(&Arc::clone(schema), output_schema)?
+            }
+            LogicalPlan::StandaloneBatchedTableFunction(
+                StandaloneBatchedTableFunction {
+                    function_name,
+                    source: _source,
+                    args,
+                    schema,
+                    projection,
+                    filters,
+                    fetch,
+                },
+            ) => {
+                let batched_tf = session_state
+                    .batched_table_function(function_name.as_str())
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Batched table function '{function_name}' not found"
+                        ))
+                    })?;
+
+                // Standalone mode: args are constants evaluated with empty schema
+                let empty_schema = Arc::new(DFSchema::empty());
+                let physical_args = args
+                    .iter()
+                    .map(|e| self.create_physical_expr(e, &empty_schema, session_state))
+                    .collect::<Result<Vec<_>>>()?;
+
+                let function_schema = Arc::clone(schema.inner());
+
+                // All filters have been pre-filtered by the logical optimizer
+                // based on supports_filters_pushdown(). Just pass them all through.
+                // PlaceholderRowExec produces one empty row to trigger the function once
+                let placeholder_exec =
+                    Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty())));
+                Arc::new(BatchedTableFunctionExec::new(
+                    Arc::clone(batched_tf.inner()),
+                    physical_args,
+                    placeholder_exec,
+                    Arc::clone(&function_schema), // projected_schema
+                    function_schema,              // table_function_schema
+                    datafusion_catalog::BatchedTableFunctionMode::Standalone,
+                    projection.clone(),
+                    filters.clone(),
+                    *fetch,
+                )?)
             }
 
             // 1 Child
@@ -1505,6 +1552,50 @@ impl DefaultPhysicalPlanner {
                 } else {
                     plan
                 }
+            }
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                input,
+                function_name,
+                source: _source,
+                args,
+                schema,
+                table_function_schema,
+                projection,
+                filters,
+                fetch,
+            }) => {
+                let input_exec = children.one()?;
+
+                let batched_tf = session_state
+                    .batched_table_function(function_name.as_str())
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Batched table function '{function_name}' not found"
+                        ))
+                    })?;
+
+                // Args evaluated against input schema, not combined schema
+                let physical_args = args
+                    .iter()
+                    .map(|e| self.create_physical_expr(e, input.schema(), session_state))
+                    .collect::<Result<Vec<_>>>()?;
+
+                let combined_schema = Arc::clone(schema.inner());
+                let function_schema = Arc::clone(table_function_schema.inner());
+
+                // All filters have been pre-filtered by the logical optimizer
+                // based on supports_filters_pushdown(). Just pass them all through.
+                Arc::new(BatchedTableFunctionExec::new(
+                    Arc::clone(batched_tf.inner()),
+                    physical_args,
+                    input_exec,
+                    combined_schema,
+                    function_schema,
+                    datafusion_catalog::BatchedTableFunctionMode::Lateral,
+                    projection.clone(),
+                    filters.clone(),
+                    *fetch,
+                )?)
             }
 
             // Other

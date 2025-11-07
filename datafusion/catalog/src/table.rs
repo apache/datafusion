@@ -18,20 +18,23 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::batched_function::BatchedTableFunctionExec;
 use crate::session::Session;
-use arrow::datatypes::SchemaRef;
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::Result;
-use datafusion_common::{not_impl_err, Constraints, Statistics};
+use datafusion_common::{not_impl_err, Constraints, Result, Statistics};
 use datafusion_expr::Expr;
+use futures::Stream;
 
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
+    CreateExternalTable, LogicalPlan, Signature, TableProviderFilterPushDown, TableType,
 };
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 
 /// A table which can be queried and modified.
 ///
@@ -486,5 +489,280 @@ impl TableFunction {
     /// Get the function implementation and generate a table
     pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         self.fun.call(args)
+    }
+}
+
+/// Implementation of a table function that can process batched inputs
+///
+/// This is the trait that table function implementors should implement.
+/// It receives already-evaluated arguments (similar to [`ScalarUDFImpl`]).
+///
+/// Unlike the legacy `TableFunctionImpl` trait which only accepts constant arguments,
+/// `BatchedTableFunctionImpl` can process batched inputs, enabling:
+/// - Constant evaluation: `SELECT * FROM generate_series(1, 10)`
+/// - LATERAL joins: `SELECT * FROM t, LATERAL generate_series(1, t.x)`
+/// - Correlated queries with deduplication and optimization
+///
+/// # Example
+///
+/// ```
+/// use datafusion_catalog::BatchedTableFunctionImpl;
+/// use datafusion_common::Result;
+/// use datafusion_expr::Signature;
+/// use arrow::datatypes::{DataType, Schema, Field};
+/// use std::sync::Arc;
+///
+/// #[derive(Debug)]
+/// struct MyFunction;
+///
+/// #[async_trait::async_trait]
+/// impl BatchedTableFunctionImpl for MyFunction {
+///     fn name(&self) -> &str {
+///         "my_func"
+///     }
+///
+///     fn signature(&self) -> &Signature {
+///         // Define function signature
+///         # unimplemented!()
+///     }
+///
+///     fn return_type(&self, arg_types: &[DataType]) -> Result<Schema> {
+///         Ok(Schema::new(vec![Field::new("value", DataType::Int64, false)]))
+///     }
+///
+///     async fn invoke_batch(
+///         &self,
+///         args: &[arrow::array::ArrayRef],
+///         projection: Option<&[usize]>,
+///         filters: &[datafusion_expr::Expr],
+///         limit: Option<usize>,
+///     ) -> Result<datafusion_catalog::BatchResultStream> {
+///         // Process argument arrays and return stream of result chunks
+///         # unimplemented!()
+///     }
+/// }
+/// ```
+///
+/// # Batch Result Types
+///
+/// Batched table functions return results as streams of [`BatchResultChunk`]s,
+/// allowing for:
+/// - Lazy generation (compute on-demand)
+/// - Memory efficiency (bounded by batch size)
+/// - Cancellation support (stop early if consumer drops stream)
+/// - Async operations (await external resources)
+///
+/// One chunk of results from a batched table function.
+///
+/// Each chunk contains output rows and a mapping from each output row
+/// to its source input row (for LATERAL joins).
+#[derive(Debug, Clone)]
+pub struct BatchResultChunk {
+    pub output: RecordBatch,
+
+    /// Maps each output row to its source input row
+    ///
+    /// For output row i, it was generated from input row input_row_indices[i].
+    /// Length must equal output.num_rows().
+    ///
+    /// For standalone invocations with a single input, this is typically
+    /// vec![0; output.num_rows()] (all rows from input row 0).
+    pub input_row_indices: Vec<u32>,
+}
+
+/// Stream of batch result chunks from a table function
+///
+/// The function yields chunks on-demand, allowing for:
+/// - Streaming large results without materializing everything
+/// - Early termination if consumer stops reading
+/// - Async operations within function execution
+pub type BatchResultStream = Pin<Box<dyn Stream<Item = Result<BatchResultChunk>> + Send>>;
+
+#[async_trait]
+pub trait BatchedTableFunctionImpl: Send + Sync + Debug {
+    fn name(&self) -> &str;
+
+    /// Function signature for type checking and coercion
+    ///
+    /// The signature specifies:
+    /// - Expected argument types
+    /// - Whether arguments can be coerced (e.g., INT32 → INT64)
+    /// - Volatility (Immutable/Stable/Volatile) for optimization
+    ///
+    /// The planner uses this to:
+    /// - Validate argument count and types
+    /// - Insert automatic type casts when needed
+    /// - Determine if function results can be cached/optimized
+    fn signature(&self) -> &Signature;
+
+    /// Infer output schema from input argument types
+    ///
+    /// Called during logical planning to determine the table's schema.
+    ///
+    /// # Arguments
+    /// * `arg_types` - Argument types after coercion by signature
+    ///
+    /// By the time this is called, the signature has already validated
+    /// and coerced types, so arg_types are guaranteed to match.
+    fn return_type(&self, arg_types: &[DataType]) -> Result<Schema>;
+
+    /// Specify if the function can apply filter expressions during execution.
+    ///
+    /// Similar to [`TableProvider::supports_filters_pushdown`], this allows
+    /// table functions to evaluate filters more efficiently than a separate
+    /// FilterExec operator.
+    ///
+    /// # Parameters and Return Value
+    ///
+    /// The return `Vec` must have one element for each element of the `filters`
+    /// argument, indicating if the function can apply that filter.
+    ///
+    /// Each element is one of:
+    /// * [`Exact`] or [`Inexact`]: Function can apply the filter
+    /// * [`Unsupported`]: Function cannot apply the filter
+    ///
+    /// Default implementation returns [`Unsupported`] for all filters.
+    ///
+    /// [`Unsupported`]: crate::TableProviderFilterPushDown::Unsupported
+    /// [`Exact`]: crate::TableProviderFilterPushDown::Exact
+    /// [`Inexact`]: crate::TableProviderFilterPushDown::Inexact
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![
+            TableProviderFilterPushDown::Unsupported;
+            filters.len()
+        ])
+    }
+
+    /// Invoke the table function with batch of evaluated arguments
+    ///
+    /// This method processes a batch of argument values (as Arrow arrays) and
+    /// returns a stream of result chunks. Each chunk contains output rows and
+    /// maps each output row back to its input row (for LATERAL joins).
+    ///
+    /// # Arguments
+    /// * `args` - Argument values as Arrow arrays, all with the same length N
+    ///   representing N invocations
+    /// * `projection` - Optional column indices to return (None = all columns).
+    ///   Allows functions to skip computing unused columns.
+    /// * `filters` - Filter expressions to apply during execution.
+    ///   Only rows satisfying all filters should be returned.
+    ///   Functions should check [`supports_filters_pushdown`] to determine
+    ///   which filters they can handle.
+    /// * `limit` - Optional row limit. Functions may stop generating rows
+    ///   after producing at least this many rows (though they may produce more).
+    ///   This is an optimization hint; [`GlobalLimitExec`] still enforces correctness.
+    ///
+    /// # Returns
+    /// A stream of [`BatchResultChunk`]s, where each chunk contains:
+    /// - `output`: Generated rows in columnar format (RecordBatch)
+    /// - `input_row_indices`: Maps each output row to its source input row [0..N)
+    ///
+    /// # Examples
+    ///
+    /// ## Direct invocation with constants
+    /// ```text
+    /// // SELECT * FROM generate_series(1, 5)
+    /// args = [
+    ///     Int64Array([1]),  // start = 1
+    ///     Int64Array([5])   // end = 5
+    /// ]
+    /// projection = None (all columns)
+    /// filters = []
+    /// limit = None
+    ///
+    /// Stream yields:
+    /// BatchResultChunk {
+    ///     output: RecordBatch with 5 rows [1, 2, 3, 4, 5],
+    ///     input_row_indices: vec![0, 0, 0, 0, 0]  // all from input row 0
+    /// }
+    /// ```
+    ///
+    /// ## LATERAL with 3 input rows and limit
+    /// ```text
+    /// // SELECT * FROM t LATERAL generate_series(t.start, t.end) LIMIT 5
+    /// // where t has rows: (1,3), (5,7), (10,12)
+    /// args = [
+    ///     Int64Array([1, 5, 10]),  // start values
+    ///     Int64Array([3, 7, 12])   // end values
+    /// ]
+    /// projection = None
+    /// filters = []
+    /// limit = Some(5)
+    ///
+    /// Stream may yield (optimization):
+    /// BatchResultChunk {
+    ///     output: RecordBatch with 5 rows [1,2,3, 5,6],
+    ///     input_row_indices: vec![0,0,0, 1,1]
+    /// }
+    /// // Function stopped early instead of generating all 9 rows
+    /// ```
+    ///
+    /// [`supports_filters_pushdown`]: Self::supports_filters_pushdown
+    /// [`GlobalLimitExec`]: datafusion_physical_plan::limit::GlobalLimitExec
+    async fn invoke_batch(
+        &self,
+        args: &[ArrayRef],
+        projection: Option<&[usize]>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<BatchResultStream>;
+}
+
+/// A table function that can process batched inputs
+///
+/// This is a wrapper around [`BatchedTableFunctionImpl`] that provides
+/// a `create_plan` method for integration with DataFusion's planning.
+///
+/// Similar to how [`ScalarUDF`] wraps [`ScalarUDFImpl`].
+#[derive(Debug, Clone)]
+pub struct BatchedTableFunction {
+    inner: Arc<dyn BatchedTableFunctionImpl>,
+}
+
+impl BatchedTableFunction {
+    pub fn new(inner: Arc<dyn BatchedTableFunctionImpl>) -> Self {
+        Self { inner }
+    }
+
+    pub fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    pub fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+
+    pub fn return_type(&self, arg_types: &[DataType]) -> Result<Schema> {
+        self.inner.return_type(arg_types)
+    }
+
+    pub fn inner(&self) -> &Arc<dyn BatchedTableFunctionImpl> {
+        &self.inner
+    }
+
+    /// Create execution plan for this table function
+    ///
+    /// Creates a wrapper ExecutionPlan that evaluates argument expressions
+    /// against input batches and calls the underlying `invoke_batch` method.
+    pub fn create_plan(
+        &self,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        input: Arc<dyn ExecutionPlan>,
+        projected_schema: SchemaRef,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(BatchedTableFunctionExec::new(
+            Arc::clone(&self.inner),
+            args,
+            input,
+            Arc::clone(&projected_schema), // projected_schema
+            projected_schema, // table_function_schema (same in Standalone mode)
+            crate::BatchedTableFunctionMode::Standalone,
+            None,   // no projection
+            vec![], // no filters
+            None,   // no limit
+        )?))
     }
 }

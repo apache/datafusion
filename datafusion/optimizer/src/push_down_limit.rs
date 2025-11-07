@@ -154,6 +154,40 @@ impl OptimizerRule for PushDownLimit {
                 subquery_alias.input = Arc::new(new_limit);
                 Ok(Transformed::yes(LogicalPlan::SubqueryAlias(subquery_alias)))
             }
+            LogicalPlan::StandaloneBatchedTableFunction(mut scan) => {
+                let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
+                let new_fetch = scan
+                    .fetch
+                    .map(|x| min(x, rows_needed))
+                    .or(Some(rows_needed));
+                if new_fetch == scan.fetch {
+                    original_limit(skip, fetch, LogicalPlan::StandaloneBatchedTableFunction(scan))
+                } else {
+                    // push limit into the table function scan itself
+                    scan.fetch = scan
+                        .fetch
+                        .map(|x| min(x, rows_needed))
+                        .or(Some(rows_needed));
+                    transformed_limit(skip, fetch, LogicalPlan::StandaloneBatchedTableFunction(scan))
+                }
+            }
+            LogicalPlan::LateralBatchedTableFunction(mut lateral) => {
+                let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
+                let new_fetch = lateral
+                    .fetch
+                    .map(|x| min(x, rows_needed))
+                    .or(Some(rows_needed));
+                if new_fetch == lateral.fetch {
+                    original_limit(skip, fetch, LogicalPlan::LateralBatchedTableFunction(lateral))
+                } else {
+                    // push limit into the lateral table function itself
+                    lateral.fetch = lateral
+                        .fetch
+                        .map(|x| min(x, rows_needed))
+                        .or(Some(rows_needed));
+                    transformed_limit(skip, fetch, LogicalPlan::LateralBatchedTableFunction(lateral))
+                }
+            }
             LogicalPlan::Extension(extension_plan)
                 if extension_plan.node.supports_limit_pushdown() =>
             {

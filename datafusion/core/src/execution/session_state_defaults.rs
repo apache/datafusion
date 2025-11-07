@@ -128,6 +128,15 @@ impl SessionStateDefaults {
     }
 
     /// returns the list of default [`FileFormatFactory`]s
+    /// returns the list of default batched table functions
+    pub fn default_batched_table_functions() -> Vec<(
+        &'static str,
+        Arc<dyn datafusion_catalog::BatchedTableFunctionImpl>,
+    )> {
+        functions_table::all_default_batched_table_functions()
+    }
+
+    /// returns the list of default [`FileFormatFactory']'s
     pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
         let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
             #[cfg(feature = "parquet")]

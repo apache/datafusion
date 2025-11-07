@@ -23,14 +23,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
+    Array, ArrayRef, AsArray, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
     LargeStringArray, StringArray, TimestampNanosecondArray, UnionArray,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
-    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
+    batched_function::helpers::materialized_batch_stream, CatalogProvider,
+    MemoryCatalogProvider, MemorySchemaProvider, Session, BatchedTableFunctionImpl,
 };
 use datafusion::common::{not_impl_err, DataFusionError, Result};
 use datafusion::functions::math::abs;
@@ -142,6 +143,10 @@ impl TestContext {
             "async_udf.slt" => {
                 info!("Registering dummy async udf");
                 register_async_abs_udf(test_ctx.session_ctx())
+            }
+            "lateral.slt" => {
+                info!("Registering test batched table function for LATERAL tests");
+                register_test_batched_table_function(test_ctx.session_ctx())
             }
             _ => {
                 info!("Using default SessionContext");
@@ -512,4 +517,157 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+fn register_test_batched_table_function(ctx: &SessionContext) {
+    /// Batched table function that generates a series of integers
+    /// batched_generate_series(start, stop) generates rows from start to stop (inclusive)
+    #[derive(Debug)]
+    struct BatchedGenerateSeriesFn {
+        signature: Signature,
+    }
+
+    impl BatchedGenerateSeriesFn {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(
+                    vec![DataType::Int32, DataType::Int32],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BatchedTableFunctionImpl for BatchedGenerateSeriesFn {
+        fn name(&self) -> &str {
+            "batched_generate_series"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<Schema> {
+            Ok(Schema::new(vec![Field::new("n", DataType::Int32, false)]))
+        }
+
+        fn supports_filters_pushdown(
+            &self,
+            filters: &[&datafusion::prelude::Expr],
+        ) -> Result<Vec<datafusion::logical_expr::TableProviderFilterPushDown>> {
+            // This test function supports all filters
+            Ok(vec![
+                datafusion::logical_expr::TableProviderFilterPushDown::Exact;
+                filters.len()
+            ])
+        }
+
+        async fn invoke_batch(
+            &self,
+            args: &[ArrayRef],
+            _projection: Option<&[usize]>,
+            filters: &[datafusion::prelude::Expr],
+            _limit: Option<usize>,
+        ) -> Result<datafusion::catalog::BatchResultStream> {
+            if args.len() != 2 {
+                return Err(DataFusionError::Internal(
+                    "Expected exactly 2 arguments (start, stop)".to_string(),
+                ));
+            }
+
+            // Support both Int32 and Int64
+            let start_array = args[0].as_ref();
+            let stop_array = args[1].as_ref();
+
+            if start_array.len() != stop_array.len() {
+                return Err(DataFusionError::Internal(
+                    "start and stop arrays must have same length".to_string(),
+                ));
+            }
+
+            // Extract i32 from Int32 or Int64
+            let get_i32 = |arr: &dyn Array, idx: usize| -> Result<i32> {
+                if arr.is_null(idx) {
+                    return Err(DataFusionError::Internal(
+                        "NULL values not supported".to_string(),
+                    ));
+                }
+
+                match arr.data_type() {
+                    DataType::Int32 => {
+                        Ok(arr.as_primitive::<arrow::datatypes::Int32Type>().value(idx))
+                    }
+                    DataType::Int64 => Ok(arr
+                        .as_primitive::<arrow::datatypes::Int64Type>()
+                        .value(idx) as i32),
+                    dt => Err(DataFusionError::Internal(format!(
+                        "Expected Int32/Int64, got {:?}",
+                        dt
+                    ))),
+                }
+            };
+
+            let mut output_values = Vec::new();
+            let mut input_row_indices = Vec::new();
+
+            for row_idx in 0..start_array.len() {
+                let start = get_i32(start_array, row_idx)?;
+                let stop = get_i32(stop_array, row_idx)?;
+
+                // Inclusive range - apply filters during generation for efficiency
+                for n in start..=stop {
+                    // Simple filter evaluation for test purposes
+                    // Only handles basic comparison filters on 'n' column
+                    let passes_filters = filters.is_empty() || filters.iter().all(|filter| {
+                        // This is a simplified filter evaluator for testing
+                        // In a real implementation, you'd use DataFusion's expression evaluator
+                        match filter {
+                            datafusion::prelude::Expr::BinaryExpr(binary) => {
+                                use datafusion::logical_expr::Operator;
+                                if let datafusion::prelude::Expr::Column(col) = &*binary.left {
+                                    if col.name == "n" {
+                                        if let datafusion::prelude::Expr::Literal(val, _) = &*binary.right {
+                                            if let datafusion::common::ScalarValue::Int32(Some(val)) = val {
+                                                return match binary.op {
+                                                    Operator::Gt => n > *val,
+                                                    Operator::Lt => n < *val,
+                                                    Operator::GtEq => n >= *val,
+                                                    Operator::LtEq => n <= *val,
+                                                    Operator::Eq => n == *val,
+                                                    Operator::NotEq => n != *val,
+                                                    _ => true, // Unsupported operators pass through
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                                true // Unknown filters pass through (should be handled by FilterExec)
+                            }
+                            _ => true, // Unknown filter types pass through
+                        }
+                    });
+
+                    if passes_filters {
+                        output_values.push(n);
+                        input_row_indices.push(row_idx as u32);
+                    }
+                }
+            }
+
+            let schema = self.return_type(&[DataType::Int32, DataType::Int32])?;
+            let output_array = Int32Array::from(output_values);
+            let output_batch =
+                RecordBatch::try_new(Arc::new(schema), vec![Arc::new(output_array)])?;
+
+            Ok(materialized_batch_stream(output_batch, input_row_indices))
+        }
+    }
+
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
+    state.register_batched_table_function(
+        "batched_generate_series",
+        Arc::new(BatchedGenerateSeriesFn::new()),
+    );
 }

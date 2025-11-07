@@ -47,8 +47,12 @@ datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+futures = { workspace = true }
 parking_lot = { workspace = true }
 paste = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
+datafusion-execution = { workspace = true }
+tokio = { workspace = true }

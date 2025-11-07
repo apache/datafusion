@@ -74,5 +74,11 @@ pub fn to_substrait_rel(
         LogicalPlan::RecursiveQuery(plan) => {
             not_impl_err!("Unsupported plan type: {plan:?}")?
         }
+        LogicalPlan::LateralBatchedTableFunction(plan) => {
+            not_impl_err!("Unsupported plan type: {plan:?}")?
+        }
+        LogicalPlan::StandaloneBatchedTableFunction(plan) => {
+            not_impl_err!("Unsupported plan type: {plan:?}")?
+        }
     }
 }
