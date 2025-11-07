@@ -33,16 +33,34 @@ use super::spill_manager::SpillManager;
 
 /// Shared state between the writer and readers of a spill pool.
 /// This contains the queue of files and coordination state.
+///
+/// # Locking Design
+///
+/// This struct uses **fine-grained locking** with nested `Arc<Mutex<>>`:
+/// - `SpillPoolShared` is wrapped in `Arc<Mutex<>>` (outer lock)
+/// - Each `ActiveSpillFileShared` is wrapped in `Arc<Mutex<>>` (inner lock)
+///
+/// This enables:
+/// 1. **Short critical sections**: The outer lock is held only for queue operations
+/// 2. **I/O outside locks**: Disk I/O happens while holding only the file-specific lock
+/// 3. **Concurrent operations**: Reader can access the queue while writer does I/O
+///
+/// **Lock ordering discipline**: Never hold both locks simultaneously to prevent deadlock.
+/// Always: acquire outer lock → release outer lock → acquire inner lock (if needed).
 struct SpillPoolShared {
     /// Queue of ALL files (including the current write file if it exists).
     /// Readers always read from the front of this queue (FIFO).
+    /// Each file has its own lock to enable concurrent reader/writer access.
     files: VecDeque<Arc<Mutex<ActiveSpillFileShared>>>,
     /// SpillManager for creating files and tracking metrics
     spill_manager: Arc<SpillManager>,
-    /// Pool-level waker to notify when new files are available (SPSC: only one reader)
+    /// Pool-level waker to notify when new files are available (single reader)
     waker: Option<Waker>,
     /// Whether the writer has been dropped (no more files will be added)
     writer_dropped: bool,
+    /// Writer's reference to the current file (shared by all cloned writers).
+    /// Has its own lock to allow I/O without blocking queue access.
+    current_write_file: Option<Arc<Mutex<ActiveSpillFileShared>>>,
 }
 
 impl SpillPoolShared {
@@ -53,6 +71,7 @@ impl SpillPoolShared {
             spill_manager,
             waker: None,
             writer_dropped: false,
+            current_write_file: None,
         }
     }
 
@@ -69,20 +88,21 @@ impl SpillPoolShared {
     }
 }
 
-/// Writer for a spill pool. Provides exclusive write access with FIFO semantics.
+/// Writer for a spill pool. Provides coordinated write access with FIFO semantics.
 ///
 /// Created by [`channel`]. See that function for architecture diagrams and usage examples.
 ///
+/// The writer is `Clone`, allowing multiple writers to coordinate on the same pool.
+/// All clones share the same current write file and coordinate file rotation.
 /// The writer automatically manages file rotation based on the `max_file_size_bytes`
-/// configured in [`channel`]. When dropped, it finalizes the current file so readers
-/// can access all written data.
+/// configured in [`channel`]. When the last writer clone is dropped, it finalizes the
+/// current file so readers can access all written data.
+#[derive(Clone)]
 pub struct SpillPoolWriter {
     /// Maximum size in bytes before rotating to a new file.
     /// Typically set from configuration `datafusion.execution.max_spill_file_size_bytes`.
     max_file_size_bytes: usize,
-    /// Writer's reference to the current file (also in the shared files queue)
-    current_write_file: Option<Arc<Mutex<ActiveSpillFileShared>>>,
-    /// Shared state with readers
+    /// Shared state with readers (includes current_write_file for coordination)
     shared: Arc<Mutex<SpillPoolShared>>,
 }
 
@@ -124,7 +144,7 @@ impl SpillPoolWriter {
     /// # Errors
     ///
     /// Returns an error if disk I/O fails or disk quota is exceeded.
-    pub fn push_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+    pub fn push_batch(&self, batch: &RecordBatch) -> Result<()> {
         if batch.num_rows() == 0 {
             // Skip empty batches
             return Ok(());
@@ -132,12 +152,14 @@ impl SpillPoolWriter {
 
         let batch_size = batch.get_array_memory_size();
 
+        // Fine-grained locking: Lock shared state briefly for queue access
+        let mut shared = self.shared.lock();
+
         // Create new file if we don't have one yet
-        if self.current_write_file.is_none() {
-            let spill_manager = {
-                let shared = self.shared.lock();
-                Arc::clone(&shared.spill_manager)
-            };
+        if shared.current_write_file.is_none() {
+            let spill_manager = Arc::clone(&shared.spill_manager);
+            // Release shared lock before disk I/O (fine-grained locking)
+            drop(shared);
 
             let writer = spill_manager.create_in_progress_file("SpillPool")?;
             // Clone the file so readers can access it immediately
@@ -152,19 +174,21 @@ impl SpillPoolWriter {
                 waker: None,
             }));
 
-            // Push to shared queue and keep reference for writing
-            {
-                let mut shared = self.shared.lock();
-                shared.files.push_back(Arc::clone(&file_shared));
-                shared.wake(); // Wake readers waiting for new files
-            }
-            self.current_write_file = Some(file_shared);
+            // Re-acquire lock and push to shared queue
+            shared = self.shared.lock();
+            shared.files.push_back(Arc::clone(&file_shared));
+            shared.current_write_file = Some(file_shared);
+            shared.wake(); // Wake readers waiting for new files
         }
 
-        let current_write_file = self.current_write_file.take();
+        let current_write_file = shared.current_write_file.take();
+        // Release shared lock before file I/O (fine-grained locking)
+        // This allows readers to access the queue while we do disk I/O
+        drop(shared);
 
-        // Write batch to current file
+        // Write batch to current file - lock only the specific file
         if let Some(current_file) = current_write_file {
+            // Now lock just this file for I/O (separate from shared lock)
             let mut file_shared = current_file.lock();
 
             // Append the batch
@@ -189,11 +213,13 @@ impl SpillPoolWriter {
                 file_shared.writer_finished = true;
                 // Wake reader waiting on this file (it's now finished)
                 file_shared.wake();
+                // Don't put back current_write_file - let it rotate
             } else {
-                // Release lock
+                // Release file lock
                 drop(file_shared);
                 // Put back the current file for further writing
-                self.current_write_file = Some(current_file);
+                let mut shared = self.shared.lock();
+                shared.current_write_file = Some(current_file);
             }
         }
 
@@ -203,8 +229,13 @@ impl SpillPoolWriter {
 
 impl Drop for SpillPoolWriter {
     fn drop(&mut self) {
-        // Finalize the current file when writer is dropped
-        if let Some(current_file) = self.current_write_file.take() {
+        let mut shared = self.shared.lock();
+
+        // Finalize the current file when the last writer is dropped
+        if let Some(current_file) = shared.current_write_file.take() {
+            // Release shared lock before locking file
+            drop(shared);
+
             let mut file_shared = current_file.lock();
 
             // Finish the current writer if it exists
@@ -218,22 +249,25 @@ impl Drop for SpillPoolWriter {
 
             // Wake reader waiting on this file (it's now finished)
             file_shared.wake();
+
+            drop(file_shared);
+            shared = self.shared.lock();
         }
 
         // Mark writer as dropped and wake pool-level readers
-        let mut shared = self.shared.lock();
         shared.writer_dropped = true;
         shared.wake();
     }
 }
 
-/// Creates a paired writer and reader for a spill pool with SPSC (single-producer, single-consumer)
+/// Creates a paired writer and reader for a spill pool with MPSC (multi-producer, single-consumer)
 /// semantics.
 ///
-/// This is the recommended way to create a spill pool. The writer has exclusive
-/// write access, and the reader can consume batches in FIFO order. The reader
-/// can start reading immediately after the writer appends a batch to the spill file,
-/// without waiting for the file to be sealed, while the writer continues to write more data.
+/// This is the recommended way to create a spill pool. The writer is `Clone`, allowing
+/// multiple producers to coordinate writes to the same pool. The reader can consume batches
+/// in FIFO order. The reader can start reading immediately after a writer appends a batch
+/// to the spill file, without waiting for the file to be sealed, while writers continue to
+/// write more data.
 ///
 /// Internally this coordinates rotating spill files based on size limits, and
 /// handles asynchronous notification between the writer and reader using wakers.
@@ -348,7 +382,7 @@ impl Drop for SpillPoolWriter {
 /// # let spill_manager = Arc::new(SpillManager::new(env, metrics, schema.clone()));
 /// #
 /// // Create channel with 1MB file size limit
-/// let (mut writer, mut reader) = spill_pool::channel(1024 * 1024, spill_manager);
+/// let (writer, mut reader) = spill_pool::channel(1024 * 1024, spill_manager);
 ///
 /// // Spawn writer task to produce batches
 /// let write_handle = tokio::spawn(async move {
@@ -401,7 +435,6 @@ pub fn channel(
 
     let writer = SpillPoolWriter {
         max_file_size_bytes,
-        current_write_file: None,
         shared: Arc::clone(&shared),
     };
 
@@ -718,7 +751,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_write_and_read() -> Result<()> {
-        let (mut writer, mut reader) = create_spill_channel(1024 * 1024);
+        let (writer, mut reader) = create_spill_channel(1024 * 1024);
 
         // Write one batch
         let batch1 = create_test_batch(0, 10);
@@ -740,7 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_single_batch_write_read() -> Result<()> {
-        let (mut writer, mut reader) = create_spill_channel(1024 * 1024);
+        let (writer, mut reader) = create_spill_channel(1024 * 1024);
 
         // Write one batch
         let batch = create_test_batch(0, 5);
@@ -764,7 +797,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_batches_sequential() -> Result<()> {
-        let (mut writer, mut reader) = create_spill_channel(1024 * 1024);
+        let (writer, mut reader) = create_spill_channel(1024 * 1024);
 
         // Write multiple batches
         for i in 0..5 {
@@ -805,7 +838,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_batch_skipping() -> Result<()> {
-        let (mut writer, mut reader) = create_spill_channel(1024 * 1024);
+        let (writer, mut reader) = create_spill_channel(1024 * 1024);
 
         // Write empty batch
         let empty_batch = create_test_batch(0, 0);
@@ -828,8 +861,7 @@ mod tests {
         let batch1 = create_test_batch(0, 10);
         let batch_size = batch1.get_array_memory_size() + 1;
 
-        let (mut writer, mut reader, metrics) =
-            create_spill_channel_with_metrics(batch_size);
+        let (writer, mut reader, metrics) = create_spill_channel_with_metrics(batch_size);
 
         // Write first batch (should fit in first file)
         writer.push_batch(&batch1)?;
@@ -921,8 +953,7 @@ mod tests {
         let batch_size = batches[0].get_array_memory_size() * 2 + 1;
 
         // Very small max_file_size to force frequent rotations
-        let (mut writer, mut reader, metrics) =
-            create_spill_channel_with_metrics(batch_size);
+        let (writer, mut reader, metrics) = create_spill_channel_with_metrics(batch_size);
 
         // Write many batches to cause multiple rotations
         for i in 0..10 {
@@ -972,7 +1003,7 @@ mod tests {
     #[tokio::test]
     async fn test_single_batch_larger_than_limit() -> Result<()> {
         // Very small limit
-        let (mut writer, mut reader, metrics) = create_spill_channel_with_metrics(100);
+        let (writer, mut reader, metrics) = create_spill_channel_with_metrics(100);
 
         // Write a batch that exceeds the limit
         let large_batch = create_test_batch(0, 100);
@@ -1019,7 +1050,7 @@ mod tests {
     #[tokio::test]
     async fn test_very_small_max_file_size() -> Result<()> {
         // Test with just 1 byte max (extreme case)
-        let (mut writer, mut reader) = create_spill_channel(1);
+        let (writer, mut reader) = create_spill_channel(1);
 
         // Any batch will exceed this limit
         let batch = create_test_batch(0, 5);
@@ -1039,8 +1070,7 @@ mod tests {
         let batch_size = batch.get_array_memory_size();
 
         // Set max_file_size to exactly the batch size
-        let (mut writer, mut reader, metrics) =
-            create_spill_channel_with_metrics(batch_size);
+        let (writer, mut reader, metrics) = create_spill_channel_with_metrics(batch_size);
 
         // Write first batch (exactly at the size limit)
         writer.push_batch(&batch)?;
@@ -1101,7 +1131,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_reader_writer() -> Result<()> {
-        let (mut writer, mut reader) = create_spill_channel(1024 * 1024);
+        let (writer, mut reader) = create_spill_channel(1024 * 1024);
 
         // Spawn writer task
         let writer_handle = SpawnedTask::spawn(async move {
@@ -1141,7 +1171,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reader_catches_up_to_writer() -> Result<()> {
-        let (mut writer, mut reader) = create_spill_channel(1024 * 1024);
+        let (writer, mut reader) = create_spill_channel(1024 * 1024);
 
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum ReadWriteEvent {
@@ -1210,7 +1240,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reader_starts_after_writer_finishes() -> Result<()> {
-        let (mut writer, reader) = create_spill_channel(128);
+        let (writer, reader) = create_spill_channel(128);
 
         // Writer writes all data
         for i in 0..5 {
@@ -1249,7 +1279,7 @@ mod tests {
         let spill_manager =
             Arc::new(SpillManager::new(Arc::clone(&env), metrics.clone(), schema));
 
-        let (mut writer, mut reader) = channel(1024 * 1024, spill_manager);
+        let (writer, mut reader) = channel(1024 * 1024, spill_manager);
 
         // Write some batches
         for i in 0..5 {
@@ -1315,7 +1345,7 @@ mod tests {
         let schema = create_test_schema();
         let spill_manager = Arc::new(SpillManager::new(runtime, metrics.clone(), schema));
 
-        let (mut writer, mut reader) = channel(batch_size, spill_manager);
+        let (writer, mut reader) = channel(batch_size, spill_manager);
 
         // Step 3: Write NUM_BATCHES batches to create approximately NUM_BATCHES files
         for i in 0..NUM_BATCHES {

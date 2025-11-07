@@ -166,9 +166,9 @@ struct PartitionChannels {
     rx: InputPartitionsToCurrentPartitionReceiver,
     /// Memory reservation for this output partition
     reservation: SharedMemoryReservation,
-    /// Spill writers for writing spilled data - one per input partition (FIFO semantics).
-    /// Wrapped in Option so they can be moved out when creating OutputChannels.
-    spill_writers: Vec<Option<SpillPoolWriter>>,
+    /// Spill writers for writing spilled data.
+    /// SpillPoolWriter is Clone, so multiple writers can share state in non-preserve-order mode.
+    spill_writers: Vec<SpillPoolWriter>,
     /// Spill readers for reading spilled data - one per input partition (FIFO semantics).
     /// Each (input, output) pair gets its own reader to maintain proper ordering.
     spill_readers: Vec<SendableRecordBatchStream>,
@@ -318,15 +318,22 @@ impl RepartitionExecState {
                     .register(context.memory_pool()),
             ));
 
-            // Create one spill channel per input partition for this output partition
-            // This ensures proper FIFO ordering within each (input, output) pair
+            // Create spill channels based on mode:
+            // - preserve_order: one spill channel per (input, output) pair for proper FIFO ordering
+            // - non-preserve-order: one shared spill channel per output partition since all inputs
+            //   share the same receiver
             let max_file_size = context
                 .session_config()
                 .options()
                 .execution
                 .max_spill_file_size_bytes;
+            let num_spill_channels = if preserve_order {
+                num_input_partitions
+            } else {
+                1
+            };
             let (spill_writers, spill_readers): (Vec<_>, Vec<_>) = (0
-                ..num_input_partitions)
+                ..num_spill_channels)
                 .map(|_| spill_pool::channel(max_file_size, Arc::clone(&spill_manager)))
                 .unzip();
 
@@ -337,7 +344,7 @@ impl RepartitionExecState {
                     rx,
                     reservation,
                     spill_readers,
-                    spill_writers: spill_writers.into_iter().map(Some).collect(),
+                    spill_writers,
                 },
             );
         }
@@ -348,16 +355,18 @@ impl RepartitionExecState {
             std::mem::take(streams_and_metrics).into_iter().enumerate()
         {
             let txs: HashMap<_, _> = channels
-                .iter_mut()
+                .iter()
                 .map(|(partition, channels)| {
+                    // In preserve_order mode: each input gets its own spill writer (index i)
+                    // In non-preserve-order mode: all inputs share spill writer 0 via clone
+                    let spill_writer_idx = if preserve_order { i } else { 0 };
                     (
                         *partition,
                         OutputChannel {
                             sender: channels.tx[i].clone(),
                             reservation: Arc::clone(&channels.reservation),
-                            spill_writer: channels.spill_writers[i]
-                                .take()
-                                .expect("spill_writer should not be taken yet"),
+                            spill_writer: channels.spill_writers[spill_writer_idx]
+                                .clone(),
                         },
                     )
                 })
@@ -932,29 +941,21 @@ impl ExecutionPlan for RepartitionExec {
                     .with_spill_manager(spill_manager)
                     .build()
             } else {
-                // Non-preserve-order case: need to merge streams from all input partitions
-                // Each input partition gets its own spill reader to maintain proper FIFO ordering
-                let input_streams = rx
+                // Non-preserve-order case: single input stream, so use the first spill reader
+                let spill_stream = spill_readers
                     .into_iter()
-                    .zip(spill_readers)
-                    .map(|(receiver, spill_stream)| {
-                        // In non-preserve-order mode, all input partitions send to the same receiver
-                        Box::pin(PerPartitionStream::new(
-                            Arc::clone(&schema_captured),
-                            receiver,
-                            Arc::clone(&abort_helper),
-                            Arc::clone(&reservation),
-                            spill_stream,
-                            num_input_partitions, // Must wait for all input partitions to finish
-                        )) as SendableRecordBatchStream
-                    })
-                    .collect::<Vec<_>>();
+                    .next()
+                    .expect("at least one spill reader should exist");
 
-                // Merge all input partition streams without sorting (arrival order)
-                let merged_stream = futures::stream::select_all(input_streams);
-                Ok(Box::pin(RecordBatchStreamAdapter::new(
+                Ok(Box::pin(PerPartitionStream::new(
                     schema_captured,
-                    merged_stream,
+                    rx.into_iter()
+                        .next()
+                        .expect("at least one receiver should exist"),
+                    abort_helper,
+                    reservation,
+                    spill_stream,
+                    num_input_partitions,
                 )) as SendableRecordBatchStream)
             }
         })
