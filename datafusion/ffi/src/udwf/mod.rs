@@ -33,7 +33,7 @@ use datafusion_expr::{
     LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
 };
 use datafusion_physical_expr::PhysicalExpr;
-use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
+use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
@@ -322,10 +322,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
             (self.udf.partition_evaluator)(&self.udf, args)
         };
 
-        df_result!(evaluator).map(|evaluator| {
-            Box::new(ForeignPartitionEvaluator::from(evaluator))
-                as Box<dyn PartitionEvaluator>
-        })
+        df_result!(evaluator).map(<Box<dyn PartitionEvaluator>>::from)
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {

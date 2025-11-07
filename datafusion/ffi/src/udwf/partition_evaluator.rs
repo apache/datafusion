@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, ops::Range};
-
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 use abi_stable::{
     std_types::{RResult, RString, RVec},
@@ -29,6 +27,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{window_state::WindowAggState, PartitionEvaluator};
 use prost::Message;
+use std::{ffi::c_void, ops::Range};
 
 use super::range::FFI_Range;
 
@@ -76,6 +75,10 @@ pub struct FFI_PartitionEvaluator {
     /// Internal data. This is only to be accessed by the provider of the evaluator.
     /// A [`ForeignPartitionEvaluator`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_PartitionEvaluator {}
@@ -86,14 +89,14 @@ pub struct PartitionEvaluatorPrivateData {
 }
 
 impl FFI_PartitionEvaluator {
-    unsafe fn inner_mut(&mut self) -> &mut Box<dyn PartitionEvaluator + 'static> {
+    fn inner_mut(&mut self) -> &mut Box<dyn PartitionEvaluator + 'static> {
         let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
-        &mut (*private_data).evaluator
+        unsafe { &mut (*private_data).evaluator }
     }
 
-    unsafe fn inner(&self) -> &(dyn PartitionEvaluator + 'static) {
+    fn inner(&self) -> &(dyn PartitionEvaluator + 'static) {
         let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
-        (*private_data).evaluator.as_ref()
+        unsafe { (*private_data).evaluator.as_ref() }
     }
 }
 
@@ -195,6 +198,7 @@ impl From<Box<dyn PartitionEvaluator>> for FFI_PartitionEvaluator {
             uses_window_frame,
             release: release_fn_wrapper,
             private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -219,9 +223,18 @@ pub struct ForeignPartitionEvaluator {
 unsafe impl Send for ForeignPartitionEvaluator {}
 unsafe impl Sync for ForeignPartitionEvaluator {}
 
-impl From<FFI_PartitionEvaluator> for ForeignPartitionEvaluator {
+impl From<FFI_PartitionEvaluator> for Box<dyn PartitionEvaluator> {
     fn from(evaluator: FFI_PartitionEvaluator) -> Self {
-        Self { evaluator }
+        if (evaluator.library_marker_id)() == crate::get_library_marker_id() {
+            unsafe {
+                let private_data = Box::from_raw(
+                    evaluator.private_data as *mut PartitionEvaluatorPrivateData,
+                );
+                private_data.evaluator
+            }
+        } else {
+            Box::new(ForeignPartitionEvaluator { evaluator })
+        }
     }
 }
 
