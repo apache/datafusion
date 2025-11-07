@@ -1278,11 +1278,11 @@ impl SessionContext {
         // Only allow literals as parameters for now.
         let mut params: Vec<ScalarAndMetadata> = parameters
             .into_iter()
-            .map(|e| match simplifier.simplify(e.clone())? {
+            .map(|e| match simplifier.simplify(e)? {
                 Expr::Literal(scalar, metadata) => {
                     Ok(ScalarAndMetadata::new(scalar, metadata))
                 }
-                _ => not_impl_err!("Unsupported parameter type: {}", e),
+                e => not_impl_err!("Unsupported parameter type: {e}"),
             })
             .collect::<Result<_>>()?;
 
