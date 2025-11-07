@@ -434,6 +434,15 @@ fn hash_single_array(
     Ok(())
 }
 
+/// Something that can be returned as a `&dyn Array`.
+/// 
+/// We want `create_hashes` to accept either `&dyn Array` or `ArrayRef`,
+/// and this seems the best way to do so.
+/// 
+/// We tried having it accept `AsRef<dyn Array>`
+/// but that is not implemented for and cannot be implemented for
+/// `&dyn Array` so callers that have the latter would not be able
+/// to call `create_hashes` directly. This shim trait makes it possible.
 pub trait AsDynArray {
     fn as_dyn_array(&self) -> &dyn Array;
 }
