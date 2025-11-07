@@ -71,10 +71,10 @@ fn do_query(sql: &'static str) -> Diagnostic {
 /// ```rust
 /// let spans = get_spans(
 ///     "SELECT /*whole+left*/speed/*left*/ + /*right*/10/*right+whole*/ FROM cars",
+/// // whole is               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/// // left is                ^^^^^
+/// // right is                                        ^^
 /// );
-/// // whole is                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/// // left is                                  ^^^^^
-/// // right is                                                          ^^
 /// dbg!(&spans["whole"]);
 /// dbg!(&spans["left"]);
 /// dbg!(&spans["right"]);
