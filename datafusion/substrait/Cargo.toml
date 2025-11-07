@@ -35,11 +35,12 @@ async-recursion = "1.0"
 async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true, features = ["sql"] }
+half = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = { workspace = true }
 prost = { workspace = true }
-substrait = { version = "0.58", features = ["serde"] }
+substrait = { version = "0.62", features = ["serde"] }
 url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 uuid = { version = "1.17.0", features = ["v4"] }

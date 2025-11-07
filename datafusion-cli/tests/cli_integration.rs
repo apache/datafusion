@@ -19,6 +19,7 @@ use std::process::Command;
 
 use rstest::rstest;
 
+use async_trait::async_trait;
 use insta::{glob, Settings};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
@@ -374,8 +375,6 @@ async fn test_s3_url_fallback() {
     settings.set_snapshot_suffix("s3_url_fallback");
     let _bound = settings.bind_to_scope();
 
-    let port = container.get_host_port_ipv4(9000).await.unwrap();
-
     // Create a table using a prefix path (without trailing slash)
     // This should trigger the fallback logic where head() fails on the prefix
     // and list() is used to discover the actual files
@@ -389,11 +388,83 @@ OPTIONS (
 SELECT * FROM partitioned_data ORDER BY column_1, column_2 LIMIT 5;
 "#;
 
-    assert_cmd_snapshot!(cli()
-        .env_clear()
-        .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
-        .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
-        .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
-        .env("AWS_ALLOW_HTTP", "true")
-        .pass_stdin(input));
+    assert_cmd_snapshot!(cli().with_minio(&container).await.pass_stdin(input));
+}
+
+/// Validate object store profiling output
+#[tokio::test]
+async fn test_object_store_profiling() {
+    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
+        eprintln!("Skipping external storages integration tests");
+        return;
+    }
+
+    let container = setup_minio_container().await;
+
+    let mut settings = make_settings();
+
+    // as the object store profiling contains timestamps and durations, we must
+    // filter them out to have stable snapshots
+    //
+    // Example line to filter:
+    // 2025-10-11T12:02:59.722646+00:00 operation=Get duration=0.001495s size=1006 path=cars.csv
+    // Output:
+    // <TIMESTAMP> operation=Get duration=[DURATION] size=1006 path=cars.csv
+    settings.add_filter(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2} operation=(Get|Put|Delete|List|Head) duration=\d+\.\d{6}s (size=\d+\s+)?path=(.*)",
+        "<TIMESTAMP> operation=$1 duration=[DURATION] ${2}path=$3",
+    );
+
+    // We also need to filter out the summary statistics (anything with an 's' at the end)
+    // Example line(s) to filter:
+    // | Get       | duration | 5.000000s | 5.000000s | 5.000000s |           | 1         |
+    settings.add_filter(
+        r"\| (Get|Put|Delete|List|Head)( +)\| duration \| .*? \| .*? \| .*? \| .*? \| (.*?) \|",
+        "| $1$2 | duration | ...NORMALIZED...| $3 |",
+    );
+
+    let _bound = settings.bind_to_scope();
+
+    let input = r#"
+    CREATE EXTERNAL TABLE CARS
+STORED AS CSV
+LOCATION 's3://data/cars.csv';
+
+-- Initial query should not show any profiling as the object store is not instrumented yet
+SELECT * from CARS LIMIT 1;
+\object_store_profiling trace
+-- Query again to see the full profiling output
+SELECT * from CARS LIMIT 1;
+\object_store_profiling summary
+-- Query again to see the summarized profiling output
+SELECT * from CARS LIMIT 1;
+\object_store_profiling disabled
+-- Final query should not show any profiling as we disabled it again
+SELECT * from CARS LIMIT 1;
+"#;
+
+    assert_cmd_snapshot!(cli().with_minio(&container).await.pass_stdin(input));
+}
+
+/// Extension trait to Add the minio connection information to a Command
+#[async_trait]
+trait MinioCommandExt {
+    async fn with_minio(&mut self, container: &ContainerAsync<minio::MinIO>)
+        -> &mut Self;
+}
+
+#[async_trait]
+impl MinioCommandExt for Command {
+    async fn with_minio(
+        &mut self,
+        container: &ContainerAsync<minio::MinIO>,
+    ) -> &mut Self {
+        let port = container.get_host_port_ipv4(9000).await.unwrap();
+
+        self.env_clear()
+            .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
+            .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+            .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
+            .env("AWS_ALLOW_HTTP", "true")
+    }
 }

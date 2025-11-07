@@ -148,3 +148,38 @@ query T
 SELECT NVL(arrow_cast('a', 'Utf8View'), NULL);
 ----
 a
+
+# nvl is implemented as a case, and short-circuits evaluation
+# so the following query should not error
+query I
+SELECT NVL(1, 1/0);
+----
+1
+
+# but this one should
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT NVL(NULL, 1/0);
+
+# Expect the query plan to show nvl as a case expression
+query I
+select NVL(int_field, 9999) FROM test;
+----
+1
+2
+3
+9999
+4
+9999
+
+# Expect the query plan to show nvl as a case expression
+query TT
+EXPLAIN select NVL(int_field, 9999) FROM test;
+----
+logical_plan
+01)Projection: CASE WHEN __common_expr_1 IS NOT NULL THEN __common_expr_1 ELSE Int64(9999) END AS nvl(test.int_field,Int64(9999))
+02)--Projection: CAST(test.int_field AS Int64) AS __common_expr_1
+03)----TableScan: test projection=[int_field]
+physical_plan
+01)ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 ELSE 9999 END as nvl(test.int_field,Int64(9999))]
+02)--ProjectionExec: expr=[CAST(int_field@0 AS Int64) as __common_expr_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]

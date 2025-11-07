@@ -16,6 +16,7 @@
 // under the License.
 
 mod data_utils;
+
 use arrow::util::pretty::pretty_format_batches;
 use criterion::{criterion_group, criterion_main, Criterion};
 use data_utils::make_data;
@@ -24,6 +25,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
+use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -57,10 +59,8 @@ async fn create_context(
 }
 
 fn run(rt: &Runtime, plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, asc: bool) {
-    criterion::black_box(
-        rt.block_on(async { aggregate(plan.clone(), ctx.clone(), asc).await }),
-    )
-    .unwrap();
+    black_box(rt.block_on(async { aggregate(plan.clone(), ctx.clone(), asc).await }))
+        .unwrap();
 }
 
 async fn aggregate(

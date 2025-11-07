@@ -46,7 +46,10 @@ use crate::aggregates::{
     order::GroupOrdering,
 };
 
+mod metrics;
 mod null_builder;
+
+pub(crate) use metrics::GroupByMetrics;
 
 /// Stores the group values during hash aggregation.
 ///
@@ -128,7 +131,6 @@ pub trait GroupValues: Send {
 /// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
 /// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
 /// `GroupValuesRows`: crate::aggregates::group_values::row::GroupValuesRows
-///
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,

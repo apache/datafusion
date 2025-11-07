@@ -350,6 +350,7 @@ DataFusion currently supports the following pipe operators:
 - [INTERSECT](#pipe_intersect)
 - [EXCEPT](#pipe_except)
 - [AGGREGATE](#pipe_aggregate)
+- [JOIN](#pipe_join)
 
 (pipe_where)=
 
@@ -513,4 +514,29 @@ select * from range(0,3)
 +-------+
 | 3     |
 +-------+
+```
+
+(pipe_join)=
+
+### JOIN
+
+```sql
+(
+  SELECT 'apples' AS item, 2 AS sales
+  UNION ALL
+  SELECT 'bananas' AS item, 5 AS sales
+)
+|> AS produce_sales
+|> LEFT JOIN
+     (
+       SELECT 'apples' AS item, 123 AS id
+     ) AS produce_data
+   ON produce_sales.item = produce_data.item
+|> SELECT produce_sales.item, sales, id;
++--------+-------+------+
+| item   | sales | id   |
++--------+-------+------+
+| apples | 2     | 123  |
+| bananas| 5     | NULL |
++--------+-------+------+
 ```

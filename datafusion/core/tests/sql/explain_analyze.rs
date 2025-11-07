@@ -22,6 +22,7 @@ use rstest::rstest;
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
+use datafusion_common::format::ExplainAnalyzeLevel;
 use object_store::path::Path;
 
 #[tokio::test]
@@ -64,8 +65,25 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
+        "AggregateExec: mode=Partial, gby=[]",
+        "output_bytes="
+    );
+
+    assert_metrics!(
+        &formatted,
+        "AggregateExec: mode=Partial, gby=[c1@0 as c1]",
+        "reduction_factor=5.1% (5/99)"
+    );
+
+    assert_metrics!(
+        &formatted,
         "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
         "metrics=[output_rows=5, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+        "output_bytes="
     );
     assert_metrics!(
         &formatted,
@@ -74,9 +92,20 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
+        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
+        "output_bytes="
+    );
+    assert_metrics!(
+        &formatted,
+        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
+        "selectivity=99% (99/100)"
+    );
+    assert_metrics!(
+        &formatted,
         "ProjectionExec: expr=[]",
         "metrics=[output_rows=5, elapsed_compute="
     );
+    assert_metrics!(&formatted, "ProjectionExec: expr=[]", "output_bytes=");
     assert_metrics!(
         &formatted,
         "CoalesceBatchesExec: target_batch_size=4096",
@@ -84,14 +113,21 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
+        "CoalesceBatchesExec: target_batch_size=4096",
+        "output_bytes="
+    );
+    assert_metrics!(
+        &formatted,
         "UnionExec",
         "metrics=[output_rows=3, elapsed_compute="
     );
+    assert_metrics!(&formatted, "UnionExec", "output_bytes=");
     assert_metrics!(
         &formatted,
         "WindowAggExec",
         "metrics=[output_rows=1, elapsed_compute="
     );
+    assert_metrics!(&formatted, "WindowAggExec", "output_bytes=");
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
@@ -158,6 +194,112 @@ async fn explain_analyze_baseline_metrics() {
 fn nanos_from_timestamp(ts: &Timestamp) -> i64 {
     ts.value().unwrap().timestamp_nanos_opt().unwrap()
 }
+
+// Test different detail level for config `datafusion.explain.analyze_level`
+
+async fn collect_plan_with_context(
+    sql_str: &str,
+    ctx: &SessionContext,
+    level: ExplainAnalyzeLevel,
+) -> String {
+    {
+        let state = ctx.state_ref();
+        let mut state = state.write();
+        state.config_mut().options_mut().explain.analyze_level = level;
+    }
+    let dataframe = ctx.sql(sql_str).await.unwrap();
+    let batches = dataframe.collect().await.unwrap();
+    arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string()
+}
+
+async fn collect_plan(sql_str: &str, level: ExplainAnalyzeLevel) -> String {
+    let ctx = SessionContext::new();
+    collect_plan_with_context(sql_str, &ctx, level).await
+}
+
+#[tokio::test]
+async fn explain_analyze_level() {
+    let sql = "EXPLAIN ANALYZE \
+            SELECT * \
+            FROM generate_series(10) as t1(v1) \
+            ORDER BY v1 DESC";
+
+    for (level, needle, should_contain) in [
+        (ExplainAnalyzeLevel::Summary, "spill_count", false),
+        (ExplainAnalyzeLevel::Summary, "output_rows", true),
+        (ExplainAnalyzeLevel::Dev, "spill_count", true),
+        (ExplainAnalyzeLevel::Dev, "output_rows", true),
+    ] {
+        let plan = collect_plan(sql, level).await;
+        assert_eq!(
+            plan.contains(needle),
+            should_contain,
+            "plan for level {level:?} unexpected content: {plan}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn explain_analyze_level_datasource_parquet() {
+    let table_name = "tpch_lineitem_small";
+    let parquet_path = "tests/data/tpch_lineitem_small.parquet";
+    let sql = format!("EXPLAIN ANALYZE SELECT * FROM {table_name}");
+
+    // Register test parquet file into context
+    let ctx = SessionContext::new();
+    ctx.register_parquet(table_name, parquet_path, ParquetReadOptions::default())
+        .await
+        .expect("register parquet table for explain analyze test");
+
+    for (level, needle, should_contain) in [
+        (ExplainAnalyzeLevel::Summary, "metadata_load_time", true),
+        (ExplainAnalyzeLevel::Summary, "page_index_eval_time", false),
+        (ExplainAnalyzeLevel::Dev, "metadata_load_time", true),
+        (ExplainAnalyzeLevel::Dev, "page_index_eval_time", true),
+    ] {
+        let plan = collect_plan_with_context(&sql, &ctx, level).await;
+
+        assert_eq!(
+            plan.contains(needle),
+            should_contain,
+            "plan for level {level:?} unexpected content: {plan}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn explain_analyze_parquet_pruning_metrics() {
+    let table_name = "tpch_lineitem_small";
+    let parquet_path = "tests/data/tpch_lineitem_small.parquet";
+    let ctx = SessionContext::new();
+    ctx.register_parquet(table_name, parquet_path, ParquetReadOptions::default())
+        .await
+        .expect("register parquet table for explain analyze test");
+
+    // Test scenario:
+    // This table's l_orderkey has range [1, 7]
+    // So the following query can't prune the file:
+    //  select * from tpch_lineitem_small where l_orderkey = 5;
+    // If change filter to `l_orderkey=10`, the whole file can be pruned using stat.
+    for (l_orderkey, expected_pruning_metrics) in
+        [(5, "1 total → 1 matched"), (10, "1 total → 0 matched")]
+    {
+        let sql = format!(
+            "explain analyze select * from {table_name} where l_orderkey = {l_orderkey};"
+        );
+
+        let plan =
+            collect_plan_with_context(&sql, &ctx, ExplainAnalyzeLevel::Summary).await;
+
+        let expected_metrics =
+            format!("files_ranges_pruned_statistics={expected_pruning_metrics}");
+
+        assert_metrics!(&plan, "DataSourceExec", &expected_metrics);
+    }
+}
+
 #[tokio::test]
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation
@@ -722,10 +864,29 @@ async fn parquet_explain_analyze() {
 
     // should contain aggregated stats
     assert_contains!(&formatted, "output_rows=8");
-    assert_contains!(&formatted, "row_groups_matched_bloom_filter=0");
-    assert_contains!(&formatted, "row_groups_pruned_bloom_filter=0");
-    assert_contains!(&formatted, "row_groups_matched_statistics=1");
-    assert_contains!(&formatted, "row_groups_pruned_statistics=0");
+    assert_contains!(
+        &formatted,
+        "row_groups_pruned_bloom_filter=1 total \u{2192} 1 matched"
+    );
+    assert_contains!(
+        &formatted,
+        "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+    );
+
+    // The order of metrics is expected to be the same as the actual pruning order
+    // (file-> row-group -> page)
+    let i_file = formatted.find("files_ranges_pruned_statistics").unwrap();
+    let i_rowgroup_stat = formatted.find("row_groups_pruned_statistics").unwrap();
+    let i_rowgroup_bloomfilter =
+        formatted.find("row_groups_pruned_bloom_filter").unwrap();
+    let i_page = formatted.find("page_index_rows_pruned").unwrap();
+
+    assert!(
+        (i_file < i_rowgroup_stat)
+            && (i_rowgroup_stat < i_rowgroup_bloomfilter)
+            && (i_rowgroup_bloomfilter < i_page),
+            "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
+    );
 }
 
 // This test reproduces the behavior described in
@@ -865,9 +1026,7 @@ async fn parquet_explain_analyze_verbose() {
         .to_string();
 
     // should contain the raw per file stats (with the label)
-    assert_contains!(&formatted, "row_groups_matched_bloom_filter{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter{partition=0");
-    assert_contains!(&formatted, "row_groups_matched_statistics{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_statistics{partition=0");
 }
 
@@ -950,4 +1109,34 @@ async fn csv_explain_analyze_with_statistics() {
         &formatted,
         ", statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]"
     );
+}
+
+#[tokio::test]
+async fn nested_loop_join_selectivity() {
+    for (join_type, expected_selectivity) in [
+        ("INNER", "1% (1/100)"),
+        ("LEFT", "10% (10/100)"),
+        ("RIGHT", "10% (10/100)"),
+        // 1 match + 9 left + 9 right = 19
+        ("FULL", "19% (19/100)"),
+    ] {
+        let ctx = SessionContext::new();
+        let sql = format!(
+            "EXPLAIN ANALYZE SELECT * \
+                FROM generate_series(1, 10) as t1(a) \
+                {join_type} JOIN generate_series(1, 10) as t2(b) \
+                ON (t1.a + t2.b) = 20"
+        );
+
+        let actual = execute_to_batches(&ctx, sql.as_str()).await;
+        let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+            .unwrap()
+            .to_string();
+
+        assert_metrics!(
+            &formatted,
+            "NestedLoopJoinExec",
+            &format!("selectivity={expected_selectivity}")
+        );
+    }
 }
