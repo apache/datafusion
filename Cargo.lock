@@ -226,7 +226,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -249,7 +249,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -262,7 +262,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "ahash 0.8.12",
  "arrow-buffer",
@@ -280,7 +280,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "bytes",
  "half",
@@ -291,7 +291,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -312,7 +312,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -326,7 +326,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -338,7 +338,7 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -365,7 +365,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -380,7 +380,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -403,7 +403,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -415,7 +415,7 @@ dependencies = [
 [[package]]
 name = "arrow-pyarrow"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -426,7 +426,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -438,7 +438,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "bitflags 2.9.4",
  "serde",
@@ -449,7 +449,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
@@ -462,7 +462,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4457,7 +4457,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "57.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=14647e18080a1823ee74da79b35a1095cfcdc885#14647e18080a1823ee74da79b35a1095cfcdc885"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fe238774fd3c2e0202e7328c6d1e3174afbd79a1#fe238774fd3c2e0202e7328c6d1e3174afbd79a1"
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
