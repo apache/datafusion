@@ -72,13 +72,47 @@ async fn explain_analyze_baseline_metrics() {
         "reduction_factor=5.1% (5/99)"
     );
 
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "metrics=[output_rows=5, elapsed_compute=",
-        "output_bytes=",
-        "output_batches=3"
-    );
+    {
+        let expected_batch_count_after_repartition =
+            if cfg!(not(feature = "force_hash_collisions")) {
+                "output_batches=3"
+            } else {
+                "output_batches=1"
+            };
+
+        assert_metrics!(
+            &formatted,
+            "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "RepartitionExec: partitioning=Hash([c1@0], 3), input_partitions=3",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "ProjectionExec: expr=[]",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "CoalesceBatchesExec: target_batch_size=4096",
+            "metrics=[output_rows=5, elapsed_compute",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+    }
+
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
@@ -86,25 +120,13 @@ async fn explain_analyze_baseline_metrics() {
         "output_bytes=",
         "output_batches=1"
     );
+
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
         "selectivity=99% (99/100)"
     );
-    assert_metrics!(
-        &formatted,
-        "ProjectionExec: expr=[]",
-        "metrics=[output_rows=5, elapsed_compute=",
-        "output_bytes=",
-        "output_batches=3"
-    );
-    assert_metrics!(
-        &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "metrics=[output_rows=5, elapsed_compute",
-        "output_bytes=",
-        "output_batches=3"
-    );
+
     assert_metrics!(
         &formatted,
         "UnionExec",
@@ -112,6 +134,7 @@ async fn explain_analyze_baseline_metrics() {
         "output_bytes=",
         "output_batches=3"
     );
+
     assert_metrics!(
         &formatted,
         "WindowAggExec",

@@ -795,6 +795,7 @@ impl ExecutionPlan for RepartitionExec {
                     reservation,
                     spill_manager,
                     state: RepartitionStreamState::ReceivingFromChannel,
+                    baseline_metrics: BaselineMetrics::new(&metrics, partition),
                 }) as SendableRecordBatchStream)
             }
         })
@@ -1215,6 +1216,9 @@ struct RepartitionStream {
 
     /// Current state of the stream
     state: RepartitionStreamState,
+
+    /// Execution metrics
+    baseline_metrics: BaselineMetrics,
 }
 
 impl Stream for RepartitionStream {
@@ -1224,6 +1228,18 @@ impl Stream for RepartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        let poll = self.poll_next_inner(cx);
+        self.baseline_metrics.record_poll(poll)
+    }
+}
+
+impl RepartitionStream {
+    fn poll_next_inner(
+        self: &mut Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
+        let _timer = cloned_time.timer();
         loop {
             match &mut self.state {
                 RepartitionStreamState::ReceivingFromChannel => {
