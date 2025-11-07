@@ -19,7 +19,7 @@ use abi_stable::{
     std_types::{ROption, RResult, RStr, RString, RVec},
     StableAbi,
 };
-use accumulator::{FFI_Accumulator, ForeignAccumulator};
+use accumulator::FFI_Accumulator;
 use accumulator_args::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 use arrow::datatypes::{DataType, Field};
 use arrow::ffi::FFI_ArrowSchema;
@@ -465,9 +465,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let args = acc_args.try_into()?;
         unsafe {
-            df_result!((self.udaf.accumulator)(&self.udaf, args)).map(|accum| {
-                Box::new(ForeignAccumulator::from(accum)) as Box<dyn Accumulator>
-            })
+            df_result!((self.udaf.accumulator)(&self.udaf, args))
+                .map(<Box<dyn Accumulator>>::from)
         }
     }
 
@@ -544,9 +543,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     ) -> Result<Box<dyn Accumulator>> {
         let args = args.try_into()?;
         unsafe {
-            df_result!((self.udaf.create_sliding_accumulator)(&self.udaf, args)).map(
-                |accum| Box::new(ForeignAccumulator::from(accum)) as Box<dyn Accumulator>,
-            )
+            df_result!((self.udaf.create_sliding_accumulator)(&self.udaf, args))
+                .map(<Box<dyn Accumulator>>::from)
         }
     }
 
