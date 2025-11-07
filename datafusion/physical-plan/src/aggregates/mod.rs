@@ -26,12 +26,18 @@ use crate::aggregates::{
     topk_stream::GroupedTopKAggregateStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::filter_pushdown::{
+    ChildFilterDescription, FilterDescription, FilterPushdownPhase, PushedDownPredicate,
+};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr::utils::collect_columns;
+use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -1024,6 +1030,88 @@ impl ExecutionPlan for AggregateExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    /// Push down parent filters when possible (see implementation comment for details),
+    /// but do not introduce any new self filters.
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // It's safe to push down filters through aggregates when filters only reference
+        // grouping columns, because such filters determine which groups to compute, not
+        // *how* to compute them. Each group's aggregate values (SUM, COUNT, etc.) are
+        // calculated from the same input rows regardless of whether we filter before or
+        // after grouping - filtering before just eliminates entire groups early.
+        // This optimization is NOT safe for filters on aggregated columns (like filtering on
+        // the result of SUM or COUNT), as those require computing all groups first.
+
+        let grouping_columns: HashSet<_> = self
+            .group_by
+            .expr()
+            .iter()
+            .flat_map(|(expr, _)| collect_columns(expr))
+            .collect();
+
+        // Analyze each filter separately to determine if it can be pushed down
+        let mut safe_filters = Vec::new();
+        let mut unsafe_filters = Vec::new();
+
+        for filter in parent_filters {
+            let filter_columns: HashSet<_> =
+                collect_columns(&filter).into_iter().collect();
+
+            // Check if this filter references non-grouping columns
+            let references_non_grouping = !grouping_columns.is_empty()
+                && !filter_columns.is_subset(&grouping_columns);
+
+            if references_non_grouping {
+                unsafe_filters.push(filter);
+                continue;
+            }
+
+            // For GROUPING SETS, verify this filter's columns appear in all grouping sets
+            if self.group_by.groups().len() > 1 {
+                let filter_column_indices: Vec<usize> = filter_columns
+                    .iter()
+                    .filter_map(|filter_col| {
+                        self.group_by.expr().iter().position(|(expr, _)| {
+                            collect_columns(expr).contains(filter_col)
+                        })
+                    })
+                    .collect();
+
+                // Check if any of this filter's columns are missing from any grouping set
+                let has_missing_column = self.group_by.groups().iter().any(|null_mask| {
+                    filter_column_indices
+                        .iter()
+                        .any(|&idx| null_mask.get(idx) == Some(&true))
+                });
+
+                if has_missing_column {
+                    unsafe_filters.push(filter);
+                    continue;
+                }
+            }
+
+            // This filter is safe to push down
+            safe_filters.push(filter);
+        }
+
+        // Build child filter description with both safe and unsafe filters
+        let child = self.children()[0];
+        let mut child_desc = ChildFilterDescription::from_child(&safe_filters, child)?;
+
+        // Add unsafe filters as unsupported
+        child_desc.parent_filters.extend(
+            unsafe_filters
+                .into_iter()
+                .map(PushedDownPredicate::unsupported),
+        );
+
+        Ok(FilterDescription::new().with_child(child_desc))
     }
 }
 

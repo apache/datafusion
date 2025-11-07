@@ -20,10 +20,11 @@ extern crate criterion;
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::encoding;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {

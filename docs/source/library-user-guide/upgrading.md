@@ -34,11 +34,11 @@ to version `57.0.0`, including several dependent crates such as `prost`,
 `tonic`, `pyo3`, and `substrait`. . See the [release
 notes](https://github.com/apache/arrow-rs/releases/tag/57.0.0) for more details.
 
-### `MSRV` updated to 1.87.0
+### `MSRV` updated to 1.88.0
 
-The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.88.0`].
 
-[`1.87.0`]: https://releases.rs/docs/1.87.0/
+[`1.88.0`]: https://releases.rs/docs/1.88.0/
 
 ### `FunctionRegistry` exposes two additional methods
 
@@ -133,20 +133,16 @@ The `projection` field in `FileScanConfig` has been renamed to `projection_exprs
 
 If you directly access the `projection` field:
 
-```rust
-# /* comment to avoid running
+```rust,ignore
 let config: FileScanConfig = ...;
 let projection = config.projection;
-# */
 ```
 
 You should update to:
 
-```rust
-# /* comment to avoid running
+```rust,ignore
 let config: FileScanConfig = ...;
 let projection_exprs = config.projection_exprs;
-# */
 ```
 
 **Impact on builders:**
@@ -168,12 +164,10 @@ Note: `with_projection()` still works but is deprecated and will be removed in a
 
 You can access column indices from `ProjectionExprs` using its methods if needed:
 
-```rust
-# /* comment to avoid running
+```rust,ignore
 let projection_exprs: ProjectionExprs = ...;
 // Get the column indices if the projection only contains simple column references
 let indices = projection_exprs.column_indices();
-# */
 ```
 
 ### `DESCRIBE query` support
@@ -181,6 +175,20 @@ let indices = projection_exprs.column_indices();
 `DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the
 _execution plan_ of the query. With this release, `DESCRIBE query` now outputs
 the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
+
+### `datafusion.execution.time_zone` default configuration changed
+
+The default value for `datafusion.execution.time_zone` previously was a string value of `+00:00` (GMT/Zulu time).
+This was changed to be an `Option<String>` with a default of `None`. If you want to change the timezone back
+to the previous value you can execute the sql:
+
+```sql
+SET
+TIMEZONE = '+00:00';
+```
+
+This change was made to better support using the default timezone in scalar UDF functions such as
+`now`, `current_date`, `current_time`, and `to_timestamp` among others.
 
 ### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
 
@@ -259,6 +267,13 @@ let file_schema_ref = table_schema.file_schema();      // Schema without partiti
 let full_schema = table_schema.table_schema();          // Complete schema with partition columns
 let partition_cols_ref = table_schema.table_partition_cols(); // Just the partition columns
 ```
+
+### `AggregateUDFImpl::is_ordered_set_aggregate` has been renamed to `AggregateUDFImpl::supports_within_group_clause`
+
+This method has been renamed to better reflect the actual impact it has for aggregate UDF implementations.
+The accompanying `AggregateUDF::is_ordered_set_aggregate` has also been renamed to `AggregateUDF::supports_within_group_clause`.
+No functionality has been changed with regards to this method; it still refers only to permitting use of `WITHIN GROUP`
+SQL syntax for the aggregate function.
 
 ## DataFusion `50.0.0`
 

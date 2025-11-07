@@ -467,9 +467,8 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
-        /// according to this time zone, and then extract the hour
-        pub time_zone: String, default = "+00:00".into()
+        /// Some functions, e.g. `now` return timestamps in this time zone
+        pub time_zone: Option<String>, default = None
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()

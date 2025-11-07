@@ -146,7 +146,9 @@ impl PercentileCont {
             variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
         }
         Self {
-            signature: Signature::one_of(variants, Volatility::Immutable),
+            signature: Signature::one_of(variants, Volatility::Immutable)
+                .with_parameter_names(vec!["expr".to_string(), "percentile".to_string()])
+                .expect("valid parameter names for percentile_cont"),
             aliases: vec![String::from("quantile_cont")],
         }
     }
@@ -360,7 +362,7 @@ impl AggregateUDFImpl for PercentileCont {
         false
     }
 
-    fn is_ordered_set_aggregate(&self) -> bool {
+    fn supports_within_group_clause(&self) -> bool {
         true
     }
 
@@ -457,7 +459,6 @@ impl<T: ArrowNumericType> Accumulator for PercentileContAccumulator<T> {
 /// of groups before final evaluation.
 /// So values in each group will be stored in a `Vec<T>`, and the total group values
 /// will be actually organized as a `Vec<Vec<T>>`.
-///
 #[derive(Debug)]
 struct PercentileContGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,
