@@ -23,7 +23,7 @@ use bytes::{BufMut, BytesMut};
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
-    ArrowFileSource, CsvSource, FileSource, JsonSource, ParquetSource,
+    ArrowFileSource, ArrowStreamSource, CsvSource, FileSource, JsonSource, ParquetSource,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -285,6 +285,25 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     // Test ArrowFileSource
     {
         let source = ArrowFileSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            format!("{:?}", retrieved_factory.as_ref()),
+            format!("{:?}", factory.as_ref())
+        );
+    }
+
+    // Test ArrowStreamSource
+    {
+        let source = ArrowStreamSource::default();
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())
