@@ -327,3 +327,35 @@ EXECUTE my_plan('a', 'b');
 ----
 1 a
 2 b
+
+statement ok
+SET datafusion.explain.logical_plan_only=false;
+
+statement ok
+DEALLOCATE my_plan
+
+statement ok
+SET datafusion.explain.logical_plan_only=true;
+
+# Prepare with alias
+query TT
+EXPLAIN PREPARE my_plan(INT, INT) AS SELECT $1 AS one, $2 AS two;
+----
+logical_plan
+01)Prepare: "my_plan" [Int32, Int32]
+02)--Projection: $1 AS one, $2 AS two
+03)----EmptyRelation: rows=1
+
+statement ok
+PREPARE my_plan(INT, INT) AS SELECT $1 AS one, $2 AS two;
+
+query II
+EXECUTE my_plan(1, 2)
+----
+1 2
+
+statement ok
+SET datafusion.explain.logical_plan_only=false;
+
+statement ok
+DEALLOCATE my_plan
