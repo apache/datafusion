@@ -21,7 +21,6 @@ use crate::function::error_utils::{
 use arrow::array::*;
 use arrow::datatypes::DataType;
 use arrow::datatypes::*;
-use datafusion_common::DataFusionError::ArrowError;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -327,81 +326,88 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             },
             dt => internal_err!("Not supported datatype for Spark ABS: {dt}"),
         },
-        ColumnarValue::Scalar(sv) => {
-            match sv {
-                ScalarValue::Null
-                | ScalarValue::UInt8(_)
-                | ScalarValue::UInt16(_)
-                | ScalarValue::UInt32(_)
-                | ScalarValue::UInt64(_) => Ok(args[0].clone()),
-                ScalarValue::Int8(a) => a
-                    .map(|v| match v.checked_abs() {
-                        Some(abs_val) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(abs_val))))
+        ColumnarValue::Scalar(sv) => match sv {
+            ScalarValue::Null
+            | ScalarValue::UInt8(_)
+            | ScalarValue::UInt16(_)
+            | ScalarValue::UInt32(_)
+            | ScalarValue::UInt64(_) => Ok(args[0].clone()),
+            ScalarValue::Int8(a) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => match v.checked_abs() {
+                    Some(abs_val) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(abs_val))))
+                    }
+                    None => {
+                        if !fail_on_error {
+                            // return the original value
+                            Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(*v))))
+                        } else {
+                            Err(arithmetic_overflow_error("Int8"))
                         }
-                        None => {
-                            if !fail_on_error {
-                                // return the original value
-                                Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(v))))
-                            } else {
-                                Err(arithmetic_overflow_error("Int8"))
-                            }
+                    }
+                },
+            },
+            ScalarValue::Int16(a) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => match v.checked_abs() {
+                    Some(abs_val) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(abs_val))))
+                    }
+                    None => {
+                        if !fail_on_error {
+                            // return the original value
+                            Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(*v))))
+                        } else {
+                            Err(arithmetic_overflow_error("Int16"))
                         }
-                    })
-                    .unwrap(),
-                ScalarValue::Int16(a) => a
-                    .map(|v| match v.checked_abs() {
-                        Some(abs_val) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(abs_val))))
+                    }
+                },
+            },
+            ScalarValue::Int32(a) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => match v.checked_abs() {
+                    Some(abs_val) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(abs_val))))
+                    }
+                    None => {
+                        if !fail_on_error {
+                            // return the original value
+                            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(*v))))
+                        } else {
+                            Err(arithmetic_overflow_error("Int32"))
                         }
-                        None => {
-                            if !fail_on_error {
-                                // return the original value
-                                Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(v))))
-                            } else {
-                                Err(arithmetic_overflow_error("Int16"))
-                            }
+                    }
+                },
+            },
+            ScalarValue::Int64(a) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => match v.checked_abs() {
+                    Some(abs_val) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(abs_val))))
+                    }
+                    None => {
+                        if !fail_on_error {
+                            // return the original value
+                            Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(*v))))
+                        } else {
+                            Err(arithmetic_overflow_error("Int64"))
                         }
-                    })
-                    .unwrap(),
-                ScalarValue::Int32(a) => a
-                    .map(|v| match v.checked_abs() {
-                        Some(abs_val) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(abs_val))))
-                        }
-                        None => {
-                            if !fail_on_error {
-                                // return the original value
-                                Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(v))))
-                            } else {
-                                Err(arithmetic_overflow_error("Int32"))
-                            }
-                        }
-                    })
-                    .unwrap(),
-                ScalarValue::Int64(a) => a
-                    .map(|v| match v.checked_abs() {
-                        Some(abs_val) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(abs_val))))
-                        }
-                        None => {
-                            if !fail_on_error {
-                                // return the original value
-                                Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(v))))
-                            } else {
-                                Err(arithmetic_overflow_error("Int64"))
-                            }
-                        }
-                    })
-                    .unwrap(),
-                ScalarValue::Float32(a) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Float32(a.map(|x| x.abs())),
-                )),
-                ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Float64(a.map(|x| x.abs())),
-                )),
-                ScalarValue::Decimal128(a, precision, scale) => a
-                    .map(|v| match v.checked_abs() {
+                    }
+                },
+            },
+            ScalarValue::Float32(a) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(v.abs())))),
+            },
+            ScalarValue::Float64(a) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(v.abs())))),
+            },
+            ScalarValue::Decimal128(a, precision, scale) => {
+                match a {
+                    None => Ok(args[0].clone()),
+                    Some(v) => match v.checked_abs() {
                         Some(abs_val) => Ok(ColumnarValue::Scalar(
                             ScalarValue::Decimal128(Some(abs_val), *precision, *scale),
                         )),
@@ -409,7 +415,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                             if !fail_on_error {
                                 // return the original value
                                 Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
-                                    Some(v),
+                                    Some(*v),
                                     *precision,
                                     *scale,
                                 )))
@@ -417,10 +423,13 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                 Err(arithmetic_overflow_error("Decimal128"))
                             }
                         }
-                    })
-                    .unwrap(),
-                ScalarValue::Decimal256(a, precision, scale) => a
-                    .map(|v| match v.checked_abs() {
+                    },
+                }
+            }
+            ScalarValue::Decimal256(a, precision, scale) => {
+                match a {
+                    None => Ok(args[0].clone()),
+                    Some(v) => match v.checked_abs() {
                         Some(abs_val) => Ok(ColumnarValue::Scalar(
                             ScalarValue::Decimal256(Some(abs_val), *precision, *scale),
                         )),
@@ -428,7 +437,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                             if !fail_on_error {
                                 // return the original value
                                 Ok(ColumnarValue::Scalar(ScalarValue::Decimal256(
-                                    Some(v),
+                                    Some(*v),
                                     *precision,
                                     *scale,
                                 )))
@@ -436,22 +445,24 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                 Err(arithmetic_overflow_error("Decimal256"))
                             }
                         }
-                    })
-                    .unwrap(),
-                ScalarValue::IntervalYearMonth(a) => {
-                    let result = a.map(|v| v.wrapping_abs());
-                    Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(
-                        result,
-                    )))
+                    },
                 }
-                ScalarValue::IntervalDayTime(a) => {
-                    let result = a.map(|v| v.wrapping_abs());
-                    Ok(ColumnarValue::Scalar(ScalarValue::IntervalDayTime(result)))
-                }
-
-                dt => internal_err!("Not supported datatype for Spark ABS: {dt}"),
             }
-        }
+            ScalarValue::IntervalYearMonth(a) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(
+                    Some(v.wrapping_abs()),
+                ))),
+            },
+            ScalarValue::IntervalDayTime(a) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    v.wrapping_abs(),
+                )))),
+            },
+
+            dt => internal_err!("Not supported datatype for Spark ABS: {dt}"),
+        },
     }
 }
 
