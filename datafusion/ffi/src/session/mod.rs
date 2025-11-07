@@ -22,7 +22,7 @@ use crate::session::config::FFI_SessionConfig;
 use crate::session::task::FFI_TaskContext;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
-use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+use crate::udwf::FFI_WindowUDF;
 use crate::{df_result, rresult, rresult_return};
 use abi_stable::std_types::{RHashMap, RStr};
 use abi_stable::{
@@ -43,6 +43,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
@@ -410,11 +411,11 @@ impl TryFrom<&FFI_Session> for ForeignSession {
             let window_functions = (session.window_functions)(session)
                 .into_iter()
                 .map(|kv_pair| {
-                    let udwf = ForeignWindowUDF::try_from(&kv_pair.1)?;
+                    let udwf = <Arc<dyn WindowUDFImpl>>::try_from(&kv_pair.1)?;
 
                     Ok((
                         kv_pair.0.into_string(),
-                        Arc::new(WindowUDF::new_from_impl(udwf)),
+                        Arc::new(WindowUDF::new_from_shared_impl(udwf)),
                     ))
                 })
                 .collect::<Result<_, DataFusionError>>()?;

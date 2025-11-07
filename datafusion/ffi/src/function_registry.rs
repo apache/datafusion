@@ -17,7 +17,7 @@
 
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
-use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+use crate::udwf::FFI_WindowUDF;
 use crate::{df_result, rresult_return};
 use abi_stable::{
     std_types::{RResult, RString, RVec},
@@ -27,7 +27,9 @@ use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, WindowUDF, WindowUDFImpl,
+};
 use log::warn;
 use std::collections::HashSet;
 use std::sync::Weak;
@@ -273,8 +275,8 @@ impl FunctionRegistry for ForeignWeakFunctionRegistry {
     fn udwf(&self, name: &str) -> datafusion_common::Result<Arc<WindowUDF>> {
         let udwf = df_result!(unsafe { (self.0.udwf)(&self.0, name.into()) })?;
 
-        let udwf = ForeignWindowUDF::try_from(&udwf)?;
-        Ok(Arc::new(udwf.into()))
+        let udwf = <Arc<dyn WindowUDFImpl>>::try_from(&udwf)?;
+        Ok(Arc::new(WindowUDF::new_from_shared_impl(udwf)))
     }
 
     fn register_udf(
