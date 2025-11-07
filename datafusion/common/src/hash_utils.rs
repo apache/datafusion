@@ -141,7 +141,7 @@ fn hash_array_primitive<T>(
 /// with the new hash using `combine_hashes`
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array<T>(
-    array: T,
+    array: &T,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
     rehash: bool,
@@ -400,16 +400,16 @@ pub fn create_hashes<'a>(
         downcast_primitive_array! {
             array => hash_array_primitive(array, random_state, hashes_buffer, rehash),
             DataType::Null => hash_null(random_state, hashes_buffer, rehash),
-            DataType::Boolean => hash_array(as_boolean_array(array)?, random_state, hashes_buffer, rehash),
-            DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, rehash),
-            DataType::Utf8View => hash_array(as_string_view_array(array)?, random_state, hashes_buffer, rehash),
-            DataType::LargeUtf8 => hash_array(as_largestring_array(array), random_state, hashes_buffer, rehash),
-            DataType::Binary => hash_array(as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
-            DataType::BinaryView => hash_array(as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
-            DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
+            DataType::Boolean => hash_array(&as_boolean_array(array)?, random_state, hashes_buffer, rehash),
+            DataType::Utf8 => hash_array(&as_string_array(array)?, random_state, hashes_buffer, rehash),
+            DataType::Utf8View => hash_array(&as_string_view_array(array)?, random_state, hashes_buffer, rehash),
+            DataType::LargeUtf8 => hash_array(&as_largestring_array(array), random_state, hashes_buffer, rehash),
+            DataType::Binary => hash_array(&as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
+            DataType::BinaryView => hash_array(&as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
+            DataType::LargeBinary => hash_array(&as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
             DataType::FixedSizeBinary(_) => {
                 let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
-                hash_array(array, random_state, hashes_buffer, rehash)
+                hash_array(&array, random_state, hashes_buffer, rehash)
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
