@@ -381,7 +381,11 @@ impl TypeSignatureClass {
             }
             TypeSignatureClass::Decimal => vec![Decimal128Type::DEFAULT_TYPE],
             TypeSignatureClass::Float => vec![DataType::Float64],
-            TypeSignatureClass::Numeric => vec![DataType::Float64],
+            TypeSignatureClass::Numeric => vec![
+                DataType::Float64,
+                DataType::Int64,
+                Decimal128Type::DEFAULT_TYPE,
+            ],
         }
     }
 

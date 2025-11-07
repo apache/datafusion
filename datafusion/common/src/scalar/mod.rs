@@ -4407,6 +4407,7 @@ macro_rules! impl_scalar {
 
 impl_scalar!(f64, Float64);
 impl_scalar!(f32, Float32);
+impl_scalar!(f16, Float16);
 impl_scalar!(i8, Int8);
 impl_scalar!(i16, Int16);
 impl_scalar!(i32, Int32);
