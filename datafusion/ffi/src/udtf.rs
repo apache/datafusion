@@ -61,6 +61,10 @@ pub struct FFI_TableFunction {
     /// Internal data. This is only to be accessed by the provider of the udtf.
     /// A [`ForeignTableFunction`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_TableFunction {}
@@ -147,25 +151,10 @@ impl FFI_TableFunction {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
-
-// impl From<Arc<dyn TableFunctionImpl>> for FFI_TableFunction {
-//     fn from(udtf: Arc<dyn TableFunctionImpl>) -> Self {
-//         let private_data = Box::new(TableFunctionPrivateData {
-//             udtf,
-//             runtime: None,
-//         });
-//
-//         Self {
-//             call: call_fn_wrapper,
-//             clone: clone_fn_wrapper,
-//             release: release_fn_wrapper,
-//             private_data: Box::into_raw(private_data) as *mut c_void,
-//         }
-//     }
-// }
 
 impl Drop for FFI_TableFunction {
     fn drop(&mut self) {
@@ -185,9 +174,13 @@ pub struct ForeignTableFunction(FFI_TableFunction);
 unsafe impl Send for ForeignTableFunction {}
 unsafe impl Sync for ForeignTableFunction {}
 
-impl From<FFI_TableFunction> for ForeignTableFunction {
+impl From<FFI_TableFunction> for Arc<dyn TableFunctionImpl> {
     fn from(value: FFI_TableFunction) -> Self {
-        Self(value)
+        if (value.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(value.inner())
+        } else {
+            Arc::new(ForeignTableFunction(value))
+        }
     }
 }
 
@@ -313,7 +306,7 @@ mod tests {
             function_registry.into(),
         );
 
-        let foreign_udf: ForeignTableFunction = local_udtf.into();
+        let foreign_udf: Arc<dyn TableFunctionImpl> = local_udtf.into();
 
         let table = foreign_udf.call(&[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
 
