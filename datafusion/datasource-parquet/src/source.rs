@@ -504,7 +504,7 @@ impl FileSource for ParquetSource {
         ) {
             (Some(expr_adapter_factory), Some(schema_adapter_factory)) => {
                 // Use both the schema adapter factory and the expr adapter factory.
-                // This results in the the SchemaAdapter being used for projections (e.g. a column was selected that is a UInt32 in the file and a UInt64 in the table schema)
+                // This results in the SchemaAdapter being used for projections (e.g. a column was selected that is a UInt32 in the file and a UInt64 in the table schema)
                 // but the PhysicalExprAdapterFactory being used for predicate pushdown and stats pruning.
                 (
                     Some(Arc::clone(expr_adapter_factory)),

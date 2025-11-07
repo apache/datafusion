@@ -302,7 +302,6 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 /// of groups before final evaluation.
 /// So values in each group will be stored in a `Vec<T>`, and the total group values
 /// will be actually organized as a `Vec<Vec<T>>`.
-///
 #[derive(Debug)]
 struct MedianGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,

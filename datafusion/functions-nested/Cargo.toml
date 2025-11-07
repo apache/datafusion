@@ -68,4 +68,8 @@ name = "array_expression"
 
 [[bench]]
 harness = false
+name = "array_reverse"
+
+[[bench]]
+harness = false
 name = "map"

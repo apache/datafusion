@@ -17,13 +17,14 @@
 
 extern crate criterion;
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::builder::StringBuilder;
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, TimeUnit};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_timestamp;
