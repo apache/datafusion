@@ -26,8 +26,7 @@ use datafusion::common::assert_contains;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn date_time() -> Result<()> {
     query_make_date().await?;
     query_to_date().await?;
     query_to_timestamp().await?;
