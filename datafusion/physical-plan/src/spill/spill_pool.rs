@@ -1304,8 +1304,12 @@ mod tests {
     async fn test_disk_usage_decreases_as_files_consumed() -> Result<()> {
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
+        // Test configuration
+        const NUM_BATCHES: usize = 3;
+        const ROWS_PER_BATCH: usize = 100;
+
         // Step 1: Create a test batch and measure its size
-        let batch = create_test_batch(0, 100);
+        let batch = create_test_batch(0, ROWS_PER_BATCH);
         let batch_size = batch.get_array_memory_size();
 
         // Step 2: Configure file rotation to approximately 1 batch per file
@@ -1319,17 +1323,19 @@ mod tests {
 
         let (mut writer, mut reader) = channel(batch_size, spill_manager);
 
-        // Step 3: Write 25 batches to create approximately 25 files
-        let num_batches = 25;
-        for i in 0..num_batches {
-            writer.push_batch(&create_test_batch(i * 100, 100))?;
+        // Step 3: Write NUM_BATCHES batches to create approximately NUM_BATCHES files
+        for i in 0..NUM_BATCHES {
+            let start = (i * ROWS_PER_BATCH) as i32;
+            writer.push_batch(&create_test_batch(start, ROWS_PER_BATCH))?;
         }
 
         // Check how many files were created (should be at least a few due to file rotation)
         let file_count = metrics.spill_file_count.value();
-        assert!(
-            file_count >= 10,
-            "Expected at least 10 files with rotation, got {file_count}"
+        assert_eq!(
+            file_count,
+            NUM_BATCHES - 1,
+            "Expected at {} files with rotation, got {file_count}",
+            NUM_BATCHES - 1
         );
 
         // Step 4: Verify initial disk usage reflects all files
@@ -1339,24 +1345,25 @@ mod tests {
             "Expected disk usage > 0 after writing batches, got {initial_disk_usage}"
         );
 
-        // Step 5: Read 24 batches (all but 1)
+        // Step 5: Read NUM_BATCHES - 1 batches (all but 1)
         // As each file is fully consumed, it should be dropped and disk usage should decrease
-        for i in 0..(num_batches - 1) {
+        for i in 0..(NUM_BATCHES - 1) {
             let result = reader.next().await.unwrap()?;
-            assert_eq!(result.num_rows(), 100);
+            assert_eq!(result.num_rows(), ROWS_PER_BATCH);
 
             let col = result
                 .column(0)
                 .as_any()
                 .downcast_ref::<Int32Array>()
                 .unwrap();
-            assert_eq!(col.value(0), i * 100);
+            assert_eq!(col.value(0), (i * ROWS_PER_BATCH) as i32);
         }
 
         // Step 6: Verify disk usage decreased but is not zero (at least 1 batch remains)
         let partial_disk_usage = disk_manager.used_disk_space();
         assert!(
-            partial_disk_usage > 0,
+            partial_disk_usage > 0
+                && partial_disk_usage < (batch_size * NUM_BATCHES * 2) as u64,
             "Disk usage should be > 0 with remaining batches"
         );
         assert!(
@@ -1366,7 +1373,7 @@ mod tests {
 
         // Step 7: Read the final batch
         let result = reader.next().await.unwrap()?;
-        assert_eq!(result.num_rows(), 100);
+        assert_eq!(result.num_rows(), ROWS_PER_BATCH);
 
         // Step 8: Drop writer first to signal no more data will be written
         // The reader has infinite stream semantics and will wait for the writer
