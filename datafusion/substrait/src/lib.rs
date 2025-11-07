@@ -66,19 +66,24 @@
 //! # use datafusion::arrow::array::{Int32Array, RecordBatch};
 //! # use datafusion_substrait::logical_plan;
 //! // Create a plan that scans table 't'
-//!  let ctx = SessionContext::new();
-//!  let batch = RecordBatch::try_from_iter(vec![("x", Arc::new(Int32Array::from(vec![42])) as _)])?;
-//!  ctx.register_batch("t", batch)?;
-//!  let df = ctx.sql("SELECT x from t").await?;
-//!  let plan = df.into_optimized_plan()?;
+//! let ctx = SessionContext::new();
+//! let batch = RecordBatch::try_from_iter(vec![(
+//!     "x",
+//!     Arc::new(Int32Array::from(vec![42])) as _,
+//! )])?;
+//! ctx.register_batch("t", batch)?;
+//! let df = ctx.sql("SELECT x from t").await?;
+//! let plan = df.into_optimized_plan()?;
 //!
-//!  // Convert the plan into a substrait (protobuf) Plan
-//!  let substrait_plan = logical_plan::producer::to_substrait_plan(&plan, &ctx.state())?;
+//! // Convert the plan into a substrait (protobuf) Plan
+//! let substrait_plan = logical_plan::producer::to_substrait_plan(&plan, &ctx.state())?;
 //!
-//!  // Receive a substrait protobuf from somewhere, and turn it into a LogicalPlan
-//!  let logical_round_trip = logical_plan::consumer::from_substrait_plan(&ctx.state(), &substrait_plan).await?;
-//!  let logical_round_trip = ctx.state().optimize(&logical_round_trip)?;
-//!  assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+//! // Receive a substrait protobuf from somewhere, and turn it into a LogicalPlan
+//! let logical_round_trip =
+//!     logical_plan::consumer::from_substrait_plan(&ctx.state(), &substrait_plan)
+//!         .await?;
+//! let logical_round_trip = ctx.state().optimize(&logical_round_trip)?;
+//! assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
 //! # Ok(())
 //! # }
 //! ```
