@@ -670,4 +670,66 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_format_detection_file_format() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test.arrow");
+
+        let file_bytes = std::fs::read("tests/data/example.arrow")?;
+        store.put(&path, file_bytes.into()).await?;
+
+        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+        assert!(is_file, "Should detect file format");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_format_detection_stream_format() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test_stream.arrow");
+
+        let stream_bytes = std::fs::read("tests/data/example_stream.arrow")?;
+        store.put(&path, stream_bytes.into()).await?;
+
+        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+
+        assert!(!is_file, "Should detect stream format (not file)");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_format_detection_corrupted_file() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("corrupted.arrow");
+
+        store
+            .put(&path, Bytes::from(vec![0x43, 0x4f, 0x52, 0x41]).into())
+            .await?;
+
+        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+
+        assert!(
+            !is_file,
+            "Corrupted file should not be detected as file format"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_format_detection_empty_file() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("empty.arrow");
+
+        store.put(&path, Bytes::new().into()).await?;
+
+        let result = is_object_in_arrow_ipc_file_format(store.clone(), &path).await;
+
+        // currently errors because it tries to read 0..6 from an empty file
+        assert!(result.is_err(), "Empty file should error");
+
+        Ok(())
+    }
 }

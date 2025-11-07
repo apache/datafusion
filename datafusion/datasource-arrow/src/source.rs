@@ -399,6 +399,7 @@ impl FileOpener for ArrowFileOpener {
 mod tests {
     use std::{fs::File, io::Read};
 
+    use arrow::datatypes::{DataType, Field, Schema};
     use arrow_ipc::reader::{FileReader, StreamReader};
     use bytes::Bytes;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -531,6 +532,71 @@ mod tests {
         let file_opener = source.create_file_opener(object_store, &scan_config, 0);
         let result = file_opener.open(partitioned_file);
         assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_arrow_stream_repartitioning_not_supported() -> Result<()> {
+        let source = ArrowStreamSource::default();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("f0", DataType::Int64, false)]));
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            schema,
+            Arc::new(source.clone()) as Arc<dyn FileSource>,
+        )
+        .build();
+
+        for target_partitions in [2, 4, 8, 16] {
+            let result =
+                source.repartitioned(target_partitions, 1024 * 1024, None, &config)?;
+
+            assert!(
+                result.is_none(),
+                "Stream format should not support repartitioning with {target_partitions} partitions",
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_opener_with_projection() -> Result<()> {
+        let filename = "example_stream.arrow";
+        let path = format!("tests/data/{filename}");
+        let path_str = path.as_str();
+        let mut file = File::open(path_str)?;
+        let file_size = file.metadata()?.len();
+
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        let bytes = Bytes::from(buffer);
+
+        let object_store = Arc::new(InMemory::new());
+        let partitioned_file = PartitionedFile::new(filename, file_size);
+        object_store
+            .put(&partitioned_file.object_meta.location, bytes.into())
+            .await?;
+
+        let opener = ArrowStreamOpener {
+            object_store,
+            projection: Some(vec![0]), // just the first column
+        };
+
+        let mut stream = opener.open(partitioned_file)?.await?;
+
+        if let Some(batch) = stream.next().await {
+            let batch = batch?;
+            assert_eq!(
+                batch.num_columns(),
+                1,
+                "Projection should result in 1 column"
+            );
+        } else {
+            panic!("Expected at least one batch");
+        }
 
         Ok(())
     }
