@@ -22,8 +22,8 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_err};
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
+use crate::{Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
     OffsetSizeTrait,
@@ -46,26 +46,23 @@ use std::thread::available_parallelism;
 ///
 /// Example:
 /// ```
-/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 /// use datafusion_common::project_schema;
 ///
 /// // Schema with columns 'a', 'b', and 'c'
 /// let schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("a", DataType::Int32, true),
-///   Field::new("b", DataType::Int64, true),
-///   Field::new("c", DataType::Utf8, true),
+///     Field::new("a", DataType::Int32, true),
+///     Field::new("b", DataType::Int64, true),
+///     Field::new("c", DataType::Utf8, true),
 /// ]));
 ///
 /// // Pick columns 'c' and 'b'
-/// let projection = Some(vec![2,1]);
-/// let projected_schema = project_schema(
-///    &schema,
-///    projection.as_ref()
-///  ).unwrap();
+/// let projection = Some(vec![2, 1]);
+/// let projected_schema = project_schema(&schema, projection.as_ref()).unwrap();
 ///
 /// let expected_schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("c", DataType::Utf8, true),
-///   Field::new("b", DataType::Int64, true),
+///     Field::new("c", DataType::Utf8, true),
+///     Field::new("b", DataType::Int64, true),
 /// ]));
 ///
 /// assert_eq!(projected_schema, expected_schema);
@@ -147,9 +144,7 @@ pub fn bisect<const SIDE: bool>(
     let low: usize = 0;
     let high: usize = item_columns
         .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
+        .ok_or_else(|| _internal_datafusion_err!("Column array shouldn't be empty"))?
         .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare_rows(current, target, sort_options)?;
@@ -198,9 +193,7 @@ pub fn linear_search<const SIDE: bool>(
     let low: usize = 0;
     let high: usize = item_columns
         .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
+        .ok_or_else(|| _internal_datafusion_err!("Column array shouldn't be empty"))?
         .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare_rows(current, target, sort_options)?;
@@ -289,6 +282,9 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
+/// Parse a string into a vector of identifiers.
+///
+/// Note: If ignore_case is false, the string will be normalized to lowercase.
 #[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
@@ -365,9 +361,7 @@ pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
         .map(|idx| items.get(*idx.borrow()).cloned())
         .collect::<Option<Vec<T>>>()
         .ok_or_else(|| {
-            DataFusionError::Execution(
-                "Expects indices to be in the range of searched vector".to_string(),
-            )
+            _exec_datafusion_err!("Expects indices to be in the range of searched vector")
         })
 }
 
@@ -401,9 +395,11 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// # use arrow::array::types::Int64Type;
 /// # use datafusion_common::utils::SingleRowListArrayBuilder;
 /// // Array is [1, 2, 3]
-/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-///       Some(vec![Some(1), Some(2), Some(3)]),
-/// ]);
+/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+///     Some(1),
+///     Some(2),
+///     Some(3),
+/// ])]);
 /// // Wrap as a list array: [[1, 2, 3]]
 /// let list_arr = SingleRowListArrayBuilder::new(Arc::new(arr)).build_list_array();
 /// assert_eq!(list_arr.len(), 1);
@@ -557,7 +553,8 @@ pub fn fixed_size_list_to_arrays(a: &ArrayRef) -> Vec<ArrayRef> {
 /// use datafusion_common::utils::base_type;
 /// use std::sync::Arc;
 ///
-/// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+/// let data_type =
+///     DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// assert_eq!(base_type(&data_type), DataType::Int32);
 ///
 /// let data_type = DataType::Int32;
@@ -808,7 +805,7 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
         .into_iter()
         .map(|target| items.iter().position(|e| target.borrow().eq(e)))
         .collect::<Option<_>>()
-        .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
+        .ok_or_else(|| _exec_datafusion_err!("Target not found"))
 }
 
 /// Transposes the given vector of vectors.
@@ -909,16 +906,19 @@ pub fn get_available_parallelism() -> usize {
 /// # use datafusion_common::utils::take_function_args;
 /// # use datafusion_common::ScalarValue;
 /// fn my_function(args: &[ScalarValue]) -> Result<()> {
-///   // function expects 2 args, so create a 2-element array
-///   let [arg1, arg2] = take_function_args("my_function", args)?;
-///   // ... do stuff..
-///   Ok(())
+///     // function expects 2 args, so create a 2-element array
+///     let [arg1, arg2] = take_function_args("my_function", args)?;
+///     // ... do stuff..
+///     Ok(())
 /// }
 ///
 /// // Calling the function with 1 argument produces an error:
 /// let args = vec![ScalarValue::Int32(Some(10))];
 /// let err = my_function(&args).unwrap_err();
-/// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
+/// assert_eq!(
+///     err.to_string(),
+///     "Execution error: my_function function requires 2 arguments, got 1"
+/// );
 /// // Calling the function with 2 arguments works great
 /// let args = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))];
 /// my_function(&args).unwrap();

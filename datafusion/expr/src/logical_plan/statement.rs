@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::FieldRef;
+use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use itertools::Itertools as _;
 use std::fmt::{self, Display};
@@ -108,10 +109,18 @@ impl Statement {
                     }) => {
                         write!(f, "SetVariable: set {variable:?} to {value:?}")
                     }
-                    Statement::Prepare(Prepare {
-                        name, data_types, ..
-                    }) => {
-                        write!(f, "Prepare: {name:?} [{}]", data_types.iter().join(", "))
+                    Statement::Prepare(Prepare { name, fields, .. }) => {
+                        write!(
+                            f,
+                            "Prepare: {name:?} [{}]",
+                            fields
+                                .iter()
+                                .map(|f| format_type_and_metadata(
+                                    f.data_type(),
+                                    Some(f.metadata())
+                                ))
+                                .join(", ")
+                        )
                     }
                     Statement::Execute(Execute {
                         name, parameters, ..
@@ -192,7 +201,7 @@ pub struct Prepare {
     /// The name of the statement
     pub name: String,
     /// Data types of the parameters ([`Expr::Placeholder`])
-    pub data_types: Vec<DataType>,
+    pub fields: Vec<FieldRef>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
 }

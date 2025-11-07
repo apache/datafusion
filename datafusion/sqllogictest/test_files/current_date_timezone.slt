@@ -1,0 +1,80 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## current_date with timezone tests
+##########
+
+# Test 1: Verify current_date is consistent within the same query (default UTC)
+query B
+SELECT current_date() = current_date();
+----
+true
+
+# Test 2: Verify alias 'today' works the same as current_date
+query B
+SELECT current_date() = today();
+----
+true
+
+# Test 3: Set timezone to +05:00 and verify current_date is still stable
+statement ok
+SET datafusion.execution.time_zone = '+05:00';
+
+query B
+SELECT current_date() = current_date();
+----
+true
+
+#Test 4: Verify current_date matches cast(now() as date) in the same timezone
+query B
+SELECT current_date() = cast(now() as date);
+----
+true
+
+# Test 5: Test with negative offset timezone
+statement ok
+SET datafusion.execution.time_zone = '-08:00';
+
+query B
+SELECT current_date() = today();
+----
+true
+
+# Test 6: Test with named timezone (America/New_York)
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+query B
+SELECT current_date() = current_date();
+----
+true
+
+# Test 7: Verify date type is preserved
+query T
+SELECT arrow_typeof(current_date());
+----
+Date32
+
+# Test 8: Reset to UTC
+statement ok
+SET datafusion.execution.time_zone = '+00:00';
+
+query B
+SELECT current_date() = today();
+----
+true

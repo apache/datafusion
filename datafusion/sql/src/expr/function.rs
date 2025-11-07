@@ -182,6 +182,11 @@ impl FunctionArgs {
                         "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
                     )
                 }
+                FunctionArgumentClause::JsonReturningClause(jr) => {
+                    return not_impl_err!(
+                        "Calling {name}: JSON RETURNING clause not supported in function arguments: {jr}"
+                    )
+                },
             }
         }
 
@@ -269,8 +274,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
-            let args = self.function_args_to_expr(args, schema, planner_context)?;
-            let inner = ScalarFunction::new_udf(fm, args);
+            let (args, arg_names) =
+                self.function_args_to_expr_with_names(args, schema, planner_context)?;
+
+            let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+                if let Some(param_names) = &fm.signature().parameter_names {
+                    datafusion_expr::arguments::resolve_function_arguments(
+                        param_names,
+                        args,
+                        arg_names,
+                    )?
+                } else {
+                    return plan_err!(
+                        "Function '{}' does not support named arguments",
+                        fm.name()
+                    );
+                }
+            } else {
+                args
+            };
+
+            // After resolution, all arguments are positional
+            let inner = ScalarFunction::new_udf(fm, resolved_args);
 
             if name.eq_ignore_ascii_case(inner.name()) {
                 return Ok(Expr::ScalarFunction(inner));
@@ -361,7 +386,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                let args = self.function_args_to_expr(args, schema, planner_context)?;
+                let (args, arg_names) =
+                    self.function_args_to_expr_with_names(args, schema, planner_context)?;
+
+                let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+                    let signature = match &fun {
+                        WindowFunctionDefinition::AggregateUDF(udaf) => udaf.signature(),
+                        WindowFunctionDefinition::WindowUDF(udwf) => udwf.signature(),
+                    };
+
+                    if let Some(param_names) = &signature.parameter_names {
+                        datafusion_expr::arguments::resolve_function_arguments(
+                            param_names,
+                            args,
+                            arg_names,
+                        )?
+                    } else {
+                        return plan_err!(
+                            "Window function '{}' does not support named arguments",
+                            name
+                        );
+                    }
+                } else {
+                    args
+                };
 
                 // Plan FILTER clause if present
                 let filter = filter
@@ -371,7 +419,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
-                    args,
+                    args: resolved_args,
                     partition_by,
                     order_by,
                     window_frame,
@@ -439,10 +487,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     );
                 }
 
-                let mut args =
-                    self.function_args_to_expr(args, schema, planner_context)?;
+                let (mut args, mut arg_names) =
+                    self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
-                let order_by = if fm.is_ordered_set_aggregate() {
+                let order_by = if fm.supports_within_group_clause() {
                     let within_group = self.order_by_to_sort_expr(
                         within_group,
                         schema,
@@ -454,6 +502,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Add the WITHIN GROUP ordering expressions to the front of the argument list
                     // So function(arg) WITHIN GROUP (ORDER BY x) becomes function(x, arg)
                     if !within_group.is_empty() {
+                        // Prepend None arg names for each WITHIN GROUP expression
+                        let within_group_count = within_group.len();
+                        arg_names = std::iter::repeat_n(None, within_group_count)
+                            .chain(arg_names)
+                            .collect();
+
                         args = within_group
                             .iter()
                             .map(|sort| sort.expr.clone())
@@ -481,9 +535,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .transpose()?
                     .map(Box::new);
 
+                let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+                    if let Some(param_names) = &fm.signature().parameter_names {
+                        datafusion_expr::arguments::resolve_function_arguments(
+                            param_names,
+                            args,
+                            arg_names,
+                        )?
+                    } else {
+                        return plan_err!(
+                            "Aggregate function '{}' does not support named arguments",
+                            fm.name()
+                        );
+                    }
+                } else {
+                    args
+                };
+
                 let mut aggregate_expr = RawAggregateExpr {
                     func: fm,
-                    args,
+                    args: resolved_args,
                     distinct,
                     filter,
                     order_by,
@@ -619,14 +690,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        let (expr, _) =
+            self.sql_fn_arg_to_logical_expr_with_name(sql, schema, planner_context)?;
+        Ok(expr)
+    }
+
+    fn sql_fn_arg_to_logical_expr_with_name(
+        &self,
+        sql: FunctionArg,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<(Expr, Option<String>)> {
         match sql {
             FunctionArg::Named {
-                name: _,
+                name,
                 arg: FunctionArgExpr::Expr(arg),
                 operator: _,
-            } => self.sql_expr_to_logical_expr(arg, schema, planner_context),
+            } => {
+                let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
+                let arg_name = crate::utils::normalize_ident(name);
+                Ok((expr, Some(arg_name)))
+            }
             FunctionArg::Named {
-                name: _,
+                name,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
             } => {
@@ -635,11 +721,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-
-                Ok(expr)
+                let arg_name = crate::utils::normalize_ident(name);
+                Ok((expr, Some(arg_name)))
             }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
-                self.sql_expr_to_logical_expr(arg, schema, planner_context)
+                let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
+                Ok((expr, None))
             }
             FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
                 #[expect(deprecated)]
@@ -647,8 +734,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-
-                Ok(expr)
+                Ok((expr, None))
             }
             FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
@@ -663,8 +749,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: qualifier.into(),
                     options: Box::new(WildcardOptions::default()),
                 };
-
-                Ok(expr)
+                Ok((expr, None))
+            }
+            // PostgreSQL dialect uses ExprNamed variant with expression for name
+            FunctionArg::ExprNamed {
+                name: SQLExpr::Identifier(name),
+                arg: FunctionArgExpr::Expr(arg),
+                operator: _,
+            } => {
+                let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
+                let arg_name = crate::utils::normalize_ident(name);
+                Ok((expr, Some(arg_name)))
+            }
+            FunctionArg::ExprNamed {
+                name: SQLExpr::Identifier(name),
+                arg: FunctionArgExpr::Wildcard,
+                operator: _,
+            } => {
+                #[expect(deprecated)]
+                let expr = Expr::Wildcard {
+                    qualifier: None,
+                    options: Box::new(WildcardOptions::default()),
+                };
+                let arg_name = crate::utils::normalize_ident(name);
+                Ok((expr, Some(arg_name)))
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
@@ -679,6 +787,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         args.into_iter()
             .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, planner_context))
             .collect::<Result<Vec<Expr>>>()
+    }
+
+    pub(super) fn function_args_to_expr_with_names(
+        &self,
+        args: Vec<FunctionArg>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<(Vec<Expr>, Vec<Option<String>>)> {
+        let results: Result<Vec<(Expr, Option<String>)>> = args
+            .into_iter()
+            .map(|a| {
+                self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
+            })
+            .collect();
+
+        let pairs = results?;
+        let (exprs, names): (Vec<Expr>, Vec<Option<String>>) = pairs.into_iter().unzip();
+        Ok((exprs, names))
     }
 
     pub(crate) fn check_unnest_arg(arg: &Expr, schema: &DFSchema) -> Result<()> {

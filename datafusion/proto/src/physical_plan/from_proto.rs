@@ -28,26 +28,27 @@ use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::file_format::csv::CsvSink;
-use datafusion::datasource::file_format::json::JsonSink;
+use arrow::datatypes::Schema;
+use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile};
+use datafusion_datasource_csv::file_format::CsvSink;
+use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
-use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
-};
-use datafusion::execution::{FunctionRegistry, TaskContext};
-use datafusion::logical_expr::WindowFunctionDefinition;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::expressions::{
+use datafusion_datasource_parquet::file_format::ParquetSink;
+use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_execution::{FunctionRegistry, TaskContext};
+use datafusion_expr::WindowFunctionDefinition;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion_physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
+use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
 
 use crate::convert_required;
@@ -138,11 +139,9 @@ pub fn parse_physical_window_expr(
         .as_ref()
         .map(|wf| wf.clone().try_into())
         .transpose()
-        .map_err(|e| DataFusionError::Internal(format!("{e}")))?
+        .map_err(|e| internal_datafusion_err!("{e}"))?
         .ok_or_else(|| {
-            DataFusionError::Internal(
-                "Missing required field 'window_frame' in protobuf".to_string(),
-            )
+            internal_datafusion_err!("Missing required field 'window_frame' in protobuf")
         })?;
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
@@ -421,9 +420,7 @@ fn parse_required_physical_expr(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.map(|e| parse_physical_expr(e, ctx, input_schema, codec))
         .transpose()?
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!("Missing required field {field:?}"))
-        })
+        .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
 }
 
 pub fn parse_protobuf_hash_partitioning(
@@ -521,14 +518,17 @@ pub fn parse_protobuf_file_scan_config(
     // Remove partition columns from the schema after recreating table_partition_cols
     // because the partition columns are not in the file. They are present to allow
     // the partition column types to be reconstructed after serde.
-    let file_schema = Arc::new(Schema::new(
-        schema
-            .fields()
-            .iter()
-            .filter(|field| !table_partition_cols.contains(field))
-            .cloned()
-            .collect::<Vec<_>>(),
-    ));
+    let file_schema = Arc::new(
+        Schema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !table_partition_cols.contains(field))
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+        .with_metadata(schema.metadata.clone()),
+    );
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
@@ -545,7 +545,7 @@ pub fn parse_protobuf_file_scan_config(
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
-        .with_projection(Some(projection))
+        .with_projection_indices(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)
         .with_output_ordering(output_ordering)
@@ -572,7 +572,9 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
     fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
         Ok(PartitionedFile {
             object_meta: ObjectMeta {
-                location: Path::from(val.path.as_str()),
+                location: Path::parse(val.path.as_str()).map_err(|e| {
+                    proto_error(format!("Invalid object_store path: {e}"))
+                })?,
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
                 size: val.size,
                 e_tag: None,
@@ -692,5 +694,57 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             keep_partition_by_columns: conf.keep_partition_by_columns,
             file_extension: conf.file_extension.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use datafusion_datasource::PartitionedFile;
+    use object_store::path::Path;
+    use object_store::ObjectMeta;
+
+    #[test]
+    fn partitioned_file_path_roundtrip_percent_encoded() {
+        let path_str = "foo/foo%2Fbar/baz%252Fqux";
+        let pf = PartitionedFile {
+            object_meta: ObjectMeta {
+                location: Path::parse(path_str).unwrap(),
+                last_modified: Utc.timestamp_nanos(1_000),
+                size: 42,
+                e_tag: None,
+                version: None,
+            },
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+            extensions: None,
+            metadata_size_hint: None,
+        };
+
+        let proto = protobuf::PartitionedFile::try_from(&pf).unwrap();
+        assert_eq!(proto.path, path_str);
+
+        let pf2 = PartitionedFile::try_from(&proto).unwrap();
+        assert_eq!(pf2.object_meta.location.as_ref(), path_str);
+        assert_eq!(pf2.object_meta.location, pf.object_meta.location);
+        assert_eq!(pf2.object_meta.size, pf.object_meta.size);
+        assert_eq!(pf2.object_meta.last_modified, pf.object_meta.last_modified);
+    }
+
+    #[test]
+    fn partitioned_file_from_proto_invalid_path() {
+        let proto = protobuf::PartitionedFile {
+            path: "foo//bar".to_string(),
+            size: 1,
+            last_modified_ns: 0,
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+        };
+
+        let err = PartitionedFile::try_from(&proto).unwrap_err();
+        assert!(err.to_string().contains("Invalid object_store path"));
     }
 }

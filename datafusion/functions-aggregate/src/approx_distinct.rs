@@ -32,7 +32,8 @@ use arrow::datatypes::{
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, DataFusionError, Result,
+    downcast_value, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
+    Result,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -64,9 +65,7 @@ impl<T: Hash> TryFrom<&[u8]> for HyperLogLog<T> {
     type Error = DataFusionError;
     fn try_from(v: &[u8]) -> Result<HyperLogLog<T>> {
         let arr: [u8; 16384] = v.try_into().map_err(|_| {
-            DataFusionError::Internal(
-                "Impossibly got invalid binary array from states".into(),
-            )
+            internal_datafusion_err!("Impossibly got invalid binary array from states")
         })?;
         Ok(HyperLogLog::<T>::new_with_registers(arr))
     }
@@ -182,8 +181,8 @@ macro_rules! default_accumulator_impl {
             let binary_array = downcast_value!(states[0], BinaryArray);
             for v in binary_array.iter() {
                 let v = v.ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Impossibly got empty binary array from states".into(),
+                    internal_datafusion_err!(
+                        "Impossibly got empty binary array from states"
                     )
                 })?;
                 let other = v.try_into()?;
@@ -362,7 +361,7 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
+        let data_type = acc_args.expr_fields[0].data_type();
 
         let accumulator: Box<dyn Accumulator> = match data_type {
             // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL

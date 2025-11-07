@@ -44,6 +44,7 @@ mod udaf;
 mod udf;
 mod udwf;
 
+pub mod arguments;
 pub mod conditional_expressions;
 pub mod execution_props;
 pub mod expr;
@@ -117,7 +118,7 @@ pub use udaf::{
     ReversedUDAF, SetMonotonicity, StatisticsArgs,
 };
 pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
-pub use udwf::{ReversedUDWF, WindowUDF, WindowUDFImpl};
+pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]

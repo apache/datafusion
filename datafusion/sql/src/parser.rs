@@ -243,7 +243,19 @@ impl fmt::Display for CreateExternalTable {
         }
         write!(f, "{} ", self.name)?;
         write!(f, "STORED AS {} ", self.file_type)?;
-        write!(f, "LOCATION {} ", self.location)
+        if !self.order_exprs.is_empty() {
+            write!(f, "WITH ORDER (")?;
+            let mut first = true;
+            for expr in self.order_exprs.iter().flatten() {
+                if !first {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{expr}")?;
+                first = false;
+            }
+            write!(f, ") ")?;
+        }
+        write!(f, "LOCATION {}", self.location)
     }
 }
 
@@ -1076,7 +1088,9 @@ mod tests {
     use super::*;
     use datafusion_common::assert_contains;
     use sqlparser::ast::Expr::Identifier;
-    use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident, ValueWithSpan};
+    use sqlparser::ast::{
+        BinaryOperator, DataType, ExactNumberInfo, Expr, Ident, ValueWithSpan,
+    };
     use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::Span;
 
@@ -1573,7 +1587,7 @@ mod tests {
             name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
-                make_column_def("c2", DataType::Float(None)),
+                make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),
@@ -1641,7 +1655,7 @@ mod tests {
             name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
-                make_column_def("c2", DataType::Float(None)),
+                make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),

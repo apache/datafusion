@@ -880,7 +880,9 @@ pub fn is_projection_unnecessary(
 /// pushdown for now because we cannot safely reason about their column usage.
 fn plan_contains_other_subqueries(plan: &LogicalPlan, cte_name: &str) -> bool {
     if let LogicalPlan::SubqueryAlias(alias) = plan {
-        if alias.alias.table() != cte_name {
+        if alias.alias.table() != cte_name
+            && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
+        {
             return true;
         }
     }
@@ -911,6 +913,23 @@ fn expr_contains_subquery(expr: &Expr) -> bool {
     })
     // Safe unwrap since we are doing a simple boolean check
     .unwrap()
+}
+
+fn subquery_alias_targets_recursive_cte(plan: &LogicalPlan, cte_name: &str) -> bool {
+    match plan {
+        LogicalPlan::TableScan(scan) => scan.table_name.table() == cte_name,
+        LogicalPlan::SubqueryAlias(alias) => {
+            subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
+        }
+        _ => {
+            let inputs = plan.inputs();
+            if inputs.len() == 1 {
+                subquery_alias_targets_recursive_cte(inputs[0], cte_name)
+            } else {
+                false
+            }
+        }
+    }
 }
 
 #[cfg(test)]
