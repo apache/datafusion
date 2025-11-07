@@ -1734,7 +1734,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match 10_i32.checked_pow((*scale + 1) as u32) {
@@ -1750,7 +1750,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match i64::from(10).checked_pow((*scale + 1) as u32) {

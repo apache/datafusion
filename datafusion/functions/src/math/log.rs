@@ -23,6 +23,7 @@ use super::power::PowerFunc;
 
 use crate::utils::{calculate_binary_math, decimal128_to_i128};
 use arrow::array::{Array, ArrayRef};
+use arrow::compute::kernels::cast;
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
 };
@@ -224,9 +225,15 @@ impl ScalarUDFImpl for LogFunc {
             }
             // TODO: native log support for decimal 32 & 64; right now upcast
             //       to decimal128 to calculate
-            DataType::Decimal32(_, scale)
-            | DataType::Decimal64(_, scale)
-            | DataType::Decimal128(_, scale) => {
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale) => {
+                calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
+                    &cast(&value, &DataType::Decimal128(*precision, *scale))?,
+                    &base,
+                    |value, base| log_decimal128(value, *scale, base),
+                )?
+            }
+            DataType::Decimal128(_, scale) => {
                 calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
@@ -348,6 +355,17 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
+
+    #[test]
+    fn test_log_decimal_native() {
+        let value = 10_i128.pow(35);
+        assert_eq!((value as f64).log2(), 116.26748332105768);
+        assert_eq!(
+            log_decimal128(value, 0, 2.0).unwrap(),
+            // TODO: see we're losing our decimal points compared to above
+            116.0
+        );
+    }
 
     #[test]
     fn test_log_invalid_base_type() {

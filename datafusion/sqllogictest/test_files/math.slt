@@ -705,3 +705,30 @@ select FACTORIAL(350943270);
 
 statement ok
 drop table signed_integers
+
+# Null propagation for log
+query TT
+EXPLAIN SELECT log(NULL, c2) from aggregate_simple;
+----
+logical_plan
+01)Projection: Float64(NULL) AS log(NULL,aggregate_simple.c2)
+02)--TableScan: aggregate_simple projection=[]
+physical_plan
+01)ProjectionExec: expr=[NULL as log(NULL,aggregate_simple.c2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_simple.csv]]}, file_type=csv, has_header=true
+
+# Float 16/32/64 for log
+query RT
+SELECT log(2.5, arrow_cast(10.9, 'Float16')), arrow_typeof(log(2.5, arrow_cast(10.9, 'Float16')));
+----
+2.6074219 Float16
+
+query RT
+SELECT log(2.5, 10.9::float), arrow_typeof(log(2.5, 10.9::float));
+----
+2.606992 Float32
+
+query RT
+SELECT log(2.5, 10.9::double), arrow_typeof(log(2.5, 10.9::double));
+----
+2.606992198152 Float64
