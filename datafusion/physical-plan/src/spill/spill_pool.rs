@@ -41,6 +41,8 @@ struct SpillPoolShared {
     spill_manager: Arc<SpillManager>,
     /// Pool-level wakers to notify when new files are available
     wakers: Vec<Waker>,
+    /// Whether the writer has been dropped (no more files will be added)
+    writer_dropped: bool,
 }
 
 impl SpillPoolShared {
@@ -50,6 +52,7 @@ impl SpillPoolShared {
             files: VecDeque::new(),
             spill_manager,
             wakers: Vec::new(),
+            writer_dropped: false,
         }
     }
 
@@ -77,7 +80,8 @@ impl SpillPoolShared {
 /// configured in [`channel`]. When dropped, it finalizes the current file so readers
 /// can access all written data.
 pub struct SpillPoolWriter {
-    /// Maximum size in bytes before rotating to a new file
+    /// Maximum size in bytes before rotating to a new file.
+    /// Typically set from configuration `datafusion.execution.max_spill_file_size_bytes`.
     max_file_size_bytes: usize,
     /// Writer's reference to the current file (also in the shared files queue)
     current_write_file: Option<Arc<Mutex<ActiveSpillFileShared>>>,
@@ -218,6 +222,11 @@ impl Drop for SpillPoolWriter {
             // Wake readers waiting on this file (it's now finished)
             file_shared.wake_all();
         }
+
+        // Mark writer as dropped and wake pool-level readers
+        let mut shared = self.shared.lock();
+        shared.writer_dropped = true;
+        shared.wake();
     }
 }
 
@@ -226,7 +235,8 @@ impl Drop for SpillPoolWriter {
 ///
 /// This is the recommended way to create a spill pool. The writer has exclusive
 /// write access, and the reader can consume batches in FIFO order. The reader
-/// can start reading immediately while the writer continues to write more data.
+/// can start reading immediately after the writer appends a batch to the spill file,
+/// without waiting for the file to be sealed, while the writer continues to write more data.
 ///
 /// Internally this coordinates rotating spill files based on size limits, and
 /// handles asynchronous notification between the writer and reader using wakers.
@@ -648,8 +658,13 @@ impl Stream for SpillPoolReader {
                 continue;
             }
 
-            // Done with this file, no more files available
-            // Register waker that will get notified when new files are added
+            // No files in queue - check if writer is done
+            if shared.writer_dropped {
+                // Writer is done and no more files will be added - EOF
+                return Poll::Ready(None);
+            }
+
+            // Writer still active, register waker that will get notified when new files are added
             shared.register_waker(cx.waker().clone());
             return Poll::Pending;
         }
@@ -1281,6 +1296,98 @@ mod tests {
         }
 
         assert_eq!(count, 5, "Should read all batches after writer is dropped");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_disk_usage_decreases_as_files_consumed() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        // Step 1: Create a test batch and measure its size
+        let batch = create_test_batch(0, 100);
+        let batch_size = batch.get_array_memory_size();
+
+        // Step 2: Configure file rotation to approximately 1 batch per file
+        // Create a custom RuntimeEnv so we can access the DiskManager
+        let runtime = Arc::new(RuntimeEnvBuilder::default().build()?);
+        let disk_manager = Arc::clone(&runtime.disk_manager);
+
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let schema = create_test_schema();
+        let spill_manager = Arc::new(SpillManager::new(runtime, metrics.clone(), schema));
+
+        let (mut writer, mut reader) = channel(batch_size, spill_manager);
+
+        // Step 3: Write 25 batches to create approximately 25 files
+        let num_batches = 25;
+        for i in 0..num_batches {
+            writer.push_batch(&create_test_batch(i * 100, 100))?;
+        }
+
+        // Check how many files were created (should be at least a few due to file rotation)
+        let file_count = metrics.spill_file_count.value();
+        assert!(
+            file_count >= 10,
+            "Expected at least 10 files with rotation, got {file_count}"
+        );
+
+        // Step 4: Verify initial disk usage reflects all files
+        let initial_disk_usage = disk_manager.used_disk_space();
+        assert!(
+            initial_disk_usage > 0,
+            "Expected disk usage > 0 after writing batches, got {initial_disk_usage}"
+        );
+
+        // Step 5: Read 24 batches (all but 1)
+        // As each file is fully consumed, it should be dropped and disk usage should decrease
+        for i in 0..(num_batches - 1) {
+            let result = reader.next().await.unwrap()?;
+            assert_eq!(result.num_rows(), 100);
+
+            let col = result
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            assert_eq!(col.value(0), i * 100);
+        }
+
+        // Step 6: Verify disk usage decreased but is not zero (at least 1 batch remains)
+        let partial_disk_usage = disk_manager.used_disk_space();
+        assert!(
+            partial_disk_usage > 0,
+            "Disk usage should be > 0 with remaining batches"
+        );
+        assert!(
+            partial_disk_usage < initial_disk_usage,
+            "Disk usage should have decreased after reading most batches: initial={initial_disk_usage}, partial={partial_disk_usage}"
+        );
+
+        // Step 7: Read the final batch
+        let result = reader.next().await.unwrap()?;
+        assert_eq!(result.num_rows(), 100);
+
+        // Step 8: Drop writer first to signal no more data will be written
+        // The reader has infinite stream semantics and will wait for the writer
+        // to be dropped before returning None
+        drop(writer);
+
+        // Verify we've read all batches - now the reader should return None
+        assert!(
+            reader.next().await.is_none(),
+            "Should have no more batches to read"
+        );
+
+        // Step 9: Drop reader to release all references
+        drop(reader);
+
+        // Step 10: Verify complete cleanup - disk usage should be 0
+        let final_disk_usage = disk_manager.used_disk_space();
+        assert_eq!(
+            final_disk_usage, 0,
+            "Disk usage should be 0 after all files dropped, got {final_disk_usage}"
+        );
 
         Ok(())
     }
