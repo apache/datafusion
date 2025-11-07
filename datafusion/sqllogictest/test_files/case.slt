@@ -683,3 +683,9 @@ FROM (
 10 10 100
 -20 20 200
 NULL 30 300
+
+# Case-with-expression that was incorrectly classified as not-nullable, but evaluates to null
+query I
+SELECT CASE 0 WHEN 0 THEN NULL WHEN SUM(1) + COUNT(*) THEN 10 ELSE 20 END
+----
+NULL
