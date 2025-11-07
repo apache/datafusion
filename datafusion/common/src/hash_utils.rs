@@ -374,16 +374,16 @@ fn hash_single_array(
     downcast_primitive_array! {
         array => hash_array_primitive(array, random_state, hashes_buffer, rehash),
         DataType::Null => hash_null(random_state, hashes_buffer, rehash),
-        DataType::Boolean => hash_array(as_boolean_array(array)?, random_state, hashes_buffer, rehash),
-        DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, rehash),
-        DataType::Utf8View => hash_array(as_string_view_array(array)?, random_state, hashes_buffer, rehash),
-        DataType::LargeUtf8 => hash_array(as_largestring_array(array), random_state, hashes_buffer, rehash),
-        DataType::Binary => hash_array(as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
-        DataType::BinaryView => hash_array(as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
-        DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
+        DataType::Boolean => hash_array(&as_boolean_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::Utf8 => hash_array(&as_string_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::Utf8View => hash_array(&as_string_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::LargeUtf8 => hash_array(&as_largestring_array(array), random_state, hashes_buffer, rehash),
+        DataType::Binary => hash_array(&as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
+        DataType::BinaryView => hash_array(&as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::LargeBinary => hash_array(&as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
         DataType::FixedSizeBinary(_) => {
             let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
-            hash_array(array, random_state, hashes_buffer, rehash)
+            hash_array(&array, random_state, hashes_buffer, rehash)
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
@@ -435,10 +435,10 @@ fn hash_single_array(
 }
 
 /// Something that can be returned as a `&dyn Array`.
-/// 
+///
 /// We want `create_hashes` to accept either `&dyn Array` or `ArrayRef`,
 /// and this seems the best way to do so.
-/// 
+///
 /// We tried having it accept `AsRef<dyn Array>`
 /// but that is not implemented for and cannot be implemented for
 /// `&dyn Array` so callers that have the latter would not be able
