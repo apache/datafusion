@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::udaf::FFI_AggregateUDF;
-use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
+use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
 use crate::{df_result, rresult_return};
 use abi_stable::{
@@ -28,7 +28,7 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{
-    AggregateUDF, AggregateUDFImpl, ScalarUDF, WindowUDF, WindowUDFImpl,
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 use log::warn;
 use std::collections::HashSet;
@@ -261,8 +261,8 @@ impl FunctionRegistry for ForeignWeakFunctionRegistry {
     fn udf(&self, name: &str) -> datafusion_common::Result<Arc<ScalarUDF>> {
         let udf = df_result!(unsafe { (self.0.udf)(&self.0, name.into()) })?;
 
-        let udf = ForeignScalarUDF::try_from(&udf)?;
-        Ok(Arc::new(udf.into()))
+        let udf = <Arc<dyn ScalarUDFImpl>>::try_from(&udf)?;
+        Ok(Arc::new(ScalarUDF::new_from_shared_impl(udf)))
     }
 
     fn udaf(&self, name: &str) -> datafusion_common::Result<Arc<AggregateUDF>> {

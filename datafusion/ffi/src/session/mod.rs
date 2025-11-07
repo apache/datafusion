@@ -21,7 +21,7 @@ use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::session::config::FFI_SessionConfig;
 use crate::session::task::FFI_TaskContext;
 use crate::udaf::FFI_AggregateUDF;
-use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
+use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
 use crate::{df_result, rresult, rresult_return};
 use abi_stable::std_types::{RHashMap, RStr};
@@ -42,8 +42,8 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{
-    AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, WindowUDF,
-    WindowUDFImpl,
+    AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, ScalarUDFImpl,
+    WindowUDF, WindowUDFImpl,
 };
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
@@ -389,11 +389,11 @@ impl TryFrom<&FFI_Session> for ForeignSession {
             let scalar_functions = (session.scalar_functions)(session)
                 .into_iter()
                 .map(|kv_pair| {
-                    let udf = ForeignScalarUDF::try_from(&kv_pair.1)?;
+                    let udf = <Arc<dyn ScalarUDFImpl>>::try_from(&kv_pair.1)?;
 
                     Ok((
                         kv_pair.0.into_string(),
-                        Arc::new(ScalarUDF::new_from_impl(udf)),
+                        Arc::new(ScalarUDF::new_from_shared_impl(udf)),
                     ))
                 })
                 .collect::<Result<_, DataFusionError>>()?;

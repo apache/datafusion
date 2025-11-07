@@ -17,7 +17,7 @@
 
 use crate::session::config::FFI_SessionConfig;
 use crate::udaf::FFI_AggregateUDF;
-use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
+use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
 use abi_stable::pmr::ROption;
 use abi_stable::std_types::RHashMap;
@@ -26,7 +26,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
-    AggregateUDF, AggregateUDFImpl, ScalarUDF, WindowUDF, WindowUDFImpl,
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 use std::{ffi::c_void, sync::Arc};
 
@@ -154,7 +154,7 @@ impl From<FFI_TaskContext> for TaskContext {
             let scalar_functions = (ffi_ctx.scalar_functions)(&ffi_ctx)
                 .into_iter()
                 .filter_map(|kv_pair| {
-                    let udf = ForeignScalarUDF::try_from(&kv_pair.1);
+                    let udf = <Arc<dyn ScalarUDFImpl>>::try_from(&kv_pair.1);
 
                     if let Err(err) = &udf {
                         log::error!("Unable to create WindowUDF in FFI: {err}")
@@ -163,7 +163,7 @@ impl From<FFI_TaskContext> for TaskContext {
                     udf.ok().map(|udf| {
                         (
                             kv_pair.0.into_string(),
-                            Arc::new(ScalarUDF::new_from_impl(udf)),
+                            Arc::new(ScalarUDF::new_from_shared_impl(udf)),
                         )
                     })
                 })
