@@ -591,6 +591,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 .as_ref()
                 .map(|v| v.try_into().map(Arc::new))
                 .transpose()?,
+            distribution_statistics: None,
             extensions: None,
             metadata_size_hint: None,
         })

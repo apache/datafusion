@@ -1537,6 +1537,7 @@ mod tests {
                 partition_values: vec![],
                 range: Some(FileRange { start, end }),
                 statistics: None,
+                distribution_statistics: None,
                 extensions: None,
                 metadata_size_hint: None,
             }
@@ -1634,6 +1635,7 @@ mod tests {
             ],
             range: None,
             statistics: None,
+            distribution_statistics: None,
             extensions: None,
             metadata_size_hint: None,
         };
@@ -1724,6 +1726,7 @@ mod tests {
             partition_values: vec![],
             range: None,
             statistics: None,
+            distribution_statistics: None,
             extensions: None,
             metadata_size_hint: None,
         };
@@ -2296,6 +2299,7 @@ mod tests {
                     partition_values: vec![],
                     range: None,
                     statistics: None,
+                    distribution_statistics: None,
                     extensions: None,
                     metadata_size_hint: None,
                 }
@@ -2312,6 +2316,7 @@ mod tests {
                 partition_values: vec![],
                 range: None,
                 statistics: None,
+                distribution_statistics: None,
                 extensions: None,
                 metadata_size_hint: None,
             })
