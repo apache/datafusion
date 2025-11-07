@@ -61,15 +61,20 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let can_evaluate_to_const = can_evaluate_to_const(args);
 
-    // check the keys array is unique
     let keys = get_first_array_ref(keys_arg)?;
-    if keys.null_count() > 0 {
-        return exec_err!("map key cannot be null");
-    }
     let key_array = keys.as_ref();
 
     match keys_arg {
         ColumnarValue::Array(_) => {
+            // For array inputs, keys is a List array where each element represents
+            // the keys of one map. Some list elements may be NULL, which represents
+            // a NULL map (not a null key within a map).
+            //
+            // We should NOT check keys.null_count() here because:
+            // - list_to_arrays() will flatten the list and skip NULL elements (via flatten())
+            // - Those NULL elements represent NULL maps, which are valid
+            // - Null keys WITHIN maps are checked later in check_unique_keys() and
+            //   make_map_array_internal()
             let row_keys = match key_array.data_type() {
                 DataType::List(_) => list_to_arrays::<i32>(&keys),
                 DataType::LargeList(_) => list_to_arrays::<i64>(&keys),
@@ -82,16 +87,52 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 }
             };
 
+            // Check that keys within each map are unique and non-null
+            // Note: row_keys only contains non-NULL map entries due to flatten()
             row_keys
                 .iter()
                 .try_for_each(|key| check_unique_keys(key.as_ref()))?;
         }
         ColumnarValue::Scalar(_) => {
-            check_unique_keys(key_array)?;
+            // For scalar inputs, process based on data type
+            match key_array.data_type() {
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _) => {
+                    // The scalar wraps a List<List<T>> which represents multiple maps
+                    // (e.g., from make_array(['a','b'], NULL, ['c']) in constant evaluation)
+                    // Some list elements may be NULL (representing NULL maps), so we use list_to_arrays
+                    let row_keys = match key_array.data_type() {
+                        DataType::List(_) => list_to_arrays::<i32>(&keys),
+                        DataType::LargeList(_) => list_to_arrays::<i64>(&keys),
+                        DataType::FixedSizeList(_, _) => fixed_size_list_to_arrays(&keys),
+                        _ => unreachable!(),
+                    };
+                    row_keys
+                        .iter()
+                        .try_for_each(|key| check_unique_keys(key.as_ref()))?;
+                }
+                _ => {
+                    // For non-list scalars (e.g., a single array of keys), check directly
+                    check_unique_keys(key_array)?;
+                }
+            }
         }
     }
 
     let values = get_first_array_ref(values_arg)?;
+
+    // For const evaluation with NULL maps, we must use make_map_array_internal
+    // because make_map_batch_internal doesn't handle NULL list elements correctly
+    if can_evaluate_to_const && keys.null_count() > 0 {
+        // If there are NULL maps, use the array path which handles them correctly
+        return if let DataType::LargeList(..) = keys_arg.data_type() {
+            make_map_array_internal::<i64>(keys, values)
+        } else {
+            make_map_array_internal::<i32>(keys, values)
+        };
+    }
+
     make_map_batch_internal(keys, values, can_evaluate_to_const, keys_arg.data_type())
 }
 
@@ -100,6 +141,10 @@ fn check_unique_keys(array: &dyn Array) -> Result<()> {
 
     for i in 0..array.len() {
         let key = ScalarValue::try_from_array(array, i)?;
+        // Map keys cannot be null
+        if key.is_null() {
+            return exec_err!("map key cannot be null");
+        }
         if seen_keys.contains(&key) {
             return exec_err!("map key must be unique, duplicate key found: {}", key);
         }
@@ -356,8 +401,14 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,
 ) -> Result<ColumnarValue> {
-    let mut offset_buffer = vec![O::zero()];
-    let mut running_offset = O::zero();
+    // Save original data types and array length before list_to_arrays transforms them
+    let keys_data_type = keys.data_type().clone();
+    let values_data_type = values.data_type().clone();
+    let original_len = keys.len(); // This is the number of rows in the input
+
+    // Save the nulls bitmap from the original keys array (before list_to_arrays)
+    // This tells us which MAP values are NULL (not which keys within maps are null)
+    let nulls_bitmap = keys.nulls().cloned();
 
     let keys = list_to_arrays::<O>(&keys);
     let values = list_to_arrays::<O>(&values);
@@ -365,18 +416,71 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];
     for (k, v) in keys.iter().zip(values.iter()) {
-        running_offset = running_offset.add(O::usize_as(k.len()));
-        offset_buffer.push(running_offset);
         key_array_vec.push(k.as_ref());
         value_array_vec.push(v.as_ref());
     }
 
-    // concatenate all the arrays
-    let flattened_keys = arrow::compute::concat(key_array_vec.as_ref())?;
-    if flattened_keys.null_count() > 0 {
-        return exec_err!("keys cannot be null");
+    // Build offset buffer that accounts for NULL maps
+    // For each row, if it's NULL, the offset stays the same (empty range)
+    // If it's not NULL, the offset advances by the number of entries in that map
+    let mut offset_buffer = vec![O::zero()];
+    let mut running_offset = O::zero();
+    let mut non_null_idx = 0;
+
+    for i in 0..original_len {
+        let is_null = nulls_bitmap
+            .as_ref()
+            .map_or(false, |nulls| nulls.is_null(i));
+        if is_null {
+            // NULL map: offset doesn't advance (empty range)
+            offset_buffer.push(running_offset);
+        } else {
+            // Non-NULL map: advance offset by the number of entries
+            if non_null_idx < key_array_vec.len() {
+                running_offset =
+                    running_offset.add(O::usize_as(key_array_vec[non_null_idx].len()));
+                non_null_idx += 1;
+            }
+            offset_buffer.push(running_offset);
+        }
     }
-    let flattened_values = arrow::compute::concat(value_array_vec.as_ref())?;
+
+    // concatenate all the arrays
+    // If key_array_vec is empty, it means all maps were NULL (list elements were NULL).
+    // In this case, we need to create empty arrays with the correct data type.
+    let (flattened_keys, flattened_values) = if key_array_vec.is_empty() {
+        // All maps are NULL - create empty arrays
+        // We need to infer the data type from the original keys/values arrays
+        let key_type = match &keys_data_type {
+            DataType::List(field) | DataType::LargeList(field) => {
+                field.data_type().clone()
+            }
+            DataType::FixedSizeList(field, _) => field.data_type().clone(),
+            _ => return exec_err!("Expected List, LargeList or FixedSizeList for keys"),
+        };
+
+        let value_type = match &values_data_type {
+            DataType::List(field) | DataType::LargeList(field) => {
+                field.data_type().clone()
+            }
+            DataType::FixedSizeList(field, _) => field.data_type().clone(),
+            _ => {
+                return exec_err!("Expected List, LargeList or FixedSizeList for values")
+            }
+        };
+
+        (
+            arrow::array::new_empty_array(&key_type),
+            arrow::array::new_empty_array(&value_type),
+        )
+    } else {
+        let flattened_keys = arrow::compute::concat(key_array_vec.as_ref())?;
+        if flattened_keys.null_count() > 0 {
+            return exec_err!("keys cannot be null");
+        }
+        let flattened_values = arrow::compute::concat(value_array_vec.as_ref())?;
+        (flattened_keys, flattened_values)
+    };
 
     let fields = vec![
         Arc::new(Field::new("key", flattened_keys.data_type().clone(), false)),
@@ -393,7 +497,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
         .add_child_data(flattened_values.to_data())
         .build()?;
 
-    let map_data = ArrayData::builder(DataType::Map(
+    let mut map_data_builder = ArrayData::builder(DataType::Map(
         Arc::new(Field::new(
             "entries",
             struct_data.data_type().clone(),
@@ -401,9 +505,15 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
         )),
         false,
     ))
-    .len(keys.len())
+    .len(original_len) // Use the original number of rows, not the filtered count
     .add_child_data(struct_data)
-    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
-    .build()?;
+    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()));
+
+    // Add the nulls bitmap if present (to preserve NULL map values)
+    if let Some(nulls) = nulls_bitmap {
+        map_data_builder = map_data_builder.nulls(Some(nulls));
+    }
+
+    let map_data = map_data_builder.build()?;
     Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
 }
