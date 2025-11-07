@@ -63,7 +63,7 @@ async fn explain_analyze_baseline_metrics() {
         "AggregateExec: mode=Partial, gby=[]",
         "metrics=[output_rows=3, elapsed_compute=",
         "output_bytes=",
-        "output_batches="
+        "output_batches=3"
     );
 
     assert_metrics!(
@@ -77,14 +77,14 @@ async fn explain_analyze_baseline_metrics() {
         "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
         "metrics=[output_rows=5, elapsed_compute=",
         "output_bytes=",
-        "output_batches="
+        "output_batches=3"
     );
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
         "metrics=[output_rows=99, elapsed_compute=",
         "output_bytes=",
-        "output_batches="
+        "output_batches=1"
     );
     assert_metrics!(
         &formatted,
@@ -96,28 +96,28 @@ async fn explain_analyze_baseline_metrics() {
         "ProjectionExec: expr=[]",
         "metrics=[output_rows=5, elapsed_compute=",
         "output_bytes=",
-        "output_batches="
+        "output_batches=3"
     );
     assert_metrics!(
         &formatted,
         "CoalesceBatchesExec: target_batch_size=4096",
         "metrics=[output_rows=5, elapsed_compute",
         "output_bytes=",
-        "output_batches="
+        "output_batches=3"
     );
     assert_metrics!(
         &formatted,
         "UnionExec",
         "metrics=[output_rows=3, elapsed_compute=",
         "output_bytes=",
-        "output_batches="
+        "output_batches=3"
     );
     assert_metrics!(
         &formatted,
         "WindowAggExec",
         "metrics=[output_rows=1, elapsed_compute=",
         "output_bytes=",
-        "output_batches="
+        "output_batches=1"
     );
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
@@ -219,9 +219,13 @@ async fn explain_analyze_level() {
 
     for (level, needle, should_contain) in [
         (ExplainAnalyzeLevel::Summary, "spill_count", false),
+        (ExplainAnalyzeLevel::Summary, "output_batches", false),
         (ExplainAnalyzeLevel::Summary, "output_rows", true),
+        (ExplainAnalyzeLevel::Summary, "output_bytes", true),
         (ExplainAnalyzeLevel::Dev, "spill_count", true),
         (ExplainAnalyzeLevel::Dev, "output_rows", true),
+        (ExplainAnalyzeLevel::Dev, "output_bytes", true),
+        (ExplainAnalyzeLevel::Dev, "output_batches", true),
     ] {
         let plan = collect_plan(sql, level).await;
         assert_eq!(
