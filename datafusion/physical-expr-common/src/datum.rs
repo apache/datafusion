@@ -116,7 +116,7 @@ pub fn apply_cmp_for_nested(
         })
     } else {
         internal_err!(
-            "invalid operator for nested data, op {} left {}, right {}",
+            "invalid operator or data type mismatch for nested data, op {} left {}, right {}",
             op,
             left_data_type,
             right_data_type
