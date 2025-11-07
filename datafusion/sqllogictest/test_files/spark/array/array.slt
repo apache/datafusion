@@ -70,3 +70,18 @@ query ?
 SELECT array(array(1,2));
 ----
 [[1, 2]]
+
+query ?
+SELECT array(arrow_cast(array(1), 'LargeList(Int64)'));
+----
+[[1]]
+
+query ?
+SELECT array(arrow_cast(array(1), 'LargeList(Int64)'), arrow_cast(array(), 'LargeList(Int64)'));
+----
+[[1], []]
+
+query ?
+SELECT array(arrow_cast(array(1,2), 'LargeList(Int64)'), array(3));
+----
+[[1, 2], [3]]

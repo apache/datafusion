@@ -42,8 +42,7 @@ use std::sync::Arc;
 // 3. Register the function using [`SessionContext::register_udtf`]
 
 /// This example demonstrates how to register a TableFunction
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn simple_udtf() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
