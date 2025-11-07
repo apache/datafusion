@@ -26,9 +26,11 @@ use arrow::datatypes::FieldRef;
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::plan_err;
 use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl,
+    Signature, TypeSignature, Volatility,
+};
 use rand::rng;
 use rand::rngs::StdRng;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
@@ -49,7 +51,25 @@ impl Default for SparkShuffle {
 impl SparkShuffle {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Volatile),
+            signature: Signature {
+                type_signature: TypeSignature::OneOf(vec![
+                    // Only array argument
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: None,
+                    }),
+                    // Array + Index (seed) argument
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: None,
+                    }),
+                ]),
+                volatility: Volatility::Volatile,
+                parameter_names: None,
+            },
         }
     }
 }
@@ -68,45 +88,7 @@ impl ScalarUDFImpl for SparkShuffle {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.is_empty() {
-            return plan_err!("shuffle expects at least 1 argument");
-        }
         Ok(arg_types[0].clone())
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() {
-            return plan_err!("shuffle expects at least 1 argument");
-        }
-        if arg_types.len() > 2 {
-            return plan_err!("shuffle expects at most 2 arguments");
-        }
-        // First argument must be an array type
-        if !matches!(
-            &arg_types[0],
-            List(_) | LargeList(_) | FixedSizeList(_, _) | Null
-        ) {
-            return plan_err!(
-                "shuffle first argument must be an array type, got '{}'",
-                arg_types[0]
-            );
-        }
-        // Second argument (if present) should be a numeric type for seed, coerce to Int64
-        if arg_types.len() == 2 {
-            let seed_type = if arg_types[1].is_numeric() {
-                DataType::Int64
-            } else if arg_types[1].is_null() {
-                Null
-            } else {
-                return plan_err!(
-                    "shuffle second argument (seed) must be a numeric type, got '{}'",
-                    arg_types[1]
-                );
-            };
-            Ok(vec![arg_types[0].clone(), seed_type])
-        } else {
-            Ok(vec![arg_types[0].clone()])
-        }
     }
 
     fn invoke_with_args(
