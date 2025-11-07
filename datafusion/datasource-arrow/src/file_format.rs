@@ -478,8 +478,8 @@ async fn extend_bytes_to_n_length_from_stream(
     if buf.len() < n {
         return Err(ArrowError::ParseError(
             "Unexpected end of byte stream for Arrow IPC file".to_string(),
-        )
-        .into());
+        ))
+        .into();
     }
 
     Ok(buf)
