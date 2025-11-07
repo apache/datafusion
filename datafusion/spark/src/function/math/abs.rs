@@ -79,7 +79,7 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() > 2 {
+        if arg_types.is_empty() || arg_types.len() > 2 {
             return Err(invalid_arg_count_exec_err("abs", (1, 2), arg_types.len()));
         }
         match &arg_types[0] {
@@ -146,7 +146,7 @@ fn arithmetic_overflow_error(from_type: &str) -> DataFusionError {
 }
 
 pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    if args.len() > 2 {
+    if args.is_empty() || args.len() > 2 {
         return internal_err!("abs takes at most 2 arguments, but got: {}", args.len());
     }
 
@@ -517,8 +517,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abs_zero_arg() {
+    fn test_abs_incorrect_arg() {
+        let arg = ColumnarValue::Scalar(ScalarValue::UInt8(Some(u8::MAX)));
+        // zero arg
         assert!(spark_abs(&[]).is_err());
+        // more than 2 args
+        assert!(spark_abs(&[arg.clone(), arg.clone(), arg.clone()]).is_err());
+        // incorrect 2nd arg type
+        assert!(spark_abs(&[arg.clone(), arg.clone()]).is_err());
     }
 
     macro_rules! eval_legacy_mode {
