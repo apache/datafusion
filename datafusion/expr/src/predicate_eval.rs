@@ -24,14 +24,15 @@ use datafusion_expr_common::operator::Operator;
 use std::ops::{BitAnd, BitOr, Not};
 
 /// Represents the possible values for SQL's three valued logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum TriStateBool {
     True,
     False,
     Uncertain,
 }
 
-impl From<Option<bool>> for TriStateBool {
-    fn from(value: Option<bool>) -> Self {
+impl From<&Option<bool>> for TriStateBool {
+    fn from(value: &Option<bool>) -> Self {
         match value {
             None => Uncertain,
             Some(true) => True,
@@ -60,6 +61,14 @@ impl TryFrom<&ScalarValue> for TriStateBool {
 }
 
 impl TriStateBool {
+    fn try_from_no_cooerce(value: &ScalarValue) -> Option<Self> {
+        match value {
+            ScalarValue::Null => Some(Uncertain),
+            ScalarValue::Boolean(b) => Some(TriStateBool::from(b)),
+            _ => None,
+        }
+    }
+
     fn is_null(&self) -> TriStateBool {
         match self {
             True | False => False,
@@ -151,7 +160,7 @@ where
         input_schema,
         evaluates_to_null,
     }
-    .const_eval_predicate(predicate)
+    .const_eval_predicate_coerced(predicate)
     .map(|b| matches!(b, True))
 }
 
@@ -164,9 +173,16 @@ impl<F> PredicateConstEvaluator<'_, F>
 where
     F: Fn(&Expr) -> Option<bool>,
 {
-    fn const_eval_predicate(&self, predicate: &Expr) -> Option<TriStateBool> {
+    fn const_eval_predicate_coerced(&self, predicate: &Expr) -> Option<TriStateBool> {
         match predicate {
             Expr::Literal(scalar, _) => TriStateBool::try_from(scalar).ok(),
+            e => self.const_eval_predicate(e),
+        }
+    }
+
+    fn const_eval_predicate(&self, predicate: &Expr) -> Option<TriStateBool> {
+        match predicate {
+            Expr::Literal(scalar, _) => TriStateBool::try_from_no_cooerce(scalar),
             Expr::IsNotNull(e) => {
                 if let Ok(false) = e.nullable(self.input_schema) {
                     // If `e` is not nullable -> `e IS NOT NULL` is true
@@ -294,9 +310,418 @@ where
                     False
                 } else {
                     // Finally, ask the callback if it knows the nullness of `expr`
-                    (self.evaluates_to_null)(e).into()
+                    let evaluates_to_null = (self.evaluates_to_null)(e);
+                    TriStateBool::from(&evaluates_to_null)
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::expr::ScalarFunction;
+    use crate::predicate_eval::TriStateBool::*;
+    use crate::predicate_eval::{const_eval_predicate, TriStateBool};
+    use crate::{
+        binary_expr, create_udf, is_false, is_not_false, is_not_null, is_not_true,
+        is_not_unknown, is_null, is_true, is_unknown, lit, not, Expr,
+    };
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion_common::{DFSchema, ScalarValue};
+    use datafusion_expr_common::columnar_value::ColumnarValue;
+    use datafusion_expr_common::operator::Operator;
+    use datafusion_expr_common::signature::Volatility;
+    use std::sync::Arc;
+    use Operator::{And, Or};
+
+    #[test]
+    fn tristate_bool_from_option() {
+        assert_eq!(TriStateBool::from(&None), Uncertain);
+        assert_eq!(TriStateBool::from(&Some(true)), True);
+        assert_eq!(TriStateBool::from(&Some(false)), False);
+    }
+
+    #[test]
+    fn tristate_bool_from_scalar() {
+        assert_eq!(
+            TriStateBool::try_from(&ScalarValue::Null).unwrap(),
+            Uncertain
+        );
+
+        assert_eq!(
+            TriStateBool::try_from(&ScalarValue::Boolean(None)).unwrap(),
+            Uncertain
+        );
+        assert_eq!(
+            TriStateBool::try_from(&ScalarValue::Boolean(Some(true))).unwrap(),
+            True
+        );
+        assert_eq!(
+            TriStateBool::try_from(&ScalarValue::Boolean(Some(false))).unwrap(),
+            False
+        );
+
+        assert_eq!(
+            TriStateBool::try_from(&ScalarValue::UInt8(None)).unwrap(),
+            Uncertain
+        );
+        assert_eq!(
+            TriStateBool::try_from(&ScalarValue::UInt8(Some(0))).unwrap(),
+            False
+        );
+        assert_eq!(
+            TriStateBool::try_from(&ScalarValue::UInt8(Some(1))).unwrap(),
+            True
+        );
+    }
+
+    #[test]
+    fn tristate_bool_from_scalar_no_cooerce() {
+        assert_eq!(
+            TriStateBool::try_from_no_cooerce(&ScalarValue::Null).unwrap(),
+            Uncertain
+        );
+
+        assert_eq!(
+            TriStateBool::try_from_no_cooerce(&ScalarValue::Boolean(None)).unwrap(),
+            Uncertain
+        );
+        assert_eq!(
+            TriStateBool::try_from_no_cooerce(&ScalarValue::Boolean(Some(true))).unwrap(),
+            True
+        );
+        assert_eq!(
+            TriStateBool::try_from_no_cooerce(&ScalarValue::Boolean(Some(false)))
+                .unwrap(),
+            False
+        );
+
+        assert_eq!(
+            TriStateBool::try_from_no_cooerce(&ScalarValue::UInt8(None)),
+            None
+        );
+        assert_eq!(
+            TriStateBool::try_from_no_cooerce(&ScalarValue::UInt8(Some(0))),
+            None
+        );
+        assert_eq!(
+            TriStateBool::try_from_no_cooerce(&ScalarValue::UInt8(Some(1))),
+            None
+        );
+    }
+
+    #[test]
+    fn tristate_bool_not() {
+        assert_eq!(!Uncertain, Uncertain);
+        assert_eq!(!False, True);
+        assert_eq!(!True, False);
+    }
+
+    #[test]
+    fn tristate_bool_and() {
+        assert_eq!(Uncertain & Uncertain, Uncertain);
+        assert_eq!(Uncertain & True, Uncertain);
+        assert_eq!(Uncertain & False, False);
+        assert_eq!(True & Uncertain, Uncertain);
+        assert_eq!(True & True, True);
+        assert_eq!(True & False, False);
+        assert_eq!(False & Uncertain, False);
+        assert_eq!(False & True, False);
+        assert_eq!(False & False, False);
+    }
+
+    #[test]
+    fn tristate_bool_or() {
+        assert_eq!(Uncertain | Uncertain, Uncertain);
+        assert_eq!(Uncertain | True, True);
+        assert_eq!(Uncertain | False, Uncertain);
+        assert_eq!(True | Uncertain, True);
+        assert_eq!(True | True, True);
+        assert_eq!(True | False, True);
+        assert_eq!(False | Uncertain, Uncertain);
+        assert_eq!(False | True, True);
+        assert_eq!(False | False, False);
+    }
+
+    fn const_eval(predicate: &Expr) -> Option<bool> {
+        let schema = DFSchema::try_from(Schema::empty()).unwrap();
+        const_eval_predicate(predicate, |_| None, &schema)
+    }
+
+    #[test]
+    fn predicate_eval_literal() {
+        assert_eq!(const_eval(&lit(ScalarValue::Null)), Some(false));
+
+        assert_eq!(const_eval(&lit(false)), Some(false));
+        assert_eq!(const_eval(&lit(true)), Some(true));
+
+        assert_eq!(const_eval(&lit(0)), Some(false));
+        assert_eq!(const_eval(&lit(1)), Some(true));
+
+        assert_eq!(const_eval(&lit("foo")), None);
+        assert_eq!(const_eval(&lit(ScalarValue::Utf8(None))), Some(false));
+    }
+
+    #[test]
+    fn predicate_eval_and() {
+        let null = lit(ScalarValue::Null);
+        let zero = lit(0);
+        let one = lit(1);
+        let t = lit(true);
+        let f = lit(false);
+        let func = make_scalar_func_expr();
+
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), And, null.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), And, one.clone())),
+            None
+        );
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), And, zero.clone())),
+            None
+        );
+
+        assert_eq!(
+            const_eval(&binary_expr(one.clone(), And, one.clone())),
+            None
+        );
+        assert_eq!(
+            const_eval(&binary_expr(one.clone(), And, zero.clone())),
+            None
+        );
+
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), And, t.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(t.clone(), And, null.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), And, f.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(f.clone(), And, null.clone())),
+            Some(false)
+        );
+
+        assert_eq!(
+            const_eval(&binary_expr(t.clone(), And, t.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(t.clone(), And, f.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(f.clone(), And, t.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(f.clone(), And, f.clone())),
+            Some(false)
+        );
+
+        assert_eq!(const_eval(&binary_expr(t.clone(), And, func.clone())), None);
+        assert_eq!(const_eval(&binary_expr(func.clone(), And, t.clone())), None);
+        assert_eq!(
+            const_eval(&binary_expr(f.clone(), And, func.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(func.clone(), And, f.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), And, func.clone())),
+            None
+        );
+        assert_eq!(
+            const_eval(&binary_expr(func.clone(), And, null.clone())),
+            None
+        );
+    }
+
+    #[test]
+    fn predicate_eval_or() {
+        let null = lit(ScalarValue::Null);
+        let zero = lit(0);
+        let one = lit(1);
+        let t = lit(true);
+        let f = lit(false);
+        let func = make_scalar_func_expr();
+
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), Or, null.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), Or, one.clone())),
+            None
+        );
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), Or, zero.clone())),
+            None
+        );
+
+        assert_eq!(const_eval(&binary_expr(one.clone(), Or, one.clone())), None);
+        assert_eq!(
+            const_eval(&binary_expr(one.clone(), Or, zero.clone())),
+            None
+        );
+
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), Or, t.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(t.clone(), Or, null.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), Or, f.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(f.clone(), Or, null.clone())),
+            Some(false)
+        );
+
+        assert_eq!(
+            const_eval(&binary_expr(t.clone(), Or, t.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(t.clone(), Or, f.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(f.clone(), Or, t.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(f.clone(), Or, f.clone())),
+            Some(false)
+        );
+
+        assert_eq!(
+            const_eval(&binary_expr(t.clone(), Or, func.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            const_eval(&binary_expr(func.clone(), Or, t.clone())),
+            Some(true)
+        );
+        assert_eq!(const_eval(&binary_expr(f.clone(), Or, func.clone())), None);
+        assert_eq!(const_eval(&binary_expr(func.clone(), Or, f.clone())), None);
+        assert_eq!(
+            const_eval(&binary_expr(null.clone(), Or, func.clone())),
+            None
+        );
+        assert_eq!(
+            const_eval(&binary_expr(func.clone(), Or, null.clone())),
+            None
+        );
+    }
+
+    #[test]
+    fn predicate_eval_not() {
+        let null = lit(ScalarValue::Null);
+        let zero = lit(0);
+        let one = lit(1);
+        let t = lit(true);
+        let f = lit(false);
+        let func = make_scalar_func_expr();
+
+        assert_eq!(const_eval(&not(null.clone())), Some(false));
+        assert_eq!(const_eval(&not(one.clone())), None);
+        assert_eq!(const_eval(&not(zero.clone())), None);
+
+        assert_eq!(const_eval(&not(t.clone())), Some(false));
+        assert_eq!(const_eval(&not(f.clone())), Some(true));
+
+        assert_eq!(const_eval(&not(func.clone())), None);
+    }
+
+    #[test]
+    fn predicate_eval_is() {
+        let null = lit(ScalarValue::Null);
+        let zero = lit(0);
+        let one = lit(1);
+        let t = lit(true);
+        let f = lit(false);
+
+        assert_eq!(const_eval(&is_null(null.clone())), Some(true));
+        assert_eq!(const_eval(&is_null(one.clone())), Some(false));
+
+        assert_eq!(const_eval(&is_not_null(null.clone())), Some(false));
+        assert_eq!(const_eval(&is_not_null(one.clone())), Some(true));
+
+        assert_eq!(const_eval(&is_true(null.clone())), Some(false));
+        assert_eq!(const_eval(&is_true(t.clone())), Some(true));
+        assert_eq!(const_eval(&is_true(f.clone())), Some(false));
+        assert_eq!(const_eval(&is_true(zero.clone())), None);
+        assert_eq!(const_eval(&is_true(one.clone())), None);
+
+        assert_eq!(const_eval(&is_not_true(null.clone())), Some(true));
+        assert_eq!(const_eval(&is_not_true(t.clone())), Some(false));
+        assert_eq!(const_eval(&is_not_true(f.clone())), Some(true));
+        assert_eq!(const_eval(&is_not_true(zero.clone())), None);
+        assert_eq!(const_eval(&is_not_true(one.clone())), None);
+
+        assert_eq!(const_eval(&is_false(null.clone())), Some(false));
+        assert_eq!(const_eval(&is_false(t.clone())), Some(false));
+        assert_eq!(const_eval(&is_false(f.clone())), Some(true));
+        assert_eq!(const_eval(&is_false(zero.clone())), None);
+        assert_eq!(const_eval(&is_false(one.clone())), None);
+
+        assert_eq!(const_eval(&is_not_false(null.clone())), Some(true));
+        assert_eq!(const_eval(&is_not_false(t.clone())), Some(true));
+        assert_eq!(const_eval(&is_not_false(f.clone())), Some(false));
+        assert_eq!(const_eval(&is_not_false(zero.clone())), None);
+        assert_eq!(const_eval(&is_not_false(one.clone())), None);
+
+        assert_eq!(const_eval(&is_unknown(null.clone())), Some(true));
+        assert_eq!(const_eval(&is_unknown(t.clone())), Some(false));
+        assert_eq!(const_eval(&is_unknown(f.clone())), Some(false));
+        assert_eq!(const_eval(&is_unknown(zero.clone())), None);
+        assert_eq!(const_eval(&is_unknown(one.clone())), None);
+
+        assert_eq!(const_eval(&is_not_unknown(null.clone())), Some(false));
+        assert_eq!(const_eval(&is_not_unknown(t.clone())), Some(true));
+        assert_eq!(const_eval(&is_not_unknown(f.clone())), Some(true));
+        assert_eq!(const_eval(&is_not_unknown(zero.clone())), None);
+        assert_eq!(const_eval(&is_not_unknown(one.clone())), None);
+    }
+
+    #[test]
+    fn predicate_eval_udf() {
+        let func = make_scalar_func_expr();
+
+        assert_eq!(const_eval(&func.clone()), None);
+        assert_eq!(const_eval(&not(func.clone())), None);
+        assert_eq!(
+            const_eval(&binary_expr(func.clone(), And, func.clone())),
+            None
+        );
+    }
+
+    fn make_scalar_func_expr() -> Expr {
+        let scalar_func_impl =
+            |_: &[ColumnarValue]| Ok(ColumnarValue::Scalar(ScalarValue::Null));
+        let udf = create_udf(
+            "foo",
+            vec![],
+            DataType::Boolean,
+            Volatility::Stable,
+            Arc::new(scalar_func_impl),
+        );
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf), vec![]))
     }
 }
