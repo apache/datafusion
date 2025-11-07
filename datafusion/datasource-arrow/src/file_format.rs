@@ -20,7 +20,6 @@
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
 use std::any::Any;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::{Seek, SeekFrom};
@@ -164,7 +163,7 @@ impl FileFormat for ArrowFormat {
                         }
                     }
                 }
-                GetResultPayload::Stream(stream) => infer_ipc_schema(stream).await?,
+                GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
             };
             schemas.push(schema.as_ref().clone());
         }
@@ -379,7 +378,7 @@ impl DataSink for ArrowFileSink {
 const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
-async fn infer_ipc_schema(
+async fn infer_stream_schema(
     mut stream: BoxStream<'static, object_store::Result<Bytes>>,
 ) -> Result<SchemaRef> {
     // Expected IPC format is either:
@@ -395,11 +394,12 @@ async fn infer_ipc_schema(
     //   <empty padding bytes [to 8 byte boundary]> - 2 bytes
     //   <stream format above>
 
-    // Perform the initial read such that we always have the metadata size
-    let bytes = collect_at_least_n_bytes(&mut stream, 16, None).await?;
+    // 16 bytes covers the preamble and metadata length no matter
+    // which version or format is used
+    let bytes = extend_bytes_to_n_length_from_stream(vec![], 16, &mut stream).await?;
 
-    // The preamble size is everything before the metadata size
-    let preamble_size = if bytes[0..6] == ARROW_MAGIC {
+    // The preamble length is everything before the metadata length
+    let preamble_len = if bytes[0..6] == ARROW_MAGIC {
         // File format starts with magic number "ARROW1"
         if bytes[8..12] == CONTINUATION_MARKER {
             // Continuation marker was added in v0.15.0
@@ -416,77 +416,72 @@ async fn infer_ipc_schema(
         0
     };
 
-    infer_ipc_schema_ignoring_preamble_bytes(bytes, preamble_size, stream).await
-}
+    let meta_len_bytes: [u8; 4] = bytes[preamble_len..preamble_len + 4]
+        .try_into()
+        .map_err(|err| {
+            ArrowError::ParseError(format!(
+                "Unable to read IPC message metadata length: {err:?}"
+            ))
+        })?;
 
-async fn infer_ipc_schema_ignoring_preamble_bytes(
-    bytes: Vec<u8>,
-    preamble_size: usize,
-    mut stream: BoxStream<'static, object_store::Result<Bytes>>,
-) -> Result<SchemaRef> {
-    let (meta_len, rest_of_bytes_start_index): ([u8; 4], usize) = (
-        bytes[preamble_size..preamble_size + 4]
-            .try_into()
-            .map_err(|err| {
-                ArrowError::ParseError(format!(
-                    "Unable to read IPC message as metadata length: {err:?}"
-                ))
-            })?,
-        preamble_size + 4,
-    );
+    let meta_len = i32::from_le_bytes([
+        meta_len_bytes[0],
+        meta_len_bytes[1],
+        meta_len_bytes[2],
+        meta_len_bytes[3],
+    ]);
 
-    let meta_len = [meta_len[0], meta_len[1], meta_len[2], meta_len[3]];
-    let meta_len = i32::from_le_bytes(meta_len);
+    if meta_len < 0 {
+        return Err(ArrowError::ParseError(
+            "IPC message metadata length is negative".to_string(),
+        )
+        .into());
+    }
 
-    // Read bytes for Schema message
-    let block_data = if bytes[rest_of_bytes_start_index..].len() < meta_len as usize {
-        // Need to read more bytes to decode Message
-        let mut block_data = Vec::with_capacity(meta_len as usize);
-        // In case we had some spare bytes in our initial read chunk
-        block_data.extend_from_slice(&bytes[rest_of_bytes_start_index..]);
-        let size_to_read = meta_len as usize - block_data.len();
-        let block_data =
-            collect_at_least_n_bytes(&mut stream, size_to_read, Some(block_data)).await?;
-        Cow::Owned(block_data)
-    } else {
-        // Already have the bytes we need
-        let end_index = meta_len as usize + rest_of_bytes_start_index;
-        let block_data = &bytes[rest_of_bytes_start_index..end_index];
-        Cow::Borrowed(block_data)
-    };
+    let bytes = extend_bytes_to_n_length_from_stream(
+        bytes,
+        preamble_len + 4 + (meta_len as usize),
+        &mut stream,
+    )
+    .await?;
 
-    // Decode Schema message
-    let message = root_as_message(&block_data).map_err(|err| {
-        ArrowError::ParseError(format!("Unable to read IPC message as metadata: {err:?}"))
+    let message = root_as_message(&bytes[preamble_len + 4..]).map_err(|err| {
+        ArrowError::ParseError(format!("Unable to read IPC message metadata: {err:?}"))
     })?;
-    let ipc_schema = message.header_as_schema().ok_or_else(|| {
-        ArrowError::IpcError("Unable to read IPC message as schema".to_string())
+    let fb_schema = message.header_as_schema().ok_or_else(|| {
+        ArrowError::IpcError("Unable to read IPC message schema".to_string())
     })?;
-    let schema = fb_to_schema(ipc_schema);
+    let schema = fb_to_schema(fb_schema);
 
     Ok(Arc::new(schema))
 }
 
-async fn collect_at_least_n_bytes(
-    stream: &mut BoxStream<'static, object_store::Result<Bytes>>,
+async fn extend_bytes_to_n_length_from_stream(
+    bytes: Vec<u8>,
     n: usize,
-    extend_from: Option<Vec<u8>>,
+    stream: &mut BoxStream<'static, object_store::Result<Bytes>>,
 ) -> Result<Vec<u8>> {
-    let mut buf = extend_from.unwrap_or_else(|| Vec::with_capacity(n));
-    // If extending existing buffer then ensure we read n additional bytes
-    let n = n + buf.len();
-    while let Some(bytes) = stream.next().await.transpose()? {
-        buf.extend_from_slice(&bytes);
+    if bytes.len() >= n {
+        return Ok(bytes);
+    }
+
+    let mut buf = bytes;
+
+    while let Some(b) = stream.next().await.transpose()? {
+        buf.extend_from_slice(&b);
+
         if buf.len() >= n {
             break;
         }
     }
+
     if buf.len() < n {
         return Err(ArrowError::ParseError(
             "Unexpected end of byte stream for Arrow IPC file".to_string(),
         )
         .into());
     }
+
     Ok(buf)
 }
 
