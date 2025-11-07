@@ -20,7 +20,7 @@ use crate::execution_plan::FFI_ExecutionPlan;
 use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::session::config::FFI_SessionConfig;
 use crate::session::task::FFI_TaskContext;
-use crate::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
+use crate::udaf::FFI_AggregateUDF;
 use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
 use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 use crate::{df_result, rresult, rresult_return};
@@ -41,7 +41,9 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, WindowUDF,
+};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
@@ -397,11 +399,11 @@ impl TryFrom<&FFI_Session> for ForeignSession {
             let aggregate_functions = (session.aggregate_functions)(session)
                 .into_iter()
                 .map(|kv_pair| {
-                    let udaf = ForeignAggregateUDF::try_from(&kv_pair.1)?;
+                    let udaf = <Arc<dyn AggregateUDFImpl>>::try_from(&kv_pair.1)?;
 
                     Ok((
                         kv_pair.0.into_string(),
-                        Arc::new(AggregateUDF::new_from_impl(udaf)),
+                        Arc::new(AggregateUDF::new_from_shared_impl(udaf)),
                     ))
                 })
                 .collect::<Result<_, DataFusionError>>()?;

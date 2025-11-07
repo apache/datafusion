@@ -142,6 +142,10 @@ pub struct FFI_AggregateUDF {
     /// Internal data. This is only to be accessed by the provider of the udaf.
     /// A [`ForeignAggregateUDF`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_AggregateUDF {}
@@ -152,9 +156,9 @@ pub struct AggregateUDFPrivateData {
 }
 
 impl FFI_AggregateUDF {
-    unsafe fn inner(&self) -> &Arc<AggregateUDF> {
+    fn inner(&self) -> &Arc<AggregateUDF> {
         let private_data = self.private_data as *const AggregateUDFPrivateData;
-        &(*private_data).udaf
+        unsafe { &(*private_data).udaf }
     }
 }
 
@@ -364,6 +368,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -403,18 +408,22 @@ impl Hash for ForeignAggregateUDF {
     }
 }
 
-impl TryFrom<&FFI_AggregateUDF> for ForeignAggregateUDF {
+impl TryFrom<&FFI_AggregateUDF> for Arc<dyn AggregateUDFImpl> {
     type Error = DataFusionError;
 
     fn try_from(udaf: &FFI_AggregateUDF) -> Result<Self, Self::Error> {
+        if (udaf.library_marker_id)() == crate::get_library_marker_id() {
+            return Ok(Arc::clone(udaf.inner().inner()));
+        }
+
         let signature = Signature::user_defined((&udaf.volatility).into());
         let aliases = udaf.aliases.iter().map(|s| s.to_string()).collect();
 
-        Ok(Self {
+        Ok(Arc::new(ForeignAggregateUDF {
             udaf: udaf.clone(),
             signature,
             aliases,
-        })
+        }))
     }
 }
 
@@ -552,11 +561,9 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
             ))?
             .into_option();
 
-            let result = result
-                .map(|func| ForeignAggregateUDF::try_from(&func))
-                .transpose()?;
-
-            Ok(result.map(|func| Arc::new(func) as Arc<dyn AggregateUDFImpl>))
+            result
+                .map(|func| <Arc<dyn AggregateUDFImpl>>::try_from(&func))
+                .transpose()
         }
     }
 
@@ -662,8 +669,8 @@ mod tests {
 
         let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
 
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        Ok(foreign_udaf.into())
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;
+        Ok(AggregateUDF::new_from_shared_impl(foreign_udaf))
     }
 
     #[test]
@@ -676,8 +683,8 @@ mod tests {
         let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
 
         // Convert back to native format
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        let foreign_udaf: AggregateUDF = foreign_udaf.into();
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;
+        let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
         assert_eq!(original_name, foreign_udaf.name());
         Ok(())
@@ -730,8 +737,8 @@ mod tests {
         let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
 
         // Convert back to native format
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        let foreign_udaf: AggregateUDF = foreign_udaf.into();
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;
+        let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
         let metadata: HashMap<String, String> =
             [("a_key".to_string(), "a_value".to_string())]

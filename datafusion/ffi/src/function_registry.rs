@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
+use crate::udaf::FFI_AggregateUDF;
 use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
 use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 use crate::{df_result, rresult_return};
@@ -27,7 +27,7 @@ use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, WindowUDF};
 use log::warn;
 use std::collections::HashSet;
 use std::sync::Weak;
@@ -266,8 +266,8 @@ impl FunctionRegistry for ForeignWeakFunctionRegistry {
     fn udaf(&self, name: &str) -> datafusion_common::Result<Arc<AggregateUDF>> {
         let udaf = df_result!(unsafe { (self.0.udaf)(&self.0, name.into()) })?;
 
-        let udaf = ForeignAggregateUDF::try_from(&udaf)?;
-        Ok(Arc::new(udaf.into()))
+        let udaf = <Arc<dyn AggregateUDFImpl>>::try_from(&udaf)?;
+        Ok(Arc::new(AggregateUDF::new_from_shared_impl(udaf)))
     }
 
     fn udwf(&self, name: &str) -> datafusion_common::Result<Arc<WindowUDF>> {

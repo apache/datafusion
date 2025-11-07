@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::session::config::FFI_SessionConfig;
-use crate::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
+use crate::udaf::FFI_AggregateUDF;
 use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
 use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 use abi_stable::pmr::ROption;
@@ -25,7 +25,7 @@ use abi_stable::{std_types::RString, StableAbi};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, WindowUDF};
 use std::{ffi::c_void, sync::Arc};
 
 /// A stable struct for sharing [`TaskContext`] across FFI boundaries.
@@ -169,7 +169,7 @@ impl From<FFI_TaskContext> for TaskContext {
             let aggregate_functions = (ffi_ctx.aggregate_functions)(&ffi_ctx)
                 .into_iter()
                 .filter_map(|kv_pair| {
-                    let udaf = ForeignAggregateUDF::try_from(&kv_pair.1);
+                    let udaf = <Arc<dyn AggregateUDFImpl>>::try_from(&kv_pair.1);
 
                     if let Err(err) = &udaf {
                         log::error!("Unable to create AggregateUDF in FFI: {err}")
@@ -178,7 +178,7 @@ impl From<FFI_TaskContext> for TaskContext {
                     udaf.ok().map(|udaf| {
                         (
                             kv_pair.0.into_string(),
-                            Arc::new(AggregateUDF::new_from_impl(udaf)),
+                            Arc::new(AggregateUDF::new_from_shared_impl(udaf)),
                         )
                     })
                 })
