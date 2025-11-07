@@ -6089,10 +6089,9 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
 ----
 logical_plan
-01)Projection: aggregate_test_100.c2, aggregate_test_100.c3
-02)--Limit: skip=0, fetch=3
-03)----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
-04)------TableScan: aggregate_test_100 projection=[c2, c3]
+01)Limit: skip=0, fetch=3
+02)--Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+03)----TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
 01)ProjectionExec: expr=[c2@0 as c2, c3@1 as c3]
 02)--GlobalLimitExec: skip=0, fetch=3

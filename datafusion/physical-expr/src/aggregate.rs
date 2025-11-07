@@ -34,15 +34,22 @@ pub mod utils {
     };
 }
 
+use std::any::Any;
 use std::fmt::Debug;
+use std::ops::Shr;
 use std::sync::Arc;
 
 use crate::expressions::Column;
 
-use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use arrow::array::{ArrowPrimitiveType, Int32Array, PrimitiveArray, RecordBatch};
+use arrow::compute::{unary, SortOptions};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, FieldRef, Int32Type, Schema, SchemaRef, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
+};
+use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
+use datafusion_expr::{AggregateUDF, ColumnarValue, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
@@ -759,3 +766,375 @@ fn replace_order_by_clause(order_by: &mut String) {
 fn replace_fn_name_clause(aggr_name: &mut String, fn_name_old: &str, fn_name_new: &str) {
     *aggr_name = aggr_name.replace(fn_name_old, fn_name_new);
 }
+
+/// Represents a GROUPING physical expression
+///
+/// The GROUPING function returns a bitmask indicating which columns are aggregated
+/// in a GROUP BY GROUPING SETS, ROLLUP, or CUBE query.
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub struct GroupingExpr {
+    name: String,
+    /// A human readable name
+    human_display: String,
+    /// The grouping id value
+    indices: Option<Vec<i32>>,
+}
+
+impl GroupingExpr {
+    /// Create a new GROUPING physical expression
+    pub fn new(name: String, human_display: String, indices: Option<Vec<i32>>) -> Self {
+        Self {
+            name,
+            human_display,
+            indices,
+        }
+    }
+
+    /// Get the indices
+    pub fn indices(&self) -> &Option<Vec<i32>> {
+        &self.indices
+    }
+
+    fn grouping<T: ArrowPrimitiveType>(
+        &self,
+        grouping_id_col: &PrimitiveArray<T>,
+        indices: &[i32],
+    ) -> PrimitiveArray<Int32Type>
+    where
+        T::Native: Shr<i32, Output = T::Native>,
+    {
+        unary::<_, _, Int32Type>(grouping_id_col, |grouping_id| {
+            let mut result = 0i32;
+            for index in indices.iter() {
+                let bit = (grouping_id >> *index).as_usize() & 1;
+                result = (result << 1) | (bit as i32);
+            }
+            result
+        })
+    }
+
+    pub fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        PhysicalExpr::evaluate(self, batch)
+    }
+}
+
+impl std::fmt::Display for GroupingExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if let Some(indices) = &self.indices {
+            write!(
+                f,
+                "GROUPING({})",
+                indices
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",")
+            )?;
+        } else {
+            write!(f, "0")?;
+        }
+
+        write!(f, " AS {}", self.name)
+    }
+}
+
+impl PhysicalExpr for GroupingExpr {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Int32)
+    }
+
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let Some(indices) = &self.indices else {
+            return Ok(ColumnarValue::Array(Arc::new(Int32Array::from(
+                std::vec![0; batch.num_rows()],
+            ))));
+        };
+        // Get the grouping_id column from the batch
+        let Some(grouping_id_col) = batch.column_by_name(INTERNAL_GROUPING_ID) else {
+            return internal_err!(
+                "GROUPING expression requires {} column in the schema",
+                INTERNAL_GROUPING_ID
+            );
+        };
+
+        match grouping_id_col.data_type() {
+            DataType::UInt8 => {
+                let result = self
+                    .grouping(as_primitive_array::<UInt8Type>(grouping_id_col)?, indices);
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::UInt16 => {
+                let result = self.grouping(
+                    as_primitive_array::<UInt16Type>(grouping_id_col)?,
+                    indices,
+                );
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::UInt32 => {
+                let result = self.grouping(
+                    as_primitive_array::<UInt32Type>(grouping_id_col)?,
+                    indices,
+                );
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::UInt64 => {
+                let result = self.grouping(
+                    as_primitive_array::<UInt64Type>(grouping_id_col)?,
+                    indices,
+                );
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            _ => {
+                internal_err!(
+                    "GROUPING expression requires a primitive array, but got {}",
+                    grouping_id_col.data_type()
+                )
+            }
+        }
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{self}"))
+    }
+
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::new(arrow::datatypes::Field::new(
+            std::format!("{self}"),
+            self.data_type(input_schema)?,
+            self.nullable(input_schema)?,
+        )))
+    }
+
+    fn evaluate_selection(
+        &self,
+        batch: &RecordBatch,
+        selection: &arrow::array::BooleanArray,
+    ) -> Result<ColumnarValue> {
+        let tmp_batch = arrow::compute::filter_record_batch(batch, selection)?;
+
+        let tmp_result = self.evaluate(&tmp_batch)?;
+
+        if batch.num_rows() == tmp_batch.num_rows() {
+            // All values from the `selection` filter are true.
+            Ok(tmp_result)
+        } else if let ColumnarValue::Array(a) = tmp_result {
+            datafusion_physical_expr_common::utils::scatter(selection, a.as_ref())
+                .map(ColumnarValue::Array)
+        } else if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = &tmp_result {
+            // When the scalar is true or false, skip the scatter process
+            if let Some(v) = value {
+                if *v {
+                    Ok(ColumnarValue::from(
+                        Arc::new(selection.clone()) as arrow::array::ArrayRef
+                    ))
+                } else {
+                    Ok(tmp_result)
+                }
+            } else {
+                let array =
+                    arrow::array::BooleanArray::from(std::vec![None; batch.num_rows()]);
+                datafusion_physical_expr_common::utils::scatter(selection, &array)
+                    .map(ColumnarValue::Array)
+            }
+        } else {
+            Ok(tmp_result)
+        }
+    }
+
+    fn evaluate_bounds(
+        &self,
+        _children: &[&datafusion_expr::interval_arithmetic::Interval],
+    ) -> Result<datafusion_expr::interval_arithmetic::Interval> {
+        not_impl_err!("Not implemented for {self}")
+    }
+
+    fn propagate_constraints(
+        &self,
+        _interval: &datafusion_expr::interval_arithmetic::Interval,
+        _children: &[&datafusion_expr::interval_arithmetic::Interval],
+    ) -> Result<Option<Vec<datafusion_expr::interval_arithmetic::Interval>>> {
+        Ok(Some(std::vec![]))
+    }
+
+    fn evaluate_statistics(
+        &self,
+        children: &[&datafusion_expr::statistics::Distribution],
+    ) -> Result<datafusion_expr::statistics::Distribution> {
+        let children_ranges = children
+            .iter()
+            .map(|c| c.range())
+            .collect::<Result<Vec<_>>>()?;
+        let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
+        let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
+        let dt = output_interval.data_type();
+        if dt.eq(&DataType::Boolean) {
+            let p = if output_interval
+                .eq(&datafusion_expr::interval_arithmetic::Interval::CERTAINLY_TRUE)
+            {
+                ScalarValue::new_one(&dt)
+            } else if output_interval
+                .eq(&datafusion_expr::interval_arithmetic::Interval::CERTAINLY_FALSE)
+            {
+                ScalarValue::new_zero(&dt)
+            } else {
+                ScalarValue::try_from(&dt)
+            }?;
+            datafusion_expr::statistics::Distribution::new_bernoulli(p)
+        } else {
+            datafusion_expr::statistics::Distribution::new_from_interval(output_interval)
+        }
+    }
+
+    fn propagate_statistics(
+        &self,
+        parent: &datafusion_expr::statistics::Distribution,
+        children: &[&datafusion_expr::statistics::Distribution],
+    ) -> Result<Option<Vec<datafusion_expr::statistics::Distribution>>> {
+        let children_ranges = children
+            .iter()
+            .map(|c| c.range())
+            .collect::<Result<Vec<_>>>()?;
+        let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
+        let parent_range = parent.range()?;
+        let Some(propagated_children) =
+            self.propagate_constraints(&parent_range, children_ranges_refs.as_slice())?
+        else {
+            return Ok(None);
+        };
+        itertools::izip!(propagated_children.into_iter(), children_ranges, children)
+            .map(|(new_interval, old_interval, child)| {
+                if new_interval == old_interval {
+                    // We weren't able to narrow the range, preserve the old statistics.
+                    Ok((*child).clone())
+                } else if new_interval.data_type().eq(&DataType::Boolean) {
+                    let dt = old_interval.data_type();
+                    let p = if new_interval.eq(&datafusion_expr::interval_arithmetic::Interval::CERTAINLY_TRUE) {
+                        ScalarValue::new_one(&dt)
+                    } else if new_interval.eq(&datafusion_expr::interval_arithmetic::Interval::CERTAINLY_FALSE) {
+                        ScalarValue::new_zero(&dt)
+                    } else {
+                        std::unreachable!("Given that we have a range reduction for a boolean interval, we should have certainty")
+                    }?;
+                    datafusion_expr::statistics::Distribution::new_bernoulli(p)
+                } else {
+                    datafusion_expr::statistics::Distribution::new_from_interval(new_interval)
+                }
+            })
+            .collect::<Result<_>>()
+            .map(Some)
+    }
+
+    fn get_properties(
+        &self,
+        _children: &[datafusion_expr::sort_properties::ExprProperties],
+    ) -> Result<datafusion_expr::sort_properties::ExprProperties> {
+        Ok(datafusion_expr::sort_properties::ExprProperties::new_unknown())
+    }
+
+    fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        // By default, we return None to indicate that this PhysicalExpr does not
+        // have any dynamic references or state.
+        // This is a safe default behavior.
+        Ok(None)
+    }
+
+    fn snapshot_generation(&self) -> u64 {
+        // By default, we return 0 to indicate that this PhysicalExpr does not
+        // have any dynamic references or state.
+        // Since the recursive algorithm XORs the generations of all children the overall
+        // generation will be 0 if no children have a non-zero generation, meaning that
+        // static expressions will always return 0.
+        0
+    }
+
+    fn is_volatile_node(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum AggregateExpr {
+    GroupingExpr(Arc<GroupingExpr>),
+    AggregateFunctionExpr(Arc<AggregateFunctionExpr>),
+}
+
+impl AggregateExpr {
+    pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
+        match self {
+            AggregateExpr::AggregateFunctionExpr(expr) => expr.get_minmax_desc(),
+            _ => None,
+        }
+    }
+
+    pub fn order_bys(&self) -> &[PhysicalSortExpr] {
+        match self {
+            AggregateExpr::AggregateFunctionExpr(expr) => expr.order_bys(),
+            _ => &[],
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            AggregateExpr::GroupingExpr(expr) => &expr.name,
+            AggregateExpr::AggregateFunctionExpr(expr) => &expr.name,
+        }
+    }
+
+    pub fn human_display(&self) -> &str {
+        match self {
+            AggregateExpr::GroupingExpr(expr) => &expr.human_display,
+            AggregateExpr::AggregateFunctionExpr(expr) => &expr.human_display,
+        }
+    }
+}
+
+impl From<Arc<AggregateFunctionExpr>> for AggregateExpr {
+    fn from(expr: Arc<AggregateFunctionExpr>) -> Self {
+        AggregateExpr::AggregateFunctionExpr(expr)
+    }
+}
+
+impl From<Arc<GroupingExpr>> for AggregateExpr {
+    fn from(expr: Arc<GroupingExpr>) -> Self {
+        AggregateExpr::GroupingExpr(expr)
+    }
+}
+
+/// Internal column used when the aggregation is a grouping set.
+///
+/// This column contains a bitmask where each bit represents a grouping
+/// expression. The least significant bit corresponds to the rightmost
+/// grouping expression. A bit value of 0 indicates that the corresponding
+/// column is included in the grouping set, while a value of 1 means it is excluded.
+///
+/// For example, for the grouping expressions CUBE(a, b), the grouping ID
+/// column will have the following values:
+///     0b00: Both `a` and `b` are included
+///     0b01: `b` is excluded
+///     0b10: `a` is excluded
+///     0b11: Both `a` and `b` are excluded
+///
+/// This internal column is necessary because excluded columns are replaced
+/// with `NULL` values. To handle these cases correctly, we must distinguish
+/// between an actual `NULL` value in a column and a column being excluded from the set.
+pub const INTERNAL_GROUPING_ID: &str = "__grouping_id";
