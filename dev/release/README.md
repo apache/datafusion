@@ -79,7 +79,7 @@ git remote add apache git@github.com:apache/datafusion.git
 
 ### Create GitHub Personal Access Token (PAT)
 
-Apersonal access token (PAT) is needed for changelog automation script. If you
+A personal access token (PAT) is needed for changelog automation script. If you
 do not already have one, create a token with the `repo` access by navigating to
 [GitHub Developer Settings] page, and [follow these steps].
 
@@ -214,7 +214,7 @@ Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 While the official release artifacts are signed tarballs and zip files, we also
 tag the commit it was created for convenience and code archaeology. Release tags
 have the format `<version>` (e.g. `38.0.0`), and release candidates have the
-the format `<version>-rc<rc>` (e.g. `38.0.0-rc0`). See [the list of existing
+format `<version>-rc<rc>` (e.g. `38.0.0-rc0`). See [the list of existing
 tags].
 
 [the list of existing tags]: https://github.com/apache/datafusion/tags
@@ -224,7 +224,7 @@ Using a string such as `38.0.0` as the `<version>`, create and push the rc tag b
 ```shell
 git fetch apache
 git tag <version>-<rc> apache/branch-X # create tag from the release branch
-git push apache <version>              # push tag to Github remote
+git push apache <version>-<rc>         # push tag to Github remote
 ```
 
 For example, to create the `50.3.0-rc1 tag from `branch-50`:
@@ -381,7 +381,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 Note: [`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
 so no action is needed.
 
-### 10: Add the release to Apache Reporter
+### 9: Add the release to Apache Reporter
 
 When you have published the release, please help the project by adding the release to
 [Apache Reporter](https://reporter.apache.org/). The reporter system should
@@ -392,7 +392,7 @@ the examples from previous releases.
 The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
-### 11: Delete old RCs and Releases
+### 10: Delete old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
