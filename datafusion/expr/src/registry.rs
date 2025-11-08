@@ -20,7 +20,7 @@
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
-use arrow::datatypes::DataType;
+use arrow_schema::Field;
 use datafusion_common::types::{LogicalTypeRef, NativeType};
 use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
 use std::collections::HashSet;
@@ -218,20 +218,27 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     }
 }
 
-/// TODO
+/// The registration of an extension type.
+///
+/// Implementations of this trait are responsible for *creating* instances of [LogicalType] that
+/// represent the semantics of an extension type. One cannot directly register the [LogicalType]
+/// instances because some extension types may have parameters that are unknown at compile time
+/// (e.g., the unknown type in [Opaque](arrow_schema::extension::Opaque)).
 pub trait ExtensionTypeRegistration: Debug {
-    /// TODO
+    /// The name of the extension type.
+    ///
+    /// This name will be used to find the correct [ExtensionTypeRegistration] when an extension
+    /// type is encountered.
     fn type_name(&self) -> &str;
 
-    /// TODO
-    fn create_logical_type(
-        &self,
-        data_type: DataType,
-        metadata: HashMap<String, String>,
-    ) -> Result<LogicalTypeRef>;
+    /// Creates a logical type instance from the provided `field`.
+    ///
+    /// The resulting [LogicalTypeRef] should only capture the *type information*, not any other
+    /// metadata or nullability information that is part of the field.
+    fn create_logical_type(&self, field: Field) -> Result<LogicalTypeRef>;
 }
 
-/// TODO
+/// A cheaply clonable pointer to an [ExtensionTypeRegistration].
 type ExtensionTypeRegistrationRef = Arc<dyn ExtensionTypeRegistration>;
 
 /// Supports registering custom [LogicalType]s, including native types.
@@ -242,16 +249,12 @@ pub trait ExtensionTypeRegistry {
     fn extension_type(&self, name: &str) -> Result<ExtensionTypeRegistrationRef>;
 
     /// TODO
-    fn create_logical_type_for(
-        &self,
-        data_type: DataType,
-        metadata: HashMap<String, String>,
-    ) -> Result<LogicalTypeRef> {
-        match metadata.get(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY) {
-            None => Ok(Arc::new(NativeType::from(data_type))),
+    fn create_logical_type_for_field(&self, field: Field) -> Result<LogicalTypeRef> {
+        match field.extension_type_name() {
+            None => Ok(Arc::new(NativeType::from(field.data_type()))),
             Some(name) => {
                 let extension_type = self.extension_type(name)?;
-                extension_type.create_logical_type(data_type, metadata)
+                extension_type.create_logical_type(field)
             }
         }
     }
