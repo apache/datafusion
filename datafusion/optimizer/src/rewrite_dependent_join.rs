@@ -32,7 +32,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, Column, HashMap, Result,
 };
 use datafusion_expr::{
-    col, lit, not, Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan,
+    col, lit, Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan,
     LogicalPlanBuilder, Projection,
 };
 
@@ -1034,12 +1034,16 @@ fn normalize_negated_subqueries(expr: &Expr) -> Result<Expr> {
                 Expr::InSubquery(mut in_subquery) if in_subquery.negated => {
                     // Convert negated InSubquery to NOT(InSubquery{negated: false})
                     in_subquery.negated = false;
-                    Ok(Transformed::yes(not(Expr::InSubquery(in_subquery))))
+                    Ok(Transformed::yes(Expr::Not(Box::new(Expr::InSubquery(
+                        in_subquery,
+                    )))))
                 }
-                Expr::Exists(mut exists_subuqery) if exists_subuqery.negated => {
+                Expr::Exists(mut exists_subquery) if exists_subquery.negated => {
                     // Convert negated ExistsSubquery to NOT(ExistsSubquery{negated: false})
-                    exists_subuqery.negated = false;
-                    Ok(Transformed::yes(not(Expr::Exists(exists_subuqery))))
+                    exists_subquery.negated = false;
+                    Ok(Transformed::yes(Expr::Not(Box::new(Expr::Exists(
+                        exists_subquery,
+                    )))))
                 }
                 _ => Ok(Transformed::no(e)),
             }
