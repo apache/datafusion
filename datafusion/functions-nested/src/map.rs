@@ -66,15 +66,6 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match keys_arg {
         ColumnarValue::Array(_) => {
-            // For array inputs, keys is a List array where each element represents
-            // the keys of one map. Some list elements may be NULL, which represents
-            // a NULL map (not a null key within a map).
-            //
-            // We should NOT check keys.null_count() here because:
-            // - list_to_arrays() will flatten the list and skip NULL elements (via flatten())
-            // - Those NULL elements represent NULL maps, which are valid
-            // - Null keys WITHIN maps are checked later in check_unique_keys() and
-            //   make_map_array_internal()
             let row_keys = match key_array.data_type() {
                 DataType::List(_) => list_to_arrays::<i32>(&keys),
                 DataType::LargeList(_) => list_to_arrays::<i64>(&keys),
@@ -87,36 +78,12 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 }
             };
 
-            // Check that keys within each map are unique and non-null
-            // Note: row_keys only contains non-NULL map entries due to flatten()
             row_keys
                 .iter()
-                .try_for_each(|key| check_unique_keys(key.as_ref()))?;
+                .try_for_each(|key| validate_map_keys(key.as_ref()))?;
         }
         ColumnarValue::Scalar(_) => {
-            // For scalar inputs, process based on data type
-            match key_array.data_type() {
-                DataType::List(_)
-                | DataType::LargeList(_)
-                | DataType::FixedSizeList(_, _) => {
-                    // The scalar wraps a List<List<T>> which represents multiple maps
-                    // (e.g., from make_array(['a','b'], NULL, ['c']) in constant evaluation)
-                    // Some list elements may be NULL (representing NULL maps), so we use list_to_arrays
-                    let row_keys = match key_array.data_type() {
-                        DataType::List(_) => list_to_arrays::<i32>(&keys),
-                        DataType::LargeList(_) => list_to_arrays::<i64>(&keys),
-                        DataType::FixedSizeList(_, _) => fixed_size_list_to_arrays(&keys),
-                        _ => unreachable!(),
-                    };
-                    row_keys
-                        .iter()
-                        .try_for_each(|key| check_unique_keys(key.as_ref()))?;
-                }
-                _ => {
-                    // For non-list scalars (e.g., a single array of keys), check directly
-                    check_unique_keys(key_array)?;
-                }
-            }
+            validate_map_keys(key_array)?;
         }
     }
 
@@ -136,15 +103,19 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     make_map_batch_internal(keys, values, can_evaluate_to_const, keys_arg.data_type())
 }
 
-fn check_unique_keys(array: &dyn Array) -> Result<()> {
+/// Validates that map keys are non-null and unique.
+fn validate_map_keys(array: &dyn Array) -> Result<()> {
     let mut seen_keys = HashSet::with_capacity(array.len());
 
     for i in 0..array.len() {
         let key = ScalarValue::try_from_array(array, i)?;
-        // Map keys cannot be null
+
+        // Validation 1: Map keys cannot be null
         if key.is_null() {
             return exec_err!("map key cannot be null");
         }
+
+        // Validation 2: Map keys must be unique
         if seen_keys.contains(&key) {
             return exec_err!("map key must be unique, duplicate key found: {}", key);
         }
@@ -428,9 +399,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     let mut non_null_idx = 0;
 
     for i in 0..original_len {
-        let is_null = nulls_bitmap
-            .as_ref()
-            .map_or(false, |nulls| nulls.is_null(i));
+        let is_null = nulls_bitmap.as_ref().is_some_and(|nulls| nulls.is_null(i));
         if is_null {
             // NULL map: offset doesn't advance (empty range)
             offset_buffer.push(running_offset);
@@ -516,4 +485,115 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
 
     let map_data = map_data_builder.build()?;
     Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_make_map_with_null_maps() {
+        // Test that NULL map values (entire map is NULL) are correctly handled
+        // This test directly calls make_map_batch with a List containing NULL elements
+        //
+        // Background: On main branch, the code would fail with "map key cannot be null"
+        // because it couldn't distinguish between:
+        // - NULL map (entire map is NULL) - should be allowed
+        // - null key within a map - should be rejected
+
+        // Build keys array: [['a'], NULL, ['b']]
+        // The middle NULL represents an entire NULL map, not a null key
+        let mut key_builder =
+            arrow::array::ListBuilder::new(arrow::array::StringBuilder::new());
+
+        // First map: ['a']
+        key_builder.values().append_value("a");
+        key_builder.append(true);
+
+        // Second map: NULL (entire map is NULL)
+        key_builder.append(false);
+
+        // Third map: ['b']
+        key_builder.values().append_value("b");
+        key_builder.append(true);
+
+        let keys_array = Arc::new(key_builder.finish());
+
+        // Build values array: [[1], [2], [3]]
+        let mut value_builder =
+            arrow::array::ListBuilder::new(arrow::array::Int32Builder::new());
+
+        value_builder.values().append_value(1);
+        value_builder.append(true);
+
+        value_builder.values().append_value(2);
+        value_builder.append(true);
+
+        value_builder.values().append_value(3);
+        value_builder.append(true);
+
+        let values_array = Arc::new(value_builder.finish());
+
+        // Call make_map_batch - should succeed
+        let result = make_map_batch(&[
+            ColumnarValue::Array(keys_array),
+            ColumnarValue::Array(values_array),
+        ]);
+
+        assert!(result.is_ok(), "Should handle NULL maps correctly");
+
+        // Verify the result
+        let map_array = match result.unwrap() {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected Array result"),
+        };
+
+        assert_eq!(map_array.len(), 3, "Should have 3 maps");
+        assert!(!map_array.is_null(0), "First map should not be NULL");
+        assert!(map_array.is_null(1), "Second map should be NULL");
+        assert!(!map_array.is_null(2), "Third map should not be NULL");
+    }
+
+    #[test]
+    fn test_make_map_with_null_key_within_map_should_fail() {
+        // Test that null keys WITHIN a map are properly rejected
+        // This ensures the fix doesn't accidentally allow invalid null keys
+
+        // Build keys array: [['a', NULL, 'b']]
+        // The NULL here is a null key within the map, which is invalid
+        let mut key_builder =
+            arrow::array::ListBuilder::new(arrow::array::StringBuilder::new());
+
+        key_builder.values().append_value("a");
+        key_builder.values().append_null(); // Invalid: null key
+        key_builder.values().append_value("b");
+        key_builder.append(true);
+
+        let keys_array = Arc::new(key_builder.finish());
+
+        // Build values array: [[1, 2, 3]]
+        let mut value_builder =
+            arrow::array::ListBuilder::new(arrow::array::Int32Builder::new());
+
+        value_builder.values().append_value(1);
+        value_builder.values().append_value(2);
+        value_builder.values().append_value(3);
+        value_builder.append(true);
+
+        let values_array = Arc::new(value_builder.finish());
+
+        // Call make_map_batch - should fail
+        let result = make_map_batch(&[
+            ColumnarValue::Array(keys_array),
+            ColumnarValue::Array(values_array),
+        ]);
+
+        assert!(result.is_err(), "Should reject null keys within maps");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("cannot be null"),
+            "Error should mention null keys, got: {}",
+            err_msg
+        );
+    }
 }
