@@ -281,7 +281,7 @@ fn has_explicit_timezone(value: &str) -> bool {
     }
 
     // Heuristic: trailing numeric offset like +0500, +05:00, -0330, etc.
-    if let Some(pos) = v.rfind(|c| c == '+' || c == '-') {
+    if let Some(pos) = v.rfind(|c| ['+', '-'].contains(&c)) {
         // Exclude scientific notation like 1.5e+10 (preceded by 'e' or 'E')
         if !(pos > 0
             && v.chars()
@@ -292,7 +292,7 @@ fn has_explicit_timezone(value: &str) -> bool {
             // Ensure the sign likely follows a time component. Look for a separator
             // (space or 'T') before the sign and check for a ':' between that
             // separator and the sign to avoid treating date dashes as offsets.
-            let sep_pos = v[..pos].rfind(|c| c == ' ' || c == 'T' || c == 't');
+            let sep_pos = v[..pos].rfind(|c| [' ', 'T', 't'].contains(&c));
             let has_time_before_sign = if let Some(spos) = sep_pos {
                 v[spos + 1..pos].contains(':')
             } else {
