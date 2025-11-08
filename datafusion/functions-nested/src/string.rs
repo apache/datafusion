@@ -405,20 +405,6 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
                 Ok(arg)
             }
-            FixedSizeList(..) => {
-                let list_array = as_fixed_size_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    compute_array_to_string(
-                        arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
-                        with_null_string,
-                    )?;
-                }
-
-                Ok(arg)
-            }
             LargeList(..) => {
                 let list_array = as_large_list_array(&arr)?;
                 for i in 0..list_array.len() {
