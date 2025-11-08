@@ -283,11 +283,13 @@ impl DiskManager {
 
         let dir_index = rng().random_range(0..local_dirs.len());
         Ok(RefCountedTempFile {
-            _parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
-            tempfile: Builder::new()
-                .tempfile_in(local_dirs[dir_index].as_ref())
-                .map_err(DataFusionError::IoError)?,
-            current_file_disk_usage: 0,
+            parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
+            tempfile: Arc::new(
+                Builder::new()
+                    .tempfile_in(local_dirs[dir_index].as_ref())
+                    .map_err(DataFusionError::IoError)?,
+            ),
+            current_file_disk_usage: Arc::new(AtomicU64::new(0)),
             disk_manager: Arc::clone(self),
         })
     }
@@ -301,17 +303,41 @@ impl DiskManager {
 /// must invoke [`Self::update_disk_usage`] to update the global disk usage counter.
 /// This ensures the disk manager can properly enforce usage limits configured by
 /// [`DiskManager::with_max_temp_directory_size`].
+///
+/// This type is Clone-able, allowing multiple references to the same underlying file.
+/// The file is deleted only when the last reference is dropped.
+///
+/// The parent temporary directory is also kept alive as long as any reference to
+/// this file exists, preventing premature cleanup of the directory.
+///
+/// Once all references to this file are dropped, the file is deleted, and the
+/// disk usage is subtracted from the disk manager's total.
 #[derive(Debug)]
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
     /// it is not cleaned up prior to the NamedTempFile
-    _parent_temp_dir: Arc<TempDir>,
-    tempfile: NamedTempFile,
+    parent_temp_dir: Arc<TempDir>,
+    /// The underlying temporary file, wrapped in Arc to allow cloning
+    tempfile: Arc<NamedTempFile>,
     /// Tracks the current disk usage of this temporary file. See
     /// [`Self::update_disk_usage`] for more details.
-    current_file_disk_usage: u64,
+    ///
+    /// This is wrapped in `Arc<AtomicU64>` so that all clones share the same
+    /// disk usage tracking, preventing incorrect accounting when clones are dropped.
+    current_file_disk_usage: Arc<AtomicU64>,
     /// The disk manager that created and manages this temporary file
     disk_manager: Arc<DiskManager>,
+}
+
+impl Clone for RefCountedTempFile {
+    fn clone(&self) -> Self {
+        Self {
+            parent_temp_dir: Arc::clone(&self.parent_temp_dir),
+            tempfile: Arc::clone(&self.tempfile),
+            current_file_disk_usage: Arc::clone(&self.current_file_disk_usage),
+            disk_manager: Arc::clone(&self.disk_manager),
+        }
+    }
 }
 
 impl RefCountedTempFile {
@@ -320,7 +346,7 @@ impl RefCountedTempFile {
     }
 
     pub fn inner(&self) -> &NamedTempFile {
-        &self.tempfile
+        self.tempfile.as_ref()
     }
 
     /// Updates the global disk usage counter after modifications to the underlying file.
@@ -332,11 +358,14 @@ impl RefCountedTempFile {
         let metadata = self.tempfile.as_file().metadata()?;
         let new_disk_usage = metadata.len();
 
+        // Get the old disk usage
+        let old_disk_usage = self.current_file_disk_usage.load(Ordering::Relaxed);
+
         // Update the global disk usage by:
         // 1. Subtracting the old file size from the global counter
         self.disk_manager
             .used_disk_space
-            .fetch_sub(self.current_file_disk_usage, Ordering::Relaxed);
+            .fetch_sub(old_disk_usage, Ordering::Relaxed);
         // 2. Adding the new file size to the global counter
         self.disk_manager
             .used_disk_space
@@ -352,23 +381,29 @@ impl RefCountedTempFile {
         }
 
         // 4. Update the local file size tracking
-        self.current_file_disk_usage = new_disk_usage;
+        self.current_file_disk_usage
+            .store(new_disk_usage, Ordering::Relaxed);
 
         Ok(())
     }
 
     pub fn current_disk_usage(&self) -> u64 {
-        self.current_file_disk_usage
+        self.current_file_disk_usage.load(Ordering::Relaxed)
     }
 }
 
 /// When the temporary file is dropped, subtract its disk usage from the disk manager's total
 impl Drop for RefCountedTempFile {
     fn drop(&mut self) {
-        // Subtract the current file's disk usage from the global counter
-        self.disk_manager
-            .used_disk_space
-            .fetch_sub(self.current_file_disk_usage, Ordering::Relaxed);
+        // Only subtract disk usage when this is the last reference to the file
+        // Check if we're the last one by seeing if there's only one strong reference
+        // left to the underlying tempfile (the one we're holding)
+        if Arc::strong_count(&self.tempfile) == 1 {
+            let current_usage = self.current_file_disk_usage.load(Ordering::Relaxed);
+            self.disk_manager
+                .used_disk_space
+                .fetch_sub(current_usage, Ordering::Relaxed);
+        }
     }
 }
 
@@ -520,6 +555,192 @@ mod tests {
 
         drop(temp_file);
         assert!(!temp_file_path.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_disk_usage_basic() -> Result<()> {
+        use std::io::Write;
+
+        let dm = Arc::new(DiskManagerBuilder::default().build()?);
+        let mut temp_file = dm.create_tmp_file("Testing")?;
+
+        // Initially, disk usage should be 0
+        assert_eq!(dm.used_disk_space(), 0);
+        assert_eq!(temp_file.current_disk_usage(), 0);
+
+        // Write some data to the file
+        temp_file.inner().as_file().write_all(b"hello world")?;
+        temp_file.update_disk_usage()?;
+
+        // Disk usage should now reflect the written data
+        let expected_usage = temp_file.current_disk_usage();
+        assert!(expected_usage > 0);
+        assert_eq!(dm.used_disk_space(), expected_usage);
+
+        // Write more data
+        temp_file.inner().as_file().write_all(b" more data")?;
+        temp_file.update_disk_usage()?;
+
+        // Disk usage should increase
+        let new_usage = temp_file.current_disk_usage();
+        assert!(new_usage > expected_usage);
+        assert_eq!(dm.used_disk_space(), new_usage);
+
+        // Drop the file
+        drop(temp_file);
+
+        // Disk usage should return to 0
+        assert_eq!(dm.used_disk_space(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_disk_usage_with_clones() -> Result<()> {
+        use std::io::Write;
+
+        let dm = Arc::new(DiskManagerBuilder::default().build()?);
+        let mut temp_file = dm.create_tmp_file("Testing")?;
+
+        // Write some data
+        temp_file.inner().as_file().write_all(b"test data")?;
+        temp_file.update_disk_usage()?;
+
+        let usage_after_write = temp_file.current_disk_usage();
+        assert!(usage_after_write > 0);
+        assert_eq!(dm.used_disk_space(), usage_after_write);
+
+        // Clone the file
+        let clone1 = temp_file.clone();
+        let clone2 = temp_file.clone();
+
+        // All clones should see the same disk usage
+        assert_eq!(clone1.current_disk_usage(), usage_after_write);
+        assert_eq!(clone2.current_disk_usage(), usage_after_write);
+
+        // Global disk usage should still be the same (not multiplied by number of clones)
+        assert_eq!(dm.used_disk_space(), usage_after_write);
+
+        // Write more data through one clone
+        clone1.inner().as_file().write_all(b" more data")?;
+        let mut mutable_clone1 = clone1;
+        mutable_clone1.update_disk_usage()?;
+
+        let new_usage = mutable_clone1.current_disk_usage();
+        assert!(new_usage > usage_after_write);
+
+        // All clones should see the updated disk usage
+        assert_eq!(temp_file.current_disk_usage(), new_usage);
+        assert_eq!(clone2.current_disk_usage(), new_usage);
+        assert_eq!(mutable_clone1.current_disk_usage(), new_usage);
+
+        // Global disk usage should reflect the new size (not multiplied)
+        assert_eq!(dm.used_disk_space(), new_usage);
+
+        // Drop one clone
+        drop(mutable_clone1);
+
+        // Disk usage should NOT change (other clones still exist)
+        assert_eq!(dm.used_disk_space(), new_usage);
+        assert_eq!(temp_file.current_disk_usage(), new_usage);
+        assert_eq!(clone2.current_disk_usage(), new_usage);
+
+        // Drop another clone
+        drop(clone2);
+
+        // Disk usage should still NOT change (original still exists)
+        assert_eq!(dm.used_disk_space(), new_usage);
+        assert_eq!(temp_file.current_disk_usage(), new_usage);
+
+        // Drop the original
+        drop(temp_file);
+
+        // Now disk usage should return to 0 (last reference dropped)
+        assert_eq!(dm.used_disk_space(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_disk_usage_clones_dropped_out_of_order() -> Result<()> {
+        use std::io::Write;
+
+        let dm = Arc::new(DiskManagerBuilder::default().build()?);
+        let mut temp_file = dm.create_tmp_file("Testing")?;
+
+        // Write data
+        temp_file.inner().as_file().write_all(b"test")?;
+        temp_file.update_disk_usage()?;
+
+        let usage = temp_file.current_disk_usage();
+        assert_eq!(dm.used_disk_space(), usage);
+
+        // Create multiple clones
+        let clone1 = temp_file.clone();
+        let clone2 = temp_file.clone();
+        let clone3 = temp_file.clone();
+
+        // Drop the original first (out of order)
+        drop(temp_file);
+
+        // Disk usage should still be tracked (clones exist)
+        assert_eq!(dm.used_disk_space(), usage);
+        assert_eq!(clone1.current_disk_usage(), usage);
+
+        // Drop clones in different order
+        drop(clone2);
+        assert_eq!(dm.used_disk_space(), usage);
+
+        drop(clone1);
+        assert_eq!(dm.used_disk_space(), usage);
+
+        // Drop the last clone
+        drop(clone3);
+
+        // Now disk usage should be 0
+        assert_eq!(dm.used_disk_space(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_disk_usage_multiple_files() -> Result<()> {
+        use std::io::Write;
+
+        let dm = Arc::new(DiskManagerBuilder::default().build()?);
+
+        // Create multiple temp files
+        let mut file1 = dm.create_tmp_file("Testing1")?;
+        let mut file2 = dm.create_tmp_file("Testing2")?;
+
+        // Write to first file
+        file1.inner().as_file().write_all(b"file1")?;
+        file1.update_disk_usage()?;
+        let usage1 = file1.current_disk_usage();
+
+        assert_eq!(dm.used_disk_space(), usage1);
+
+        // Write to second file
+        file2.inner().as_file().write_all(b"file2 data")?;
+        file2.update_disk_usage()?;
+        let usage2 = file2.current_disk_usage();
+
+        // Global usage should be sum of both files
+        assert_eq!(dm.used_disk_space(), usage1 + usage2);
+
+        // Drop first file
+        drop(file1);
+
+        // Usage should only reflect second file
+        assert_eq!(dm.used_disk_space(), usage2);
+
+        // Drop second file
+        drop(file2);
+
+        // Usage should be 0
+        assert_eq!(dm.used_disk_space(), 0);
 
         Ok(())
     }

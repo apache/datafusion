@@ -531,7 +531,6 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///                          / /
     ///                       column2
     /// ```
-    ///
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {

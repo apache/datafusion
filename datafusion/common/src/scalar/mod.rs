@@ -878,10 +878,10 @@ impl Hash for ScalarValue {
 
 fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
     let len = arr.len();
-    let arrays = vec![arr];
     let hashes_buffer = &mut vec![0; len];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-    let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+    let hashes = create_hashes(&[arr], &random_state, hashes_buffer)
+        .expect("hash_nested_array: failed to create row hashes");
     // Hash back to std::hash::Hasher
     hashes.hash(state);
 }
@@ -1734,7 +1734,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match 10_i32.checked_pow((*scale + 1) as u32) {
@@ -1750,7 +1750,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match i64::from(10).checked_pow((*scale + 1) as u32) {
@@ -4407,6 +4407,7 @@ macro_rules! impl_scalar {
 
 impl_scalar!(f64, Float64);
 impl_scalar!(f32, Float32);
+impl_scalar!(f16, Float16);
 impl_scalar!(i8, Int8);
 impl_scalar!(i16, Int16);
 impl_scalar!(i32, Int32);
@@ -4563,6 +4564,7 @@ impl_try_from!(UInt8, u8);
 impl_try_from!(UInt16, u16);
 impl_try_from!(UInt32, u32);
 impl_try_from!(UInt64, u64);
+impl_try_from!(Float16, f16);
 impl_try_from!(Float32, f32);
 impl_try_from!(Float64, f64);
 impl_try_from!(Boolean, bool);
