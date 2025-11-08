@@ -21,9 +21,14 @@ use crate::function::error_utils::{
 use arrow::array::*;
 use arrow::datatypes::DataType;
 use arrow::datatypes::*;
+use arrow::error::ArrowError;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_functions::{
+    downcast_named_arg, make_abs_function, make_decimal_abs_function,
+    make_try_abs_function,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -113,36 +118,8 @@ impl ScalarUDFImpl for SparkAbs {
     }
 }
 
-macro_rules! legacy_compute_op {
-    ($ARRAY:expr, $FUNC:ident, $TYPE:ident, $RESULT:ident) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$TYPE>().unwrap();
-        let res: $RESULT = arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
-        res
-    }};
-}
-
-macro_rules! ansi_compute_op {
-    ($ARRAY:expr, $FUNC:ident, $TYPE:ident, $RESULT:ident, $MIN:expr, $FROM_TYPE:expr) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$TYPE>().unwrap();
-        match arrow::compute::kernels::arity::try_unary(array, |x| {
-            if x == $MIN {
-                Err(arrow::error::ArrowError::ArithmeticOverflow(
-                    $FROM_TYPE.to_string(),
-                ))
-            } else {
-                Ok(x.$FUNC())
-            }
-        }) {
-            Ok(res) => Ok(ColumnarValue::Array(Arc::<PrimitiveArray<$RESULT>>::new(
-                res,
-            ))),
-            Err(_) => Err(arithmetic_overflow_error($FROM_TYPE)),
-        }
-    }};
-}
-
 fn arithmetic_overflow_error(from_type: &str) -> DataFusionError {
-    DataFusionError::Execution(format!("arithmetic overflow from {from_type}"))
+    DataFusionError::Execution(format!("overflow on abs {from_type}"))
 }
 
 pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
@@ -175,171 +152,83 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             | DataType::UInt64 => Ok(args[0].clone()),
             DataType::Int8 => {
                 if !fail_on_error {
-                    let result =
-                        legacy_compute_op!(array, wrapping_abs, Int8Array, Int8Array);
-                    Ok(ColumnarValue::Array(Arc::new(result)))
+                    let abs_fun = make_decimal_abs_function!(Int8Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 } else {
-                    ansi_compute_op!(array, abs, Int8Array, Int8Type, i8::MIN, "Int8")
+                    let abs_fun = make_try_abs_function!(Int8Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 }
             }
             DataType::Int16 => {
                 if !fail_on_error {
-                    let result =
-                        legacy_compute_op!(array, wrapping_abs, Int16Array, Int16Array);
-                    Ok(ColumnarValue::Array(Arc::new(result)))
+                    let abs_fun = make_decimal_abs_function!(Int16Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 } else {
-                    ansi_compute_op!(array, abs, Int16Array, Int16Type, i16::MIN, "Int16")
+                    let abs_fun = make_try_abs_function!(Int16Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 }
             }
             DataType::Int32 => {
                 if !fail_on_error {
-                    let result =
-                        legacy_compute_op!(array, wrapping_abs, Int32Array, Int32Array);
-                    Ok(ColumnarValue::Array(Arc::new(result)))
+                    let abs_fun = make_decimal_abs_function!(Int32Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 } else {
-                    ansi_compute_op!(array, abs, Int32Array, Int32Type, i32::MIN, "Int32")
+                    let abs_fun = make_try_abs_function!(Int32Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 }
             }
             DataType::Int64 => {
                 if !fail_on_error {
-                    let result =
-                        legacy_compute_op!(array, wrapping_abs, Int64Array, Int64Array);
-                    Ok(ColumnarValue::Array(Arc::new(result)))
+                    let abs_fun = make_decimal_abs_function!(Int64Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 } else {
-                    ansi_compute_op!(array, abs, Int64Array, Int64Type, i64::MIN, "Int64")
+                    let abs_fun = make_try_abs_function!(Int64Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 }
             }
             DataType::Float32 => {
-                let result = legacy_compute_op!(array, abs, Float32Array, Float32Array);
-                Ok(ColumnarValue::Array(Arc::new(result)))
+                let abs_fun = make_abs_function!(Float32Array);
+                abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Float64 => {
-                let result = legacy_compute_op!(array, abs, Float64Array, Float64Array);
-                Ok(ColumnarValue::Array(Arc::new(result)))
+                let abs_fun = make_abs_function!(Float64Array);
+                abs_fun(array).map(ColumnarValue::Array)
             }
-            DataType::Decimal128(precision, scale) => {
+            DataType::Decimal128(_, _) => {
                 if !fail_on_error {
-                    let result = legacy_compute_op!(
-                        array,
-                        wrapping_abs,
-                        Decimal128Array,
-                        Decimal128Array
-                    );
-                    let result =
-                        result.with_data_type(DataType::Decimal128(*precision, *scale));
-                    Ok(ColumnarValue::Array(Arc::new(result)))
+                    let abs_fun = make_decimal_abs_function!(Decimal128Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 } else {
-                    // Need to pass precision and scale from input, so not using ansi_compute_op
-                    let input = array.as_any().downcast_ref::<Decimal128Array>();
-                    match input {
-                        Some(i) => {
-                            match arrow::compute::kernels::arity::try_unary(i, |x| {
-                                if x == i128::MIN {
-                                    Err(arrow::error::ArrowError::ArithmeticOverflow(
-                                        "Decimal128".to_string(),
-                                    ))
-                                } else {
-                                    Ok(x.abs())
-                                }
-                            }) {
-                                Ok(res) => Ok(ColumnarValue::Array(Arc::<
-                                    PrimitiveArray<Decimal128Type>,
-                                >::new(
-                                    res.with_data_type(DataType::Decimal128(
-                                        *precision, *scale,
-                                    )),
-                                ))),
-                                Err(_) => Err(arithmetic_overflow_error("Decimal128")),
-                            }
-                        }
-                        _ => Err(DataFusionError::Internal(
-                            "Invalid data type".to_string(),
-                        )),
-                    }
+                    let abs_fun = make_try_abs_function!(Decimal128Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 }
             }
-            DataType::Decimal256(precision, scale) => {
+            DataType::Decimal256(_, _) => {
                 if !fail_on_error {
-                    let result = legacy_compute_op!(
-                        array,
-                        wrapping_abs,
-                        Decimal256Array,
-                        Decimal256Array
-                    );
-                    let result =
-                        result.with_data_type(DataType::Decimal256(*precision, *scale));
-                    Ok(ColumnarValue::Array(Arc::new(result)))
+                    let abs_fun = make_decimal_abs_function!(Decimal256Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 } else {
-                    // Need to pass precision and scale from input, so not using ansi_compute_op
-                    let input = array.as_any().downcast_ref::<Decimal256Array>();
-                    match input {
-                        Some(i) => {
-                            match arrow::compute::kernels::arity::try_unary(i, |x| {
-                                if x == i256::MIN {
-                                    Err(arrow::error::ArrowError::ArithmeticOverflow(
-                                        "Decimal256".to_string(),
-                                    ))
-                                } else {
-                                    Ok(x.wrapping_abs()) // i256 doesn't define abs() method
-                                }
-                            }) {
-                                Ok(res) => Ok(ColumnarValue::Array(Arc::<
-                                    PrimitiveArray<Decimal256Type>,
-                                >::new(
-                                    res.with_data_type(DataType::Decimal256(
-                                        *precision, *scale,
-                                    )),
-                                ))),
-                                Err(_) => Err(arithmetic_overflow_error("Decimal256")),
-                            }
-                        }
-                        _ => Err(DataFusionError::Internal(
-                            "Invalid data type".to_string(),
-                        )),
-                    }
+                    let abs_fun = make_try_abs_function!(Decimal256Array);
+                    abs_fun(array).map(ColumnarValue::Array)
                 }
             }
             DataType::Interval(unit) => match unit {
                 IntervalUnit::YearMonth => {
                     if !fail_on_error {
-                        let result = legacy_compute_op!(
-                            array,
-                            wrapping_abs,
-                            IntervalYearMonthArray,
-                            IntervalYearMonthArray
-                        );
-                        let result = result.with_data_type(DataType::Interval(*unit));
-                        Ok(ColumnarValue::Array(Arc::new(result)))
+                        let abs_fun = make_decimal_abs_function!(IntervalYearMonthArray);
+                        abs_fun(array).map(ColumnarValue::Array)
                     } else {
-                        ansi_compute_op!(
-                            array,
-                            abs,
-                            IntervalYearMonthArray,
-                            IntervalYearMonthType,
-                            i32::MIN,
-                            "IntervalYearMonth"
-                        )
+                        let abs_fun = make_try_abs_function!(IntervalYearMonthArray);
+                        abs_fun(array).map(ColumnarValue::Array)
                     }
                 }
                 IntervalUnit::DayTime => {
                     if !fail_on_error {
-                        let result = legacy_compute_op!(
-                            array,
-                            wrapping_abs,
-                            IntervalDayTimeArray,
-                            IntervalDayTimeArray
-                        );
-                        let result = result.with_data_type(DataType::Interval(*unit));
-                        Ok(ColumnarValue::Array(Arc::new(result)))
+                        let abs_fun = make_decimal_abs_function!(IntervalDayTimeArray);
+                        abs_fun(array).map(ColumnarValue::Array)
                     } else {
-                        ansi_compute_op!(
-                            array,
-                            wrapping_abs,
-                            IntervalDayTimeArray,
-                            IntervalDayTimeType,
-                            IntervalDayTime::MIN,
-                            "IntervalDayTime"
-                        )
+                        let abs_fun = make_try_abs_function!(IntervalDayTimeArray);
+                        abs_fun(array).map(ColumnarValue::Array)
                     }
                 }
                 IntervalUnit::MonthDayNano => internal_err!(
@@ -630,7 +519,7 @@ mod tests {
             match spark_abs(&[args, fail_on_error]) {
                 Err(e) => {
                     assert!(
-                        e.to_string().contains("arithmetic overflow"),
+                        e.to_string().contains("overflow on abs"),
                         "Error message did not match. Actual message: {e}"
                     );
                 }
@@ -654,7 +543,7 @@ mod tests {
             match spark_abs(&[args, fail_on_error]) {
                 Err(e) => {
                     assert!(
-                        e.to_string().contains("arithmetic overflow"),
+                        e.to_string().contains("overflow on abs"),
                         "Error message did not match. Actual message: {e}"
                     );
                 }
@@ -858,7 +747,7 @@ mod tests {
             match spark_abs(&[args, fail_on_error]) {
                 Err(e) => {
                     assert!(
-                        e.to_string().contains("arithmetic overflow"),
+                        e.to_string().contains("overflow on abs"),
                         "Error message did not match. Actual message: {e}"
                     );
                 }

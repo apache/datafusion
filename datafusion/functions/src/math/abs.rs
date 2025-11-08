@@ -39,6 +39,7 @@ use num_traits::sign::Signed;
 
 type MathArrayFunction = fn(&ArrayRef) -> Result<ArrayRef>;
 
+#[macro_export]
 macro_rules! make_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |input: &ArrayRef| {
@@ -49,6 +50,7 @@ macro_rules! make_abs_function {
     }};
 }
 
+#[macro_export]
 macro_rules! make_try_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |input: &ArrayRef| {
@@ -56,7 +58,7 @@ macro_rules! make_try_abs_function {
             let res: $ARRAY_TYPE = array.try_unary(|x| {
                 x.checked_abs().ok_or_else(|| {
                     ArrowError::ComputeError(format!(
-                        "{} overflow on abs({})",
+                        "{} overflow on abs({:?})",
                         stringify!($ARRAY_TYPE),
                         x
                     ))
@@ -67,6 +69,7 @@ macro_rules! make_try_abs_function {
     }};
 }
 
+#[macro_export]
 macro_rules! make_decimal_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |input: &ArrayRef| {
