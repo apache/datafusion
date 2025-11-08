@@ -148,16 +148,16 @@ where
                 // Null scalar is castable to any numeric, creating a non-null expression.
                 // Provide null array explicitly to make result null
                 PrimitiveArray::<O>::new_null(1)
-            } else {          
-              let right = R::Native::try_from(scalar.clone()).map_err(|_| {
-                  DataFusionError::NotImplemented(format!(
-                      "Cannot convert scalar value {} to {}",
-                      &scalar,
-                      R::DATA_TYPE
-                  ))
-              })?;
-              left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
-          }
+            } else {
+                let right = R::Native::try_from(scalar.clone()).map_err(|_| {
+                    DataFusionError::NotImplemented(format!(
+                        "Cannot convert scalar value {} to {}",
+                        &scalar,
+                        R::DATA_TYPE
+                    ))
+                })?;
+                left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
+            }
         }
         ColumnarValue::Array(right) => {
             let right = right.as_primitive::<R>();
