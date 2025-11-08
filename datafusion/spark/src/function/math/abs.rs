@@ -515,17 +515,6 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::cast::{
-        as_decimal128_array, as_decimal256_array, as_float32_array, as_float64_array,
-        as_int16_array, as_int32_array, as_int64_array, as_int8_array,
-        as_interval_dt_array, as_interval_ym_array, as_uint64_array,
-    };
-
-    fn with_fail_on_error<F: Fn(bool) -> Result<()>>(test_fn: F) {
-        for fail_on_error in [true, false] {
-            let _ = test_fn(fail_on_error);
-        }
-    }
 
     #[test]
     fn test_abs_zero_arg() {
