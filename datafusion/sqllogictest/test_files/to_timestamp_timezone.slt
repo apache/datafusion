@@ -83,7 +83,7 @@ SELECT to_timestamp('2020-09-08T13:42:29+05:00');
 query T
 SELECT arrow_typeof(to_timestamp('2020-09-08T13:42:29'));
 ----
-Timestamp(Nanosecond, None)
+Timestamp(ns)
 
 ## Test 11: Configure to offset-based timezone
 statement ok
