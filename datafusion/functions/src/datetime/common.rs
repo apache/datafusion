@@ -270,14 +270,27 @@ fn timestamp_to_naive(value: i64) -> Result<NaiveDateTime> {
 /// Uses chrono for full RFC3339 parsing and a few lightweight heuristics
 /// for other common forms (trailing Z, numeric offsets, named tz tokens).
 fn has_explicit_timezone(value: &str) -> bool {
-    // Fast path: RFC3339 covers many common cases (Z, +HH:MM, etc.)
-    if DateTime::parse_from_rfc3339(value).is_ok() {
+    // Fast, cheap heuristics first (avoid expensive RFC3339 parse on common inputs)
+    let v = value.trim();
+
+    // trailing 'Z' or 'z' indicates UTC
+    if v.ends_with('Z') || v.ends_with('z') {
         return true;
     }
 
-    let v = value.trim();
-    if v.ends_with('Z') || v.ends_with('z') {
+    // Named timezones: IANA names often contain a slash, or common tokens like UTC/GMT
+    let up = v.to_uppercase();
+    if v.contains('/') || up.contains("UTC") || up.contains("GMT") {
         return true;
+    }
+
+    // Common abbreviations like PST, EST, etc.
+    const COMMON_ABBREVIATIONS: [&str; 8] =
+        ["PST", "PDT", "EST", "EDT", "CST", "CDT", "MST", "MDT"];
+    for &abbr in COMMON_ABBREVIATIONS.iter() {
+        if up.contains(abbr) {
+            return true;
+        }
     }
 
     // Heuristic: trailing numeric offset like +0500, +05:00, -0330, etc.
@@ -309,19 +322,9 @@ fn has_explicit_timezone(value: &str) -> bool {
         }
     }
 
-    // Heuristic: named timezones often contain a slash (IANA) or common tokens
-    let up = v.to_uppercase();
-    if v.contains('/') || up.contains("UTC") || up.contains("GMT") {
+    // Last resort: try full RFC3339 parsing (covers additional valid cases)
+    if DateTime::parse_from_rfc3339(value).is_ok() {
         return true;
-    }
-
-    // Common abbreviations like PST, EST, etc.
-    const COMMON_ABBREVIATIONS: [&str; 8] =
-        ["PST", "PDT", "EST", "EDT", "CST", "CDT", "MST", "MDT"];
-    for &abbr in COMMON_ABBREVIATIONS.iter() {
-        if up.contains(abbr) {
-            return true;
-        }
     }
 
     false
