@@ -1427,7 +1427,7 @@ impl PerPartitionStream {
             spill_stream,
             state: StreamState::ReadingMemory,
             remaining_partitions: num_input_partitions,
-            baseline_metrics: baseline_metrics,
+            baseline_metrics,
         }
     }
 
