@@ -1156,7 +1156,7 @@ impl LogicalPlan {
 
     /// Helper for [Self::with_new_exprs] to use when no expressions are expected.
     #[inline]
-    #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
+    #[expect(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
     fn assert_no_expressions(&self, expr: Vec<Expr>) -> Result<()> {
         if !expr.is_empty() {
             return internal_err!("{self:?} should have no exprs, got {:?}", expr);
@@ -1166,7 +1166,7 @@ impl LogicalPlan {
 
     /// Helper for [Self::with_new_exprs] to use when no inputs are expected.
     #[inline]
-    #[allow(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
+    #[expect(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
     fn assert_no_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<()> {
         if !inputs.is_empty() {
             return internal_err!("{self:?} should have no inputs, got: {:?}", inputs);

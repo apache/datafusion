@@ -18,18 +18,18 @@
 //! Math function: `log()`.
 
 use std::any::Any;
-use std::sync::Arc;
 
 use super::power::PowerFunc;
 
 use crate::utils::{calculate_binary_math, decimal128_to_i128};
 use arrow::array::{Array, ArrayRef};
+use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int32Type,
-    Int64Type, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
+use datafusion_common::types::NativeType;
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
@@ -37,11 +37,12 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    lit, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature::*,
+    lit, Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
+    TypeSignature, TypeSignatureClass,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
+use num_traits::Float;
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -72,37 +73,28 @@ impl Default for LogFunc {
 
 impl LogFunc {
     pub fn new() -> Self {
+        // Converts decimals & integers to float64, accepting other floats as is
+        let as_float = Coercion::new_implicit(
+            TypeSignatureClass::Float,
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
             signature: Signature::one_of(
+                // Ensure decimals have precedence over floats since we have
+                // a native decimal implementation for log
                 vec![
-                    Numeric(1),
-                    Numeric(2),
-                    Exact(vec![DataType::Float32, DataType::Float32]),
-                    Exact(vec![DataType::Float64, DataType::Float64]),
-                    Exact(vec![
-                        DataType::Int64,
-                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                    // log(value)
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Decimal,
+                    )]),
+                    TypeSignature::Coercible(vec![as_float.clone()]),
+                    // log(base, value)
+                    TypeSignature::Coercible(vec![
+                        as_float.clone(),
+                        Coercion::new_exact(TypeSignatureClass::Decimal),
                     ]),
-                    Exact(vec![
-                        DataType::Float32,
-                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
-                    ]),
-                    Exact(vec![
-                        DataType::Float64,
-                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
-                    ]),
-                    Exact(vec![
-                        DataType::Int64,
-                        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
-                    ]),
-                    Exact(vec![
-                        DataType::Float32,
-                        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
-                    ]),
-                    Exact(vec![
-                        DataType::Float64,
-                        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
-                    ]),
+                    TypeSignature::Coercible(vec![as_float.clone(), as_float.clone()]),
                 ],
                 Volatility::Immutable,
             ),
@@ -160,6 +152,7 @@ impl ScalarUDFImpl for LogFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         // Check last argument (value)
         match &arg_types.last().ok_or(plan_datafusion_err!("No args"))? {
+            DataType::Float16 => Ok(DataType::Float16),
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
         }
@@ -192,68 +185,67 @@ impl ScalarUDFImpl for LogFunc {
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(&args.args)?;
+        if args.arg_fields.iter().any(|a| a.data_type().is_null()) {
+            return ColumnarValue::Scalar(ScalarValue::Null)
+                .cast_to(args.return_type(), None);
+        }
 
-        let (base, value) = if args.len() == 2 {
-            // note in f64::log params order is different than in sql. e.g in sql log(base, x) == f64::log(x, base)
-            (ColumnarValue::Array(Arc::clone(&args[0])), &args[1])
+        let (base, value) = if args.args.len() == 2 {
+            (args.args[0].clone(), &args.args[1])
         } else {
-            // log(num) - assume base is 10
-            let ret_type = if args[0].data_type().is_null() {
-                &DataType::Float64
-            } else {
-                args[0].data_type()
-            };
+            // no base specified, default to 10
             (
-                ColumnarValue::Array(
-                    ScalarValue::new_ten(ret_type)?.to_array_of_size(args[0].len())?,
-                ),
-                &args[0],
+                ColumnarValue::Scalar(ScalarValue::new_ten(args.return_type())?),
+                &args.args[0],
             )
         };
+        let value = value.to_array(args.number_rows)?;
 
-        // All log functors have format 'log(value, base)'
-        // Therefore, for `calculate_binary_math` the first type means a type of main array
-        // The second type is the type of the base array (even if derived from main)
-        let arr: ArrayRef = match value.data_type() {
-            DataType::Float32 => calculate_binary_math::<
-                Float32Type,
-                Float32Type,
-                Float32Type,
-                _,
-            >(value, &base, |x, b| Ok(f32::log(x, b)))?,
-            DataType::Float64 => calculate_binary_math::<
-                Float64Type,
-                Float64Type,
-                Float64Type,
-                _,
-            >(value, &base, |x, b| Ok(f64::log(x, b)))?,
-            DataType::Int32 => {
-                calculate_binary_math::<Int32Type, Float64Type, Float64Type, _>(
-                    value,
+        let output: ArrayRef = match value.data_type() {
+            DataType::Float16 => {
+                calculate_binary_math::<Float16Type, Float16Type, Float16Type, _>(
+                    &value,
                     &base,
-                    |x, b| Ok(f64::log(x as f64, b)),
+                    |value, base| Ok(value.log(base)),
                 )?
             }
-            DataType::Int64 => {
-                calculate_binary_math::<Int64Type, Float64Type, Float64Type, _>(
-                    value,
+            DataType::Float32 => {
+                calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
+                    &value,
                     &base,
-                    |x, b| Ok(f64::log(x as f64, b)),
+                    |value, base| Ok(value.log(base)),
                 )?
             }
-            DataType::Decimal128(_precision, scale) => {
+            DataType::Float64 => {
+                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
+                    &value,
+                    &base,
+                    |value, base| Ok(value.log(base)),
+                )?
+            }
+            // TODO: native log support for decimal 32 & 64; right now upcast
+            //       to decimal128 to calculate
+            //       https://github.com/apache/datafusion/issues/17555
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale) => {
                 calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
-                    value,
+                    &cast(&value, &DataType::Decimal128(*precision, *scale))?,
                     &base,
-                    |x, b| log_decimal128(x, *scale, b),
+                    |value, base| log_decimal128(value, *scale, base),
                 )?
             }
-            DataType::Decimal256(_precision, scale) => {
-                calculate_binary_math::<Decimal256Type, Float64Type, Float64Type, _>(
-                    value,
+            DataType::Decimal128(_, scale) => {
+                calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
+                    &value,
                     &base,
-                    |x, b| log_decimal256(x, *scale, b),
+                    |value, base| log_decimal128(value, *scale, base),
+                )?
+            }
+            DataType::Decimal256(_, scale) => {
+                calculate_binary_math::<Decimal256Type, Float64Type, Float64Type, _>(
+                    &value,
+                    &base,
+                    |value, base| log_decimal256(value, *scale, base),
                 )?
             }
             other => {
@@ -261,7 +253,7 @@ impl ScalarUDFImpl for LogFunc {
             }
         };
 
-        Ok(ColumnarValue::Array(arr))
+        Ok(ColumnarValue::Array(output))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -277,17 +269,28 @@ impl ScalarUDFImpl for LogFunc {
         mut args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
+        let mut arg_types = args
+            .iter()
+            .map(|arg| info.get_data_type(arg))
+            .collect::<Result<Vec<_>>>()?;
+        let return_type = self.return_type(&arg_types)?;
+
+        // Null propagation
+        if arg_types.iter().any(|dt| dt.is_null()) {
+            return Ok(ExprSimplifyResult::Simplified(lit(
+                ScalarValue::Null.cast_to(&return_type)?
+            )));
+        }
+
         // Args are either
         // log(number)
         // log(base, number)
         let num_args = args.len();
-        if num_args > 2 {
+        if num_args != 1 && num_args != 2 {
             return plan_err!("Expected log to have 1 or 2 arguments, got {num_args}");
         }
-        let number = args.pop().ok_or_else(|| {
-            plan_datafusion_err!("Expected log to have 1 or 2 arguments, got 0")
-        })?;
-        let number_datatype = info.get_data_type(&number)?;
+        let number = args.pop().unwrap();
+        let number_datatype = arg_types.pop().unwrap();
         // default to base 10
         let base = if let Some(base) = args.pop() {
             base
@@ -339,6 +342,7 @@ fn is_pow(func: &ScalarUDF) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use super::*;
 
@@ -352,6 +356,18 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
+
+    #[test]
+    fn test_log_decimal_native() {
+        let value = 10_i128.pow(35);
+        assert_eq!((value as f64).log2(), 116.26748332105768);
+        assert_eq!(
+            log_decimal128(value, 0, 2.0).unwrap(),
+            // TODO: see we're losing our decimal points compared to above
+            //       https://github.com/apache/datafusion/issues/18524
+            116.0
+        );
+    }
 
     #[test]
     fn test_log_invalid_base_type() {
