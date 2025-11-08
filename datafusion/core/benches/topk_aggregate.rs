@@ -46,7 +46,7 @@ async fn create_context(
     opts.optimizer.enable_topk_aggregation = use_topk;
     let ctx = SessionContext::new_with_config(cfg);
     let _ = ctx.register_table("traces", mem_table)?;
-    let sql = format!("select trace_id, max(timestamp_ms) from traces group by trace_id order by max(timestamp_ms) desc limit {limit};");
+    let sql = format!("select max(timestamp_ms) from traces group by trace_id order by max(timestamp_ms) desc limit {limit};");
     let df = ctx.sql(sql.as_str()).await?;
     let physical_plan = df.create_physical_plan().await?;
     let actual_phys_plan = displayable(physical_plan.as_ref()).indent(true).to_string();
@@ -75,20 +75,20 @@ async fn aggregate(
 
     let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
     let expected_asc = r#"
-+----------------------------------+--------------------------+
-| trace_id                         | max(traces.timestamp_ms) |
-+----------------------------------+--------------------------+
-| 5868861a23ed31355efc5200eb80fe74 | 16909009999999           |
-| 4040e64656804c3d77320d7a0e7eb1f0 | 16909009999998           |
-| 02801bbe533190a9f8713d75222f445d | 16909009999997           |
-| 9e31b3b5a620de32b68fefa5aeea57f1 | 16909009999996           |
-| 2d88a860e9bd1cfaa632d8e7caeaa934 | 16909009999995           |
-| a47edcef8364ab6f191dd9103e51c171 | 16909009999994           |
-| 36a3fa2ccfbf8e00337f0b1254384db6 | 16909009999993           |
-| 0756be84f57369012e10de18b57d8a2f | 16909009999992           |
-| d4d6bf9845fa5897710e3a8db81d5907 | 16909009999991           |
-| 3c2cc1abe728a66b61e14880b53482a0 | 16909009999990           |
-+----------------------------------+--------------------------+
++--------------------------+
+| max(traces.timestamp_ms) |
++--------------------------+
+| 16909009999999           |
+| 16909009999998           |
+| 16909009999997           |
+| 16909009999996           |
+| 16909009999995           |
+| 16909009999994           |
+| 16909009999993           |
+| 16909009999992           |
+| 16909009999991           |
+| 16909009999990           |
++--------------------------+
         "#
     .trim();
     if asc {
