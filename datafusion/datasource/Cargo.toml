@@ -74,6 +74,9 @@ zstd = { version = "0.13", optional = true, default-features = false }
 criterion = { workspace = true }
 tempfile = { workspace = true }
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
