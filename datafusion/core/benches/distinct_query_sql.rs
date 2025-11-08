@@ -30,12 +30,13 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
 
 use parking_lot::Mutex;
+use std::hint::black_box;
 use std::{sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
 
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
-    criterion::black_box(rt.block_on(df.collect()).unwrap());
+    black_box(rt.block_on(df.collect()).unwrap());
 }
 
 fn create_context(
@@ -124,8 +125,7 @@ async fn distinct_with_limit(
 }
 
 fn run(rt: &Runtime, plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>) {
-    criterion::black_box(rt.block_on(distinct_with_limit(plan.clone(), ctx.clone())))
-        .unwrap();
+    black_box(rt.block_on(distinct_with_limit(plan.clone(), ctx.clone()))).unwrap();
 }
 
 pub async fn create_context_sampled_data(

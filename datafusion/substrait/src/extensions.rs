@@ -113,11 +113,15 @@ impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
 }
 
 impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
+    // Silence deprecation warnings for `extension_uri_reference` during the uri -> urn migration
+    // See: https://github.com/substrait-io/substrait/issues/856
+    #[allow(deprecated)]
     fn from(val: Extensions) -> Vec<SimpleExtensionDeclaration> {
         let mut extensions = vec![];
         for (f_anchor, f_name) in val.functions {
             let function_extension = ExtensionFunction {
                 extension_uri_reference: u32::MAX,
+                extension_urn_reference: u32::MAX,
                 function_anchor: f_anchor,
                 name: f_name,
             };
@@ -130,6 +134,7 @@ impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
         for (t_anchor, t_name) in val.types {
             let type_extension = ExtensionType {
                 extension_uri_reference: u32::MAX, // https://github.com/apache/datafusion/issues/11545
+                extension_urn_reference: u32::MAX, // https://github.com/apache/datafusion/issues/11545
                 type_anchor: t_anchor,
                 name: t_name,
             };
@@ -142,6 +147,7 @@ impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
         for (tv_anchor, tv_name) in val.type_variations {
             let type_variation_extension = ExtensionTypeVariation {
                 extension_uri_reference: u32::MAX, // We don't register proper extension URIs yet
+                extension_urn_reference: u32::MAX, // We don't register proper extension URIs yet
                 type_variation_anchor: tv_anchor,
                 name: tv_name,
             };

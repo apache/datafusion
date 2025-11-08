@@ -314,7 +314,7 @@ async fn verify_file_encrypted(
         for col in row_group.columns() {
             assert!(matches!(
                 col.crypto_metadata(),
-                Some(ColumnCryptoMetaData::EncryptionWithFooterKey)
+                Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY)
             ));
         }
     }
@@ -336,7 +336,7 @@ impl EncryptionFactory for MockEncryptionFactory {
         config: &EncryptionFactoryOptions,
         _schema: &SchemaRef,
         file_path: &object_store::path::Path,
-    ) -> datafusion_common::Result<Option<FileEncryptionProperties>> {
+    ) -> datafusion_common::Result<Option<Arc<FileEncryptionProperties>>> {
         assert_eq!(
             config.options.get("test_key"),
             Some(&"test value".to_string())
@@ -353,7 +353,7 @@ impl EncryptionFactory for MockEncryptionFactory {
         &self,
         config: &EncryptionFactoryOptions,
         file_path: &object_store::path::Path,
-    ) -> datafusion_common::Result<Option<FileDecryptionProperties>> {
+    ) -> datafusion_common::Result<Option<Arc<FileDecryptionProperties>>> {
         assert_eq!(
             config.options.get("test_key"),
             Some(&"test value".to_string())

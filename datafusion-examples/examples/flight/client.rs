@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use tonic::transport::Endpoint;
 
 use datafusion::arrow::datatypes::Schema;
 
@@ -29,12 +30,13 @@ use datafusion::arrow::util::pretty;
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
 /// Parquet files and executing SQL queries against them on a remote server.
 /// This example is run along-side the example `flight_server`.
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let testdata = datafusion::test_util::parquet_test_data();
 
     // Create Flight client
-    let mut client = FlightServiceClient::connect("http://localhost:50051").await?;
+    let endpoint = Endpoint::new("http://localhost:50051")?;
+    let channel = endpoint.connect().await?;
+    let mut client = FlightServiceClient::new(channel);
 
     // Call get_schema to get the schema of a Parquet file
     let request = tonic::Request::new(FlightDescriptor {

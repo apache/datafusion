@@ -32,6 +32,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -112,7 +115,7 @@ arrow = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.6.0", optional = true }
+bzip2 = { version = "0.6.1", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
@@ -240,6 +243,10 @@ required-features = ["parquet"]
 [[bench]]
 harness = false
 name = "sql_planner"
+
+[[bench]]
+harness = false
+name = "sql_planner_extended"
 
 [[bench]]
 harness = false

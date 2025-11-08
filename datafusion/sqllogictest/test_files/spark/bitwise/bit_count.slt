@@ -59,17 +59,17 @@ SELECT bit_count(1023::int);
 query I
 SELECT bit_count(-1::int);
 ----
-32
+64
 
 query I
 SELECT bit_count(-2::int);
 ----
-31
+63
 
 query I
 SELECT bit_count(-3::int);
 ----
-31
+63
 
 # Tests with different integer types
 query I
@@ -85,7 +85,7 @@ SELECT bit_count(arrow_cast(15, 'Int8'));
 query I
 SELECT bit_count(arrow_cast(-1, 'Int8'));
 ----
-8
+64
 
 query I
 SELECT bit_count(arrow_cast(0, 'Int16'));
@@ -100,7 +100,7 @@ SELECT bit_count(arrow_cast(255, 'Int16'));
 query I
 SELECT bit_count(arrow_cast(-1, 'Int16'));
 ----
-16
+64
 
 query I
 SELECT bit_count(arrow_cast(0, 'Int64'));
@@ -214,7 +214,7 @@ SELECT bit_count(arrow_cast(2147483647, 'Int32'));
 query I
 SELECT bit_count(arrow_cast(-2147483648, 'Int32'));
 ----
-1
+33
 
 query I
 SELECT bit_count(arrow_cast(9223372036854775807, 'Int64'));

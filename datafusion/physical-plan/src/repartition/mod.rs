@@ -32,12 +32,11 @@ use super::{
 };
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
-use crate::metrics::BaselineMetrics;
+use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
-use crate::repartition::distributor_channels::{
-    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
-};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
+use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_pool::{self, SpillPoolWriter};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
@@ -65,32 +64,140 @@ use log::trace;
 use parking_lot::Mutex;
 
 mod distributor_channels;
+use distributor_channels::{
+    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
+};
 
-type MaybeBatch = Option<Result<RecordBatch>>;
+/// A batch in the repartition queue - either in memory or spilled to disk.
+///
+/// This enum represents the two states a batch can be in during repartitioning.
+/// The decision to spill is made based on memory availability when sending a batch
+/// to an output partition.
+///
+/// # Batch Flow with Spilling
+///
+/// ```text
+/// Input Stream ──▶ Partition Logic ──▶ try_grow()
+///                                            │
+///                            ┌───────────────┴────────────────┐
+///                            │                                │
+///                            ▼                                ▼
+///                   try_grow() succeeds            try_grow() fails
+///                   (Memory Available)              (Memory Pressure)
+///                            │                                │
+///                            ▼                                ▼
+///                  RepartitionBatch::Memory         spill_writer.push_batch()
+///                  (batch held in memory)           (batch written to disk)
+///                            │                                │
+///                            │                                ▼
+///                            │                      RepartitionBatch::Spilled
+///                            │                      (marker - no batch data)
+///                            │                                │
+///                            └────────┬───────────────────────┘
+///                                     │
+///                                     ▼
+///                              Send to channel
+///                                     │
+///                                     ▼
+///                            Output Stream (poll)
+///                                     │
+///                      ┌──────────────┴─────────────┐
+///                      │                            │
+///                      ▼                            ▼
+///         RepartitionBatch::Memory      RepartitionBatch::Spilled
+///         Return batch immediately       Poll spill_stream (blocks)
+///                      │                            │
+///                      └────────┬───────────────────┘
+///                               │
+///                               ▼
+///                          Return batch
+///                    (FIFO order preserved)
+/// ```
+///
+/// See [`RepartitionExec`] for overall architecture and [`StreamState`] for
+/// the state machine that handles reading these batches.
+#[derive(Debug)]
+enum RepartitionBatch {
+    /// Batch held in memory (counts against memory reservation)
+    Memory(RecordBatch),
+    /// Marker indicating a batch was spilled to the partition's SpillPool.
+    /// The actual batch can be retrieved by reading from the SpillPoolStream.
+    /// This variant contains no data itself - it's just a signal to the reader
+    /// to fetch the next batch from the spill stream.
+    Spilled,
+}
+
+type MaybeBatch = Option<Result<RepartitionBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
 
-#[derive(Debug)]
+/// Output channel with its associated memory reservation and spill writer
+struct OutputChannel {
+    sender: DistributionSender<MaybeBatch>,
+    reservation: SharedMemoryReservation,
+    spill_writer: SpillPoolWriter,
+}
+
+/// Channels and resources for a single output partition.
+///
+/// Each output partition has channels to receive data from all input partitions.
+/// To handle memory pressure, each (input, output) pair gets its own
+/// [`SpillPool`](crate::spill::spill_pool) channel via [`spill_pool::channel`].
+///
+/// # Structure
+///
+/// For an output partition receiving from N input partitions:
+/// - `tx`: N senders (one per input) for sending batches to this output
+/// - `rx`: N receivers (one per input) for receiving batches at this output
+/// - `spill_writers`: N spill writers (one per input) for writing spilled data
+/// - `spill_readers`: N spill readers (one per input) for reading spilled data
+///
+/// This 1:1 mapping between input partitions and spill channels ensures that
+/// batches from each input are processed in FIFO order, even when some batches
+/// are spilled to disk and others remain in memory.
+///
+/// See [`RepartitionExec`] for the overall N×M architecture.
+///
+/// [`spill_pool::channel`]: crate::spill::spill_pool::channel
+struct PartitionChannels {
+    /// Senders for each input partition to send data to this output partition
+    tx: InputPartitionsToCurrentPartitionSender,
+    /// Receivers for each input partition sending data to this output partition
+    rx: InputPartitionsToCurrentPartitionReceiver,
+    /// Memory reservation for this output partition
+    reservation: SharedMemoryReservation,
+    /// Spill writers for writing spilled data.
+    /// SpillPoolWriter is Clone, so multiple writers can share state in non-preserve-order mode.
+    spill_writers: Vec<SpillPoolWriter>,
+    /// Spill readers for reading spilled data - one per input partition (FIFO semantics).
+    /// Each (input, output) pair gets its own reader to maintain proper ordering.
+    spill_readers: Vec<SendableRecordBatchStream>,
+}
+
 struct ConsumingInputStreamsState {
     /// Channels for sending batches from input partitions to output partitions.
     /// Key is the partition number.
-    channels: HashMap<
-        usize,
-        (
-            InputPartitionsToCurrentPartitionSender,
-            InputPartitionsToCurrentPartitionReceiver,
-            SharedMemoryReservation,
-        ),
-    >,
+    channels: HashMap<usize, PartitionChannels>,
 
-    /// Helper that ensures that that background job is killed once it is no longer needed.
+    /// Helper that ensures that background jobs are killed once they are no longer needed.
     abort_helper: Arc<Vec<SpawnedTask<()>>>,
 }
 
+impl Debug for ConsumingInputStreamsState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConsumingInputStreamsState")
+            .field("num_channels", &self.channels.len())
+            .field("abort_helper", &self.abort_helper)
+            .finish()
+    }
+}
+
 /// Inner state of [`RepartitionExec`].
+#[derive(Default)]
 enum RepartitionExecState {
     /// Not initialized yet. This is the default state stored in the RepartitionExec node
     /// upon instantiation.
+    #[default]
     NotInitialized,
     /// Input streams are initialized, but they are still not being consumed. The node
     /// transitions to this state when the arrow's RecordBatch stream is created in
@@ -99,12 +206,6 @@ enum RepartitionExecState {
     /// The input streams are being consumed. The node transitions to this state when
     /// the first message in the arrow's RecordBatch stream is consumed.
     ConsumingInputStreams(ConsumingInputStreamsState),
-}
-
-impl Default for RepartitionExecState {
-    fn default() -> Self {
-        Self::NotInitialized
-    }
 }
 
 impl Debug for RepartitionExecState {
@@ -149,6 +250,7 @@ impl RepartitionExecState {
         Ok(())
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn consume_input_streams(
         &mut self,
         input: Arc<dyn ExecutionPlan>,
@@ -157,12 +259,13 @@ impl RepartitionExecState {
         preserve_order: bool,
         name: String,
         context: Arc<TaskContext>,
+        spill_manager: SpillManager,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
                 self.ensure_input_streams_initialized(
-                    input,
-                    metrics,
+                    Arc::clone(&input),
+                    metrics.clone(),
                     partitioning.partition_count(),
                     Arc::clone(&context),
                 )?;
@@ -180,17 +283,19 @@ impl RepartitionExecState {
         let num_input_partitions = streams_and_metrics.len();
         let num_output_partitions = partitioning.partition_count();
 
+        let spill_manager = Arc::new(spill_manager);
+
         let (txs, rxs) = if preserve_order {
-            let (txs, rxs) =
+            // Create partition-aware channels with one channel per (input, output) pair
+            // This provides backpressure while maintaining proper ordering
+            let (txs_all, rxs_all) =
                 partition_aware_channels(num_input_partitions, num_output_partitions);
             // Take transpose of senders and receivers. `state.channels` keeps track of entries per output partition
-            let txs = transpose(txs);
-            let rxs = transpose(rxs);
+            let txs = transpose(txs_all);
+            let rxs = transpose(rxs_all);
             (txs, rxs)
         } else {
-            // create one channel per *output* partition
-            // note we use a custom channel that ensures there is always data for each receiver
-            // but limits the amount of buffering if required.
+            // Create one channel per *output* partition with backpressure
             let (txs, rxs) = channels(num_output_partitions);
             // Clone sender for each input partitions
             let txs = txs
@@ -205,9 +310,39 @@ impl RepartitionExecState {
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
             let reservation = Arc::new(Mutex::new(
                 MemoryConsumer::new(format!("{name}[{partition}]"))
+                    .with_can_spill(true)
                     .register(context.memory_pool()),
             ));
-            channels.insert(partition, (tx, rx, reservation));
+
+            // Create spill channels based on mode:
+            // - preserve_order: one spill channel per (input, output) pair for proper FIFO ordering
+            // - non-preserve-order: one shared spill channel per output partition since all inputs
+            //   share the same receiver
+            let max_file_size = context
+                .session_config()
+                .options()
+                .execution
+                .max_spill_file_size_bytes;
+            let num_spill_channels = if preserve_order {
+                num_input_partitions
+            } else {
+                1
+            };
+            let (spill_writers, spill_readers): (Vec<_>, Vec<_>) = (0
+                ..num_spill_channels)
+                .map(|_| spill_pool::channel(max_file_size, Arc::clone(&spill_manager)))
+                .unzip();
+
+            channels.insert(
+                partition,
+                PartitionChannels {
+                    tx,
+                    rx,
+                    reservation,
+                    spill_readers,
+                    spill_writers,
+                },
+            );
         }
 
         // launch one async task per *input* partition
@@ -217,26 +352,39 @@ impl RepartitionExecState {
         {
             let txs: HashMap<_, _> = channels
                 .iter()
-                .map(|(partition, (tx, _rx, reservation))| {
-                    (*partition, (tx[i].clone(), Arc::clone(reservation)))
+                .map(|(partition, channels)| {
+                    // In preserve_order mode: each input gets its own spill writer (index i)
+                    // In non-preserve-order mode: all inputs share spill writer 0 via clone
+                    let spill_writer_idx = if preserve_order { i } else { 0 };
+                    (
+                        *partition,
+                        OutputChannel {
+                            sender: channels.tx[i].clone(),
+                            reservation: Arc::clone(&channels.reservation),
+                            spill_writer: channels.spill_writers[spill_writer_idx]
+                                .clone(),
+                        },
+                    )
                 })
+                .collect();
+
+            // Extract senders for wait_for_task before moving txs
+            let senders: HashMap<_, _> = txs
+                .iter()
+                .map(|(partition, channel)| (*partition, channel.sender.clone()))
                 .collect();
 
             let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
                 stream,
-                txs.clone(),
+                txs,
                 partitioning.clone(),
                 metrics,
             ));
 
             // In a separate task, wait for each input to be done
             // (and pass along any errors, including panic!s)
-            let wait_for_task = SpawnedTask::spawn(RepartitionExec::wait_for_task(
-                input_task,
-                txs.into_iter()
-                    .map(|(partition, (tx, _reservation))| (partition, tx))
-                    .collect(),
-            ));
+            let wait_for_task =
+                SpawnedTask::spawn(RepartitionExec::wait_for_task(input_task, senders));
             spawned_tasks.push(wait_for_task);
         }
         *self = Self::ConsumingInputStreams(ConsumingInputStreamsState {
@@ -430,10 +578,10 @@ impl BatchPartitioner {
 ///        │                  │                  │
 ///        │                  │                  │
 ///        │                  │                  │
-///┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-///│    GroupBy    │  │    GroupBy    │  │    GroupBy    │
-///│   (Partial)   │  │   (Partial)   │  │   (Partial)   │
-///└───────────────┘  └───────────────┘  └───────────────┘
+/// ┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+/// │    GroupBy    │  │    GroupBy    │  │    GroupBy    │
+/// │   (Partial)   │  │   (Partial)   │  │   (Partial)   │
+/// └───────────────┘  └───────────────┘  └───────────────┘
 ///        ▲                  ▲                  ▲
 ///        └──────────────────┼──────────────────┘
 ///                           │
@@ -452,7 +600,7 @@ impl BatchPartitioner {
 ///     ╲               ╱           ╲               ╱
 ///      '─.         ,─'             '─.         ,─'
 ///         `───────'                   `───────'
-///```
+/// ```
 ///
 /// # Error Handling
 ///
@@ -464,6 +612,38 @@ impl BatchPartitioner {
 /// If more than one stream is being repartitioned, the output will be some
 /// arbitrary interleaving (and thus unordered) unless
 /// [`Self::with_preserve_order`] specifies otherwise.
+///
+/// # Spilling Architecture
+///
+/// RepartitionExec uses [`SpillPool`](crate::spill::spill_pool) channels to handle
+/// memory pressure during repartitioning. Each (input partition, output partition)
+/// pair gets its own SpillPool channel for FIFO ordering.
+///
+/// ```text
+/// Input Partitions (N)          Output Partitions (M)
+/// ────────────────────          ─────────────────────
+///
+///    Input 0 ──┐                      ┌──▶ Output 0
+///              │  ┌──────────────┐    │
+///              ├─▶│ SpillPool    │────┤
+///              │  │ [In0→Out0]   │    │
+///    Input 1 ──┤  └──────────────┘    ├──▶ Output 1
+///              │                       │
+///              │  ┌──────────────┐    │
+///              ├─▶│ SpillPool    │────┤
+///              │  │ [In1→Out0]   │    │
+///    Input 2 ──┤  └──────────────┘    ├──▶ Output 2
+///              │                      │
+///              │       ... (N×M SpillPools total)
+///              │                      │
+///              │  ┌──────────────┐    │
+///              └─▶│ SpillPool    │────┘
+///                 │ [InN→OutM]   │
+///                 └──────────────┘
+///
+/// Each SpillPool maintains FIFO order for its (input, output) pair.
+/// See `RepartitionBatch` for details on the memory/spill decision logic.
+/// ```
 ///
 /// # Footnote
 ///
@@ -544,7 +724,7 @@ impl RepartitionExec {
         &self.cache.partitioning
     }
 
-    /// Get preserve_order flag of the RepartitionExecutor
+    /// Get preserve_order flag of the RepartitionExec
     /// `true` means `SortPreservingRepartitionExec`, `false` means `RepartitionExec`
     pub fn preserve_order(&self) -> bool {
         self.preserve_order
@@ -650,6 +830,8 @@ impl ExecutionPlan for RepartitionExec {
             partition
         );
 
+        let spill_metrics = SpillMetrics::new(&self.metrics, partition);
+
         let input = Arc::clone(&self.input);
         let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
@@ -657,6 +839,12 @@ impl ExecutionPlan for RepartitionExec {
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
+
+        let spill_manager = SpillManager::new(
+            Arc::clone(&context.runtime_env()),
+            spill_metrics,
+            input.schema(),
+        );
 
         // Get existing ordering to use for merging
         let sort_exprs = self.sort_exprs().cloned();
@@ -671,11 +859,11 @@ impl ExecutionPlan for RepartitionExec {
             )?;
         }
 
-        let stream = futures::stream::once(async move {
-            let num_input_partitions = input.output_partitioning().partition_count();
+        let num_input_partitions = input.output_partitioning().partition_count();
 
+        let stream = futures::stream::once(async move {
             // lock scope
-            let (mut rx, reservation, abort_helper) = {
+            let (rx, reservation, spill_readers, abort_helper) = {
                 // lock mutexes
                 let mut state = state.lock();
                 let state = state.consume_input_streams(
@@ -685,16 +873,27 @@ impl ExecutionPlan for RepartitionExec {
                     preserve_order,
                     name.clone(),
                     Arc::clone(&context),
+                    spill_manager.clone(),
                 )?;
 
                 // now return stream for the specified *output* partition which will
                 // read from the channel
-                let (_tx, rx, reservation) = state
+                let PartitionChannels {
+                    rx,
+                    reservation,
+                    spill_readers,
+                    ..
+                } = state
                     .channels
                     .remove(&partition)
                     .expect("partition not used yet");
 
-                (rx, reservation, Arc::clone(&state.abort_helper))
+                (
+                    rx,
+                    reservation,
+                    spill_readers,
+                    Arc::clone(&state.abort_helper),
+                )
             };
 
             trace!(
@@ -703,15 +902,20 @@ impl ExecutionPlan for RepartitionExec {
 
             if preserve_order {
                 // Store streams from all the input partitions:
+                // Each input partition gets its own spill reader to maintain proper FIFO ordering
                 let input_streams = rx
                     .into_iter()
-                    .map(|receiver| {
-                        Box::pin(PerPartitionStream {
-                            schema: Arc::clone(&schema_captured),
+                    .zip(spill_readers)
+                    .map(|(receiver, spill_stream)| {
+                        // In preserve_order mode, each receiver corresponds to exactly one input partition
+                        Box::pin(PerPartitionStream::new(
+                            Arc::clone(&schema_captured),
                             receiver,
-                            _drop_helper: Arc::clone(&abort_helper),
-                            reservation: Arc::clone(&reservation),
-                        }) as SendableRecordBatchStream
+                            Arc::clone(&abort_helper),
+                            Arc::clone(&reservation),
+                            spill_stream,
+                            1, // Each receiver handles one input partition
+                        )) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
                 // Note that receiver size (`rx.len()`) and `num_input_partitions` are same.
@@ -730,16 +934,25 @@ impl ExecutionPlan for RepartitionExec {
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(fetch)
                     .with_reservation(merge_reservation)
+                    .with_spill_manager(spill_manager)
                     .build()
             } else {
-                Ok(Box::pin(RepartitionStream {
-                    num_input_partitions,
-                    num_input_partitions_processed: 0,
-                    schema: input.schema(),
-                    input: rx.swap_remove(0),
-                    _drop_helper: abort_helper,
+                // Non-preserve-order case: single input stream, so use the first spill reader
+                let spill_stream = spill_readers
+                    .into_iter()
+                    .next()
+                    .expect("at least one spill reader should exist");
+
+                Ok(Box::pin(PerPartitionStream::new(
+                    schema_captured,
+                    rx.into_iter()
+                        .next()
+                        .expect("at least one receiver should exist"),
+                    abort_helper,
                     reservation,
-                }) as SendableRecordBatchStream)
+                    spill_stream,
+                    num_input_partitions,
+                )) as SendableRecordBatchStream)
             }
         })
         .try_flatten();
@@ -974,13 +1187,10 @@ impl RepartitionExec {
     /// Pulls data from the specified input plan, feeding it to the
     /// output partitions based on the desired partitioning
     ///
-    /// txs hold the output sending channels for each output partition
+    /// `output_channels` holds the output sending channels for each output partition
     async fn pull_from_input(
         mut stream: SendableRecordBatchStream,
-        mut output_channels: HashMap<
-            usize,
-            (DistributionSender<MaybeBatch>, SharedMemoryReservation),
-        >,
+        mut output_channels: HashMap<usize, OutputChannel>,
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
     ) -> Result<()> {
@@ -1001,18 +1211,39 @@ impl RepartitionExec {
                 None => break,
             };
 
+            // Handle empty batch
+            if batch.num_rows() == 0 {
+                continue;
+            }
+
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
                 let size = batch.get_array_memory_size();
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
-                if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
-                    reservation.lock().try_grow(size)?;
+                if let Some(channel) = output_channels.get_mut(&partition) {
+                    let (batch_to_send, is_memory_batch) =
+                        match channel.reservation.lock().try_grow(size) {
+                            Ok(_) => {
+                                // Memory available - send in-memory batch
+                                (RepartitionBatch::Memory(batch), true)
+                            }
+                            Err(_) => {
+                                // We're memory limited - spill to SpillPool
+                                // SpillPool handles file handle reuse and rotation
+                                channel.spill_writer.push_batch(&batch)?;
+                                // Send marker indicating batch was spilled
+                                (RepartitionBatch::Spilled, false)
+                            }
+                        };
 
-                    if tx.send(Some(Ok(batch))).await.is_err() {
+                    if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                        reservation.lock().shrink(size);
+                        // Only shrink memory if it was a memory batch
+                        if is_memory_batch {
+                            channel.reservation.lock().shrink(size);
+                        }
                         output_channels.remove(&partition);
                     }
                 }
@@ -1043,6 +1274,8 @@ impl RepartitionExec {
             }
         }
 
+        // Spill writers will auto-finalize when dropped
+        // No need for explicit flush
         Ok(())
     }
 
@@ -1085,7 +1318,7 @@ impl RepartitionExec {
             // Input task completed successfully
             Ok(Ok(())) => {
                 // notify each output partition that this input partition has no more data
-                for (_, tx) in txs {
+                for (_partition, tx) in txs {
                     tx.send(None).await.ok();
                 }
             }
@@ -1093,71 +1326,55 @@ impl RepartitionExec {
     }
 }
 
-struct RepartitionStream {
-    /// Number of input partitions that will be sending batches to this output channel
-    num_input_partitions: usize,
-
-    /// Number of input partitions that have finished sending batches to this output channel
-    num_input_partitions_processed: usize,
-
-    /// Schema wrapped by Arc
-    schema: SchemaRef,
-
-    /// channel containing the repartitioned batches
-    input: DistributionReceiver<MaybeBatch>,
-
-    /// Handle to ensure background tasks are killed when no longer needed.
-    _drop_helper: Arc<Vec<SpawnedTask<()>>>,
-
-    /// Memory reservation.
-    reservation: SharedMemoryReservation,
-}
-
-impl Stream for RepartitionStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        loop {
-            match self.input.recv().poll_unpin(cx) {
-                Poll::Ready(Some(Some(v))) => {
-                    if let Ok(batch) = &v {
-                        self.reservation
-                            .lock()
-                            .shrink(batch.get_array_memory_size());
-                    }
-
-                    return Poll::Ready(Some(v));
-                }
-                Poll::Ready(Some(None)) => {
-                    self.num_input_partitions_processed += 1;
-
-                    if self.num_input_partitions == self.num_input_partitions_processed {
-                        // all input partitions have finished sending batches
-                        return Poll::Ready(None);
-                    } else {
-                        // other partitions still have data to send
-                        continue;
-                    }
-                }
-                Poll::Ready(None) => {
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    return Poll::Pending;
-                }
-            }
-        }
-    }
-}
-
-impl RecordBatchStream for RepartitionStream {
-    /// Get the schema
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
+/// State for tracking whether we're reading from memory channel or spill stream.
+///
+/// This state machine ensures proper ordering when batches are mixed between memory
+/// and spilled storage. When a [`RepartitionBatch::Spilled`] marker is received,
+/// the stream must block on the spill stream until the corresponding batch arrives.
+///
+/// # State Machine
+///
+/// ```text
+///                        ┌─────────────────┐
+///                   ┌───▶│  ReadingMemory  │◀───┐
+///                   │    └────────┬────────┘    │
+///                   │             │             │
+///                   │     Poll channel          │
+///                   │             │             │
+///                   │  ┌──────────┼─────────────┐
+///                   │  │          │             │
+///                   │  ▼          ▼             │
+///                   │ Memory   Spilled          │
+///       Got batch   │ batch    marker           │
+///       from spill  │  │          │             │
+///                   │  │          ▼             │
+///                   │  │  ┌──────────────────┐  │
+///                   │  │  │ ReadingSpilled   │  │
+///                   │  │  └────────┬─────────┘  │
+///                   │  │           │            │
+///                   │  │   Poll spill_stream    │
+///                   │  │           │            │
+///                   │  │           ▼            │
+///                   │  │      Get batch         │
+///                   │  │           │            │
+///                   └──┴───────────┴────────────┘
+///                                  │
+///                                  ▼
+///                           Return batch
+///                     (Order preserved within
+///                      (input, output) pair)
+/// ```
+///
+/// The transition to `ReadingSpilled` blocks further channel polling to maintain
+/// FIFO ordering - we cannot read the next item from the channel until the spill
+/// stream provides the current batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamState {
+    /// Reading from the memory channel (normal operation)
+    ReadingMemory,
+    /// Waiting for a spilled batch from the spill stream.
+    /// Must not poll channel until spilled batch is received to preserve ordering.
+    ReadingSpilled,
 }
 
 /// This struct converts a receiver to a stream.
@@ -1174,6 +1391,38 @@ struct PerPartitionStream {
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
+
+    /// Infinite stream for reading from the spill pool
+    spill_stream: SendableRecordBatchStream,
+
+    /// Internal state indicating if we are reading from memory or spill stream
+    state: StreamState,
+
+    /// Number of input partitions that have not yet finished.
+    /// In non-preserve-order mode, multiple input partitions send to the same channel,
+    /// each sending None when complete. We must wait for all of them.
+    remaining_partitions: usize,
+}
+
+impl PerPartitionStream {
+    fn new(
+        schema: SchemaRef,
+        receiver: DistributionReceiver<MaybeBatch>,
+        drop_helper: Arc<Vec<SpawnedTask<()>>>,
+        reservation: SharedMemoryReservation,
+        spill_stream: SendableRecordBatchStream,
+        num_input_partitions: usize,
+    ) -> Self {
+        Self {
+            schema,
+            receiver,
+            _drop_helper: drop_helper,
+            reservation,
+            spill_stream,
+            state: StreamState::ReadingMemory,
+            remaining_partitions: num_input_partitions,
+        }
+    }
 }
 
 impl Stream for PerPartitionStream {
@@ -1183,21 +1432,78 @@ impl Stream for PerPartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        match self.receiver.recv().poll_unpin(cx) {
-            Poll::Ready(Some(Some(v))) => {
-                if let Ok(batch) = &v {
-                    self.reservation
-                        .lock()
-                        .shrink(batch.get_array_memory_size());
+        use futures::StreamExt;
+
+        loop {
+            match self.state {
+                StreamState::ReadingMemory => {
+                    // Poll the memory channel for next message
+                    let value = match self.receiver.recv().poll_unpin(cx) {
+                        Poll::Ready(v) => v,
+                        Poll::Pending => {
+                            // Nothing from channel, wait
+                            return Poll::Pending;
+                        }
+                    };
+
+                    match value {
+                        Some(Some(v)) => match v {
+                            Ok(RepartitionBatch::Memory(batch)) => {
+                                // Release memory and return batch
+                                self.reservation
+                                    .lock()
+                                    .shrink(batch.get_array_memory_size());
+                                return Poll::Ready(Some(Ok(batch)));
+                            }
+                            Ok(RepartitionBatch::Spilled) => {
+                                // Batch was spilled, transition to reading from spill stream
+                                // We must block on spill stream until we get the batch
+                                // to preserve ordering
+                                self.state = StreamState::ReadingSpilled;
+                                continue;
+                            }
+                            Err(e) => {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        },
+                        Some(None) => {
+                            // One input partition finished
+                            self.remaining_partitions -= 1;
+                            if self.remaining_partitions == 0 {
+                                // All input partitions finished
+                                return Poll::Ready(None);
+                            }
+                            // Continue to poll for more data from other partitions
+                            continue;
+                        }
+                        None => {
+                            // Channel closed unexpectedly
+                            return Poll::Ready(None);
+                        }
+                    }
                 }
-                Poll::Ready(Some(v))
+                StreamState::ReadingSpilled => {
+                    // Poll spill stream for the spilled batch
+                    match self.spill_stream.poll_next_unpin(cx) {
+                        Poll::Ready(Some(Ok(batch))) => {
+                            self.state = StreamState::ReadingMemory;
+                            return Poll::Ready(Some(Ok(batch)));
+                        }
+                        Poll::Ready(Some(Err(e))) => {
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                        Poll::Ready(None) => {
+                            // Spill stream ended, keep draining the memory channel
+                            self.state = StreamState::ReadingMemory;
+                        }
+                        Poll::Pending => {
+                            // Spilled batch not ready yet, must wait
+                            // This preserves ordering by blocking until spill data arrives
+                            return Poll::Pending;
+                        }
+                    }
+                }
             }
-            Poll::Ready(Some(None)) => {
-                // Input partition has finished sending batches
-                Poll::Ready(None)
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -1229,8 +1535,8 @@ mod tests {
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_common::{arrow_datafusion_err, exec_err};
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use insta::assert_snapshot;
@@ -1712,14 +2018,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oom() -> Result<()> {
-        // define input partitions
+    async fn repartition_with_spilling() -> Result<()> {
+        // Test that repartition successfully spills to disk when memory is constrained
         let schema = test_schema();
         let partition = create_vec_batches(50);
         let input_partitions = vec![partition];
         let partitioning = Partitioning::RoundRobinBatch(4);
 
-        // setup up context
+        // Set up context with very tight memory limit to force spilling
         let runtime = RuntimeEnvBuilder::default()
             .with_memory_limit(1, 1.0)
             .build_arc()?;
@@ -1732,11 +2038,203 @@ mod tests {
             TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
         let exec = RepartitionExec::try_new(exec, partitioning)?;
 
-        // pull partitions
+        // Collect all partitions - should succeed by spilling to disk
+        let mut total_rows = 0;
         for i in 0..exec.partitioning().partition_count() {
             let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            let err =
-                arrow_datafusion_err!(stream.next().await.unwrap().unwrap_err().into());
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                total_rows += batch.num_rows();
+            }
+        }
+
+        // Verify we got all the data (50 batches * 8 rows each)
+        assert_eq!(total_rows, 50 * 8);
+
+        // Verify spilling metrics to confirm spilling actually happened
+        let metrics = exec.metrics().unwrap();
+        assert!(
+            metrics.spill_count().unwrap() > 0,
+            "Expected spill_count > 0, but got {:?}",
+            metrics.spill_count()
+        );
+        println!("Spilled {} times", metrics.spill_count().unwrap());
+        assert!(
+            metrics.spilled_bytes().unwrap() > 0,
+            "Expected spilled_bytes > 0, but got {:?}",
+            metrics.spilled_bytes()
+        );
+        println!(
+            "Spilled {} bytes in {} spills",
+            metrics.spilled_bytes().unwrap(),
+            metrics.spill_count().unwrap()
+        );
+        assert!(
+            metrics.spilled_rows().unwrap() > 0,
+            "Expected spilled_rows > 0, but got {:?}",
+            metrics.spilled_rows()
+        );
+        println!("Spilled {} rows", metrics.spilled_rows().unwrap());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repartition_with_partial_spilling() -> Result<()> {
+        // Test that repartition can handle partial spilling (some batches in memory, some spilled)
+        let schema = test_schema();
+        let partition = create_vec_batches(50);
+        let input_partitions = vec![partition];
+        let partitioning = Partitioning::RoundRobinBatch(4);
+
+        // Set up context with moderate memory limit to force partial spilling
+        // 2KB should allow some batches in memory but force others to spill
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(2 * 1024, 1.0)
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // create physical plan
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        // Collect all partitions - should succeed with partial spilling
+        let mut total_rows = 0;
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                total_rows += batch.num_rows();
+            }
+        }
+
+        // Verify we got all the data (50 batches * 8 rows each)
+        assert_eq!(total_rows, 50 * 8);
+
+        // Verify partial spilling metrics
+        let metrics = exec.metrics().unwrap();
+        let spill_count = metrics.spill_count().unwrap();
+        let spilled_rows = metrics.spilled_rows().unwrap();
+        let spilled_bytes = metrics.spilled_bytes().unwrap();
+
+        assert!(
+            spill_count > 0,
+            "Expected some spilling to occur, but got spill_count={spill_count}"
+        );
+        assert!(
+            spilled_rows > 0 && spilled_rows < total_rows,
+            "Expected partial spilling (0 < spilled_rows < {total_rows}), but got spilled_rows={spilled_rows}"
+        );
+        assert!(
+            spilled_bytes > 0,
+            "Expected some bytes to be spilled, but got spilled_bytes={spilled_bytes}"
+        );
+
+        println!(
+            "Partial spilling: spilled {} out of {} rows ({:.1}%) in {} spills, {} bytes",
+            spilled_rows,
+            total_rows,
+            (spilled_rows as f64 / total_rows as f64) * 100.0,
+            spill_count,
+            spilled_bytes
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repartition_without_spilling() -> Result<()> {
+        // Test that repartition does not spill when there's ample memory
+        let schema = test_schema();
+        let partition = create_vec_batches(50);
+        let input_partitions = vec![partition];
+        let partitioning = Partitioning::RoundRobinBatch(4);
+
+        // Set up context with generous memory limit - no spilling should occur
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(10 * 1024 * 1024, 1.0) // 10MB
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // create physical plan
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        // Collect all partitions - should succeed without spilling
+        let mut total_rows = 0;
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                total_rows += batch.num_rows();
+            }
+        }
+
+        // Verify we got all the data (50 batches * 8 rows each)
+        assert_eq!(total_rows, 50 * 8);
+
+        // Verify no spilling occurred
+        let metrics = exec.metrics().unwrap();
+        assert_eq!(
+            metrics.spill_count(),
+            Some(0),
+            "Expected no spilling, but got spill_count={:?}",
+            metrics.spill_count()
+        );
+        assert_eq!(
+            metrics.spilled_bytes(),
+            Some(0),
+            "Expected no bytes spilled, but got spilled_bytes={:?}",
+            metrics.spilled_bytes()
+        );
+        assert_eq!(
+            metrics.spilled_rows(),
+            Some(0),
+            "Expected no rows spilled, but got spilled_rows={:?}",
+            metrics.spilled_rows()
+        );
+
+        println!("No spilling occurred - all data processed in memory");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oom() -> Result<()> {
+        use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+
+        // Test that repartition fails with OOM when disk manager is disabled
+        let schema = test_schema();
+        let partition = create_vec_batches(50);
+        let input_partitions = vec![partition];
+        let partitioning = Partitioning::RoundRobinBatch(4);
+
+        // Setup context with memory limit but NO disk manager (explicitly disabled)
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // create physical plan
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        // Attempt to execute - should fail with ResourcesExhausted error
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            let err = stream.next().await.unwrap().unwrap_err();
             let err = err.find_root();
             assert!(
                 matches!(err, DataFusionError::ResourcesExhausted(_)),
@@ -1762,12 +2260,105 @@ mod tests {
         )
         .unwrap()
     }
+
+    /// Create batches with sequential values for ordering tests
+    fn create_ordered_batches(num_batches: usize) -> Vec<RecordBatch> {
+        let schema = test_schema();
+        (0..num_batches)
+            .map(|i| {
+                let start = (i * 8) as u32;
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(UInt32Array::from(
+                        (start..start + 8).collect::<Vec<_>>(),
+                    ))],
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_repartition_ordering_with_spilling() -> Result<()> {
+        // Test that repartition preserves ordering when spilling occurs
+        // This tests the state machine fix where we must block on spill_stream
+        // when a Spilled marker is received, rather than continuing to poll the channel
+
+        let schema = test_schema();
+        // Create batches with sequential values: batch 0 has [0,1,2,3,4,5,6,7],
+        // batch 1 has [8,9,10,11,12,13,14,15], etc.
+        let partition = create_ordered_batches(20);
+        let input_partitions = vec![partition];
+
+        // Use RoundRobinBatch to ensure predictable ordering
+        let partitioning = Partitioning::RoundRobinBatch(2);
+
+        // Set up context with very tight memory limit to force spilling
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // create physical plan
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        // Collect all output partitions
+        let mut all_batches = Vec::new();
+        for i in 0..exec.partitioning().partition_count() {
+            let mut partition_batches = Vec::new();
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                partition_batches.push(batch);
+            }
+            all_batches.push(partition_batches);
+        }
+
+        // Verify spilling occurred
+        let metrics = exec.metrics().unwrap();
+        assert!(
+            metrics.spill_count().unwrap() > 0,
+            "Expected spilling to occur, but spill_count = 0"
+        );
+
+        // Verify ordering is preserved within each partition
+        // With RoundRobinBatch, even batches go to partition 0, odd batches to partition 1
+        for (partition_idx, batches) in all_batches.iter().enumerate() {
+            let mut last_value = None;
+            for batch in batches {
+                let array = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .unwrap();
+
+                for i in 0..array.len() {
+                    let value = array.value(i);
+                    if let Some(last) = last_value {
+                        assert!(
+                            value > last,
+                            "Ordering violated in partition {partition_idx}: {value} is not greater than {last}"
+                        );
+                    }
+                    last_value = Some(value);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use arrow::array::record_batch;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::assert_batches_eq;
 
     use super::*;
     use crate::test::TestMemoryExec;
@@ -1780,7 +2371,6 @@ mod test {
     ///
     /// `$EXPECTED_PLAN_LINES`: input plan
     /// `$PLAN`: the plan to optimized
-    ///
     macro_rules! assert_plan {
         ($PLAN: expr,  @ $EXPECTED: expr) => {
             let formatted = crate::displayable($PLAN).indent(true).to_string();
@@ -1848,6 +2438,204 @@ mod test {
             DataSourceExec: partitions=1, partition_sizes=[0]
             DataSourceExec: partitions=1, partition_sizes=[0]
         ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_preserve_order_with_spilling() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+        use datafusion_execution::TaskContext;
+
+        // Create sorted input data across multiple partitions
+        // Partition1: [1,3], [5,7], [9,11]
+        // Partition2: [2,4], [6,8], [10,12]
+        let batch1 = record_batch!(("c0", UInt32, [1, 3])).unwrap();
+        let batch2 = record_batch!(("c0", UInt32, [2, 4])).unwrap();
+        let batch3 = record_batch!(("c0", UInt32, [5, 7])).unwrap();
+        let batch4 = record_batch!(("c0", UInt32, [6, 8])).unwrap();
+        let batch5 = record_batch!(("c0", UInt32, [9, 11])).unwrap();
+        let batch6 = record_batch!(("c0", UInt32, [10, 12])).unwrap();
+        let schema = batch1.schema();
+        let sort_exprs = LexOrdering::new([PhysicalSortExpr {
+            expr: col("c0", &schema).unwrap(),
+            options: SortOptions::default().asc(),
+        }])
+        .unwrap();
+        let partition1 = vec![batch1.clone(), batch3.clone(), batch5.clone()];
+        let partition2 = vec![batch2.clone(), batch4.clone(), batch6.clone()];
+        let input_partitions = vec![partition1, partition2];
+
+        // Set up context with tight memory limit to force spilling
+        // Sorting needs some non-spillable memory, so 64 bytes should force spilling while still allowing the query to complete
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(64, 1.0)
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // Create physical plan with order preservation
+        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs])?;
+        let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
+        // Repartition into 3 partitions with order preservation
+        // We expect 1 batch per output partition after repartitioning
+        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(3))?
+            .with_preserve_order();
+
+        let mut batches = vec![];
+
+        // Collect all partitions - should succeed by spilling to disk
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                batches.push(batch);
+            }
+        }
+
+        #[rustfmt::skip]
+        let expected = [
+            [
+                "+----+",
+                "| c0 |",
+                "+----+",
+                "| 1  |",
+                "| 2  |",
+                "| 3  |",
+                "| 4  |",
+                "+----+",
+            ],
+            [
+                "+----+",
+                "| c0 |",
+                "+----+",
+                "| 5  |",
+                "| 6  |",
+                "| 7  |",
+                "| 8  |",
+                "+----+",
+            ],
+            [
+                "+----+",
+                "| c0 |",
+                "+----+",
+                "| 9  |",
+                "| 10 |",
+                "| 11 |",
+                "| 12 |",
+                "+----+",
+            ],
+        ];
+
+        for (batch, expected) in batches.iter().zip(expected.iter()) {
+            assert_batches_eq!(expected, std::slice::from_ref(batch));
+        }
+
+        // We should have spilled ~ all of the data.
+        // - We spill data during the repartitioning phase
+        // - We may also spill during the final merge sort
+        let all_batches = [batch1, batch2, batch3, batch4, batch5, batch6];
+        let metrics = exec.metrics().unwrap();
+        assert!(
+            metrics.spill_count().unwrap() > input_partitions.len(),
+            "Expected spill_count > {} for order-preserving repartition, but got {:?}",
+            input_partitions.len(),
+            metrics.spill_count()
+        );
+        assert!(
+            metrics.spilled_bytes().unwrap()
+                > all_batches
+                    .iter()
+                    .map(|b| b.get_array_memory_size())
+                    .sum::<usize>(),
+            "Expected spilled_bytes > {} for order-preserving repartition, got {}",
+            all_batches
+                .iter()
+                .map(|b| b.get_array_memory_size())
+                .sum::<usize>(),
+            metrics.spilled_bytes().unwrap()
+        );
+        assert!(
+            metrics.spilled_rows().unwrap()
+                >= all_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            "Expected spilled_rows > {} for order-preserving repartition, got {}",
+            all_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            metrics.spilled_rows().unwrap()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_partitioning_with_spilling() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+        use datafusion_execution::TaskContext;
+
+        // Create input data similar to the round-robin test
+        let batch1 = record_batch!(("c0", UInt32, [1, 3])).unwrap();
+        let batch2 = record_batch!(("c0", UInt32, [2, 4])).unwrap();
+        let batch3 = record_batch!(("c0", UInt32, [5, 7])).unwrap();
+        let batch4 = record_batch!(("c0", UInt32, [6, 8])).unwrap();
+        let schema = batch1.schema();
+
+        let partition1 = vec![batch1.clone(), batch3.clone()];
+        let partition2 = vec![batch2.clone(), batch4.clone()];
+        let input_partitions = vec![partition1, partition2];
+
+        // Set up context with memory limit to test hash partitioning with spilling infrastructure
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // Create physical plan with hash partitioning
+        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
+        // Hash partition into 2 partitions by column c0
+        let hash_expr = col("c0", &schema)?;
+        let exec =
+            RepartitionExec::try_new(exec, Partitioning::Hash(vec![hash_expr], 2))?;
+
+        // Collect all partitions concurrently using JoinSet - this prevents deadlock
+        // where the distribution channel gate closes when all output channels are full
+        let mut join_set = tokio::task::JoinSet::new();
+        for i in 0..exec.partitioning().partition_count() {
+            let stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            join_set.spawn(async move {
+                let mut count = 0;
+                futures::pin_mut!(stream);
+                while let Some(result) = stream.next().await {
+                    let batch = result?;
+                    count += batch.num_rows();
+                }
+                Ok::<usize, DataFusionError>(count)
+            });
+        }
+
+        // Wait for all partitions and sum the rows
+        let mut total_rows = 0;
+        while let Some(result) = join_set.join_next().await {
+            total_rows += result.unwrap()?;
+        }
+
+        // Verify we got all rows back
+        let all_batches = [batch1, batch2, batch3, batch4];
+        let expected_rows: usize = all_batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, expected_rows);
+
+        // Verify metrics are available
+        let metrics = exec.metrics().unwrap();
+        // Just verify the metrics can be retrieved (spilling may or may not occur)
+        let spill_count = metrics.spill_count().unwrap_or(0);
+        assert!(spill_count > 0);
+        let spilled_bytes = metrics.spilled_bytes().unwrap_or(0);
+        assert!(spilled_bytes > 0);
+        let spilled_rows = metrics.spilled_rows().unwrap_or(0);
+        assert!(spilled_rows > 0);
+
         Ok(())
     }
 

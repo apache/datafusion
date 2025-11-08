@@ -58,7 +58,7 @@ fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
 /// Syntax:
 /// ```sql
 /// EXPLAIN <ANALYZE> <VERBOSE> [FORMAT format] statement
-///```
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplainStatement {
     /// `EXPLAIN ANALYZE ..`
@@ -243,7 +243,19 @@ impl fmt::Display for CreateExternalTable {
         }
         write!(f, "{} ", self.name)?;
         write!(f, "STORED AS {} ", self.file_type)?;
-        write!(f, "LOCATION {} ", self.location)
+        if !self.order_exprs.is_empty() {
+            write!(f, "WITH ORDER (")?;
+            let mut first = true;
+            for expr in self.order_exprs.iter().flatten() {
+                if !first {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{expr}")?;
+                first = false;
+            }
+            write!(f, ") ")?;
+        }
+        write!(f, "LOCATION {}", self.location)
     }
 }
 
@@ -308,8 +320,7 @@ const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 /// # use datafusion_sql::parser::DFParserBuilder;
 /// # use datafusion_common::Result;
 /// # fn test() -> Result<()> {
-/// let mut parser = DFParserBuilder::new("SELECT * FROM foo; SELECT 1 + 2")
-///   .build()?;
+/// let mut parser = DFParserBuilder::new("SELECT * FROM foo; SELECT 1 + 2").build()?;
 /// // parse the SQL into DFStatements
 /// let statements = parser.parse_statements()?;
 /// assert_eq!(statements.len(), 2);
@@ -324,13 +335,13 @@ const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 /// # use datafusion_sql::sqlparser::dialect::MySqlDialect;
 /// # use datafusion_sql::sqlparser::ast::Expr;
 /// # fn test() -> Result<()> {
-/// let dialect = MySqlDialect{}; // Parse using MySQL dialect
+/// let dialect = MySqlDialect {}; // Parse using MySQL dialect
 /// let mut parser = DFParserBuilder::new("1 + 2")
-///   .with_dialect(&dialect)
-///   .build()?;
+///     .with_dialect(&dialect)
+///     .build()?;
 /// // parse 1+2 into an sqlparser::ast::Expr
 /// let res = parser.parse_expr()?;
-/// assert!(matches!(res.expr, Expr::BinaryOp {..}));
+/// assert!(matches!(res.expr, Expr::BinaryOp { .. }));
 /// # Ok(())
 /// # }
 /// ```
