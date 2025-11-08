@@ -15,6 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Demonstrates how to use [`FileStreamProvider`] and [`StreamTable`] to stream data
+/// from a file-like source (FIFO) into DataFusion for continuous querying.
+///
+/// On non-Windows systems, this example creates a named pipe (FIFO) and
+/// writes rows into it asynchronously while DataFusion reads the data
+/// through a `FileStreamProvider`.  
+///
+/// This illustrates how to integrate dynamically updated data sources
+/// with DataFusion without needing to reload the entire dataset each time.
+///
+/// This example does not work on Windows.
+pub async fn file_stream_provider() -> datafusion::error::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        println!("file_stream_provider example does not work on windows");
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        non_windows::main().await
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 mod non_windows {
     use datafusion::assert_batches_eq;
@@ -184,18 +207,5 @@ mod non_windows {
         assert_batches_eq!(&expected, &batches);
 
         Ok(())
-    }
-}
-
-#[tokio::main]
-async fn main() -> datafusion::error::Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        println!("file_stream_provider example does not work on windows");
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        non_windows::main().await
     }
 }

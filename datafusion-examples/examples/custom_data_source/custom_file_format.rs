@@ -47,6 +47,42 @@ use tempfile::tempdir;
 /// TSVFileFormatFactory is responsible for creating instances of TSVFileFormat.
 /// The former, once registered with the SessionState, will then be used
 /// to facilitate SQL operations on TSV files, such as `COPY TO` shown here.
+pub async fn custom_file_format() -> Result<()> {
+    // Create a new context with the default configuration
+    let mut state = SessionStateBuilder::new().with_default_features().build();
+
+    // Register the custom file format
+    let file_format = Arc::new(TSVFileFactory::new());
+    state.register_file_format(file_format, true)?;
+
+    // Create a new context with the custom file format
+    let ctx = SessionContext::new_with_state(state);
+
+    let mem_table = create_mem_table();
+    ctx.register_table("mem_table", mem_table)?;
+
+    let temp_dir = tempdir().unwrap();
+    let table_save_path = temp_dir.path().join("mem_table.tsv");
+
+    let d = ctx
+        .sql(&format!(
+            "COPY mem_table TO '{}' STORED AS TSV;",
+            table_save_path.display(),
+        ))
+        .await?;
+
+    let results = d.collect().await?;
+    println!(
+        "Number of inserted rows: {:?}",
+        (results[0]
+            .column_by_name("count")
+            .unwrap()
+            .as_primitive::<UInt64Type>()
+            .value(0))
+    );
+
+    Ok(())
+}
 
 #[derive(Debug)]
 /// Custom file format that reads and writes TSV files
@@ -178,44 +214,6 @@ impl GetExt for TSVFileFactory {
     fn get_ext(&self) -> String {
         "tsv".to_string()
     }
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Create a new context with the default configuration
-    let mut state = SessionStateBuilder::new().with_default_features().build();
-
-    // Register the custom file format
-    let file_format = Arc::new(TSVFileFactory::new());
-    state.register_file_format(file_format, true).unwrap();
-
-    // Create a new context with the custom file format
-    let ctx = SessionContext::new_with_state(state);
-
-    let mem_table = create_mem_table();
-    ctx.register_table("mem_table", mem_table).unwrap();
-
-    let temp_dir = tempdir().unwrap();
-    let table_save_path = temp_dir.path().join("mem_table.tsv");
-
-    let d = ctx
-        .sql(&format!(
-            "COPY mem_table TO '{}' STORED AS TSV;",
-            table_save_path.display(),
-        ))
-        .await?;
-
-    let results = d.collect().await?;
-    println!(
-        "Number of inserted rows: {:?}",
-        (results[0]
-            .column_by_name("count")
-            .unwrap()
-            .as_primitive::<UInt64Type>()
-            .value(0))
-    );
-
-    Ok(())
 }
 
 // create a simple mem table
