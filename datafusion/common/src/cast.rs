@@ -158,11 +158,6 @@ pub fn as_list_array(array: &dyn Array) -> Result<&ListArray> {
     Ok(downcast_value!(array, ListArray))
 }
 
-// Downcast Array to ListViewArray
-pub fn as_list_view_array(array: &dyn Array) -> Result<&ListViewArray> {
-    Ok(downcast_value!(array, ListViewArray))
-}
-
 // Downcast Array to DictionaryArray
 pub fn as_dictionary_array<T: ArrowDictionaryKeyType>(
     array: &dyn Array,
@@ -187,11 +182,6 @@ pub fn as_generic_list_array<T: OffsetSizeTrait>(
 // Downcast Array to LargeListArray
 pub fn as_large_list_array(array: &dyn Array) -> Result<&LargeListArray> {
     Ok(downcast_value!(array, LargeListArray))
-}
-
-// Downcast Array to LargeListViewArray
-pub fn as_large_list_view_array(array: &dyn Array) -> Result<&LargeListViewArray> {
-    Ok(downcast_value!(array, LargeListViewArray))
 }
 
 // Downcast Array to PrimitiveArray
