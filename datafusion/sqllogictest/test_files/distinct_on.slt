@@ -192,3 +192,13 @@ logical_plan
 
 statement ok
 drop table t;
+
+# test distinct on with aggregation
+query TII
+SELECT DISTINCT ON (c1) c1, c3, max(c4) as agg2 FROM aggregate_test_100 GROUP BY c1, c3 ORDER BY c1, agg2;
+----
+a 65 -28462
+b -60 -21739
+c 3 -30508
+d 102 -24558
+e -56 -31500

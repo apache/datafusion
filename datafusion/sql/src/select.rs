@@ -29,7 +29,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, plan_err, Column, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -329,20 +329,55 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     || !group_by_exprs.is_empty()
                     || !window_func_exprs.is_empty()
                 {
-                    return not_impl_err!("DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported ");
+                    // With aggregation/window functions, the DISTINCT ON expressions and ORDER BY
+                    // should reference columns from the aggregated/windowed result
+                    let on_expr = on_expr
+                        .into_iter()
+                        .map(|e| {
+                            self.sql_expr_to_logical_expr(
+                                e,
+                                plan.schema(),
+                                planner_context,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    let on_expr = on_expr
+                        .into_iter()
+                        .map(|expr| normalize_col(expr, &plan))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    // Get select expressions from the current plan's output
+                    let select_exprs_from_plan = plan
+                        .schema()
+                        .iter()
+                        .map(|(qualifier, field)| {
+                            Expr::Column(Column::from((qualifier, field.as_ref())))
+                        })
+                        .collect::<Vec<_>>();
+
+                    // Build the final plan with DISTINCT ON
+                    LogicalPlanBuilder::from(plan)
+                        .distinct_on(on_expr, select_exprs_from_plan, None)?
+                        .build()
+                } else {
+                    // Original logic: without aggregation, use base_plan
+                    let on_expr = on_expr
+                        .into_iter()
+                        .map(|e| {
+                            self.sql_expr_to_logical_expr(
+                                e,
+                                plan.schema(),
+                                planner_context,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    // Build the final plan
+                    LogicalPlanBuilder::from(base_plan)
+                        .distinct_on(on_expr, select_exprs, None)?
+                        .build()
                 }
-
-                let on_expr = on_expr
-                    .into_iter()
-                    .map(|e| {
-                        self.sql_expr_to_logical_expr(e, plan.schema(), planner_context)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                // Build the final plan
-                LogicalPlanBuilder::from(base_plan)
-                    .distinct_on(on_expr, select_exprs, None)?
-                    .build()
             }
         }?;
 
