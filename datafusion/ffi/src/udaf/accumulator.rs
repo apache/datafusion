@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
@@ -26,9 +27,8 @@ use datafusion_common::{
 };
 use datafusion_expr::Accumulator;
 use prost::Message;
+use std::ptr::null_mut;
 use std::{ffi::c_void, ops::Deref};
-
-use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`Accumulator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -176,9 +176,11 @@ unsafe extern "C" fn retract_batch_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
-    let private_data =
-        Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
-    drop(private_data);
+    if !accumulator.private_data.is_null() {
+        let private_data =
+            Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
+        drop(private_data);
+    }
 }
 
 impl From<Box<dyn Accumulator>> for FFI_Accumulator {
@@ -222,12 +224,14 @@ unsafe impl Send for ForeignAccumulator {}
 unsafe impl Sync for ForeignAccumulator {}
 
 impl From<FFI_Accumulator> for Box<dyn Accumulator> {
-    fn from(accumulator: FFI_Accumulator) -> Self {
+    fn from(mut accumulator: FFI_Accumulator) -> Self {
         if (accumulator.library_marker_id)() == crate::get_library_marker_id() {
             unsafe {
                 let private_data = Box::from_raw(
                     accumulator.private_data as *mut AccumulatorPrivateData,
                 );
+                // We must set this to null to avoid a double free
+                accumulator.private_data = null_mut();
                 private_data.accumulator
             }
         } else {

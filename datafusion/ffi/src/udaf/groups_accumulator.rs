@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, ops::Deref, sync::Arc};
-
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
     df_result, rresult, rresult_return,
@@ -32,6 +30,8 @@ use arrow::{
 };
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use std::ptr::null_mut;
+use std::{ffi::c_void, ops::Deref, sync::Arc};
 
 /// A stable struct for sharing [`GroupsAccumulator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -217,9 +217,11 @@ unsafe extern "C" fn convert_to_state_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator) {
-    let private_data =
-        Box::from_raw(accumulator.private_data as *mut GroupsAccumulatorPrivateData);
-    drop(private_data);
+    if !accumulator.private_data.is_null() {
+        let private_data =
+            Box::from_raw(accumulator.private_data as *mut GroupsAccumulatorPrivateData);
+        drop(private_data);
+    }
 }
 
 impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
@@ -243,11 +245,11 @@ impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
     }
 }
 
-impl Drop for FFI_GroupsAccumulator {
-    fn drop(&mut self) {
-        unsafe { (self.release)(self) }
-    }
-}
+// impl Drop for FFI_GroupsAccumulator {
+//     fn drop(&mut self) {
+//         unsafe { (self.release)(self) }
+//     }
+// }
 
 /// This struct is used to access an UDF provided by a foreign
 /// library across a FFI boundary.
@@ -264,12 +266,13 @@ unsafe impl Send for ForeignGroupsAccumulator {}
 unsafe impl Sync for ForeignGroupsAccumulator {}
 
 impl From<FFI_GroupsAccumulator> for Box<dyn GroupsAccumulator> {
-    fn from(accumulator: FFI_GroupsAccumulator) -> Self {
+    fn from(mut accumulator: FFI_GroupsAccumulator) -> Self {
         if (accumulator.library_marker_id)() == crate::get_library_marker_id() {
             unsafe {
                 let private_data = Box::from_raw(
                     accumulator.private_data as *mut GroupsAccumulatorPrivateData,
                 );
+                accumulator.private_data = null_mut();
                 private_data.accumulator
             }
         } else {
@@ -451,7 +454,7 @@ mod tests {
     use super::{FFI_EmitTo, FFI_GroupsAccumulator};
 
     #[test]
-    fn test_foreign_avg_accumulator() -> Result<()> {
+    fn test_foreign_bool_groups_accumulator() -> Result<()> {
         let boxed_accum: Box<dyn GroupsAccumulator> =
             Box::new(BooleanGroupsAccumulator::new(|a, b| a && b, true));
         let ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
