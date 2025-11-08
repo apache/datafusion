@@ -1659,7 +1659,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                     .to_string();
                                 Transformed::yes(Expr::Like(Like {
                                     pattern: Box::new(to_string_scalar(
-                                        data_type,
+                                        &data_type,
                                         Some(simplified_pattern),
                                     )),
                                     ..like
@@ -1971,7 +1971,7 @@ fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
     }
 }
 
-fn to_string_scalar(data_type: DataType, value: Option<String>) -> Expr {
+fn to_string_scalar(data_type: &DataType, value: Option<String>) -> Expr {
     match data_type {
         DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value), None),
         DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value), None),
