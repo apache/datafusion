@@ -58,7 +58,7 @@ impl ValuePrettyPrinter for UuidValuePrettyPrinter {
                         )
                     })?;
                     let uuid = uuid::Uuid::from_bytes(bytes);
-                    Ok(format!("arrow.uuid({})", uuid))
+                    Ok(format!("arrow.uuid({uuid})"))
                 }
                 None => Ok("arrow.uuid(NULL)".to_owned()),
             },
@@ -102,7 +102,7 @@ struct OpaqueValuePrettyPrinter;
 
 impl ValuePrettyPrinter for OpaqueValuePrettyPrinter {
     fn pretty_print_scalar(&self, value: &ScalarValue) -> Result<String> {
-        Ok(format!("arrow.opaque({})", value))
+        Ok(format!("arrow.opaque({value})"))
     }
 }
 
@@ -158,7 +158,7 @@ impl LogicalType for UnresolvedExtensionType {
             parameters: vec![],
         });
         TypeSignature::Extension {
-            name: &"datafusion.unresolved",
+            name: "datafusion.unresolved",
             parameters: vec![inner_type],
         }
     }
@@ -175,7 +175,7 @@ struct UnresolvedValuePrettyPrinter {}
 
 impl ValuePrettyPrinter for UnresolvedValuePrettyPrinter {
     fn pretty_print_scalar(&self, value: &ScalarValue) -> Result<String> {
-        Ok(format!("datafusion.unresolved({})", value))
+        Ok(format!("datafusion.unresolved({value})"))
     }
 }
 
