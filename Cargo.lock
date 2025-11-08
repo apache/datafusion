@@ -2253,6 +2253,7 @@ version = "50.3.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "bitflags 2.9.4",
  "chrono",
  "ctor",
  "datafusion-common",
