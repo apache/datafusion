@@ -728,386 +728,256 @@ mod tests {
         eval_ansi_mode!(Float64, -0.0f64, 0.0f64);
     }
 
-    #[test]
-    fn test_abs_i8_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input =
-                Int8Array::from(vec![Some(-1), Some(i8::MIN), Some(i8::MAX), None]);
+    macro_rules! eval_array_legacy_mode {
+        ($INPUT:expr, $OUTPUT:expr, $FUNC:ident) => {{
+            let input = $INPUT;
             let args = ColumnarValue::Array(Arc::new(input));
-            let expected =
-                Int8Array::from(vec![Some(1), Some(i8::MIN), Some(i8::MAX), None]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
-
-            match spark_abs(&[args, fail_on_error_arg]) {
+            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
+            let expected = $OUTPUT;
+            match spark_abs(&[args, fail_on_error]) {
                 Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_int8_array(&result)?;
+                    let actual = datafusion_common::cast::$FUNC(&result).unwrap();
                     assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
                 }
                 _ => unreachable!(),
             }
-        });
+        }};
     }
 
     #[test]
-    fn test_abs_i16_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input =
-                Int16Array::from(vec![Some(-1), Some(i16::MIN), Some(i16::MAX), None]);
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected =
-                Int16Array::from(vec![Some(1), Some(i16::MIN), Some(i16::MAX), None]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
+    fn test_abs_array_legacy_mode() {
+        eval_array_legacy_mode!(
+            Int8Array::from(vec![Some(-1), Some(i8::MIN), Some(i8::MAX), None]),
+            Int8Array::from(vec![Some(1), Some(i8::MIN), Some(i8::MAX), None]),
+            as_int8_array
+        );
 
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_int16_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
-    }
+        eval_array_legacy_mode!(
+            Int16Array::from(vec![Some(-1), Some(i16::MIN), Some(i16::MAX), None]),
+            Int16Array::from(vec![Some(1), Some(i16::MIN), Some(i16::MAX), None]),
+            as_int16_array
+        );
 
-    #[test]
-    fn test_abs_i32_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input =
-                Int32Array::from(vec![Some(-1), Some(i32::MIN), Some(i32::MAX), None]);
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected =
-                Int32Array::from(vec![Some(1), Some(i32::MIN), Some(i32::MAX), None]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
+        eval_array_legacy_mode!(
+            Int32Array::from(vec![Some(-1), Some(i32::MIN), Some(i32::MAX), None]),
+            Int32Array::from(vec![Some(1), Some(i32::MIN), Some(i32::MAX), None]),
+            as_int32_array
+        );
 
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_int32_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
-    }
+        eval_array_legacy_mode!(
+            Int64Array::from(vec![Some(-1), Some(i64::MIN), Some(i64::MAX), None]),
+            Int64Array::from(vec![Some(1), Some(i64::MIN), Some(i64::MAX), None]),
+            as_int64_array
+        );
 
-    #[test]
-    fn test_abs_i64_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input =
-                Int64Array::from(vec![Some(-1), Some(i64::MIN), Some(i64::MAX), None]);
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected =
-                Int64Array::from(vec![Some(1), Some(i64::MIN), Some(i64::MAX), None]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
-
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_int64_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
-    }
-
-    #[test]
-    fn test_abs_f32_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input = Float32Array::from(vec![
+        eval_array_legacy_mode!(
+            Float32Array::from(vec![
                 Some(-1f32),
                 Some(f32::MIN),
                 Some(f32::MAX),
                 None,
                 Some(f32::NAN),
-            ]);
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected = Float32Array::from(vec![
+                Some(f32::INFINITY),
+                Some(f32::NEG_INFINITY),
+                Some(0.0),
+                Some(-0.0),
+            ]),
+            Float32Array::from(vec![
                 Some(1f32),
                 Some(f32::MAX),
                 Some(f32::MAX),
                 None,
                 Some(f32::NAN),
-            ]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
+                Some(f32::INFINITY),
+                Some(f32::INFINITY),
+                Some(0.0),
+                Some(0.0),
+            ]),
+            as_float32_array
+        );
 
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_float32_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
-    }
-
-    #[test]
-    fn test_abs_f64_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input = Float64Array::from(vec![
+        eval_array_legacy_mode!(
+            Float64Array::from(vec![
                 Some(-1f64),
                 Some(f64::MIN),
                 Some(f64::MAX),
                 None,
                 Some(f64::NAN),
-            ]);
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected = Float64Array::from(vec![
+                Some(f64::INFINITY),
+                Some(f64::NEG_INFINITY),
+                Some(0.0),
+                Some(-0.0),
+            ]),
+            Float64Array::from(vec![
                 Some(1f64),
                 Some(f64::MAX),
                 Some(f64::MAX),
                 None,
                 Some(f64::NAN),
-            ]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
+                Some(f64::INFINITY),
+                Some(f64::INFINITY),
+                Some(0.0),
+                Some(0.0),
+            ]),
+            as_float64_array
+        );
 
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_float64_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
+        eval_array_legacy_mode!(
+            Decimal128Array::from(vec![Some(i128::MIN), None])
+                .with_precision_and_scale(38, 37)
+                .unwrap(),
+            Decimal128Array::from(vec![Some(i128::MIN), None])
+                .with_precision_and_scale(38, 37)
+                .unwrap(),
+            as_decimal128_array
+        );
+
+        eval_array_legacy_mode!(
+            Decimal256Array::from(vec![Some(i256::MIN), None])
+                .with_precision_and_scale(5, 2)
+                .unwrap(),
+            Decimal256Array::from(vec![Some(i256::MIN), None])
+                .with_precision_and_scale(5, 2)
+                .unwrap(),
+            as_decimal256_array
+        );
+
+        eval_array_legacy_mode!(
+            IntervalYearMonthArray::from(vec![i32::MIN, -1]),
+            IntervalYearMonthArray::from(vec![i32::MIN, 1]),
+            as_interval_ym_array
+        );
+
+        eval_array_legacy_mode!(
+            IntervalDayTimeArray::from(vec![IntervalDayTime::new(i32::MIN, i32::MIN,)]),
+            IntervalDayTimeArray::from(vec![IntervalDayTime::new(i32::MIN, i32::MIN,)]),
+            as_interval_dt_array
+        );
     }
 
-    #[test]
-    fn test_abs_decimal128_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input = Decimal128Array::from(vec![Some(i128::MIN), None])
-                .with_precision_and_scale(38, 37)?;
+    macro_rules! eval_array_ansi_mode {
+        ($INPUT:expr) => {{
+            let input = $INPUT;
             let args = ColumnarValue::Array(Arc::new(input));
-            let expected = Decimal128Array::from(vec![Some(i128::MIN), None])
-                .with_precision_and_scale(38, 37)?;
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
-
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_decimal128_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
+            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+            match spark_abs(&[args, fail_on_error]) {
                 Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
+                    assert!(
+                        e.to_string().contains("arithmetic overflow"),
+                        "Error message did not match. Actual message: {e}"
+                    );
                 }
                 _ => unreachable!(),
             }
-        });
+        }};
+        ($INPUT:expr, $OUTPUT:expr, $FUNC:ident) => {{
+            let input = $INPUT;
+            let args = ColumnarValue::Array(Arc::new(input));
+            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+            let expected = $OUTPUT;
+            match spark_abs(&[args, fail_on_error]) {
+                Ok(ColumnarValue::Array(result)) => {
+                    let actual = datafusion_common::cast::$FUNC(&result).unwrap();
+                    assert_eq!(actual, &expected);
+                }
+                _ => unreachable!(),
+            }
+        }};
     }
-
     #[test]
-    fn test_abs_decimal256_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input = Decimal256Array::from(vec![Some(i256::MIN), None])
-                .with_precision_and_scale(5, 2)?;
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected = Decimal256Array::from(vec![Some(i256::MIN), None])
-                .with_precision_and_scale(5, 2)?;
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
+    fn test_abs_array_ansi_mode() {
+        eval_array_ansi_mode!(
+            UInt64Array::from(vec![Some(u64::MIN), Some(u64::MAX), None]),
+            UInt64Array::from(vec![Some(u64::MIN), Some(u64::MAX), None]),
+            as_uint64_array
+        );
 
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_decimal256_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
-    }
+        eval_array_ansi_mode!(Int8Array::from(vec![
+            Some(-1),
+            Some(i8::MIN),
+            Some(i8::MAX),
+            None
+        ]));
+        eval_array_ansi_mode!(Int16Array::from(vec![
+            Some(-1),
+            Some(i16::MIN),
+            Some(i16::MAX),
+            None
+        ]));
+        eval_array_ansi_mode!(Int32Array::from(vec![
+            Some(-1),
+            Some(i32::MIN),
+            Some(i32::MAX),
+            None
+        ]));
+        eval_array_ansi_mode!(Int64Array::from(vec![
+            Some(-1),
+            Some(i64::MIN),
+            Some(i64::MAX),
+            None
+        ]));
+        eval_array_ansi_mode!(
+            Float32Array::from(vec![
+                Some(-1f32),
+                Some(f32::MIN),
+                Some(f32::MAX),
+                None,
+                Some(f32::NAN),
+                Some(f32::INFINITY),
+                Some(f32::NEG_INFINITY),
+                Some(0.0),
+                Some(-0.0),
+            ]),
+            Float32Array::from(vec![
+                Some(1f32),
+                Some(f32::MAX),
+                Some(f32::MAX),
+                None,
+                Some(f32::NAN),
+                Some(f32::INFINITY),
+                Some(f32::INFINITY),
+                Some(0.0),
+                Some(0.0),
+            ]),
+            as_float32_array
+        );
 
-    #[test]
-    fn test_abs_interval_year_month_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input = IntervalYearMonthArray::from(vec![i32::MIN, -1]);
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected = IntervalYearMonthArray::from(vec![i32::MIN, 1]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
+        eval_array_ansi_mode!(
+            Float64Array::from(vec![
+                Some(-1f64),
+                Some(f64::MIN),
+                Some(f64::MAX),
+                None,
+                Some(f64::NAN),
+                Some(f64::INFINITY),
+                Some(f64::NEG_INFINITY),
+                Some(0.0),
+                Some(-0.0),
+            ]),
+            Float64Array::from(vec![
+                Some(1f64),
+                Some(f64::MAX),
+                Some(f64::MAX),
+                None,
+                Some(f64::NAN),
+                Some(f64::INFINITY),
+                Some(f64::INFINITY),
+                Some(0.0),
+                Some(0.0),
+            ]),
+            as_float64_array
+        );
 
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_interval_ym_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
-    }
-
-    #[test]
-    fn test_abs_interval_day_time_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input = IntervalDayTimeArray::from(vec![IntervalDayTime::new(
-                i32::MIN,
-                i32::MIN,
-            )]);
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected = IntervalDayTimeArray::from(vec![IntervalDayTime::new(
-                i32::MIN,
-                i32::MIN,
-            )]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
-
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_interval_dt_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
-    }
-
-    #[test]
-    fn test_abs_u64_array() {
-        with_fail_on_error(|fail_on_error| {
-            let input = UInt64Array::from(vec![Some(u64::MIN), Some(u64::MAX), None]);
-            let args = ColumnarValue::Array(Arc::new(input));
-            let expected = UInt64Array::from(vec![Some(u64::MIN), Some(u64::MAX), None]);
-            let fail_on_error_arg =
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error)));
-
-            match spark_abs(&[args, fail_on_error_arg]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = as_uint64_array(&result)?;
-                    assert_eq!(actual, &expected);
-                    Ok(())
-                }
-                Err(e) => {
-                    if fail_on_error {
-                        assert!(
-                            e.to_string().contains("arithmetic overflow"),
-                            "Error message did not match. Actual message: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        panic!("Didn't expect error, but got: {e:?}")
-                    }
-                }
-                _ => unreachable!(),
-            }
-        });
+        eval_array_ansi_mode!(Decimal128Array::from(vec![Some(i128::MIN), None])
+            .with_precision_and_scale(38, 37)
+            .unwrap());
+        eval_array_ansi_mode!(Decimal256Array::from(vec![Some(i256::MIN), None])
+            .with_precision_and_scale(5, 2)
+            .unwrap());
+        eval_array_ansi_mode!(IntervalYearMonthArray::from(vec![i32::MIN, -1]));
+        eval_array_ansi_mode!(IntervalDayTimeArray::from(vec![IntervalDayTime::new(
+            i32::MIN,
+            i32::MIN,
+        )]));
     }
 }
