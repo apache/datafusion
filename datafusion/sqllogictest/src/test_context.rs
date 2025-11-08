@@ -602,8 +602,7 @@ fn register_test_batched_table_function(ctx: &SessionContext) {
                         .as_primitive::<arrow::datatypes::Int64Type>()
                         .value(idx) as i32),
                     dt => Err(DataFusionError::Internal(format!(
-                        "Expected Int32/Int64, got {:?}",
-                        dt
+                        "Expected Int32/Int64, got {dt:?}"
                     ))),
                 }
             };
@@ -619,16 +618,24 @@ fn register_test_batched_table_function(ctx: &SessionContext) {
                 for n in start..=stop {
                     // Simple filter evaluation for test purposes
                     // Only handles basic comparison filters on 'n' column
-                    let passes_filters = filters.is_empty() || filters.iter().all(|filter| {
-                        // This is a simplified filter evaluator for testing
-                        // In a real implementation, you'd use DataFusion's expression evaluator
-                        match filter {
-                            datafusion::prelude::Expr::BinaryExpr(binary) => {
-                                use datafusion::logical_expr::Operator;
-                                if let datafusion::prelude::Expr::Column(col) = &*binary.left {
-                                    if col.name == "n" {
-                                        if let datafusion::prelude::Expr::Literal(val, _) = &*binary.right {
-                                            if let datafusion::common::ScalarValue::Int32(Some(val)) = val {
+                    let passes_filters = filters.is_empty()
+                        || filters.iter().all(|filter| {
+                            // This is a simplified filter evaluator for testing
+                            // In a real implementation, you'd use DataFusion's expression evaluator
+                            match filter {
+                                datafusion::prelude::Expr::BinaryExpr(binary) => {
+                                    use datafusion::logical_expr::Operator;
+                                    if let datafusion::prelude::Expr::Column(col) =
+                                        &*binary.left
+                                    {
+                                        if col.name == "n" {
+                                            if let datafusion::prelude::Expr::Literal(
+                                                datafusion::common::ScalarValue::Int32(
+                                                    Some(val),
+                                                ),
+                                                _,
+                                            ) = &*binary.right
+                                            {
                                                 return match binary.op {
                                                     Operator::Gt => n > *val,
                                                     Operator::Lt => n < *val,
@@ -641,12 +648,11 @@ fn register_test_batched_table_function(ctx: &SessionContext) {
                                             }
                                         }
                                     }
+                                    true // Unknown filters pass through (should be handled by FilterExec)
                                 }
-                                true // Unknown filters pass through (should be handled by FilterExec)
+                                _ => true, // Unknown filter types pass through
                             }
-                            _ => true, // Unknown filter types pass through
-                        }
-                    });
+                        });
 
                     if passes_filters {
                         output_values.push(n);

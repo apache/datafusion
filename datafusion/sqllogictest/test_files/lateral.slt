@@ -438,10 +438,10 @@ EXPLAIN SELECT n
 FROM batched_generate_series(1, 20)
 WHERE n > 15 AND n < 18
 ----
-logical_plan StandaloneBatchedTableFunctionScan: batched_generate_series(Int64(1), Int64(20)), projection=[0], filters=[batched_generate_series().n > Int32(15), batched_generate_series().n < Int32(18)]
+logical_plan StandaloneBatchedTableFunction: batched_generate_series(Int64(1), Int64(20)), projection=[0], filters=[batched_generate_series().n > Int32(15), batched_generate_series().n < Int32(18)]
 physical_plan
 01)BatchedTableFunctionExec: function=batched_generate_series, args=[1, 20], projection=[0], filters=[batched_generate_series().n > Int32(15), batched_generate_series().n < Int32(18)]
-02)--PlaceholderRowExec: produces single row
+02)--PlaceholderRowExec
 
 # Verify volatile filters are NOT pushed down (they stay as Filter operator)
 query TT
@@ -451,13 +451,13 @@ WHERE n > 15 AND random() > 0.5
 ----
 logical_plan
 01)Filter: random() > Float64(0.5)
-02)--StandaloneBatchedTableFunctionScan: batched_generate_series(Int64(1), Int64(20)), projection=[0], filters=[batched_generate_series().n > Int32(15)]
+02)--StandaloneBatchedTableFunction: batched_generate_series(Int64(1), Int64(20)), projection=[0], filters=[batched_generate_series().n > Int32(15)]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: random() > 0.5
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------BatchedTableFunctionExec: function=batched_generate_series, args=[1, 20], projection=[0], filters=[batched_generate_series().n > Int32(15)]
-05)--------PlaceholderRowExec: produces single row
+05)--------PlaceholderRowExec
 
 # Verify LATERAL projection pushdown - since generate_series only has 1 column, projection not shown
 query TT
@@ -467,7 +467,7 @@ CROSS JOIN LATERAL batched_generate_series(ranges_filter_test.start_val, ranges_
 ----
 logical_plan
 01)Projection: ranges_filter_test.start_val, batched_generate_series().n
-02)--LateralTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
+02)--LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 03)----TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
 01)ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]
@@ -483,7 +483,7 @@ WHERE n > 12
 ----
 logical_plan
 01)Projection: ranges_filter_test.start_val, batched_generate_series().n
-02)--LateralTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val), filters=[batched_generate_series().n > Int32(12)]
+02)--LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val), filters=[batched_generate_series().n > Int32(12)]
 03)----TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
 01)ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]
@@ -500,7 +500,7 @@ WHERE start_val > 5
 logical_plan
 01)Filter: ranges_filter_test.start_val > Int32(5)
 02)--Projection: ranges_filter_test.start_val, batched_generate_series().n
-03)----LateralTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
+03)----LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 04)------TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
@@ -603,17 +603,17 @@ WHERE n <= 10
 ## Limit Pushdown Tests
 ##########
 
-# Verify limit pushdown for StandaloneBatchedTableFunctionScan
+# Verify limit pushdown for StandaloneBatchedTableFunction
 query TT
 EXPLAIN SELECT n FROM batched_generate_series(1, 100) LIMIT 5
 ----
 logical_plan
 01)Limit: skip=0, fetch=5
-02)--StandaloneBatchedTableFunctionScan: batched_generate_series(Int64(1), Int64(100)), projection=[0]
+02)--StandaloneBatchedTableFunction: batched_generate_series(Int64(1), Int64(100)), projection=[0]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--BatchedTableFunctionExec: function=batched_generate_series, args=[1, 100], projection=[0]
-03)----PlaceholderRowExec: produces single row
+03)----PlaceholderRowExec
 
 # Test limit actually works
 query I
@@ -635,7 +635,7 @@ LIMIT 3
 logical_plan
 01)Projection: ranges_filter_test.start_val, batched_generate_series().n
 02)--Limit: skip=0, fetch=3
-03)----LateralTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
+03)----LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 04)------TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
 01)ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]

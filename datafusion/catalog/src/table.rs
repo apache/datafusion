@@ -495,7 +495,7 @@ impl TableFunction {
 /// Implementation of a table function that can process batched inputs
 ///
 /// This is the trait that table function implementors should implement.
-/// It receives already-evaluated arguments (similar to [`ScalarUDFImpl`]).
+/// It receives already-evaluated arguments (similar to `ScalarUDFImpl`).
 ///
 /// Unlike the legacy `TableFunctionImpl` trait which only accepts constant arguments,
 /// `BatchedTableFunctionImpl` can process batched inputs, enabling:
@@ -562,8 +562,8 @@ pub struct BatchResultChunk {
 
     /// Maps each output row to its source input row
     ///
-    /// For output row i, it was generated from input row input_row_indices[i].
-    /// Length must equal output.num_rows().
+    /// For output row `i`, it was generated from input row `input_row_indices[i]`.
+    /// Length must equal `output.num_rows()`.
     ///
     /// For standalone invocations with a single input, this is typically
     /// vec![0; output.num_rows()] (all rows from input row 0).
@@ -623,9 +623,9 @@ pub trait BatchedTableFunctionImpl: Send + Sync + Debug {
     ///
     /// Default implementation returns [`Unsupported`] for all filters.
     ///
-    /// [`Unsupported`]: crate::TableProviderFilterPushDown::Unsupported
-    /// [`Exact`]: crate::TableProviderFilterPushDown::Exact
-    /// [`Inexact`]: crate::TableProviderFilterPushDown::Inexact
+    /// [`Unsupported`]: TableProviderFilterPushDown::Unsupported
+    /// [`Exact`]: TableProviderFilterPushDown::Exact
+    /// [`Inexact`]: TableProviderFilterPushDown::Inexact
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
@@ -716,7 +716,7 @@ pub trait BatchedTableFunctionImpl: Send + Sync + Debug {
 /// This is a wrapper around [`BatchedTableFunctionImpl`] that provides
 /// a `create_plan` method for integration with DataFusion's planning.
 ///
-/// Similar to how [`ScalarUDF`] wraps [`ScalarUDFImpl`].
+/// Similar to how `ScalarUDF` wraps `ScalarUDFImpl`.
 #[derive(Debug, Clone)]
 pub struct BatchedTableFunction {
     inner: Arc<dyn BatchedTableFunctionImpl>,
