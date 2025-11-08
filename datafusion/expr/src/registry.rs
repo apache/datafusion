@@ -238,7 +238,7 @@ pub trait ExtensionTypeRegistration: Debug + Send + Sync {
     fn create_logical_type(&self, field: Field) -> Result<LogicalTypeRef>;
 }
 
-/// A cheaply clonable pointer to an [ExtensionTypeRegistration].
+/// A cheaply cloneable pointer to an [ExtensionTypeRegistration].
 pub type ExtensionTypeRegistrationRef = Arc<dyn ExtensionTypeRegistration>;
 
 /// Supports registering custom [LogicalType]s, including native types.
