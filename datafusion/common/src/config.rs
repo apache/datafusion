@@ -1195,15 +1195,6 @@ impl ConfigField for ConfigOptions {
         }
     }
 
-    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
-        self.catalog.visit(v, "datafusion.catalog", "");
-        self.execution.visit(v, "datafusion.execution", "");
-        self.optimizer.visit(v, "datafusion.optimizer", "");
-        self.explain.visit(v, "datafusion.explain", "");
-        self.sql_parser.visit(v, "datafusion.sql_parser", "");
-        self.format.visit(v, "datafusion.format", "");
-    }
-
     /// Reset a configuration option back to its default value
     fn reset(&mut self, key: &str) -> Result<()> {
         let Some((prefix, rest)) = key.split_once('.') else {

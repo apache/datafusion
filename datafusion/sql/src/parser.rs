@@ -767,17 +767,17 @@ impl<'a> DFParser<'a> {
                 Token::Period => {
                     self.parser.next_token();
                     if expecting_segment || parts.is_empty() {
-                        return self.expected("configuration parameter", next_token);
+                        return self.expected("configuration parameter", &next_token);
                     }
                     expecting_segment = true;
                 }
                 Token::EOF | Token::SemiColon => break,
-                _ => return self.expected("configuration parameter", next_token),
+                _ => return self.expected("configuration parameter", &next_token),
             }
         }
 
         if parts.is_empty() || expecting_segment {
-            return self.expected("configuration parameter", self.parser.peek_token());
+            return self.expected("configuration parameter", &self.parser.peek_token());
         }
 
         let idents: Vec<Ident> = parts.into_iter().map(Ident::new).collect();

@@ -1108,8 +1108,6 @@ impl SessionContext {
             for udf in udfs_to_update {
                 state.register_udf(udf)?;
             }
-
-            drop(state);
         }
 
         Ok(())
@@ -1140,7 +1138,6 @@ impl SessionContext {
             state.register_udf(udf)?;
         }
 
-        drop(state);
         Ok(())
     }
 

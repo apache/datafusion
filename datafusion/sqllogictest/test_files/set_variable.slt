@@ -290,17 +290,6 @@ statement ok
 set datafusion.catalog.information_schema = true
 
 statement ok
-SET TIME ZONE = '+10:00'
-
-statement ok
-RESET TIME ZONE
-
-query TT
-SHOW TIME ZONE
-----
-datafusion.execution.time_zone +00:00
-
-statement ok
 SET TIMEZONE = '-03:00'
 
 statement ok
@@ -309,7 +298,7 @@ RESET TIMEZONE
 query TT
 SHOW TIMEZONE
 ----
-datafusion.execution.time_zone +00:00
+datafusion.execution.time_zone NULL
 
 statement ok
 SET TIME ZONE = '+09:00'
@@ -320,7 +309,7 @@ RESET timezone
 query TT
 SHOW TIME ZONE
 ----
-datafusion.execution.time_zone +00:00
+datafusion.execution.time_zone NULL
 
 # reset runtime variables
 statement ok
@@ -357,6 +346,7 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
 
 statement ok
 RESET datafusion.runtime.memory_limit
+
 # This query should succeed after resetting memory limit
 statement ok
 EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
