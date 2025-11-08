@@ -20,7 +20,7 @@
 # Download
 
 Most users use DataFusion as a library in their Rust projects by adding it as a dependency
-in their `Cargo.toml` file and downloading it from the Rust [crates.io] package registry. 
+in their `Cargo.toml` file and downloading it from the Rust [crates.io] package registry.
 
 For example:
 
@@ -36,9 +36,8 @@ official Apache DataFusion releases are provided as source artifacts.
 
 ## Releases
 
-You can find the latest releases, signatures and checksums on 
+You can find the latest releases, signatures and checksums on
 the [ASF Release Page](https://dist.apache.org/repos/dist/release/datafusion)
-
 
 For previous releases, please check the [archive](https://archive.apache.org/dist/datafusion/).
 
@@ -50,7 +49,7 @@ For releases earlier than 37.0.0, please check [Arrow's archive](https://archive
 - The [KEYS] file contains the public keys used for signing release. It is recommended that (when possible) a web of trust is used to confirm the identity of these keys.
 - Please download the [KEYS] file as well as the .asc signature files.
 
-[KEYS]: https://downloads.apache.org/datafusion/KEYS
+[keys]: https://downloads.apache.org/datafusion/KEYS
 
 ### To verify the signature of the release artifact
 
