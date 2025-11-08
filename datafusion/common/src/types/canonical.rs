@@ -15,37 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::_internal_err;
 use crate::types::{
     LogicalType, NativeType, TypeParameter, TypeSignature, ValuePrettyPrinter,
 };
-use crate::Result;
 use crate::ScalarValue;
+use crate::{Result, _internal_datafusion_err};
+use arrow_schema::extension::{ExtensionType, Opaque, Uuid};
 use std::sync::{Arc, LazyLock};
+use uuid::Bytes;
 
-/// Represents the canonical [UUID extension type](https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid).
-pub struct UuidType {}
-
-impl UuidType {
-    /// Creates a new [UuidType].
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Default for UuidType {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LogicalType for UuidType {
+impl LogicalType for Uuid {
     fn native(&self) -> &NativeType {
         &NativeType::FixedSizeBinary(16)
     }
 
     fn signature(&self) -> TypeSignature<'_> {
         TypeSignature::Extension {
-            name: "arrow.uuid",
+            name: Uuid::NAME,
             parameters: vec![],
         }
     }
@@ -62,7 +49,21 @@ struct UuidValuePrettyPrinter;
 
 impl ValuePrettyPrinter for UuidValuePrettyPrinter {
     fn pretty_print_scalar(&self, value: &ScalarValue) -> Result<String> {
-        Ok(format!("arrow.uuid({})", value))
+        match value {
+            ScalarValue::FixedSizeBinary(16, value) => match value {
+                Some(value) => {
+                    let bytes = Bytes::try_from(value.as_slice()).map_err(|_| {
+                        _internal_datafusion_err!(
+                            "Invalid UUID bytes even though type is correct."
+                        )
+                    })?;
+                    let uuid = uuid::Uuid::from_bytes(bytes);
+                    Ok(format!("arrow.uuid({})", uuid))
+                }
+                None => Ok("arrow.uuid(NULL)".to_owned()),
+            },
+            _ => _internal_err!("Wrong scalar given to "),
+        }
     }
 }
 
@@ -70,28 +71,19 @@ impl ValuePrettyPrinter for UuidValuePrettyPrinter {
 ///
 /// In the context of DataFusion, a common use case of the opaque type is when an extension type
 /// is unknown to DataFusion. Contrary to [UnresolvedExtensionType], the extension type has
-/// already been checked against the extension type registry and was not found.  
-pub struct OpaqueType {
-    /// The underlying native type.
-    native_type: NativeType,
-}
-
-impl OpaqueType {
-    /// Creates a new [OpaqueType].
-    pub fn new(native_type: NativeType) -> Self {
-        Self { native_type }
-    }
-}
-
-impl LogicalType for OpaqueType {
+/// already been checked against the extension type registry and was not found.
+impl LogicalType for Opaque {
     fn native(&self) -> &NativeType {
         &NativeType::FixedSizeBinary(16)
     }
 
     fn signature(&self) -> TypeSignature<'_> {
-        let parameter = TypeParameter::Type(TypeSignature::Native(&self.native_type));
+        let parameter = TypeParameter::Type(TypeSignature::Extension {
+            name: self.metadata().type_name(),
+            parameters: vec![],
+        });
         TypeSignature::Extension {
-            name: "arrow.opaque",
+            name: Opaque::NAME,
             parameters: vec![parameter],
         }
     }
@@ -102,6 +94,8 @@ impl LogicalType for OpaqueType {
         &PRETTY_PRINTER
     }
 }
+
+// TODO Other canonical extension types.
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 struct OpaqueValuePrettyPrinter;
@@ -159,9 +153,13 @@ impl LogicalType for UnresolvedExtensionType {
     }
 
     fn signature(&self) -> TypeSignature<'_> {
+        let inner_type = TypeParameter::Type(TypeSignature::Extension {
+            name: &self.name,
+            parameters: vec![],
+        });
         TypeSignature::Extension {
             name: &"datafusion.unresolved",
-            parameters: vec![],
+            parameters: vec![inner_type],
         }
     }
 
@@ -178,5 +176,23 @@ struct UnresolvedValuePrettyPrinter {}
 impl ValuePrettyPrinter for UnresolvedValuePrettyPrinter {
     fn pretty_print_scalar(&self, value: &ScalarValue) -> Result<String> {
         Ok(format!("datafusion.unresolved({})", value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    pub fn test_pretty_print_uuid() {
+        let my_uuid = uuid::Uuid::nil();
+        let uuid = ScalarValue::FixedSizeBinary(16, Some(my_uuid.as_bytes().to_vec()));
+
+        let printer = UuidValuePrettyPrinter::default();
+        let pretty_printed = printer.pretty_print_scalar(&uuid).unwrap();
+        assert_eq!(
+            pretty_printed,
+            "arrow.uuid(00000000-0000-0000-0000-000000000000)"
+        );
     }
 }

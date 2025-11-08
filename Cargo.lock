@@ -2033,6 +2033,7 @@ dependencies = [
  "recursive",
  "sqlparser",
  "tokio",
+ "uuid",
  "web-time",
 ]
 

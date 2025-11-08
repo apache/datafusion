@@ -94,6 +94,7 @@ apache-avro = { version = "0.20", default-features = false }
 arrow = { version = "57.0.0", features = [
     "prettyprint",
     "chrono-tz",
+    "canonical_extension_types"
 ] }
 arrow-buffer = { version = "57.0.0", default-features = false }
 arrow-flight = { version = "57.0.0", features = [
@@ -103,7 +104,7 @@ arrow-ipc = { version = "57.0.0", default-features = false, features = [
     "lz4",
 ] }
 arrow-ord = { version = "57.0.0", default-features = false }
-arrow-schema = { version = "57.0.0", default-features = false }
+arrow-schema = { version = "57.0.0", default-features = false, features = ["canonical_extension_types"] }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.10"
