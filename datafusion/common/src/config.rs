@@ -517,6 +517,23 @@ config_namespace! {
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
 
+        /// Maximum size in bytes for individual spill files before rotating to a new file.
+        ///
+        /// When operators spill data to disk (e.g., RepartitionExec), they write
+        /// multiple batches to the same file until this size limit is reached, then rotate
+        /// to a new file. This reduces syscall overhead compared to one-file-per-batch
+        /// while preventing files from growing too large.
+        ///
+        /// A larger value reduces file creation overhead but may hold more disk space.
+        /// A smaller value creates more files but allows finer-grained space reclamation
+        /// as files can be deleted once fully consumed.
+        ///
+        /// Now only `RepartitionExec` supports this spill file rotation feature, other spilling operators
+        /// may create spill files larger than the limit.
+        ///
+        /// Default: 128 MB
+        pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
+
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
 
