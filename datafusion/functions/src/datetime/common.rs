@@ -164,7 +164,9 @@ fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
                 match rest.len() {
                     2 => format!("{}{}:00", sign, &rest[0..2]),
                     4 => format!("{}{}:{}", sign, &rest[0..2], &rest[2..4]),
-                    6 => format!("{}{}:{}:{}", sign, &rest[0..2], &rest[2..4], &rest[4..6]),
+                    6 => {
+                        format!("{}{}:{}:{}", sign, &rest[0..2], &rest[2..4], &rest[4..6])
+                    }
                     _ => tz.to_string(),
                 }
             } else {
