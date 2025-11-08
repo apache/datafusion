@@ -77,6 +77,7 @@ pub struct BatchedTableFunctionExec {
 }
 
 impl BatchedTableFunctionExec {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         func: Arc<dyn BatchedTableFunctionImpl>,
         args: Vec<Arc<dyn PhysicalExpr>>,

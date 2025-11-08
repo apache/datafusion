@@ -24,7 +24,7 @@ use crate::expr::NullTreatment;
 #[cfg(feature = "sql")]
 use crate::logical_plan::LogicalPlan;
 use crate::{
-    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, BatchedTableFunctionSource,
+    AggregateUDF, BatchedTableFunctionSource, Expr, GetFieldAccess, ScalarUDF, SortExpr,
     TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};

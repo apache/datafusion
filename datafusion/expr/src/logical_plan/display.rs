@@ -22,9 +22,10 @@ use std::fmt;
 
 use crate::{
     expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr,
-    Filter, Join, LateralBatchedTableFunction, Limit, LogicalPlan, Partitioning, Projection,
-    RecursiveQuery, Repartition, Sort, StandaloneBatchedTableFunction, Subquery,
-    SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values, Window,
+    Filter, Join, LateralBatchedTableFunction, Limit, LogicalPlan, Partitioning,
+    Projection, RecursiveQuery, Repartition, Sort, StandaloneBatchedTableFunction,
+    Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values,
+    Window,
 };
 
 use crate::dml::CopyTo;
@@ -651,11 +652,13 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Arguments": expr_vec_fmt!(args),
                 })
             }
-            LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
-                function_name,
-                args,
-                ..
-            }) => {
+            LogicalPlan::StandaloneBatchedTableFunction(
+                StandaloneBatchedTableFunction {
+                    function_name,
+                    args,
+                    ..
+                },
+            ) => {
                 json!({
                     "Node Type": "StandaloneBatchedTableFunction",
                     "Function": function_name,

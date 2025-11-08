@@ -41,8 +41,9 @@ use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
     Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
     LateralBatchedTableFunction, Limit, LogicalPlan, Partitioning, Prepare, Projection,
-    RecursiveQuery, Repartition, Sort, Statement, StandaloneBatchedTableFunction, Subquery,
-    SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values, Window,
+    RecursiveQuery, Repartition, Sort, StandaloneBatchedTableFunction, Statement,
+    Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values,
+    Window,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -473,7 +474,9 @@ impl LogicalPlan {
             LogicalPlan::StandaloneBatchedTableFunction(batched_scan) => {
                 batched_scan.args.apply_elements(f)
             }
-            LogicalPlan::LateralBatchedTableFunction(lateral) => lateral.args.apply_elements(f),
+            LogicalPlan::LateralBatchedTableFunction(lateral) => {
+                lateral.args.apply_elements(f)
+            }
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 on_expr,
                 select_expr,
@@ -668,16 +671,8 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
-            LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
-                function_name,
-                source,
-                args,
-                schema,
-                projection,
-                filters,
-                fetch,
-            }) => args.map_elements(f)?.update_data(|args| {
-                LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
+            LogicalPlan::StandaloneBatchedTableFunction(
+                StandaloneBatchedTableFunction {
                     function_name,
                     source,
                     args,
@@ -685,7 +680,19 @@ impl LogicalPlan {
                     projection,
                     filters,
                     fetch,
-                })
+                },
+            ) => args.map_elements(f)?.update_data(|args| {
+                LogicalPlan::StandaloneBatchedTableFunction(
+                    StandaloneBatchedTableFunction {
+                        function_name,
+                        source,
+                        args,
+                        schema,
+                        projection,
+                        filters,
+                        fetch,
+                    },
+                )
             }),
             LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
                 input,

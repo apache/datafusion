@@ -1331,7 +1331,8 @@ impl OptimizerRule for PushDownFilter {
 
                 Transformed::yes(new_lateral).transform_data(|new_lateral| {
                     if let Some(predicate) = conjunction(remaining_predicates) {
-                        make_filter(predicate, Arc::new(new_lateral)).map(Transformed::yes)
+                        make_filter(predicate, Arc::new(new_lateral))
+                            .map(Transformed::yes)
                     } else {
                         Ok(Transformed::no(new_lateral))
                     }

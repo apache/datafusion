@@ -42,6 +42,7 @@ impl DoubleFn {
     }
 }
 
+#[async_trait::async_trait]
 impl BatchedTableFunctionImpl for DoubleFn {
     fn name(&self) -> &str {
         "double"
@@ -59,7 +60,7 @@ impl BatchedTableFunctionImpl for DoubleFn {
         )]))
     }
 
-    fn invoke_batch(
+    async fn invoke_batch(
         &self,
         args: &[ArrayRef],
         _projection: Option<&[usize]>,
@@ -123,7 +124,7 @@ async fn test_lateral_no_select() -> Result<()> {
             Ok(())
         }
         Err(e) => {
-            println!("Error: {}", e);
+            println!("Error: {e}");
             Err(e)
         }
     }
@@ -160,7 +161,7 @@ async fn test_lateral_simple_explain() -> Result<()> {
 
     println!("EXPLAIN results:");
     for batch in &results {
-        println!("{:?}", batch);
+        println!("{batch:?}");
     }
 
     Ok(())

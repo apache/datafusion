@@ -30,8 +30,8 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
-    batched_function::helpers::materialized_batch_stream, CatalogProvider,
-    MemoryCatalogProvider, MemorySchemaProvider, Session, BatchedTableFunctionImpl,
+    batched_function::helpers::materialized_batch_stream, BatchedTableFunctionImpl,
+    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
 };
 use datafusion::common::{not_impl_err, DataFusionError, Result};
 use datafusion::functions::math::abs;

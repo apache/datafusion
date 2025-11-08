@@ -45,10 +45,10 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable,
-    LogicalPlanBuilder, Operator, Prepare, BatchedTableFunctionSource, TableProviderFilterPushDown,
-    TableSource,
-    WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
+    build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
+    BatchedTableFunctionSource, BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr,
+    ExprSchemable, LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown,
+    TableSource, WindowFunctionDefinition,
 };
 
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
@@ -358,12 +358,12 @@ impl LogicalPlan {
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
             LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
-                schema, ..
-            }) => schema,
-            LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
                 schema,
                 ..
             }) => schema,
+            LogicalPlan::StandaloneBatchedTableFunction(
+                StandaloneBatchedTableFunction { schema, .. },
+            ) => schema,
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
@@ -486,7 +486,10 @@ impl LogicalPlan {
             LogicalPlan::Copy(copy) => vec![&copy.input],
             LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
-            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction { input, .. }) => {
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                input,
+                ..
+            }) => {
                 vec![input]
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
@@ -1158,15 +1161,17 @@ impl LogicalPlan {
                 self.assert_no_inputs(inputs)?;
                 Ok(self.clone())
             }
-            LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
-                function_name,
-                source,
-                schema,
-                projection,
-                filters,
-                fetch,
-                ..
-            }) => {
+            LogicalPlan::StandaloneBatchedTableFunction(
+                StandaloneBatchedTableFunction {
+                    function_name,
+                    source,
+                    schema,
+                    projection,
+                    filters,
+                    fetch,
+                    ..
+                },
+            ) => {
                 self.assert_no_inputs(inputs)?;
                 Ok(LogicalPlan::StandaloneBatchedTableFunction(
                     StandaloneBatchedTableFunction {
@@ -1191,17 +1196,19 @@ impl LogicalPlan {
                 ..
             }) => {
                 let input = self.only_input(inputs)?;
-                Ok(LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
-                    input: Arc::new(input),
-                    function_name: function_name.clone(),
-                    source: Arc::clone(source),
-                    args: expr.to_vec(),
-                    schema: Arc::clone(schema),
-                    table_function_schema: Arc::clone(table_function_schema),
-                    projection: projection.clone(),
-                    filters: filters.clone(),
-                    fetch: *fetch,
-                }))
+                Ok(LogicalPlan::LateralBatchedTableFunction(
+                    LateralBatchedTableFunction {
+                        input: Arc::new(input),
+                        function_name: function_name.clone(),
+                        source: Arc::clone(source),
+                        args: expr.to_vec(),
+                        schema: Arc::clone(schema),
+                        table_function_schema: Arc::clone(table_function_schema),
+                        projection: projection.clone(),
+                        filters: filters.clone(),
+                        fetch: *fetch,
+                    },
+                ))
             }
             LogicalPlan::Unnest(Unnest {
                 exec_columns: columns,
@@ -2177,7 +2184,7 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "LateralBatchedTableFunction: {}({})", function_name, expr_vec_fmt!(args))?;
                         if let Some(proj) = projection {
-                            write!(f, ", projection={:?}", proj)?;
+                            write!(f, ", projection={proj:?}")?;
                         }
                         if !filters.is_empty() {
                             write!(f, ", filters=[{}]", expr_vec_fmt!(filters))?;
@@ -2193,7 +2200,7 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "StandaloneBatchedTableFunction: {}({})", function_name, expr_vec_fmt!(args))?;
                         if let Some(proj) = projection {
-                            write!(f, ", projection={:?}", proj)?;
+                            write!(f, ", projection={proj:?}")?;
                         }
                         if !filters.is_empty() {
                             write!(f, ", filters=[{}]", expr_vec_fmt!(filters))?;

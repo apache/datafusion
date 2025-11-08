@@ -298,17 +298,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let combined_schema = input_schema.as_ref().join(&qualified_func_schema)?;
 
-        let lateral_plan = LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
-            input: Arc::new(input_plan.clone()),
-            function_name: func_name.to_string(),
-            source,
-            args: func_args,
-            schema: Arc::new(combined_schema),
-            table_function_schema: Arc::new(qualified_func_schema),
-            projection: None,
-            filters: vec![],
-            fetch: None,
-        });
+        let lateral_plan =
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                input: Arc::new(input_plan.clone()),
+                function_name: func_name.to_string(),
+                source,
+                args: func_args,
+                schema: Arc::new(combined_schema),
+                table_function_schema: Arc::new(qualified_func_schema),
+                projection: None,
+                filters: vec![],
+                fetch: None,
+            });
 
         Ok(Some(lateral_plan))
     }

@@ -44,6 +44,7 @@ impl DoubleFn {
     }
 }
 
+#[async_trait::async_trait]
 impl BatchedTableFunctionImpl for DoubleFn {
     fn name(&self) -> &str {
         "double"
@@ -61,7 +62,7 @@ impl BatchedTableFunctionImpl for DoubleFn {
         )]))
     }
 
-    fn invoke_batch(
+    async fn invoke_batch(
         &self,
         args: &[ArrayRef],
         _projection: Option<&[usize]>,

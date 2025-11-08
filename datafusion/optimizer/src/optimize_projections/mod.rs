@@ -306,7 +306,8 @@ fn optimize_projections(
                     let qualified_fields: Vec<_> = proj
                         .iter()
                         .map(|&i| {
-                            let (qualifier, field) = lateral.table_function_schema.qualified_field(i);
+                            let (qualifier, field) =
+                                lateral.table_function_schema.qualified_field(i);
                             (qualifier.cloned(), Arc::new(field.clone()))
                         })
                         .collect();
@@ -458,9 +459,9 @@ fn optimize_projections(
 
             let mut new_scan = scan.clone();
             new_scan.projection = Some(new_projection);
-            return Ok(Transformed::yes(LogicalPlan::StandaloneBatchedTableFunction(
-                new_scan,
-            )));
+            return Ok(Transformed::yes(
+                LogicalPlan::StandaloneBatchedTableFunction(new_scan),
+            ));
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
