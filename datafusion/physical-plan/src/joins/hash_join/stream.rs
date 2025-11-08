@@ -107,7 +107,7 @@ impl BuildSide {
 /// Expected state transitions performed by HashJoinStream are:
 ///
 /// ```text
-///
+/// 
 ///       WaitBuildSide
 ///             │
 ///             ▼
