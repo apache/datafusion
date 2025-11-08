@@ -29,7 +29,8 @@ use chrono::{DateTime, TimeZone, Utc};
 
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
-    exec_err, unwrap_or_internal_err, DataFusionError, Result, ScalarType, ScalarValue,
+    exec_datafusion_err, exec_err, unwrap_or_internal_err, DataFusionError, Result,
+    ScalarType, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -83,9 +84,9 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
     format: &str,
 ) -> Result<DateTime<T>, DataFusionError> {
     let err = |err_ctx: &str| {
-        DataFusionError::Execution(format!(
+        exec_datafusion_err!(
             "Error parsing timestamp from '{s}' using format '{format}': {err_ctx}"
-        ))
+        )
     };
 
     let mut parsed = Parsed::new();
@@ -139,7 +140,6 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 /// defined by `chrono`.
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-///
 #[inline]
 pub(crate) fn string_to_timestamp_nanos_formatted(
     s: &str,
@@ -149,9 +149,7 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
         .naive_utc()
         .and_utc()
         .timestamp_nanos_opt()
-        .ok_or_else(|| {
-            DataFusionError::Execution(ERR_NANOSECONDS_NOT_SUPPORTED.to_string())
-        })
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
 }
 
 /// Accepts a string with a `chrono` format and converts it to a
@@ -170,7 +168,6 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
 /// defined by `chrono`.
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-///
 #[inline]
 pub(crate) fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
     Ok(string_to_datetime_formatted(&Utc, s, format)?

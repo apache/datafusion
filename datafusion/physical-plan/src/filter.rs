@@ -32,12 +32,13 @@ use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown, PushedDownPredicate,
 };
+use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec, ProjectionExpr,
 };
 use crate::{
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
+    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
     DisplayFormatType, ExecutionPlan,
 };
 
@@ -265,7 +266,7 @@ impl FilterExec {
             default_selectivity,
         )?;
         let mut eq_properties = input.equivalence_properties().clone();
-        let (equal_pairs, _) = collect_columns_from_predicate(predicate);
+        let (equal_pairs, _) = collect_columns_from_predicate_inner(predicate);
         for (lhs, rhs) in equal_pairs {
             eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
         }
@@ -384,12 +385,12 @@ impl ExecutionPlan for FilterExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let metrics = FilterExecMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
             input: self.input.execute(partition, context)?,
-            baseline_metrics,
+            metrics,
             projection: self.projection.clone(),
         }))
     }
@@ -623,9 +624,28 @@ struct FilterExecStream {
     /// The input partition to filter.
     input: SendableRecordBatchStream,
     /// Runtime metrics recording
-    baseline_metrics: BaselineMetrics,
+    metrics: FilterExecMetrics,
     /// The projection indices of the columns in the input schema
     projection: Option<Vec<usize>>,
+}
+
+/// The metrics for `FilterExec`
+struct FilterExecMetrics {
+    // Common metrics for most operators
+    baseline_metrics: BaselineMetrics,
+    // Selectivity of the filter, calculated as output_rows / input_rows
+    selectivity: RatioMetrics,
+}
+
+impl FilterExecMetrics {
+    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self {
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
+            selectivity: MetricBuilder::new(metrics)
+                .with_type(MetricType::SUMMARY)
+                .ratio_metrics("selectivity", partition),
+        }
+    }
 }
 
 pub fn batch_filter(
@@ -679,7 +699,7 @@ impl Stream for FilterExecStream {
         loop {
             match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let timer = self.baseline_metrics.elapsed_compute().timer();
+                    let timer = self.metrics.baseline_metrics.elapsed_compute().timer();
                     let filtered_batch = filter_and_project(
                         &batch,
                         &self.predicate,
@@ -687,6 +707,10 @@ impl Stream for FilterExecStream {
                         &self.schema,
                     )?;
                     timer.done();
+
+                    self.metrics.selectivity.add_part(filtered_batch.num_rows());
+                    self.metrics.selectivity.add_total(batch.num_rows());
+
                     // Skip entirely filtered batches
                     if filtered_batch.num_rows() == 0 {
                         continue;
@@ -700,7 +724,7 @@ impl Stream for FilterExecStream {
                 }
             }
         }
-        self.baseline_metrics.record_poll(poll)
+        self.metrics.baseline_metrics.record_poll(poll)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -716,7 +740,17 @@ impl RecordBatchStream for FilterExecStream {
 }
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
+#[deprecated(
+    since = "51.0.0",
+    note = "This function will be internal in the future"
+)]
 pub fn collect_columns_from_predicate(
+    predicate: &'_ Arc<dyn PhysicalExpr>,
+) -> EqualAndNonEqual<'_> {
+    collect_columns_from_predicate_inner(predicate)
+}
+
+fn collect_columns_from_predicate_inner(
     predicate: &'_ Arc<dyn PhysicalExpr>,
 ) -> EqualAndNonEqual<'_> {
     let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
@@ -787,7 +821,7 @@ mod tests {
             &schema,
         )?;
 
-        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&predicate);
+        let (equal_pairs, ne_pairs) = collect_columns_from_predicate_inner(&predicate);
         assert_eq!(2, equal_pairs.len());
         assert!(equal_pairs[0].0.eq(&col("c2", &schema)?));
         assert!(equal_pairs[0].1.eq(&lit(4u32)));

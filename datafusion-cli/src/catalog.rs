@@ -230,6 +230,8 @@ pub fn substitute_tilde(cur: String) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use std::{env, vec};
+
     use super::*;
 
     use datafusion::catalog::SchemaProvider;
@@ -284,6 +286,19 @@ mod tests {
 
     #[tokio::test]
     async fn query_s3_location_test() -> Result<()> {
+        let aws_envs = vec![
+            "AWS_ENDPOINT",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ALLOW_HTTP",
+        ];
+        for aws_env in aws_envs {
+            if env::var(aws_env).is_err() {
+                eprint!("aws envs not set, skipping s3 test");
+                return Ok(());
+            }
+        }
+
         let bucket = "examples3bucket";
         let location = format!("s3://{bucket}/file.parquet");
 

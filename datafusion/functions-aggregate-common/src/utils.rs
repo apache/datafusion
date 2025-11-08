@@ -20,7 +20,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{
     ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
 };
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::sync::Arc;
@@ -95,6 +95,8 @@ pub struct DecimalAverager<T: DecimalType> {
     target_mul: T::Native,
     /// the output precision
     target_precision: u8,
+    /// the output scale
+    target_scale: i8,
 }
 
 impl<T: DecimalType> DecimalAverager<T> {
@@ -112,21 +114,24 @@ impl<T: DecimalType> DecimalAverager<T> {
     ) -> Result<Self> {
         let sum_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(sum_scale as u32))
-            .ok_or(DataFusionError::Internal(
-                "Failed to compute sum_mul in DecimalAverager".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!("Failed to compute sum_mul in DecimalAverager")
+            })?;
 
         let target_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(target_scale as u32))
-            .ok_or(DataFusionError::Internal(
-                "Failed to compute target_mul in DecimalAverager".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Failed to compute target_mul in DecimalAverager"
+                )
+            })?;
 
         if target_mul >= sum_mul {
             Ok(Self {
                 sum_mul,
                 target_mul,
                 target_precision,
+                target_scale,
             })
         } else {
             // can't convert the lit decimal to the returned data type
@@ -145,8 +150,11 @@ impl<T: DecimalType> DecimalAverager<T> {
         if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
             let new_value = value.div_wrapping(count);
 
-            let validate =
-                T::validate_decimal_precision(new_value, self.target_precision);
+            let validate = T::validate_decimal_precision(
+                new_value,
+                self.target_precision,
+                self.target_scale,
+            );
 
             if validate.is_ok() {
                 Ok(new_value)

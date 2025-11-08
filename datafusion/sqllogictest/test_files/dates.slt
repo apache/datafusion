@@ -85,9 +85,14 @@ g
 h
 
 ## Plan error when compare Utf8 and timestamp in where clause
-statement error DataFusion error: type_coercion\ncaused by\nError during planning: Cannot coerce arithmetic expression Timestamp\(Nanosecond, Some\("\+00:00"\)\) \+ Utf8 to valid types
+statement error
 select i_item_desc from test
 where d3_date > now() + '5 days';
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: Cannot coerce arithmetic expression Timestamp(ns) + Utf8 to valid types
+
 
 # DATE minus DATE
 # https://github.com/apache/arrow-rs/issues/4383
@@ -310,6 +315,14 @@ query D
 select to_date('2022-01-23', '%Y-%m-%d');
 ----
 2022-01-23
+
+# invalid date_trunc format
+query error DataFusion error: Execution error: Unsupported date_trunc granularity: ''. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year
+SELECT date_trunc('', to_date('2022-02-23', '%Y-%m-%d'))
+
+# invalid date_trunc format
+query error DataFusion error: Execution error: Unsupported date_trunc granularity: 'invalid'. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year
+SELECT date_trunc('invalid', to_date('2022-02-23', '%Y-%m-%d'))
 
 query PPPP
 select

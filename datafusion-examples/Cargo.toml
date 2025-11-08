@@ -29,20 +29,11 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
-
-[[example]]
-name = "flight_sql_server"
-path = "examples/flight/flight_sql_server.rs"
-
-[[example]]
-name = "flight_server"
-path = "examples/flight/flight_server.rs"
-
-[[example]]
-name = "flight_client"
-path = "examples/flight/flight_client.rs"
 
 [[example]]
 name = "dataframe_to_s3"
@@ -81,7 +72,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
-tonic = "0.13.1"
+tonic = "0.14"
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
 url = { workspace = true }

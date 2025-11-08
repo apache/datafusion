@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::FieldRef;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -61,7 +61,7 @@ struct ColumnAccess {
     // the node referencing the column
     node_id: usize,
     col: Column,
-    data_type: DataType,
+    field: FieldRef,
     subquery_depth: usize,
 }
 
@@ -140,7 +140,7 @@ impl DependentJoinRewriter {
                 .iter()
                 .map(|ac| CorrelatedColumnInfo {
                     col: ac.col.clone(),
-                    data_type: ac.data_type.clone(),
+                    field: ac.field.clone(),
                     depth: ac.subquery_depth,
                 })
                 .unique()
@@ -327,7 +327,7 @@ impl DependentJoinRewriter {
             .iter()
             .map(|ac| CorrelatedColumnInfo {
                 col: ac.col.clone(),
-                data_type: ac.data_type.clone(),
+                field: ac.field.clone(),
                 depth: ac.subquery_depth,
             })
             .unique()
@@ -475,7 +475,7 @@ impl DependentJoinRewriter {
                     col: col.clone(),
                     node_id: access.node_id,
                     stack: access.stack.clone(),
-                    data_type: access.data_type.clone(),
+                    field: access.field.clone(),
                     subquery_depth: access.subquery_depth,
                 });
             }
@@ -486,7 +486,7 @@ impl DependentJoinRewriter {
     fn mark_outer_column_access(
         &mut self,
         child_id: usize,
-        data_type: &DataType,
+        field: &FieldRef,
         col: &Column,
     ) {
         // iter from bottom to top, the goal is to mark the dependent node
@@ -498,7 +498,7 @@ impl DependentJoinRewriter {
                 stack: self.stack.clone(),
                 node_id: child_id,
                 col: col.clone(),
-                data_type: data_type.clone(),
+                field: field.clone(),
                 subquery_depth: self.subquery_depth,
             });
     }
@@ -828,8 +828,8 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     );
 
                     expr.expr.apply(|expr| {
-                        if let Expr::OuterReferenceColumn(data_type, col) = expr {
-                            self.mark_outer_column_access(new_id, data_type, col);
+                        if let Expr::OuterReferenceColumn(field, col) = expr {
+                            self.mark_outer_column_access(new_id, field, col);
                         }
                         Ok(TreeNodeRecursion::Continue)
                     })?;

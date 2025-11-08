@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -29,8 +29,8 @@ use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
-    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    AggregateUDF, Expr, LimitEffect, LogicalPlan, Operator, PartitionEvaluator,
+    ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -42,8 +42,9 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use sqlparser::ast::NullTreatment;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::Not;
@@ -70,8 +71,22 @@ pub fn col(ident: impl Into<Column>) -> Expr {
 
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
+/// The expression created by this function does not preserve the metadata of the outer column.
+/// Please use `out_ref_col_with_metadata` if you want to preserve the metadata.
 pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
-    Expr::OuterReferenceColumn(dt, ident.into())
+    out_ref_col_with_metadata(dt, HashMap::new(), ident)
+}
+
+/// Create an out reference column from an existing field (preserving metadata)
+pub fn out_ref_col_with_metadata(
+    dt: DataType,
+    metadata: HashMap<String, String>,
+    ident: impl Into<Column>,
+) -> Expr {
+    let column = ident.into();
+    let field: FieldRef =
+        Arc::new(Field::new(column.name(), dt, true).with_metadata(metadata));
+    Expr::OuterReferenceColumn(field, column)
 }
 
 /// Create an unqualified column expression from the provided name, without normalizing
@@ -104,13 +119,13 @@ pub fn ident(name: impl Into<String>) -> Expr {
 ///
 /// ```rust
 /// # use datafusion_expr::{placeholder};
-/// let p = placeholder("$0"); // $0, refers to parameter 1
-/// assert_eq!(p.to_string(), "$0")
+/// let p = placeholder("$1"); // $1, refers to parameter 1
+/// assert_eq!(p.to_string(), "$1")
 /// ```
 pub fn placeholder(id: impl Into<String>) -> Expr {
     Expr::Placeholder(Placeholder {
         id: id.into(),
-        data_type: None,
+        field: None,
     })
 }
 
@@ -691,6 +706,10 @@ impl WindowUDFImpl for SimpleWindowUDF {
             true,
         )))
     }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
+    }
 }
 
 pub fn interval_year_month_lit(value: &str) -> Expr {
@@ -716,8 +735,8 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// # Example
 /// ```no_run
 /// # use datafusion_common::Result;
+/// # use datafusion_expr::expr::NullTreatment;
 /// # use datafusion_expr::test::function_stub::count;
-/// # use sqlparser::ast::NullTreatment;
 /// # use datafusion_expr::{ExprFunctionExt, lit, Expr, col};
 /// # // first_value is an aggregate function in another crate
 /// # fn first_value(_arg: Expr) -> Expr {

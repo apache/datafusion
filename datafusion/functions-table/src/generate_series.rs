@@ -269,9 +269,9 @@ impl GenerateSeriesTable {
                     .map(|s| Tz::from_str(s.as_ref()))
                     .transpose()
                     .map_err(|e| {
-                        datafusion_common::DataFusionError::Internal(format!(
+                        datafusion_common::internal_datafusion_err!(
                             "Failed to parse timezone: {e}"
-                        ))
+                        )
                     })?
                     .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
                 Arc::new(RwLock::new(GenericSeriesState {
@@ -472,14 +472,12 @@ impl TableProvider for GenerateSeriesTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let batch_size = state.config_options().execution.batch_size;
-        let schema = match projection {
-            Some(projection) => Arc::new(self.schema.project(projection)?),
-            None => self.schema(),
-        };
-
         let generator = self.as_generator(batch_size)?;
 
-        Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
+        Ok(Arc::new(
+            LazyMemoryExec::try_new(self.schema(), vec![generator])?
+                .with_projection(projection.cloned()),
+        ))
     }
 }
 

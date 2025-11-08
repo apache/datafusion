@@ -147,7 +147,7 @@ impl DependentJoinDecorrelator {
         let parent_correlated_columns =
             correlated_columns_from_parent.iter().filter(|info| {
                 all_outer_ref.contains(&Expr::OuterReferenceColumn(
-                    info.data_type.clone(),
+                    info.field.clone(),
                     info.col.clone(),
                 ))
             });
@@ -485,7 +485,7 @@ impl DependentJoinDecorrelator {
             let domains = domains_by_table.entry(table_ref.to_string()).or_default();
             if !domains.iter().any(|existing| {
                 (&existing.col == &domain.col)
-                    && (&existing.data_type == &domain.data_type)
+                    && (&existing.field == &domain.field)
             }) {
                 domains.push(domain.clone());
             }
@@ -1452,10 +1452,10 @@ fn detect_correlated_expressions(
     plan.apply(|child| match child {
         any_plan => {
             for e in any_plan.all_out_ref_exprs().iter() {
-                if let Expr::OuterReferenceColumn(data_type, col) = e {
+                if let Expr::OuterReferenceColumn(field, col) = e {
                     if correlated_columns
                         .iter()
-                        .any(|c| (&c.col == col) && (&c.data_type == data_type))
+                        .any(|c| (&c.col == col) && (&c.field == field))
                     {
                         *has_correlated_expressions = true;
                         return Ok(TreeNodeRecursion::Stop);

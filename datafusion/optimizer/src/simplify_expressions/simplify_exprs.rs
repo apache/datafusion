@@ -926,4 +926,152 @@ mod tests {
         "#
         )
     }
+
+    #[test]
+    fn simplify_not_in_list() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").in_list(vec![lit("a"), lit("b")], false).not())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r#"
+        Filter: test.a != Utf8("a") AND test.a != Utf8("b")
+          TableScan: test
+        "#
+        )
+    }
+
+    #[test]
+    fn simplify_not_not_in_list() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                col("a")
+                    .in_list(vec![lit("a"), lit("b")], false)
+                    .not()
+                    .not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r#"
+        Filter: test.a = Utf8("a") OR test.a = Utf8("b")
+          TableScan: test
+        "#
+        )
+    }
+
+    #[test]
+    fn simplify_not_exists() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan2 =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                exists(Arc::new(LogicalPlanBuilder::from(table_scan2).build()?)).not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: NOT EXISTS (<subquery>)
+          Subquery:
+            TableScan: test2
+          TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn simplify_not_not_exists() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan2 =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                exists(Arc::new(LogicalPlanBuilder::from(table_scan2).build()?))
+                    .not()
+                    .not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            TableScan: test2
+          TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn simplify_not_in_subquery() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan2 =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                in_subquery(
+                    col("a"),
+                    Arc::new(LogicalPlanBuilder::from(table_scan2).build()?),
+                )
+                .not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.a NOT IN (<subquery>)
+          Subquery:
+            TableScan: test2
+          TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn simplify_not_not_in_subquery() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan2 =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                in_subquery(
+                    col("a"),
+                    Arc::new(LogicalPlanBuilder::from(table_scan2).build()?),
+                )
+                .not()
+                .not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.a IN (<subquery>)
+          Subquery:
+            TableScan: test2
+          TableScan: test
+        "
+        )
+    }
 }

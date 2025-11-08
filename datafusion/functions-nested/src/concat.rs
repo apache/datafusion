@@ -319,8 +319,9 @@ impl ScalarUDFImpl for ArrayConcat {
             }
         } else {
             plan_err!(
-                "Failed to unify argument types of {}: {arg_types:?}",
-                self.name()
+                "Failed to unify argument types of {}: [{}]",
+                self.name(),
+                arg_types.iter().join(", ")
             )
         }
     }

@@ -64,7 +64,7 @@ See [use cases] for examples. The following related subprojects target end users
   DataFusion.
 
 "Out of the box,"
-DataFusion offers [SQL] and [`Dataframe`] APIs, excellent [performance],
+DataFusion offers [SQL](https://datafusion.apache.org/user-guide/sql/index.html) and [Dataframe](https://datafusion.apache.org/user-guide/dataframe.html) APIs, excellent [performance],
 built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
 a great community.
 
@@ -118,6 +118,7 @@ Default features:
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
+- `sql`: Support for sql parsing / planning
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL

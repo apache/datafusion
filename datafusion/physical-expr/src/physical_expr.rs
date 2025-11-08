@@ -21,7 +21,7 @@ use crate::expressions::{self, Column};
 use crate::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_err, Result};
 use datafusion_common::{DFSchema, HashMap};
@@ -29,7 +29,6 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, SortExpr};
 
 use itertools::izip;
-
 // Exports:
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -119,12 +118,16 @@ pub fn physical_exprs_bag_equal(
 /// ]);
 ///
 /// let sort_exprs = vec![
-///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "id")), asc: true, nulls_first: false }
-///     ],
-///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "name")), asc: false, nulls_first: true }
-///     ]
+///     vec![SortExpr {
+///         expr: Expr::Column(Column::new(Some("t"), "id")),
+///         asc: true,
+///         nulls_first: false,
+///     }],
+///     vec![SortExpr {
+///         expr: Expr::Column(Column::new(Some("t"), "name")),
+///         asc: false,
+///         nulls_first: true,
+///     }],
 /// ];
 /// let result = create_ordering(&schema, &sort_exprs).unwrap();
 /// ```
@@ -159,6 +162,32 @@ pub fn create_ordering(
             }
         }
         all_sort_orders.extend(LexOrdering::new(sort_exprs));
+    }
+    Ok(all_sort_orders)
+}
+
+/// Creates a vector of [LexOrdering] from a vector of logical expression
+pub fn create_lex_ordering(
+    schema: &SchemaRef,
+    sort_order: &[Vec<SortExpr>],
+    execution_props: &ExecutionProps,
+) -> Result<Vec<LexOrdering>> {
+    // Try the fast path that only supports column references first
+    // This avoids creating a DFSchema
+    if let Ok(ordering) = create_ordering(schema, sort_order) {
+        return Ok(ordering);
+    }
+
+    let df_schema = DFSchema::try_from(Arc::clone(schema))?;
+
+    let mut all_sort_orders = vec![];
+
+    for exprs in sort_order.iter() {
+        all_sort_orders.extend(LexOrdering::new(create_physical_sort_exprs(
+            exprs,
+            &df_schema,
+            execution_props,
+        )?));
     }
     Ok(all_sort_orders)
 }

@@ -29,6 +29,9 @@ edition = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -37,6 +40,7 @@ name = "datafusion_spark"
 
 [dependencies]
 arrow = { workspace = true }
+bigdecimal = { workspace = true }
 chrono = { workspace = true }
 crc32fast = "1.4"
 datafusion-catalog = { workspace = true }
@@ -44,15 +48,13 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
-datafusion-macros = { workspace = true }
 log = { workspace = true }
+rand = { workspace = true }
 sha1 = "0.10"
 url = { workspace = true }
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
-rand = { workspace = true }
 
 [[bench]]
 harness = false

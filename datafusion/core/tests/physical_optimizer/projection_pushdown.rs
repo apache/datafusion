@@ -390,7 +390,7 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
         Arc::new(CsvSource::new(false, 0, 0)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
-    .with_projection(Some(vec![0, 1, 2, 3, 4]))
+    .with_projection_indices(Some(vec![0, 1, 2, 3, 4]))
     .build();
 
     DataSourceExec::from_data_source(config)
@@ -409,7 +409,7 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
         Arc::new(CsvSource::new(false, 0, 0)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
-    .with_projection(Some(vec![3, 2, 1]))
+    .with_projection_indices(Some(vec![3, 2, 1]))
     .build();
 
     DataSourceExec::from_data_source(config)
@@ -1281,7 +1281,7 @@ fn test_hash_join_after_projection() -> Result<()> {
         &JoinType::Inner,
         None,
         PartitionMode::Auto,
-        NullEquality::NullEqualsNull,
+        NullEquality::NullEqualsNothing,
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
@@ -1535,7 +1535,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
 #[test]
 fn test_union_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
-    let union = Arc::new(UnionExec::new(vec![csv.clone(), csv.clone(), csv]));
+    let union = UnionExec::try_new(vec![csv.clone(), csv.clone(), csv])?;
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
@@ -1596,7 +1596,7 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_table_partition_cols(vec![Field::new("partition_col", DataType::Utf8, true)])
-    .with_projection(Some(vec![0, 1, 2]))
+    .with_projection_indices(Some(vec![0, 1, 2]))
     .build();
 
     DataSourceExec::from_data_source(config)

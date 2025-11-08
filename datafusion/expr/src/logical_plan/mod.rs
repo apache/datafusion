@@ -40,7 +40,7 @@ pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
     projection_schema, Aggregate, Analyze, ColumnUnnestList, CorrelatedColumnInfo,
     DelimGet, DependentJoin, DescribeTable, Distinct, DistinctOn, EmptyRelation, Explain,
-    ExplainFormat, ExplainOption, Extension, FetchType, Filter, Join, JoinConstraint,
+    ExplainOption, Extension, FetchType, Filter, Join, JoinConstraint,
     JoinKind, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
     RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
@@ -49,6 +49,8 @@ pub use statement::{
     Deallocate, Execute, Prepare, SetVariable, Statement, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
 };
+
+pub use datafusion_common::format::ExplainFormat;
 
 pub use display::display_schema;
 

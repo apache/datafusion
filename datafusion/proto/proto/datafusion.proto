@@ -167,6 +167,7 @@ message CreateExternalTableNode {
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
+  bool or_replace = 15;
   bool temporary = 14;
   string definition = 7;
   repeated SortExprNodeCollection order_exprs = 10;
@@ -178,8 +179,11 @@ message CreateExternalTableNode {
 
 message PrepareNode {
   string name = 1;
+  // We serialize both the data types and the fields for compatibility with
+  // older versions (newer versions populate both).
   repeated datafusion_common.ArrowType data_types = 2;
   LogicalPlanNode input = 3;
+  repeated datafusion_common.Field fields = 4;
 }
 
 message CreateCatalogSchemaNode {
@@ -411,7 +415,11 @@ message Wildcard {
 
 message PlaceholderNode {
   string id = 1;
+  // We serialize the data type, metadata, and nullability separately to maintain
+  // compatibility with older versions
   datafusion_common.ArrowType data_type = 2;
+  optional bool nullable = 3;
+  map<string, string> metadata = 4;
 }
 
 message LogicalExprList {
@@ -517,6 +525,7 @@ message AggregateUDFExprNode {
   LogicalExprNode filter = 3;
   repeated SortExprNode order_by = 4;
   optional bytes fun_definition = 6;
+  optional NullTreatment null_treatment = 7;
 }
 
 message ScalarUDFExprNode {
@@ -537,6 +546,9 @@ message WindowExprNode {
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
   optional bytes fun_definition = 10;
+  optional NullTreatment null_treatment = 11;
+  bool distinct = 12;
+  LogicalExprNode filter = 13;
 }
 
 message BetweenNode {
@@ -619,6 +631,11 @@ enum WindowFrameBoundType {
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
   datafusion_common.ScalarValue bound_value = 2;
+}
+
+enum NullTreatment {
+  RESPECT_NULLS = 0;
+  IGNORE_NULLS = 1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

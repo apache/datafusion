@@ -31,7 +31,7 @@ use crate::dml::CopyTo;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{internal_datafusion_err, Column, DataFusionError};
 use serde_json::json;
 
 /// Formats plans with a single line per node. For example:
@@ -72,11 +72,7 @@ impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         write!(self.f, "{}", plan.display())?;
         if self.with_schema {
-            write!(
-                self.f,
-                " {}",
-                display_schema(&plan.schema().as_ref().to_owned().into())
-            )?;
+            write!(self.f, " {}", display_schema(plan.schema().as_arrow()))?;
         }
 
         self.indent += 1;
@@ -98,17 +94,17 @@ impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
 /// `foo:Utf8;N` if `foo` is nullable.
 ///
 /// ```
-/// use arrow::datatypes::{Field, Schema, DataType};
+/// use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_expr::logical_plan::display_schema;
 /// let schema = Schema::new(vec![
 ///     Field::new("id", DataType::Int32, false),
 ///     Field::new("first_name", DataType::Utf8, true),
-///  ]);
+/// ]);
 ///
-///  assert_eq!(
-///      "[id:Int32, first_name:Utf8;N]",
-///      format!("{}", display_schema(&schema))
-///  );
+/// assert_eq!(
+///     "[id:Int32, first_name:Utf8;N]",
+///     format!("{}", display_schema(&schema))
+/// );
 /// ```
 pub fn display_schema(schema: &Schema) -> impl fmt::Display + '_ {
     struct Wrapper<'a>(&'a Schema);
@@ -196,7 +192,7 @@ impl<'n> TreeNodeVisitor<'n> for GraphvizVisitor<'_, '_> {
             format!(
                 r"{}\nSchema: {}",
                 plan.display(),
-                display_schema(&plan.schema().as_ref().to_owned().into())
+                display_schema(plan.schema().as_arrow())
             )
         } else {
             format!("{}", plan.display())
@@ -204,14 +200,14 @@ impl<'n> TreeNodeVisitor<'n> for GraphvizVisitor<'_, '_> {
 
         self.graphviz_builder
             .add_node(self.f, id, &label, None)
-            .map_err(|_e| DataFusionError::Internal("Fail to format".to_string()))?;
+            .map_err(|_e| internal_datafusion_err!("Fail to format"))?;
 
         // Create an edge to our parent node, if any
         //  parent_id -> id
         if let Some(parent_id) = self.parent_ids.last() {
             self.graphviz_builder
                 .add_edge(self.f, *parent_id, id)
-                .map_err(|_e| DataFusionError::Internal("Fail to format".to_string()))?;
+                .map_err(|_e| internal_datafusion_err!("Fail to format"))?;
         }
 
         self.parent_ids.push(id);
@@ -225,7 +221,7 @@ impl<'n> TreeNodeVisitor<'n> for GraphvizVisitor<'_, '_> {
         // always be non-empty as pre_visit always pushes
         // So it should always be Ok(true)
         let res = self.parent_ids.pop();
-        res.ok_or(DataFusionError::Internal("Fail to format".to_string()))
+        res.ok_or(internal_datafusion_err!("Fail to format"))
             .map(|_| TreeNodeRecursion::Continue)
     }
 }
@@ -692,9 +688,10 @@ impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         let id = self.parent_ids.pop().unwrap();
 
-        let current_node = self.objects.remove(&id).ok_or_else(|| {
-            DataFusionError::Internal("Missing current node!".to_string())
-        })?;
+        let current_node = self
+            .objects
+            .remove(&id)
+            .ok_or_else(|| internal_datafusion_err!("Missing current node!"))?;
 
         if let Some(parent_id) = self.parent_ids.last() {
             let parent_node = self

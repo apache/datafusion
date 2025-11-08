@@ -207,7 +207,9 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 /// let schema_1 = Arc::clone(&schema);
 /// builder.spawn(async move {
 ///     // Your task needs to send batches to the tx
-///     tx_1.send(Ok(RecordBatch::new_empty(schema_1))).await.unwrap();
+///     tx_1.send(Ok(RecordBatch::new_empty(schema_1)))
+///         .await
+///         .unwrap();
 ///
 ///     Ok(())
 /// });
@@ -217,7 +219,9 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 /// let schema_2 = Arc::clone(&schema);
 /// builder.spawn(async move {
 ///     // Your task needs to send batches to the tx
-///     tx_2.send(Ok(RecordBatch::new_empty(schema_2))).await.unwrap();
+///     tx_2.send(Ok(RecordBatch::new_empty(schema_2)))
+///         .await
+///         .unwrap();
 ///
 ///     Ok(())
 /// });
@@ -417,9 +421,10 @@ impl<S> RecordBatchStreamAdapter<S> {
     /// # use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     /// // Create stream of Result<RecordBatch>
     /// let batch = record_batch!(
-    ///   ("a", Int32, [1, 2, 3]),
-    ///   ("b", Float64, [Some(4.0), None, Some(5.0)])
-    /// ).expect("created batch");
+    ///     ("a", Int32, [1, 2, 3]),
+    ///     ("b", Float64, [Some(4.0), None, Some(5.0)])
+    /// )
+    /// .expect("created batch");
     /// let schema = batch.schema();
     /// let stream = futures::stream::iter(vec![Ok(batch)]);
     /// // Convert the stream to a SendableRecordBatchStream

@@ -272,7 +272,7 @@ drop table my_table
 
 # select_into
 statement ok
-SELECT* INTO my_table FROM (SELECT * FROM aggregate_simple)
+SELECT * INTO my_table FROM (SELECT * FROM aggregate_simple)
 
 query RRB rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
@@ -312,7 +312,7 @@ DROP TABLE aggregate_simple
 
 # Arrow format
 statement ok
-CREATE external table arrow_simple STORED as ARROW LOCATION '../core/tests/data/example.arrow';
+CREATE external table arrow_simple STORED as ARROW LOCATION '../datasource-arrow/tests/data/example.arrow';
 
 query ITB rowsort
 SELECT * FROM arrow_simple order by f1 LIMIT 1
@@ -587,7 +587,7 @@ statement ok
 CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 # Should not recreate the same EXTERNAL table
-statement error Execution error: Table 'aggregate_simple' already exists
+statement error Execution error: External table 'aggregate_simple' already exists
 CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 statement ok
@@ -606,6 +606,55 @@ CREATE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
 # 'IF NOT EXISTS' cannot coexist with 'REPLACE'
 statement error Execution error: 'IF NOT EXISTS' cannot coexist with 'REPLACE'
 CREATE OR REPLACE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
+
+# CREATE OR REPLACE
+statement ok
+CREATE OR REPLACE EXTERNAL TABLE aggregate_simple_repl
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE OR REPLACE EXTERNAL TABLE aggregate_simple_repl
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Create replacement table for table that doesn't already exist
+statement ok
+DROP TABLE IF EXISTS aggregate_table;
+
+statement ok
+CREATE OR REPLACE EXTERNAL TABLE aggregate_table
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TTT
+DESCRIBE aggregate_table;
+----
+c1 Float64 YES
+c2 Float64 YES
+c3 Boolean YES
+
+# Create replacement table with different format for table that doesn't already exist
+query I
+COPY (SELECT * FROM (VALUES (1),(2),(3)) AS t(id))
+TO 'test_files/scratch/ddl/test_table'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE OR REPLACE EXTERNAL TABLE aggregate_table
+STORED AS PARQUET
+LOCATION 'test_files/scratch/ddl/test_table';
+
+
+query TTT
+DESCRIBE aggregate_table;
+----
+id Int64 YES
 
 # Should insert into an empty table
 statement ok
@@ -658,9 +707,9 @@ CREATE EXTERNAL TABLE empty STORED AS CSV LOCATION '../core/tests/data/empty.csv
 query TTI
 select column_name, data_type, ordinal_position from information_schema.columns where table_name='empty';;
 ----
-c1 Utf8 0
-c2 Utf8 1
-c3 Utf8 2
+c1 Null 0
+c2 Null 1
+c3 Null 2
 
 
 ## should allow any type of exprs as values
@@ -747,7 +796,7 @@ logical_plan
 02)--Values: (Int64(1), Int64(2), Int64(3))
 
 query TT
-explain CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../core/tests/data/example.arrow';
+explain CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../datasource-arrow/tests/data/example.arrow';
 ----
 logical_plan CreateExternalTable: Bare { table: "tty" }
 
@@ -755,7 +804,7 @@ statement ok
 set datafusion.explain.logical_plan_only=false;
 
 statement error DataFusion error: This feature is not implemented: Temporary tables not supported
-CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../core/tests/data/example.arrow';
+CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../datasource-arrow/tests/data/example.arrow';
 
 statement error DataFusion error: This feature is not implemented: Temporary views not supported
 CREATE TEMPORARY VIEW y AS VALUES (1,2,3);
@@ -818,7 +867,7 @@ query TTTTTT
 show columns FROM table_with_pk;
 ----
 datafusion public table_with_pk sn Int32 NO
-datafusion public table_with_pk ts Timestamp(Nanosecond, Some("+00:00")) NO
+datafusion public table_with_pk ts Timestamp(ns) NO
 datafusion public table_with_pk currency Utf8View NO
 datafusion public table_with_pk amount Float32 YES
 

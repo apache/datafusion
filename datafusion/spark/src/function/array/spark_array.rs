@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use datafusion_common::{internal_err, plan_datafusion_err, plan_err, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -72,27 +72,8 @@ impl ScalarUDFImpl for SparkArray {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.len() {
-            0 => Ok(empty_array_type()),
-            _ => {
-                let mut expr_type = DataType::Null;
-                for arg_type in arg_types {
-                    if !arg_type.equals_datatype(&DataType::Null) {
-                        expr_type = arg_type.clone();
-                        break;
-                    }
-                }
-
-                if expr_type.is_null() {
-                    expr_type = DataType::Int32;
-                }
-
-                Ok(DataType::List(Arc::new(Field::new_list_field(
-                    expr_type, true,
-                ))))
-            }
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -102,9 +83,27 @@ impl ScalarUDFImpl for SparkArray {
             .map(|f| f.data_type())
             .cloned()
             .collect::<Vec<_>>();
-        let return_type = self.return_type(&data_types)?;
-        Ok(Arc::new(Field::new(
+
+        let mut expr_type = DataType::Null;
+        for arg_type in &data_types {
+            if !arg_type.equals_datatype(&DataType::Null) {
+                expr_type = arg_type.clone();
+                break;
+            }
+        }
+
+        if expr_type.is_null() {
+            expr_type = DataType::Int32;
+        }
+
+        let return_type = DataType::List(Arc::new(Field::new(
             ARRAY_FIELD_DEFAULT_NAME,
+            expr_type,
+            true,
+        )));
+
+        Ok(Arc::new(Field::new(
+            "this_field_name_is_irrelevant",
             return_type,
             false,
         )))
@@ -136,20 +135,11 @@ impl ScalarUDFImpl for SparkArray {
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
                     } else {
-                        plan_err!("Coercion from {acc:?} to {x:?} failed.")
+                        plan_err!("Coercion from {acc} to {x} failed.")
                     }
                 })?;
         Ok(vec![new_type; arg_types.len()])
     }
-}
-
-// Empty array is a special case that is useful for many other array functions
-pub(super) fn empty_array_type() -> DataType {
-    DataType::List(Arc::new(Field::new(
-        ARRAY_FIELD_DEFAULT_NAME,
-        DataType::Int32,
-        true,
-    )))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
@@ -174,10 +164,10 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(
                 SingleRowListArrayBuilder::new(array)
                     .with_nullable(true)
+                    .with_field_name(Some(ARRAY_FIELD_DEFAULT_NAME.to_string()))
                     .build_list_array(),
             ))
         }
-        DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
         _ => array_array::<i32>(arrays, data_type),
     }
 }

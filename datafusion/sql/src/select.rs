@@ -585,7 +585,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok((intermediate_plan, intermediate_select_exprs))
     }
 
-    fn plan_selection(
+    pub(crate) fn plan_selection(
         &self,
         selection: Option<SQLExpr>,
         plan: LogicalPlan,
@@ -672,7 +672,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
-    fn prepare_select_exprs(
+    pub(crate) fn prepare_select_exprs(
         &self,
         plan: &LogicalPlan,
         projection: Vec<SelectItem>,
@@ -681,14 +681,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
-
-        // Handle the case where no projection is specified but we have a valid FROM clause
-        // In this case, implicitly add a wildcard projection (SELECT *)
-        let projection = if projection.is_empty() && !empty_from {
-            vec![SelectItem::Wildcard(WildcardAdditionalOptions::default())]
-        } else {
-            projection
-        };
 
         for expr in projection {
             match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
@@ -840,7 +832,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Wrap a plan in a projection
-    fn project(&self, input: LogicalPlan, expr: Vec<SelectExpr>) -> Result<LogicalPlan> {
+    pub(crate) fn project(
+        &self,
+        input: LogicalPlan,
+        expr: Vec<SelectExpr>,
+    ) -> Result<LogicalPlan> {
         // convert to Expr for validate_schema_satisfies_exprs
         let exprs = expr
             .iter()

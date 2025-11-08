@@ -128,8 +128,10 @@ impl SharedBoundsAccumulator {
     /// ## Partition Mode Execution Patterns
     ///
     /// - **CollectLeft**: Build side is collected ONCE from partition 0 and shared via `OnceFut`
-    ///   across all output partitions. Each output partition calls `collect_build_side` to access
-    ///   the shared build data. Expected calls = number of output partitions.
+    ///   across all output partitions. Each output partition calls `collect_build_side` to access the shared build data.
+    ///   Although this results in multiple invocations, the  `report_partition_bounds` function contains deduplication logic to handle them safely.
+    ///   Expected calls = number of output partitions.
+    ///
     ///
     /// - **Partitioned**: Each partition independently builds its own hash table by calling
     ///   `collect_build_side` once. Expected calls = number of build partitions.
@@ -260,22 +262,34 @@ impl SharedBoundsAccumulator {
     /// consider making the resulting future shared so the ready result can be reused.
     ///
     /// # Arguments
-    /// * `partition` - The partition identifier reporting its bounds
+    /// * `left_side_partition_id` - The identifier for the **left-side** partition reporting its bounds
     /// * `partition_bounds` - The bounds computed by this partition (if any)
     ///
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed
     pub(crate) async fn report_partition_bounds(
         &self,
-        partition: usize,
+        left_side_partition_id: usize,
         partition_bounds: Option<Vec<ColumnBounds>>,
     ) -> Result<()> {
         // Store bounds in the accumulator - this runs once per partition
         if let Some(bounds) = partition_bounds {
-            self.inner
-                .lock()
-                .bounds
-                .push(PartitionBounds::new(partition, bounds));
+            let mut guard = self.inner.lock();
+
+            let should_push = if let Some(last_bound) = guard.bounds.last() {
+                // In `PartitionMode::CollectLeft`, all streams on the left side share the same partition id (0).
+                // Since this function can be called multiple times for that same partition, we must deduplicate
+                // by checking against the last recorded bound.
+                last_bound.partition != left_side_partition_id
+            } else {
+                true
+            };
+
+            if should_push {
+                guard
+                    .bounds
+                    .push(PartitionBounds::new(left_side_partition_id, bounds));
+            }
         }
 
         if self.barrier.wait().await.is_leader() {

@@ -35,7 +35,9 @@ use arrow::{
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
-use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, FieldRef};
+use arrow::datatypes::{
+    ArrowNativeType, ArrowPrimitiveType, Decimal32Type, Decimal64Type, FieldRef,
+};
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, DataFusionError, HashSet, Result, ScalarValue,
@@ -160,12 +162,14 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        let dt = acc_args.exprs[0].data_type(acc_args.schema)?;
+        let dt = acc_args.expr_fields[0].data_type().clone();
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),
             DataType::Float32 => helper!(Float32Type, dt),
             DataType::Float64 => helper!(Float64Type, dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
             DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
             DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -192,7 +196,7 @@ impl AggregateUDFImpl for Median {
             );
         }
 
-        let dt = args.exprs[0].data_type(args.schema)?;
+        let dt = args.expr_fields[0].data_type().clone();
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
@@ -205,6 +209,8 @@ impl AggregateUDFImpl for Median {
             DataType::Float16 => helper!(Float16Type, dt),
             DataType::Float32 => helper!(Float32Type, dt),
             DataType::Float64 => helper!(Float64Type, dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
             DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
             DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -296,7 +302,6 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 /// of groups before final evaluation.
 /// So values in each group will be stored in a `Vec<T>`, and the total group values
 /// will be actually organized as a `Vec<Vec<T>>`.
-///
 #[derive(Debug)]
 struct MedianGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,

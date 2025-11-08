@@ -34,6 +34,9 @@ alph = "alph"
 wih = "wih"
 Ded = "Ded"
 
+# From SLT README
+nteger = "nteger"
+
 [files]
 extend-exclude = [
     "*.slt",
@@ -42,5 +45,6 @@ extend-exclude = [
     "*.sql",
     "dev/changelog/**",
     "benchmarks/**",
-    "*.csv"
+    "*.csv",
+    "docs/source/contributor-guide/governance.md"
 ]

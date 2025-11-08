@@ -754,19 +754,18 @@ impl TopKHeap {
             return Ok((None, topk_rows));
         }
 
-        // Indices for each row within its respective RecordBatch
+        // Collect the batches into a vec and store the "batch_id -> array_pos" mapping, to then
+        // build the `indices` vec below. This is needed since the batch ids are not continuous.
+        let mut record_batches = Vec::new();
+        let mut batch_id_array_pos = HashMap::new();
+        for (array_pos, (batch_id, batch)) in self.store.batches.iter().enumerate() {
+            record_batches.push(&batch.batch);
+            batch_id_array_pos.insert(*batch_id, array_pos);
+        }
+
         let indices: Vec<_> = topk_rows
             .iter()
-            .enumerate()
-            .map(|(i, k)| (i, k.index))
-            .collect();
-
-        let record_batches: Vec<_> = topk_rows
-            .iter()
-            .map(|k| {
-                let entry = self.store.get(k.batch_id).expect("invalid stored batch id");
-                &entry.batch
-            })
+            .map(|k| (batch_id_array_pos[&k.batch_id], k.index))
             .collect();
 
         // At this point `indices` contains indexes within the
