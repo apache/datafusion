@@ -113,15 +113,11 @@ impl DisplayAs for PlaceholderRowExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
-                write!(f, "PlaceholderRowExec: produces single row")
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "PlaceholderRowExec")
             }
-            DisplayFormatType::Verbose => {
-                write!(f, "PlaceholderRowExec: produces single row")
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "produces single row")
-            }
+
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }
