@@ -121,7 +121,6 @@ use url::Url;
 ///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
 ///         └───────────────────────┘      the ParquetSource does not re-read /
 ///          Parquet File                  decode the thrift footer
-///
 /// ```
 ///
 /// Within a Row Group, Column Chunks store data in DataPages. This example also
@@ -502,7 +501,7 @@ impl TableProvider for IndexTableProvider {
         let file_scan_config =
             FileScanConfigBuilder::new(object_store_url, schema, file_source)
                 .with_limit(limit)
-                .with_projection(projection.cloned())
+                .with_projection_indices(projection.cloned())
                 .with_file(partitioned_file)
                 .build();
 

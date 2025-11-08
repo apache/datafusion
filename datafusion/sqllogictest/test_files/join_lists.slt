@@ -60,4 +60,3 @@ DROP TABLE categories_raw;
 
 statement ok
 DROP TABLE places;
-

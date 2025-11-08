@@ -153,6 +153,8 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 pub struct LazyMemoryExec {
     /// Schema representing the data
     schema: SchemaRef,
+    /// Optional projection for which columns to load
+    projection: Option<Vec<usize>>,
     /// Functions to generate batches for each partition
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
@@ -199,10 +201,26 @@ impl LazyMemoryExec {
 
         Ok(Self {
             schema,
+            projection: None,
             batch_generators: generators,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
         })
+    }
+
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        match projection.as_ref() {
+            Some(columns) => {
+                let projected = Arc::new(self.schema.project(columns).unwrap());
+                self.cache = self.cache.with_eq_properties(EquivalenceProperties::new(
+                    Arc::clone(&projected),
+                ));
+                self.schema = projected;
+                self.projection = projection;
+                self
+            }
+            _ => self,
+        }
     }
 
     pub fn try_set_partitioning(&mut self, partitioning: Partitioning) -> Result<()> {
@@ -320,6 +338,7 @@ impl ExecutionPlan for LazyMemoryExec {
 
         let stream = LazyMemoryStream {
             schema: Arc::clone(&self.schema),
+            projection: self.projection.clone(),
             generator: Arc::clone(&self.batch_generators[partition]),
             baseline_metrics,
         };
@@ -338,6 +357,8 @@ impl ExecutionPlan for LazyMemoryExec {
 /// Stream that generates record batches on demand
 pub struct LazyMemoryStream {
     schema: SchemaRef,
+    /// Optional projection for which columns to load
+    projection: Option<Vec<usize>>,
     /// Generator to produce batches
     ///
     /// Note: Idiomatically, DataFusion uses plan-time parallelism - each stream
@@ -361,7 +382,14 @@ impl Stream for LazyMemoryStream {
         let batch = self.generator.write().generate_next_batch();
 
         let poll = match batch {
-            Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
+            Ok(Some(batch)) => {
+                // return just the columns requested
+                let batch = match self.projection.as_ref() {
+                    Some(columns) => batch.project(columns)?,
+                    None => batch,
+                };
+                Poll::Ready(Some(Ok(batch)))
+            }
             Ok(None) => Poll::Ready(None),
             Err(e) => Poll::Ready(Some(Err(e))),
         };

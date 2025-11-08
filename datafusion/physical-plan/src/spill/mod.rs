@@ -19,6 +19,11 @@
 
 pub(crate) mod in_progress_spill_file;
 pub(crate) mod spill_manager;
+pub mod spill_pool;
+
+// Re-export SpillManager for doctests only (hidden from public docs)
+#[doc(hidden)]
+pub use spill_manager::SpillManager;
 
 use std::fs::File;
 use std::io::BufReader;

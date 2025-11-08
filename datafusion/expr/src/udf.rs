@@ -568,7 +568,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// * `Some(ScalarUDF)` - A new instance of this function configured with the new settings
     /// * `None` - If this function does not change with new configuration settings (the default)
-    ///
     fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
         None
     }
@@ -604,10 +603,10 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// # struct Example{}
     /// # impl Example {
     /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-    ///   // report output is only nullable if any one of the arguments are nullable
-    ///   let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-    ///   let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
-    ///   Ok(field)
+    ///     // report output is only nullable if any one of the arguments are nullable
+    ///     let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
+    ///     Ok(field)
     /// }
     /// # }
     /// ```

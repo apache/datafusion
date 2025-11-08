@@ -21,60 +21,86 @@
 
 ## How to update the version of Rust used in CI tests
 
-- Make a PR to update the [rust-toolchain] file in the root of the repository:
+Make a PR to update the [rust-toolchain] file in the root of the repository.
 
 [rust-toolchain]: https://github.com/apache/datafusion/blob/main/rust-toolchain.toml
 
-## How to add a new scalar function
+## Adding new functions
 
-Below is a checklist of what you need to do to add a new scalar function to DataFusion:
+**Implementation**
 
-- Add the actual implementation of the function to a new module file within:
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions-nested) for arrays, maps and structs functions
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/crypto) for crypto functions
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/datetime) for datetime functions
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/encoding) for encoding functions
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/math) for math functions
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/regex) for regex functions
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/string) for string functions
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/unicode) for unicode functions
-  - create a new module [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/) for other functions.
-- New function modules - for example a `vector` module, should use a [rust feature](https://doc.rust-lang.org/cargo/reference/features.html) (for example `vector_expressions`) to allow DataFusion
-  users to enable or disable the new module as desired.
-- The implementation of the function is done via implementing `ScalarUDFImpl` trait for the function struct.
-  - See the [advanced_udf.rs] example for an example implementation
-  - Add tests for the new function
-- To connect the implementation of the function add to the mod.rs file:
-  - a `mod xyz;` where xyz is the new module file
-  - a call to `make_udf_function!(..);`
-  - an item in `export_functions!(..);`
-- In [sqllogictest/test_files], add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
-  - Documentation for `sqllogictest` [here](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md)
-- Add SQL reference documentation [here](https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md)
-  - An example of this being done can be seen [here](https://github.com/apache/datafusion/pull/12775)
-  - Run `./dev/update_function_docs.sh` to update docs
+| Function type | Location to implement     | Trait to implement                             | Macros to use                                    | Example              |
+| ------------- | ------------------------- | ---------------------------------------------- | ------------------------------------------------ | -------------------- |
+| Scalar        | [functions][df-functions] | [`ScalarUDFImpl`]                              | `make_udf_function!()` and `export_functions!()` | [`advanced_udf.rs`]  |
+| Nested        | [functions-nested]        | [`ScalarUDFImpl`]                              | `make_udf_expr_and_func!()`                      |                      |
+| Aggregate     | [functions-aggregate]     | [`AggregateUDFImpl`] and an [`Accumulator`]    | `make_udaf_expr_and_func!()`                     | [`advanced_udaf.rs`] |
+| Window        | [functions-window]        | [`WindowUDFImpl`] and a [`PartitionEvaluator`] | `define_udwf_and_expr!()`                        | [`advanced_udwf.rs`] |
+| Table         | [functions-table]         | [`TableFunctionImpl`] and a [`TableProvider`]  | `create_udtf_function!()`                        | [`simple_udtf.rs`]   |
 
-[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-[datafusion/expr/src]: https://github.com/apache/datafusion/tree/main/datafusion/expr/src
-[sqllogictest/test_files]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files
+- The macros are to simplify some boilerplate such as ensuring a DataFrame API compatible function is also created
+- Ensure new functions are properly exported through the subproject
+  `mod.rs` or `lib.rs`.
+- Functions should preferably provide documentation via the `#[user_doc(...)]` attribute so their documentation
+  can be included in the SQL reference documentation (see below section)
+- Scalar functions are further grouped into modules for families of functions (e.g. string, math, datetime).
+  Functions should be added to the relevant module; if a new module needs to be created then a new [Rust feature]
+  should also be added to allow DataFusion users to conditionally compile the modules as needed
+- Aggregate functions can optionally implement a [`GroupsAccumulator`] for better performance
 
-## How to add a new aggregate function
+Spark compatible functions are [located in separate crate][df-spark] but otherwise follow the same steps, though all
+function types (e.g. scalar, nested, aggregate) are grouped together in the single location.
 
-Below is a checklist of what you need to do to add a new aggregate function to DataFusion:
+[df-functions]: https://github.com/apache/datafusion/tree/main/datafusion/functions
+[functions-nested]: https://github.com/apache/datafusion/tree/main/datafusion/functions-nested
+[functions-aggregate]: https://github.com/apache/datafusion/tree/main/datafusion/functions-aggregate
+[functions-window]: https://github.com/apache/datafusion/tree/main/datafusion/functions-window
+[functions-table]: https://github.com/apache/datafusion/tree/main/datafusion/functions-table
+[df-spark]: https://github.com/apache/datafusion/tree/main/datafusion/spark
+[`scalarudfimpl`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html
+[`aggregateudfimpl`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.AggregateUDFImpl.html
+[`accumulator`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.Accumulator.html
+[`groupsaccumulator`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.GroupsAccumulator.html
+[`windowudfimpl`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.WindowUDFImpl.html
+[`partitionevaluator`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.PartitionEvaluator.html
+[`tablefunctionimpl`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableFunctionImpl.html
+[`tableprovider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+[`simple_udtf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
+[rust feature]: https://doc.rust-lang.org/cargo/reference/features.html
 
-- Add the actual implementation of an `Accumulator` and `AggregateExpr`:
-- In [datafusion/expr/src], add:
-  - a new variant to `AggregateFunction`
-  - a new entry to `FromStr` with the name of the function as called by SQL
-  - a new line in `return_type` with the expected return type of the function, given an incoming type
-  - a new line in `signature` with the signature of the function (number and types of its arguments)
-  - a new line in `create_aggregate_expr` mapping the built-in to the implementation
-  - tests to the function.
-- In [sqllogictest/test_files], add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
-  - Documentation for `sqllogictest` [here](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md)
-- Add SQL reference documentation [here](https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md)
-  - An example of this being done can be seen [here](https://github.com/apache/datafusion/pull/12775)
-  - Run `./dev/update_function_docs.sh` to update docs
+**Testing**
+
+Prefer adding `sqllogictest` integration tests where the function is called via SQL against
+well known data and returns an expected result. See the existing [test files][slt-test-files] if
+there is an appropriate file to add test cases to, otherwise create a new file. See the
+[`sqllogictest` documentation][slt-readme] for details on how to construct these tests.
+Ensure edge case, `null` input cases are considered in these tests.
+
+If a behaviour cannot be tested via `sqllogictest` (e.g. testing `simplify()`, needs to be
+tested in isolation from the optimizer, difficult to construct exact input via `sqllogictest`)
+then tests can be added as Rust unit tests in the implementation module, though these should be
+kept minimal where possible
+
+[slt-test-files]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files
+[slt-readme]: https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md
+
+**Documentation**
+
+Run documentation update script `./dev/update_function_docs.sh` which will update the relevant
+markdown document [here][fn-doc-home] (see the documents for [scalar][fn-doc-scalar],
+[aggregate][fn-doc-aggregate] and [window][fn-doc-window] functions)
+
+- You _should not_ manually update the markdown document after running the script as those manual
+  changes would be overwritten on next execution
+- Reference [GitHub issue] which introduced this behaviour
+
+[fn-doc-home]: https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql
+[fn-doc-scalar]: https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md
+[fn-doc-aggregate]: https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md
+[fn-doc-window]: https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/window_functions.md
+[github issue]: https://github.com/apache/datafusion/issues/12740
 
 ## How to display plans graphically
 
@@ -97,11 +123,13 @@ can be displayed. For example, the following command creates a
 dot -Tpdf < /tmp/plan.dot > /tmp/plan.pdf
 ```
 
-## How to format `.md` document
+## How to format `.md` documents
 
-We are using `prettier` to format `.md` files.
+We use [`prettier`] to format `.md` files.
 
-You can either use `npm i -g prettier` to install it globally or use `npx` to run it as a standalone binary. Using `npx` required a working node environment. Upgrading to the latest prettier is recommended (by adding `--upgrade` to the `npm` command).
+You can either use `npm i -g prettier` to install it globally or use `npx` to run it as a standalone binary.
+Using `npx` requires a working node environment. Upgrading to the latest prettier is recommended (by adding
+`--upgrade` to the `npm` command).
 
 ```bash
 $ prettier --version
@@ -114,19 +142,19 @@ After you've confirmed your prettier version, you can format all the `.md` files
 prettier -w {datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md
 ```
 
+[`prettier`]: https://prettier.io/
+
 ## How to format `.toml` files
 
-We use `taplo` to format `.toml` files.
+We use [`taplo`] to format `.toml` files.
 
-For Rust developers, you can install it via:
+To install via cargo:
 
 ```sh
 cargo install taplo-cli --locked
 ```
 
-> Refer to the [Installation section][doc] on other ways to install it.
->
-> [doc]: https://taplo.tamasfe.dev/cli/installation/binary.html
+> Refer to the [taplo installation documentation][taplo-install] for other ways to install it.
 
 ```bash
 $ taplo --version
@@ -139,28 +167,24 @@ After you've confirmed your `taplo` version, you can format all the `.toml` file
 taplo fmt
 ```
 
+[`taplo`]: https://taplo.tamasfe.dev/
+[taplo-install]: https://taplo.tamasfe.dev/cli/installation/binary.html
+
 ## How to update protobuf/gen dependencies
 
-The prost/tonic code can be generated by running `./regen.sh`, which in turn invokes the Rust binary located in `./gen`
+For the `proto` and `proto-common` crates, the prost/tonic code is generated by running their respective `./regen.sh` scripts,
+which in turn invokes the Rust binary located in `./gen`.
 
 This is necessary after modifying the protobuf definitions or altering the dependencies of `./gen`, and requires a
 valid installation of [protoc] (see [installation instructions] for details).
 
 ```bash
-./regen.sh
+# From repository root
+# proto-common
+./datafusion/proto-common/regen.sh
+# proto
+./datafusion/proto/regen.sh
 ```
 
 [protoc]: https://github.com/protocolbuffers/protobuf#protocol-compiler-installation
 [installation instructions]: https://datafusion.apache.org/contributor-guide/getting_started.html#protoc-installation
-
-## How to add/edit documentation for UDFs
-
-Documentations for the UDF documentations are generated from code (related [github issue]). To generate markdown run `./update_function_docs.sh`.
-
-This is necessary after adding new UDF implementation or modifying existing implementation which requires to update documentation.
-
-```bash
-./dev/update_function_docs.sh
-```
-
-[github issue]: https://github.com/apache/datafusion/issues/12740

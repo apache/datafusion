@@ -24,6 +24,7 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
+    TableSchema,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -156,16 +157,20 @@ impl FileSource for TestSource {
         })
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+        assert!(
+            schema.table_partition_cols().is_empty(),
+            "TestSource does not support partition columns"
+        );
         Arc::new(TestSource {
-            schema: Some(schema),
+            schema: Some(schema.file_schema().clone()),
             ..self.clone()
         })
     }
 
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(TestSource {
-            projection: config.projection.clone(),
+            projection: config.projection_exprs.as_ref().map(|p| p.column_indices()),
             ..self.clone()
         })
     }

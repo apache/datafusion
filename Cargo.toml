@@ -77,7 +77,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.87.0"
+rust-version = "1.88.0"
 # Define DataFusion version
 version = "50.3.0"
 
@@ -91,25 +91,25 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.20", default-features = false }
-arrow = { version = "56.2.0", features = [
+arrow = { version = "57.0.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "56.2.0", default-features = false }
-arrow-flight = { version = "56.2.0", features = [
+arrow-buffer = { version = "57.0.0", default-features = false }
+arrow-flight = { version = "57.0.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "56.2.0", default-features = false, features = [
+arrow-ipc = { version = "57.0.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "56.2.0", default-features = false }
-arrow-schema = { version = "56.2.0", default-features = false }
+arrow-ord = { version = "57.0.0", default-features = false }
+arrow-schema = { version = "57.0.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.10"
 chrono = { version = "0.4.42", default-features = false }
-criterion = "0.5.1"
-ctor = "0.4.3"
+criterion = "0.7"
+ctor = "0.6.1"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "50.3.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "50.3.0" }
@@ -156,29 +156,30 @@ half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
 indexmap = "2.12.0"
+insta = { version = "1.43.2", features = ["glob", "filters"] }
 itertools = "0.14"
 log = "^0.4"
+num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "56.2.0", default-features = false, features = [
+parquet = { version = "57.0.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
 ] }
-pbjson = { version = "0.7.0" }
-pbjson-types = "0.7"
+pbjson = { version = "0.8.0" }
+pbjson-types = "0.8"
 # Should match arrow-flight's version of prost.
-insta = { version = "1.43.2", features = ["glob", "filters"] }
-prost = "0.13.1"
+prost = "0.14.1"
 rand = "0.9"
 recursive = "0.1.1"
-regex = "1.11"
-rstest = "0.25.0"
+regex = "1.12"
+rstest = "0.26.1"
 serde_json = "1"
 sqlparser = { version = "0.59.0", default-features = false, features = ["std", "visitor"] }
 tempfile = "3"
-testcontainers = { version = "0.24", features = ["default"] }
-testcontainers-modules = { version = "0.12" }
+testcontainers = { version = "0.25.2", features = ["default"] }
+testcontainers-modules = { version = "0.13" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
 

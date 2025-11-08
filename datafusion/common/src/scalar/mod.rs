@@ -171,9 +171,9 @@ pub use struct_builder::ScalarStructBuilder;
 /// let field_b = Field::new("b", DataType::Utf8, false);
 ///
 /// let s1 = ScalarStructBuilder::new()
-///    .with_scalar(field_a, ScalarValue::from(1i32))
-///    .with_scalar(field_b, ScalarValue::from("foo"))
-///    .build();
+///     .with_scalar(field_a, ScalarValue::from(1i32))
+///     .with_scalar(field_b, ScalarValue::from("foo"))
+///     .build();
 /// ```
 ///
 /// ## Example: Creating a null [`ScalarValue::Struct`] using [`ScalarStructBuilder`]
@@ -199,13 +199,13 @@ pub use struct_builder::ScalarStructBuilder;
 /// // Build a struct like: {a: 1, b: "foo"}
 /// // Field description
 /// let fields = Fields::from(vec![
-///   Field::new("a", DataType::Int32, false),
-///   Field::new("b", DataType::Utf8, false),
+///     Field::new("a", DataType::Int32, false),
+///     Field::new("b", DataType::Utf8, false),
 /// ]);
 /// // one row arrays for each field
 /// let arrays: Vec<ArrayRef> = vec![
-///   Arc::new(Int32Array::from(vec![1])),
-///   Arc::new(StringArray::from(vec!["foo"])),
+///     Arc::new(Int32Array::from(vec![1])),
+///     Arc::new(StringArray::from(vec!["foo"])),
 /// ];
 /// // no nulls for this array
 /// let nulls = None;
@@ -878,10 +878,10 @@ impl Hash for ScalarValue {
 
 fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
     let len = arr.len();
-    let arrays = vec![arr];
     let hashes_buffer = &mut vec![0; len];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-    let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+    let hashes = create_hashes(&[arr], &random_state, hashes_buffer)
+        .expect("hash_nested_array: failed to create row hashes");
     // Hash back to std::hash::Hasher
     hashes.hash(state);
 }
@@ -1068,8 +1068,8 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::datatypes::DataType;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalar = ScalarValue::try_new_null(&DataType::Int32).unwrap();
     /// assert_eq!(scalar.is_null(), true);
@@ -1734,7 +1734,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match 10_i32.checked_pow((*scale + 1) as u32) {
@@ -1750,7 +1750,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match i64::from(10).checked_pow((*scale + 1) as u32) {
@@ -2231,23 +2231,16 @@ impl ScalarValue {
     ///
     /// # Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::{BooleanArray, Int32Array};
+    /// use datafusion_common::ScalarValue;
     ///
     /// let arr = Int32Array::from(vec![Some(1), None, Some(10)]);
     /// let five = ScalarValue::Int32(Some(5));
     ///
-    /// let result = arrow::compute::kernels::cmp::lt(
-    ///   &arr,
-    ///   &five.to_scalar().unwrap(),
-    /// ).unwrap();
+    /// let result =
+    ///     arrow::compute::kernels::cmp::lt(&arr, &five.to_scalar().unwrap()).unwrap();
     ///
-    /// let expected = BooleanArray::from(vec![
-    ///     Some(true),
-    ///     None,
-    ///     Some(false)
-    ///   ]
-    /// );
+    /// let expected = BooleanArray::from(vec![Some(true), None, Some(false)]);
     ///
     /// assert_eq!(&result, &expected);
     /// ```
@@ -2265,26 +2258,20 @@ impl ScalarValue {
     ///
     /// # Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::{ArrayRef, BooleanArray};
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///   ScalarValue::Boolean(Some(true)),
-    ///   ScalarValue::Boolean(None),
-    ///   ScalarValue::Boolean(Some(false)),
+    ///     ScalarValue::Boolean(Some(true)),
+    ///     ScalarValue::Boolean(None),
+    ///     ScalarValue::Boolean(Some(false)),
     /// ];
     ///
     /// // Build an Array from the list of ScalarValues
-    /// let array = ScalarValue::iter_to_array(scalars.into_iter())
-    ///   .unwrap();
+    /// let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
     ///
-    /// let expected: ArrayRef = std::sync::Arc::new(
-    ///   BooleanArray::from(vec![
-    ///     Some(true),
-    ///     None,
-    ///     Some(false)
-    ///   ]
-    /// ));
+    /// let expected: ArrayRef =
+    ///     std::sync::Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)]));
     ///
     /// assert_eq!(&array, &expected);
     /// ```
@@ -2731,23 +2718,24 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::array::{Int32Array, ListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
     /// let result = ScalarValue::new_list(&scalars, &DataType::Int32, true);
     ///
-    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     None,
+    ///     Some(2),
+    /// ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -2791,23 +2779,25 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::array::{Int32Array, ListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
-    /// let result = ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32, true);
+    /// let result =
+    ///     ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32, true);
     ///
-    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     None,
+    ///     Some(2),
+    /// ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -2833,23 +2823,25 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{LargeListArray, Int32Array};
+    /// use arrow::array::{Int32Array, LargeListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_large_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
     /// let result = ScalarValue::new_large_list(&scalars, &DataType::Int32);
     ///
-    /// let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected =
+    ///     LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///         Some(1),
+    ///         None,
+    ///         Some(2),
+    ///     ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -3248,14 +3240,14 @@ impl ScalarValue {
     ///
     /// Example 1: Array (ScalarValue::Int32)
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::ScalarValue;
     ///
     /// // Equivalent to [[1,2,3], [4,5]]
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    Some(vec![Some(4), Some(5)])
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
     /// // Convert the array into Scalar Values for each row
@@ -3278,15 +3270,15 @@ impl ScalarValue {
     ///
     /// Example 2: Nested array (ScalarValue::List)
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::utils::SingleRowListArrayBuilder;
+    /// use datafusion_common::ScalarValue;
     /// use std::sync::Arc;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    Some(vec![Some(4), Some(5)])
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
     /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
@@ -3295,33 +3287,34 @@ impl ScalarValue {
     /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
-    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///     Some(vec![Some(1), Some(2), Some(3)]),
-    /// ]);
-    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///     Some(vec![Some(4), Some(5)]),
-    /// ]);
+    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     Some(2),
+    ///     Some(3),
+    /// ])]);
+    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(4),
+    ///     Some(5),
+    /// ])]);
     ///
-    /// let expected = vec![
-    ///   Some(vec![
+    /// let expected = vec![Some(vec![
     ///     ScalarValue::List(Arc::new(l1)),
     ///     ScalarValue::List(Arc::new(l2)),
-    ///   ]),
-    /// ];
+    /// ])];
     ///
     /// assert_eq!(scalar_vec, expected);
     /// ```
     ///
     /// Example 3: Nullable array
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::ScalarValue;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    None,
-    ///    Some(vec![Some(4), Some(5)])
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    ///     None,
+    ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
     /// // Convert the array into Scalar Values for each row
@@ -4414,6 +4407,7 @@ macro_rules! impl_scalar {
 
 impl_scalar!(f64, Float64);
 impl_scalar!(f32, Float32);
+impl_scalar!(f16, Float16);
 impl_scalar!(i8, Int8);
 impl_scalar!(i16, Int16);
 impl_scalar!(i32, Int32);
@@ -4570,6 +4564,7 @@ impl_try_from!(UInt8, u8);
 impl_try_from!(UInt16, u16);
 impl_try_from!(UInt32, u32);
 impl_try_from!(UInt64, u64);
+impl_try_from!(Float16, f16);
 impl_try_from!(Float32, f32);
 impl_try_from!(Float64, f64);
 impl_try_from!(Boolean, bool);
@@ -4655,9 +4650,9 @@ impl fmt::Display for ScalarValue {
                 }
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            ScalarValue::List(arr) => fmt_list(arr.as_ref(), f)?,
+            ScalarValue::LargeList(arr) => fmt_list(arr.as_ref(), f)?,
+            ScalarValue::FixedSizeList(arr) => fmt_list(arr.as_ref(), f)?,
             ScalarValue::Date32(e) => format_option!(
                 f,
                 e.map(|v| {
@@ -4779,12 +4774,11 @@ impl fmt::Display for ScalarValue {
     }
 }
 
-fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
+fn fmt_list(arr: &dyn Array, f: &mut fmt::Formatter) -> fmt::Result {
     // ScalarValue List, LargeList, FixedSizeList should always have a single element
     assert_eq!(arr.len(), 1);
     let options = FormatOptions::default().with_display_error(true);
-    let formatter =
-        ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+    let formatter = ArrayFormatter::try_new(arr, &options).unwrap();
     let value_formatter = formatter.value(0);
     write!(f, "{value_formatter}")
 }
@@ -8700,7 +8694,7 @@ mod tests {
             ])),
             true,
         ));
-        let scalars = vec![
+        let scalars = [
             ScalarValue::try_new_null(&DataType::List(Arc::clone(&field_ref))).unwrap(),
             ScalarValue::try_new_null(&DataType::LargeList(Arc::clone(&field_ref)))
                 .unwrap(),
