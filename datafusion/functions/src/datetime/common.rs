@@ -151,37 +151,28 @@ fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
         return FixedOffset::east_opt(0);
     }
 
-    // Fast/robust path: try to parse the offset using chrono's `Parsed` API.
-    // Chrono accepts offsets in a few formats (%z = +HHMM, %:z = +HH:MM, %::z = +HH:MM:SS).
-    // We normalize compact digit-only offsets (e.g. +05, +0500, +053045) into
-    // a colon-separated form so chrono can parse them with the %:z / %::z
-    // patterns.
+    // Strict chrono-only path: normalize compact digit-only offsets
+    // (e.g. +05, +0500, +053045) into colon-separated forms and
+    // attempt parsing with chrono's Parsed API. Return None if chrono
+    // can't parse the provided string.
     if let Some(first) = tz.chars().next() {
         if first == '+' || first == '-' {
             let sign = first;
             let rest = &tz[1..];
 
-            // If rest is digits-only, normalize based on length:
-            // 2  -> HH      -> HH:00
-            // 4  -> HHMM    -> HH:MM
-            // 6  -> HHMMSS  -> HH:MM:SS
             let normalized = if rest.chars().all(|c| c.is_ascii_digit()) {
                 match rest.len() {
                     2 => format!("{}{}:00", sign, &rest[0..2]),
                     4 => format!("{}{}:{}", sign, &rest[0..2], &rest[2..4]),
-                    6 => {
-                        format!("{}{}:{}:{}", sign, &rest[0..2], &rest[2..4], &rest[4..6])
-                    }
+                    6 => format!("{}{}:{}:{}", sign, &rest[0..2], &rest[2..4], &rest[4..6]),
                     _ => tz.to_string(),
                 }
             } else {
-                // otherwise keep original (may already contain colons)
                 tz.to_string()
             };
 
-            // Try %::z (HH:MM:SS), then %:z (HH:MM), then %z (HHMM)
             let try_formats = ["%::z", "%:z", "%z"];
-            for fmt in try_formats {
+            for fmt in try_formats.iter() {
                 let mut parsed = Parsed::new();
                 if parse(&mut parsed, &normalized, StrftimeItems::new(fmt)).is_ok() {
                     if let Ok(off) = parsed.to_fixed_offset() {
@@ -192,33 +183,7 @@ fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
         }
     }
 
-    // Fallback: attempt a conservative manual parse to preserve previous behavior
-    // for odd inputs (kept for compatibility).
-    let (sign, rest) = if let Some(rest) = tz.strip_prefix('+') {
-        (1, rest)
-    } else if let Some(rest) = tz.strip_prefix('-') {
-        (-1, rest)
-    } else {
-        return None;
-    };
-
-    let (hours, minutes) = if let Some((hours, minutes)) = rest.split_once(':') {
-        (hours, minutes)
-    } else if rest.len() == 4 {
-        rest.split_at(2)
-    } else {
-        return None;
-    };
-
-    let hours: i32 = hours.parse().ok()?;
-    let minutes: i32 = minutes.parse().ok()?;
-    if hours > 23 || minutes > 59 {
-        return None;
-    }
-
-    let total_minutes = hours * 60 + minutes;
-    let total_seconds = sign * total_minutes * 60;
-    FixedOffset::east_opt(total_seconds)
+    None
 }
 
 /// Converts a local datetime result to a UTC timestamp in nanoseconds.
