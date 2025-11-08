@@ -20,38 +20,41 @@ use arrow::datatypes::DataType;
 use bitflags::bitflags;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{ExprSchema, ScalarValue};
+use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr_common::operator::Operator;
 
 bitflags! {
+    /// A set representing the possible outcomes of a SQL boolean expression
     #[derive(PartialEq, Eq, Clone, Debug)]
-    struct TriBoolSet: u8 {
+    struct TernarySet: u8 {
         const TRUE = 0b1;
         const FALSE = 0b10;
         const UNKNOWN = 0b100;
     }
 }
 
-impl TriBoolSet {
-    fn try_from(value: &ScalarValue) -> TriBoolSet {
+impl TernarySet {
+    fn try_from(value: &ScalarValue) -> TernarySet {
         match value {
-            ScalarValue::Null => TriBoolSet::UNKNOWN,
+            ScalarValue::Null => TernarySet::UNKNOWN,
             ScalarValue::Boolean(b) => match b {
-                Some(true) => TriBoolSet::TRUE,
-                Some(false) => TriBoolSet::FALSE,
-                None => TriBoolSet::UNKNOWN,
+                Some(true) => TernarySet::TRUE,
+                Some(false) => TernarySet::FALSE,
+                None => TernarySet::UNKNOWN,
             },
             _ => {
                 if let Ok(b) = value.cast_to(&DataType::Boolean) {
                     Self::try_from(&b)
                 } else {
-                    TriBoolSet::empty()
+                    TernarySet::empty()
                 }
             }
         }
     }
 
-    /// Returns the set of possible values after applying `IS TRUE` on all
-    /// values in this set
+    /// Returns the set of possible values after applying the `is true` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
     fn is_true(&self) -> Self {
         let mut is_true = Self::empty();
         if self.contains(Self::TRUE) {
@@ -63,8 +66,9 @@ impl TriBoolSet {
         is_true
     }
 
-    /// Returns the set of possible values after applying `IS FALSE` on all
-    /// values in this set
+    /// Returns the set of possible values after applying the `is false` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
     fn is_false(&self) -> Self {
         let mut is_false = Self::empty();
         if self.contains(Self::FALSE) {
@@ -76,8 +80,9 @@ impl TriBoolSet {
         is_false
     }
 
-    /// Returns the set of possible values after applying `IS UNKNOWN` on all
-    /// values in this set
+    /// Returns the set of possible values after applying the `is unknown` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
     fn is_unknown(&self) -> Self {
         let mut is_unknown = Self::empty();
         if self.contains(Self::UNKNOWN) {
@@ -94,12 +99,12 @@ impl TriBoolSet {
     ///
     /// This method uses the following truth table.
     ///
-    /// ```
-    /// P       | !P
-    /// --------|-------
-    /// TRUE    | FALSE
-    /// FALSE   | TRUE
-    /// UNKNOWN | UNKNOWN
+    /// ```text
+    ///  A  | ¬A
+    /// ----|----
+    ///  F  |  T
+    ///  U  |  U
+    ///  T  |  F
     /// ```
     fn not(set: Self) -> Self {
         let mut not = Self::empty();
@@ -120,18 +125,12 @@ impl TriBoolSet {
     ///
     /// This method uses the following truth table.
     ///
-    /// ```
-    /// P       | Q       | P AND Q
-    /// --------|---------|----------
-    /// TRUE    | TRUE    | TRUE
-    /// TRUE    | FALSE   | FALSE
-    /// FALSE   | TRUE    | FALSE
-    /// FALSE   | FALSE   | FALSE
-    /// FALSE   | UNKNOWN | FALSE
-    /// UNKNOWN | FALSE   | FALSE
-    /// TRUE    | UNKNOWN | UNKNOWN
-    /// UNKNOWN | TRUE    | UNKNOWN
-    /// UNKNOWN | UNKNOWN | UNKNOWN
+    /// ```text
+    /// A ∧ B │ F U T
+    /// ──────┼──────
+    ///     F │ F F F
+    ///     U │ F U U
+    ///     T │ F U T
     /// ```
     fn and(lhs: Self, rhs: Self) -> Self {
         if lhs.is_empty() || rhs.is_empty() {
@@ -161,20 +160,12 @@ impl TriBoolSet {
     ///
     /// This method uses the following truth table.
     ///
-    /// ```
-    /// SQL three-valued logic OR truth table:
-    ///
-    /// P       | Q       | P OR Q
-    /// --------|---------|----------
-    /// FALSE   | FALSE   | FALSE
-    /// TRUE    | TRUE    | TRUE
-    /// TRUE    | FALSE   | TRUE
-    /// FALSE   | TRUE    | TRUE
-    /// TRUE    | UNKNOWN | TRUE
-    /// UNKNOWN | TRUE    | TRUE
-    /// FALSE   | UNKNOWN | UNKNOWN
-    /// UNKNOWN | FALSE   | UNKNOWN
-    /// UNKNOWN | UNKNOWN | UNKNOWN
+    /// ```text
+    /// A ∨ B │ F U T
+    /// ──────┼──────
+    ///     F │ F U T
+    ///     U │ U U T
+    ///     T │ T T T
     /// ```
     fn or(lhs: Self, rhs: Self) -> Self {
         let mut or = Self::empty();
@@ -197,123 +188,180 @@ impl TriBoolSet {
     }
 }
 
-/// Attempts to const evaluate a predicate using SQL three-valued logic.
+/// Computes the output interval for the given boolean expression based on statically
+/// available information.
 ///
-/// Semantics of the return value:
-/// - `Some(true)`      => predicate is provably truthy
-/// - `Some(false)`     => predicate is provably falsy
-/// - `None`            => inconclusive with available static information
+/// # Arguments
 ///
-/// The evaluation is conservative and only uses:
-/// - Expression nullability from `input_schema`
-/// - Simple type checks (e.g. whether an expression is Boolean)
-/// - Syntactic patterns (IS NULL/IS NOT NULL/IS TRUE/IS FALSE/etc.)
-/// - Three-valued boolean algebra for AND/OR/NOT
+/// * `predicate` - The boolean expression to analyze
+/// * `is_null` - A callback function that provides additional nullability information for
+///   expressions. When called with an expression, it should return:
+///   - `Some(true)` if the expression is known to evaluate to NULL
+///   - `Some(false)` if the expression is known to NOT evaluate to NULL
+///   - `None` if the nullability cannot be determined
 ///
-/// It does not evaluate user-defined functions.
-pub(super) fn const_eval_predicate<F>(
+///   This callback allows the caller to provide context-specific knowledge about expression
+///   nullability that cannot be determined from the schema alone. For example, it can be used
+///   to indicate that a particular column reference is known to be NULL in a specific context,
+///   or that certain expressions will never be NULL based on runtime constraints.
+///
+/// * `input_schema` - Schema information for resolving expression types and nullability
+///
+/// # Return Value
+///
+/// The function returns a [NullableInterval] that describes the possible boolean values the
+/// predicate can evaluate to. The return value will be one of the following:
+///
+/// * `NullableInterval::NotNull { values: Interval::CERTAINLY_TRUE }` - The predicate will
+///   always evaluate to TRUE (never FALSE or NULL)
+///
+/// * `NullableInterval::NotNull { values: Interval::CERTAINLY_FALSE }` - The predicate will
+///   always evaluate to FALSE (never TRUE or NULL)
+///
+/// * `NullableInterval::NotNull { values: Interval::UNCERTAIN }` - The predicate will never
+///   evaluate to NULL, but may be either TRUE or FALSE
+///
+/// * `NullableInterval::Null { datatype: DataType::Boolean }` - The predicate will always
+///   evaluate to NULL (SQL UNKNOWN in three-valued logic)
+///
+/// * `NullableInterval::MaybeNull { values: Interval::CERTAINLY_TRUE }` - The predicate may
+///   evaluate to TRUE or NULL, but never FALSE
+///
+/// * `NullableInterval::MaybeNull { values: Interval::CERTAINLY_FALSE }` - The predicate may
+///   evaluate to FALSE or NULL, but never TRUE
+///
+/// * `NullableInterval::MaybeNull { values: Interval::UNCERTAIN }` - The predicate may
+///   evaluate to any of TRUE, FALSE, or NULL
+///
+pub(super) fn evaluate_bounds<F>(
     predicate: &Expr,
-    evaluates_to_null: F,
+    is_null: F,
     input_schema: &dyn ExprSchema,
-) -> Option<bool>
+) -> NullableInterval
 where
     F: Fn(&Expr) -> Option<bool>,
 {
-    let evaluator = PredicateConstEvaluator {
+    let evaluator = PredicateBoundsEvaluator {
         input_schema,
-        evaluates_to_null,
+        is_null,
     };
-    let possible_results = evaluator.eval_predicate(predicate);
+    let possible_results = evaluator.evaluate_bounds(predicate);
 
-    if !possible_results.is_empty() {
-        if possible_results == TriBoolSet::TRUE {
-            // Provably true
-            return Some(true);
-        } else if !possible_results.contains(TriBoolSet::TRUE) {
-            // Provably not true
-            return Some(false);
+    if possible_results.is_empty() || possible_results == TernarySet::all() {
+        NullableInterval::MaybeNull {
+            values: Interval::UNCERTAIN,
+        }
+    } else if possible_results == TernarySet::TRUE {
+        NullableInterval::NotNull {
+            values: Interval::CERTAINLY_TRUE,
+        }
+    } else if possible_results == TernarySet::FALSE {
+        NullableInterval::NotNull {
+            values: Interval::CERTAINLY_FALSE,
+        }
+    } else if possible_results == TernarySet::UNKNOWN {
+        NullableInterval::Null {
+            datatype: DataType::Boolean,
+        }
+    } else {
+        let t = possible_results.contains(TernarySet::TRUE);
+        let f = possible_results.contains(TernarySet::FALSE);
+        let values = if t && f {
+            Interval::UNCERTAIN
+        } else if t {
+            Interval::CERTAINLY_TRUE
+        } else {
+            Interval::CERTAINLY_FALSE
+        };
+
+        if possible_results.contains(TernarySet::UNKNOWN) {
+            NullableInterval::MaybeNull { values }
+        } else {
+            NullableInterval::NotNull { values }
         }
     }
-
-    None
 }
 
-pub(super) struct PredicateConstEvaluator<'a, F> {
+pub(super) struct PredicateBoundsEvaluator<'a, F> {
     input_schema: &'a dyn ExprSchema,
-    evaluates_to_null: F,
+    is_null: F,
 }
 
-impl<F> PredicateConstEvaluator<'_, F>
+impl<F> PredicateBoundsEvaluator<'_, F>
 where
     F: Fn(&Expr) -> Option<bool>,
 {
-    /// Attempts to const evaluate a boolean predicate.
-    fn eval_predicate(&self, predicate: &Expr) -> TriBoolSet {
+    /// Derives the bounds of the given boolean expression
+    fn evaluate_bounds(&self, predicate: &Expr) -> TernarySet {
         match predicate {
             Expr::Literal(scalar, _) => {
                 // Interpret literals as boolean, coercing if necessary
-                TriBoolSet::try_from(scalar)
+                TernarySet::try_from(scalar)
             }
-            Expr::Negative(e) => self.eval_predicate(e),
+            Expr::Negative(e) => self.evaluate_bounds(e),
             Expr::IsNull(e) => {
                 // If `e` is not nullable, then `e IS NULL` is provably false
                 if let Ok(false) = e.nullable(self.input_schema) {
-                    return TriBoolSet::FALSE;
+                    return TernarySet::FALSE;
                 }
 
                 match e.get_type(self.input_schema) {
                     // If `e` is a boolean expression, try to evaluate it and test for unknown
-                    Ok(DataType::Boolean) => self.eval_predicate(e).is_unknown(),
+                    Ok(DataType::Boolean) => self.evaluate_bounds(e).is_unknown(),
                     // If `e` is not a boolean expression, check if `e` is provably null
                     Ok(_) => self.is_null(e),
-                    Err(_) => TriBoolSet::empty(),
+                    Err(_) => TernarySet::empty(),
                 }
             }
             Expr::IsNotNull(e) => {
                 // If `e` is not nullable, then `e IS NOT NULL` is provably true
                 if let Ok(false) = e.nullable(self.input_schema) {
-                    return TriBoolSet::TRUE;
+                    return TernarySet::TRUE;
                 }
 
                 match e.get_type(self.input_schema) {
                     // If `e` is a boolean expression, try to evaluate it and test for not unknown
                     Ok(DataType::Boolean) => {
-                        TriBoolSet::not(self.eval_predicate(e).is_unknown())
+                        TernarySet::not(self.evaluate_bounds(e).is_unknown())
                     }
                     // If `e` is not a boolean expression, check if `e` is provably null
-                    Ok(_) => TriBoolSet::not(self.is_null(e)),
-                    Err(_) => TriBoolSet::empty(),
+                    Ok(_) => TernarySet::not(self.is_null(e)),
+                    Err(_) => TernarySet::empty(),
                 }
             }
-            Expr::IsTrue(e) => self.eval_predicate(e).is_true(),
-            Expr::IsNotTrue(e) => TriBoolSet::not(self.eval_predicate(e).is_true()),
-            Expr::IsFalse(e) => self.eval_predicate(e).is_false(),
-            Expr::IsNotFalse(e) => TriBoolSet::not(self.eval_predicate(e).is_false()),
-            Expr::IsUnknown(e) => self.eval_predicate(e).is_unknown(),
-            Expr::IsNotUnknown(e) => TriBoolSet::not(self.eval_predicate(e).is_unknown()),
-            Expr::Not(e) => TriBoolSet::not(self.eval_predicate(e)),
+            Expr::IsTrue(e) => self.evaluate_bounds(e).is_true(),
+            Expr::IsNotTrue(e) => TernarySet::not(self.evaluate_bounds(e).is_true()),
+            Expr::IsFalse(e) => self.evaluate_bounds(e).is_false(),
+            Expr::IsNotFalse(e) => TernarySet::not(self.evaluate_bounds(e).is_false()),
+            Expr::IsUnknown(e) => self.evaluate_bounds(e).is_unknown(),
+            Expr::IsNotUnknown(e) => {
+                TernarySet::not(self.evaluate_bounds(e).is_unknown())
+            }
+            Expr::Not(e) => TernarySet::not(self.evaluate_bounds(e)),
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::And,
                 right,
-            }) => TriBoolSet::and(self.eval_predicate(left), self.eval_predicate(right)),
+            }) => {
+                TernarySet::and(self.evaluate_bounds(left), self.evaluate_bounds(right))
+            }
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::Or,
                 right,
-            }) => TriBoolSet::or(self.eval_predicate(left), self.eval_predicate(right)),
+            }) => TernarySet::or(self.evaluate_bounds(left), self.evaluate_bounds(right)),
             e => {
-                let mut result = TriBoolSet::empty();
+                let mut result = TernarySet::empty();
                 let is_null = self.is_null(e);
 
                 // If an expression is null, then it's value is UNKNOWN
-                if is_null.contains(TriBoolSet::TRUE) {
-                    result |= TriBoolSet::UNKNOWN
+                if is_null.contains(TernarySet::TRUE) {
+                    result |= TernarySet::UNKNOWN
                 }
 
                 // If an expression is not null, then it's either TRUE or FALSE
-                if is_null.contains(TriBoolSet::FALSE) {
-                    result |= TriBoolSet::TRUE | TriBoolSet::FALSE
+                if is_null.contains(TernarySet::FALSE) {
+                    result |= TernarySet::TRUE | TernarySet::FALSE
                 }
 
                 result
@@ -324,31 +372,33 @@ where
     /// Determines if the given expression can evaluate to `NULL`.
     ///
     /// This method only returns sets containing `TRUE`, `FALSE`, or both.
-    fn is_null(&self, expr: &Expr) -> TriBoolSet {
+    fn is_null(&self, expr: &Expr) -> TernarySet {
+        // Fast path for literals
+        if let Expr::Literal(scalar, _) = expr {
+            if scalar.is_null() {
+                return TernarySet::TRUE;
+            } else {
+                return TernarySet::FALSE;
+            }
+        }
+
         // If `expr` is not nullable, we can be certain `expr` is not null
         if let Ok(false) = expr.nullable(self.input_schema) {
-            return TriBoolSet::FALSE;
+            return TernarySet::FALSE;
         }
 
         // Check if the callback can decide for us
-        if let Some(is_null) = (self.evaluates_to_null)(expr) {
-            return if is_null {
-                TriBoolSet::TRUE
+        if let Some(expr_is_null) = (self.is_null)(expr) {
+            return if expr_is_null {
+                TernarySet::TRUE
             } else {
-                TriBoolSet::FALSE
+                TernarySet::FALSE
             };
         }
 
-        // `expr` is nullable, so our default answer is { TRUE, FALSE }.
-        // Try to see if we can narrow it down to one of the two.
+        // `expr` is nullable, so our default answer for `is null` is going to be `{ TRUE, FALSE }`.
+        // Try to see if we can narrow it down to just one option.
         match expr {
-            Expr::Literal(s, _) => {
-                if s.is_null() {
-                    TriBoolSet::TRUE
-                } else {
-                    TriBoolSet::FALSE
-                }
-            }
             Expr::Alias(_)
             | Expr::Between(_)
             | Expr::BinaryExpr(_)
@@ -359,19 +409,19 @@ where
             | Expr::SimilarTo(_) => {
                 // These expressions are null if any of their direct children is null
                 // If any child is inconclusive, the result for this expression is also inconclusive
-                let mut is_null = TriBoolSet::FALSE.clone();
+                let mut is_null = TernarySet::FALSE.clone();
                 let _ = expr.apply_children(|child| {
                     let child_is_null = self.is_null(child);
 
-                    if child_is_null.contains(TriBoolSet::TRUE) {
+                    if child_is_null.contains(TernarySet::TRUE) {
                         // If a child might be null, then the result may also be null
-                        is_null.insert(TriBoolSet::TRUE);
+                        is_null.insert(TernarySet::TRUE);
                     }
 
-                    if !child_is_null.contains(TriBoolSet::FALSE) {
+                    if !child_is_null.contains(TernarySet::FALSE) {
                         // If the child is never not null, then the result can also never be not null
                         // and we can stop traversing the children
-                        is_null.remove(TriBoolSet::FALSE);
+                        is_null.remove(TernarySet::FALSE);
                         Ok(TreeNodeRecursion::Stop)
                     } else {
                         Ok(TreeNodeRecursion::Continue)
@@ -379,7 +429,7 @@ where
                 });
                 is_null
             }
-            _ => TriBoolSet::TRUE | TriBoolSet::FALSE,
+            _ => TernarySet::TRUE | TernarySet::FALSE,
         }
     }
 }
@@ -387,13 +437,13 @@ where
 #[cfg(test)]
 mod tests {
     use crate::expr::ScalarFunction;
-    use crate::predicate_eval::{const_eval_predicate, TriBoolSet};
+    use crate::predicate_bounds::{evaluate_bounds, TernarySet};
     use crate::{
         binary_expr, col, create_udf, is_false, is_not_false, is_not_null, is_not_true,
         is_not_unknown, is_null, is_true, is_unknown, lit, not, Expr,
     };
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{DFSchema, ScalarValue};
+    use datafusion_common::{DFSchema, ExprSchema, ScalarValue};
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_expr_common::operator::Operator::{And, Eq, Or};
     use datafusion_expr_common::signature::Volatility;
@@ -402,50 +452,50 @@ mod tests {
     #[test]
     fn tristate_bool_from_scalar() {
         let cases = vec![
-            (ScalarValue::Null, TriBoolSet::UNKNOWN),
-            (ScalarValue::Boolean(None), TriBoolSet::UNKNOWN),
-            (ScalarValue::Boolean(Some(true)), TriBoolSet::TRUE),
-            (ScalarValue::Boolean(Some(false)), TriBoolSet::FALSE),
-            (ScalarValue::UInt8(None), TriBoolSet::UNKNOWN),
-            (ScalarValue::UInt8(Some(0)), TriBoolSet::FALSE),
-            (ScalarValue::UInt8(Some(1)), TriBoolSet::TRUE),
+            (ScalarValue::Null, TernarySet::UNKNOWN),
+            (ScalarValue::Boolean(None), TernarySet::UNKNOWN),
+            (ScalarValue::Boolean(Some(true)), TernarySet::TRUE),
+            (ScalarValue::Boolean(Some(false)), TernarySet::FALSE),
+            (ScalarValue::UInt8(None), TernarySet::UNKNOWN),
+            (ScalarValue::UInt8(Some(0)), TernarySet::FALSE),
+            (ScalarValue::UInt8(Some(1)), TernarySet::TRUE),
             (
                 ScalarValue::Utf8(Some("abc".to_string())),
-                TriBoolSet::empty(),
+                TernarySet::empty(),
             ),
         ];
 
         for case in cases {
-            assert_eq!(TriBoolSet::try_from(&case.0), case.1);
+            assert_eq!(TernarySet::try_from(&case.0), case.1);
         }
     }
 
     #[test]
     fn tristate_bool_not() {
         let cases = vec![
-            (TriBoolSet::UNKNOWN, TriBoolSet::UNKNOWN),
-            (TriBoolSet::TRUE, TriBoolSet::FALSE),
-            (TriBoolSet::FALSE, TriBoolSet::TRUE),
+            (TernarySet::UNKNOWN, TernarySet::UNKNOWN),
+            (TernarySet::TRUE, TernarySet::FALSE),
+            (TernarySet::FALSE, TernarySet::TRUE),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::TRUE | TernarySet::FALSE,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::UNKNOWN,
-                TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::UNKNOWN,
+                TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
             (
-                TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::UNKNOWN,
+                TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::UNKNOWN,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
         ];
 
         for case in cases {
-            assert_eq!(TriBoolSet::not(case.0), case.1);
+            assert_eq!(TernarySet::not(case.0), case.1);
         }
     }
 
@@ -453,65 +503,65 @@ mod tests {
     fn tristate_bool_and() {
         let cases = vec![
             (
-                TriBoolSet::UNKNOWN,
-                TriBoolSet::UNKNOWN,
-                TriBoolSet::UNKNOWN,
+                TernarySet::UNKNOWN,
+                TernarySet::UNKNOWN,
+                TernarySet::UNKNOWN,
             ),
-            (TriBoolSet::UNKNOWN, TriBoolSet::TRUE, TriBoolSet::UNKNOWN),
-            (TriBoolSet::UNKNOWN, TriBoolSet::FALSE, TriBoolSet::FALSE),
-            (TriBoolSet::TRUE, TriBoolSet::TRUE, TriBoolSet::TRUE),
-            (TriBoolSet::TRUE, TriBoolSet::FALSE, TriBoolSet::FALSE),
-            (TriBoolSet::FALSE, TriBoolSet::FALSE, TriBoolSet::FALSE),
+            (TernarySet::UNKNOWN, TernarySet::TRUE, TernarySet::UNKNOWN),
+            (TernarySet::UNKNOWN, TernarySet::FALSE, TernarySet::FALSE),
+            (TernarySet::TRUE, TernarySet::TRUE, TernarySet::TRUE),
+            (TernarySet::TRUE, TernarySet::FALSE, TernarySet::FALSE),
+            (TernarySet::FALSE, TernarySet::FALSE, TernarySet::FALSE),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::FALSE,
-                TriBoolSet::FALSE,
-            ),
-            (
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::TRUE,
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::FALSE,
+                TernarySet::FALSE,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE,
-                TriBoolSet::TRUE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::TRUE,
+                TernarySet::TRUE | TernarySet::FALSE,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::UNKNOWN,
+                TernarySet::TRUE,
+                TernarySet::TRUE | TernarySet::UNKNOWN,
             ),
             (
-                TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE,
-                TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
             (
-                TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE,
+                TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+            ),
+            (
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
         ];
 
         for case in cases {
             assert_eq!(
-                TriBoolSet::and(case.0.clone(), case.1.clone()),
+                TernarySet::and(case.0.clone(), case.1.clone()),
                 case.2.clone(),
                 "{:?} & {:?} = {:?}",
                 case.0.clone(),
@@ -519,7 +569,7 @@ mod tests {
                 case.2.clone()
             );
             assert_eq!(
-                TriBoolSet::and(case.1.clone(), case.0.clone()),
+                TernarySet::and(case.1.clone(), case.0.clone()),
                 case.2.clone(),
                 "{:?} & {:?} = {:?}",
                 case.1.clone(),
@@ -533,55 +583,55 @@ mod tests {
     fn tristate_bool_or() {
         let cases = vec![
             (
-                TriBoolSet::UNKNOWN,
-                TriBoolSet::UNKNOWN,
-                TriBoolSet::UNKNOWN,
+                TernarySet::UNKNOWN,
+                TernarySet::UNKNOWN,
+                TernarySet::UNKNOWN,
             ),
-            (TriBoolSet::UNKNOWN, TriBoolSet::TRUE, TriBoolSet::TRUE),
-            (TriBoolSet::UNKNOWN, TriBoolSet::FALSE, TriBoolSet::UNKNOWN),
-            (TriBoolSet::TRUE, TriBoolSet::TRUE, TriBoolSet::TRUE),
-            (TriBoolSet::TRUE, TriBoolSet::FALSE, TriBoolSet::TRUE),
-            (TriBoolSet::FALSE, TriBoolSet::FALSE, TriBoolSet::FALSE),
+            (TernarySet::UNKNOWN, TernarySet::TRUE, TernarySet::TRUE),
+            (TernarySet::UNKNOWN, TernarySet::FALSE, TernarySet::UNKNOWN),
+            (TernarySet::TRUE, TernarySet::TRUE, TernarySet::TRUE),
+            (TernarySet::TRUE, TernarySet::FALSE, TernarySet::TRUE),
+            (TernarySet::FALSE, TernarySet::FALSE, TernarySet::FALSE),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::FALSE,
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-            ),
-            (
-                TriBoolSet::TRUE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE,
-                TriBoolSet::TRUE,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::FALSE,
+                TernarySet::TRUE | TernarySet::FALSE,
             ),
             (
-                TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE,
-                TriBoolSet::TRUE,
+                TernarySet::TRUE | TernarySet::UNKNOWN,
+                TernarySet::TRUE,
+                TernarySet::TRUE,
             ),
             (
-                TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE,
+                TernarySet::TRUE,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE,
-                TriBoolSet::TRUE,
+                TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE,
+                TernarySet::TRUE,
             ),
             (
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
-                TriBoolSet::TRUE | TriBoolSet::FALSE | TriBoolSet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+            ),
+            (
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
+                TernarySet::TRUE | TernarySet::FALSE | TernarySet::UNKNOWN,
             ),
         ];
 
         for case in cases {
             assert_eq!(
-                TriBoolSet::or(case.0.clone(), case.1.clone()),
+                TernarySet::or(case.0.clone(), case.1.clone()),
                 case.2.clone(),
                 "{:?} | {:?} = {:?}",
                 case.0.clone(),
@@ -589,13 +639,32 @@ mod tests {
                 case.2.clone()
             );
             assert_eq!(
-                TriBoolSet::or(case.1.clone(), case.0.clone()),
+                TernarySet::or(case.1.clone(), case.0.clone()),
                 case.2.clone(),
                 "{:?} | {:?} = {:?}",
                 case.1.clone(),
                 case.0.clone(),
                 case.2.clone()
             );
+        }
+    }
+
+    fn const_eval_predicate<F>(
+        predicate: &Expr,
+        evaluates_to_null: F,
+        input_schema: &dyn ExprSchema,
+    ) -> Option<bool>
+    where
+        F: Fn(&Expr) -> Option<bool>,
+    {
+        let bounds = evaluate_bounds(predicate, evaluates_to_null, input_schema);
+
+        if bounds.is_certainly_true() {
+            Some(true)
+        } else if bounds.is_certainly_not_true() {
+            Some(false)
+        } else {
+            None
         }
     }
 

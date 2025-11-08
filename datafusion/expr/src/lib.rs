@@ -70,7 +70,7 @@ pub mod async_udf;
 pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
-mod predicate_eval;
+mod predicate_bounds;
 pub mod ptr_eq;
 pub mod test;
 pub mod tree_node;

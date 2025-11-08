@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{predicate_eval, Between, Expr, Like};
+use super::{predicate_bounds, Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
     InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
@@ -321,17 +321,18 @@ impl ExprSchemable for Expr {
                                         }
                                     };
 
-                                    match predicate_eval::const_eval_predicate(
+                                    let bounds = predicate_bounds::evaluate_bounds(
                                         w,
                                         is_null,
                                         input_schema,
-                                    ) {
-                                        // Const evaluation was inconclusive or determined the branch
-                                        // would be taken
-                                        None | Some(true) => Some(Ok(())),
-                                        // Const evaluation proves the branch will never be taken.
+                                    );
+                                    if bounds.is_certainly_not_true() {
+                                        // The branch will certainly never be taken.
                                         // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                                        Some(false) => None,
+                                        None
+                                    } else {
+                                        // The branch might be taken
+                                        Some(Ok(()))
                                     }
                                 }
                             }

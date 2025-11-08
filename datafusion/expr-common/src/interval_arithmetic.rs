@@ -1762,6 +1762,16 @@ impl NullableInterval {
         }
     }
 
+    /// Return true if the value is definitely not true (either null or false).
+    pub fn is_certainly_not_true(&self) -> bool {
+        match self {
+            Self::Null { .. } => true,
+            Self::MaybeNull { values } | Self::NotNull { values } => {
+                values == &Interval::CERTAINLY_FALSE
+            }
+        }
+    }
+
     /// Return true if the value is definitely false (and not null).
     pub fn is_certainly_false(&self) -> bool {
         match self {
