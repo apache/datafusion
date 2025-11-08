@@ -1977,10 +1977,10 @@ mod tests {
         operator::Operator,
     };
 
+    use crate::interval_arithmetic::NullableInterval;
     use arrow::datatypes::DataType;
     use datafusion_common::rounding::{next_down, next_up};
     use datafusion_common::{Result, ScalarValue};
-    use crate::interval_arithmetic::NullableInterval;
 
     #[test]
     fn test_next_prev_value() -> Result<()> {
@@ -4118,63 +4118,159 @@ mod tests {
     #[test]
     fn test_is_certainly_true() {
         let test_cases = vec![
-            (NullableInterval::Null { datatype: DataType::Boolean }, false),
-            (NullableInterval::MaybeNull { values: Interval::CERTAINLY_TRUE }, false),
-            (NullableInterval::MaybeNull { values: Interval::CERTAINLY_FALSE }, false),
-            (NullableInterval::MaybeNull { values: Interval::UNCERTAIN }, false),
-            (NullableInterval::NotNull { values: Interval::CERTAINLY_TRUE }, true),
-            (NullableInterval::NotNull { values: Interval::CERTAINLY_FALSE }, false),
-            (NullableInterval::NotNull { values: Interval::UNCERTAIN }, false),
+            (
+                NullableInterval::Null {
+                    datatype: DataType::Boolean,
+                },
+                false,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::CERTAINLY_TRUE,
+                },
+                false,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::CERTAINLY_FALSE,
+                },
+                false,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::UNCERTAIN,
+                },
+                false,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::CERTAINLY_TRUE,
+                },
+                true,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::CERTAINLY_FALSE,
+                },
+                false,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::UNCERTAIN,
+                },
+                false,
+            ),
         ];
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_true();
-            assert_eq!(
-                result, expected,
-                "Failed for interval: {interval}",
-            );
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
         }
     }
 
     #[test]
     fn test_is_certainly_not_true() {
         let test_cases = vec![
-            (NullableInterval::Null { datatype: DataType::Boolean }, true),
-            (NullableInterval::MaybeNull { values: Interval::CERTAINLY_TRUE }, false),
-            (NullableInterval::MaybeNull { values: Interval::CERTAINLY_FALSE }, true),
-            (NullableInterval::MaybeNull { values: Interval::UNCERTAIN }, false),
-            (NullableInterval::NotNull { values: Interval::CERTAINLY_TRUE }, false),
-            (NullableInterval::NotNull { values: Interval::CERTAINLY_FALSE }, true),
-            (NullableInterval::NotNull { values: Interval::UNCERTAIN }, false),
+            (
+                NullableInterval::Null {
+                    datatype: DataType::Boolean,
+                },
+                true,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::CERTAINLY_TRUE,
+                },
+                false,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::CERTAINLY_FALSE,
+                },
+                true,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::UNCERTAIN,
+                },
+                false,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::CERTAINLY_TRUE,
+                },
+                false,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::CERTAINLY_FALSE,
+                },
+                true,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::UNCERTAIN,
+                },
+                false,
+            ),
         ];
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_not_true();
-            assert_eq!(
-                result, expected,
-                "Failed for interval: {interval}",
-            );
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
         }
     }
 
     #[test]
     fn test_is_certainly_false() {
         let test_cases = vec![
-            (NullableInterval::Null { datatype: DataType::Boolean }, false),
-            (NullableInterval::MaybeNull { values: Interval::CERTAINLY_TRUE }, false),
-            (NullableInterval::MaybeNull { values: Interval::CERTAINLY_FALSE }, false),
-            (NullableInterval::MaybeNull { values: Interval::UNCERTAIN }, false),
-            (NullableInterval::NotNull { values: Interval::CERTAINLY_TRUE }, false),
-            (NullableInterval::NotNull { values: Interval::CERTAINLY_FALSE }, true),
-            (NullableInterval::NotNull { values: Interval::UNCERTAIN }, false),
+            (
+                NullableInterval::Null {
+                    datatype: DataType::Boolean,
+                },
+                false,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::CERTAINLY_TRUE,
+                },
+                false,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::CERTAINLY_FALSE,
+                },
+                false,
+            ),
+            (
+                NullableInterval::MaybeNull {
+                    values: Interval::UNCERTAIN,
+                },
+                false,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::CERTAINLY_TRUE,
+                },
+                false,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::CERTAINLY_FALSE,
+                },
+                true,
+            ),
+            (
+                NullableInterval::NotNull {
+                    values: Interval::UNCERTAIN,
+                },
+                false,
+            ),
         ];
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_false();
-            assert_eq!(
-                result, expected,
-                "Failed for interval: {interval}",
-            );
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
         }
     }
 }
