@@ -16,27 +16,16 @@
 # under the License.
 
 # Test shuffle function with simple arrays
-query B
-SELECT array_sort(shuffle([1, 2, 3, 4, 5, NULL])) = [NULL,1, 2, 3, 4, 5];
+query ?
+SELECT shuffle([1, 2, 3, 4, 5, NULL], 1);
 ----
-true
-
-query B
-SELECT shuffle([1, 2, 3, 4, 5, NULL]) != [1, 2, 3, 4, 5, NULL];
-----
-true
+[1, 4, NULL, 2, 5, 3]
 
 # Test shuffle function with string arrays
-
-query B
-SELECT array_sort(shuffle(['a', 'b', 'c', 'd', 'e', 'f'])) = ['a', 'b', 'c', 'd', 'e', 'f'];
+query ?
+SELECT shuffle(['a', 'b', 'c', 'd', 'e', 'f'], 1);
 ----
-true
-
-query B
-SELECT shuffle(['a', 'b', 'c', 'd', 'e', 'f']) != ['a', 'b', 'c', 'd', 'e', 'f'];;
-----
-true
+[a, d, f, b, e, c]
 
 # Test shuffle function with empty array
 query ?
@@ -57,15 +46,10 @@ SELECT shuffle(NULL);
 NULL
 
 # Test shuffle function with fixed size list arrays
-query B
-SELECT array_sort(shuffle(arrow_cast([1, 2, NULL, 3, 4, 5], 'FixedSizeList(6, Int64)'))) = [NULL, 1, 2, 3, 4, 5];
+query ?
+SELECT shuffle(arrow_cast([1, 2, NULL, 3, 4, 5], 'FixedSizeList(6, Int64)'), 1);
 ----
-true
-
-query B
-SELECT shuffle(arrow_cast([1, 2, NULL, 3, 4, 5], 'FixedSizeList(6, Int64)')) != [1, 2, NULL, 3, 4, 5];
-----
-true
+[1, 3, 5, 2, 4, NULL]
 
 # Test shuffle on table data with different list types
 statement ok
@@ -78,10 +62,10 @@ CREATE TABLE test_shuffle_list_types AS VALUES
 
 # Test shuffle with large list from table
 query ?
-SELECT array_sort(shuffle(column1)) FROM test_shuffle_list_types;
+SELECT shuffle(column1, 1) FROM test_shuffle_list_types;
 ----
-[1, 2, 3, 4]
-[5, 6, 7, 8, 9]
+[1, 4, 3, 2]
+[8, 9, 6, 5, 7]
 [10]
 NULL
 []
@@ -96,11 +80,11 @@ CREATE TABLE test_shuffle_fixed_size AS VALUES
 
 # Test shuffle with fixed size list from table
 query ?
-SELECT array_sort(shuffle(column1)) FROM test_shuffle_fixed_size;
+SELECT shuffle(column1, 1) FROM test_shuffle_fixed_size;
 ----
 [1, 2, 3]
-[4, 5, 6]
-[NULL, 8, 9]
+[4, 6, 5]
+[9, NULL, 8]
 NULL
 
 # Clean up

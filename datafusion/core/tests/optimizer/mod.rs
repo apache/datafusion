@@ -287,7 +287,7 @@ fn test_nested_schema_nullability() {
 
 #[test]
 fn test_inequalities_non_null_bounded() {
-    let guarantees = vec![
+    let guarantees = [
         // x ∈ [1, 3] (not null)
         (
             col("x"),

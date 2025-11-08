@@ -88,6 +88,12 @@ impl InProgressSpillFile {
         Ok(())
     }
 
+    /// Returns a reference to the in-progress file, if it exists.
+    /// This can be used to get the file path for creating readers before the file is finished.
+    pub fn file(&self) -> Option<&RefCountedTempFile> {
+        self.in_progress_file.as_ref()
+    }
+
     /// Finalizes the file, returning the completed file reference.
     /// If there are no batches spilled before, it returns `None`.
     pub fn finish(&mut self) -> Result<Option<RefCountedTempFile>> {

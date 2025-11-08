@@ -329,9 +329,9 @@ impl AggregateUDF {
         self.inner.supports_null_handling_clause()
     }
 
-    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
-    pub fn is_ordered_set_aggregate(&self) -> bool {
-        self.inner.is_ordered_set_aggregate()
+    /// See [`AggregateUDFImpl::supports_within_group_clause`] for more details.
+    pub fn supports_within_group_clause(&self) -> bool {
+        self.inner.supports_within_group_clause()
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -746,18 +746,25 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         true
     }
 
-    /// If this function is an ordered-set aggregate function, return `true`.
-    /// Otherwise, return `false` (default).
+    /// If this function supports the `WITHIN GROUP (ORDER BY column [ASC|DESC])`
+    /// SQL syntax, return `true`. Otherwise, return `false` (default) which will
+    /// cause an error when parsing SQL where this syntax is detected for this
+    /// function.
+    ///
+    /// This function should return `true` for ordered-set aggregate functions
+    /// only.
+    ///
+    /// # Ordered-set aggregate functions
     ///
     /// Ordered-set aggregate functions allow specifying a sort order that affects
     /// how the function calculates its result, unlike other aggregate functions
-    /// like `SUM` or `COUNT`. For example, `percentile_cont` is an ordered-set
+    /// like `sum` or `count`. For example, `percentile_cont` is an ordered-set
     /// aggregate function that calculates the exact percentile value from a list
     /// of values; the output of calculating the `0.75` percentile depends on if
     /// you're calculating on an ascending or descending list of values.
     ///
-    /// Setting this to return `true` affects only SQL parsing & planning; it allows
-    /// use of the `WITHIN GROUP` clause to specify this order, for example:
+    /// An example of how an ordered-set aggregate function is called with the
+    /// `WITHIN GROUP` SQL syntax:
     ///
     /// ```sql
     /// -- Ascending
@@ -784,15 +791,11 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// without the `WITHIN GROUP` clause, though a default of ascending is the
     /// standard practice.
     ///
-    /// Note that setting this to `true` does not guarantee input sort order to
-    /// the aggregate function; it expects the function to handle ordering the
-    /// input values themselves (e.g. `percentile_cont` must buffer and sort
-    /// the values internally). That is, DataFusion does not introduce any kind
-    /// of sort into the plan for these functions.
-    ///
-    /// Setting this to `false` disallows calling this function with the `WITHIN GROUP`
-    /// clause.
-    fn is_ordered_set_aggregate(&self) -> bool {
+    /// Ordered-set aggregate function implementations are responsible for handling
+    /// the input sort order themselves (e.g. `percentile_cont` must buffer and
+    /// sort the values internally). That is, DataFusion does not introduce any
+    /// kind of sort into the plan for these functions with this syntax.
+    fn supports_within_group_clause(&self) -> bool {
         false
     }
 
@@ -843,7 +846,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
 
     // exclude the first function argument(= column) in ordered set aggregate function,
     // because it is duplicated with the WITHIN GROUP clause in schema name.
-    let args = if func.is_ordered_set_aggregate() && !order_by.is_empty() {
+    let args = if func.supports_within_group_clause() && !order_by.is_empty() {
         &args[1..]
     } else {
         &args[..]
@@ -867,7 +870,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
     };
 
     if !order_by.is_empty() {
-        let clause = match func.is_ordered_set_aggregate() {
+        let clause = match func.supports_within_group_clause() {
             true => "WITHIN GROUP",
             false => "ORDER BY",
         };
@@ -1259,8 +1262,8 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.supports_null_handling_clause()
     }
 
-    fn is_ordered_set_aggregate(&self) -> bool {
-        self.inner.is_ordered_set_aggregate()
+    fn supports_within_group_clause(&self) -> bool {
+        self.inner.supports_within_group_clause()
     }
 
     fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {

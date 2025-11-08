@@ -70,9 +70,8 @@ use sqlparser::tokenizer::Span;
 /// use datafusion_expr::{col, lit};
 /// use datafusion_sql::unparser::expr_to_sql;
 /// let expr = col("a").gt(lit(4)); // form an expression `a > 4`
-/// let sql = expr_to_sql(&expr).unwrap(); // convert to ast::Expr
-/// // use the Display impl to convert to SQL text
-/// assert_eq!(sql.to_string(), "(a > 4)")
+/// let sql = expr_to_sql(&expr).unwrap(); // convert to ast::Expr, using
+/// assert_eq!(sql.to_string(), "(a > 4)"); // use Display impl for SQL text
 /// ```
 ///
 /// [`SqlToRel::sql_to_expr`]: crate::planner::SqlToRel::sql_to_expr
@@ -336,7 +335,7 @@ impl Unparser<'_> {
                     None => None,
                 };
                 let within_group: Vec<ast::OrderByExpr> =
-                    if agg.func.is_ordered_set_aggregate() {
+                    if agg.func.supports_within_group_clause() {
                         order_by
                             .iter()
                             .map(|sort_expr| self.sort_to_sql(sort_expr))

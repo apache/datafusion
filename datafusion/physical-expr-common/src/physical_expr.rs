@@ -341,7 +341,6 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// representation.
     ///
     /// See the [`fmt_sql`] function for an example of printing `PhysicalExpr`s as SQL.
-    ///
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
 
     /// Take a snapshot of this `PhysicalExpr`, if it is dynamic.
@@ -566,9 +565,8 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
 ///
 /// # Returns
 ///
-/// Returns an `Option<Arc<dyn PhysicalExpr>>` which is the snapshot of the
-/// `PhysicalExpr` if it is dynamic. If the `PhysicalExpr` does not have
-/// any dynamic references or state, it returns `None`.
+/// Returns a snapshot of the `PhysicalExpr` if it is dynamic, otherwise
+/// returns itself.
 pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Arc<dyn PhysicalExpr>> {

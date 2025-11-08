@@ -100,7 +100,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 ///
 /// # Printing Expressions
 ///
-/// You can print `Expr`s using the the `Debug` trait, `Display` trait, or
+/// You can print `Expr`s using the `Debug` trait, `Display` trait, or
 /// [`Self::human_display`]. See the [examples](#examples-displaying-exprs) below.
 ///
 /// If you need  SQL to pass to other systems, consider using [`Unparser`].
@@ -990,7 +990,7 @@ impl WindowFunctionDefinition {
         }
     }
 
-    /// Return the the inner window simplification function, if any
+    /// Return the inner window simplification function, if any
     ///
     /// See [`WindowFunctionSimplification`] for more information
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
@@ -1077,7 +1077,7 @@ impl WindowFunction {
         }
     }
 
-    /// Return the the inner window simplification function, if any
+    /// Return the inner window simplification function, if any
     ///
     /// See [`WindowFunctionSimplification`] for more information
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {

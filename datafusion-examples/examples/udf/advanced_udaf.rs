@@ -469,8 +469,9 @@ fn create_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// In this example we register `GeoMeanUdaf` and `SimplifiedGeoMeanUdaf`
+/// as user defined aggregate functions and invoke them via the DataFrame API and SQL
+pub async fn advanced_udaf() -> Result<()> {
     let ctx = create_context()?;
 
     let geo_mean_udf = AggregateUDF::from(GeoMeanUdaf::new());
