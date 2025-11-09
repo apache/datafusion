@@ -1299,7 +1299,8 @@ impl RepartitionExec {
         if is_hash_partitioning {
             // flush any remaining coalesced batches
             for (partition, coalesce_batch) in coalesce_batches.iter_mut().enumerate() {
-                while let Some(batch) = coalesce_batch.next_completed_batch() {
+                coalesce_batch.finish_buffered_batch()?;
+                if let Some(batch) = coalesce_batch.next_completed_batch() {
                     let size = batch.get_array_memory_size();
                     // Check if channel still exists (may have been removed if receiver hung up)
                     if let Some(channel) = output_channels.get_mut(&partition) {
