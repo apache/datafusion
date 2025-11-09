@@ -329,6 +329,7 @@ impl FunctionRegistry for ForeignWeakFunctionRegistry {
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
+        warn!("FFI Function Registry does not support expression planners.");
         vec![]
     }
 
@@ -337,5 +338,58 @@ impl FunctionRegistry for ForeignWeakFunctionRegistry {
         _expr_planner: Arc<dyn ExprPlanner>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Function Registry does not allow mutation via FFI")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::prelude::SessionContext;
+    use datafusion_expr::registry::FunctionRegistry;
+
+    #[tokio::test]
+    async fn test_round_trip_ffi_function_registry() -> Result<(), DataFusionError> {
+        let ctx = Arc::new(SessionContext::new());
+        let function_registry =
+            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
+
+        let mut ffi_registry = FFI_WeakFunctionRegistry::from(function_registry);
+        ffi_registry.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_registry: Arc<dyn FunctionRegistry + Send + Sync> =
+            (&ffi_registry).try_into()?;
+
+        let udf_names = foreign_registry.udfs();
+        assert!(!udf_names.is_empty());
+        let udf = foreign_registry.udf(udf_names.iter().next().unwrap())?;
+
+        let udaf_names = foreign_registry.udafs();
+        assert!(!udaf_names.is_empty());
+        let udaf = foreign_registry.udaf(udaf_names.iter().next().unwrap())?;
+
+        let udwf_names = foreign_registry.udwfs();
+        assert!(!udwf_names.is_empty());
+        let udwf = foreign_registry.udwf(udwf_names.iter().next().unwrap())?;
+
+        // The following tests exist to ensure that if we do add support
+        // for mutable function registry in the future that we have
+        // added test coverage.
+
+        // Manually create foreign registry so we can make it mutable
+        let mut foreign_registry = ForeignWeakFunctionRegistry(ffi_registry);
+
+        fn expect_not_implemented<T>(input: Result<T, DataFusionError>) {
+            let Err(DataFusionError::NotImplemented(_)) = input else {
+                panic!("Expected not implemented feature");
+            };
+        }
+        expect_not_implemented(foreign_registry.register_udf(udf));
+        expect_not_implemented(foreign_registry.register_udaf(udaf));
+        expect_not_implemented(foreign_registry.register_udwf(udwf));
+        expect_not_implemented(foreign_registry.deregister_udf("a"));
+        expect_not_implemented(foreign_registry.deregister_udaf("a"));
+        expect_not_implemented(foreign_registry.deregister_udwf("a"));
+
+        Ok(())
     }
 }
