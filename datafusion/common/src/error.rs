@@ -777,12 +777,12 @@ macro_rules! assert_or_internal_err {
             )));
         }
     };
-    ($cond:expr, $msg:expr) => {
+    ($cond:expr, $($arg:tt)+) => {
         if !$cond {
             return Err(DataFusionError::Internal(format!(
                 "Assertion failed: {}: {}",
                 stringify!($cond),
-                $msg
+                format!($($arg)+)
             )));
         }
     };
