@@ -606,6 +606,12 @@ config_namespace! {
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+
+        /// When set to true, ProjectionExec will track execution time for each individual
+        /// expression separately. This allows detailed profiling of expression performance
+        /// in EXPLAIN ANALYZE output. Each expression will have its own metric with a label
+        /// identifying the expression.
+        pub individual_expr_metrics: bool, default = false
     }
 }
 

@@ -21,7 +21,9 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use super::expressions::{Column, Literal};
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, Time,
+};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -33,6 +35,7 @@ use crate::filter_pushdown::{
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
+use datafusion_common::instant::Instant;
 use std::any::Any;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -273,11 +276,19 @@ impl ExecutionPlan for ProjectionExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        let track_individual_metrics = context
+            .session_config()
+            .options()
+            .execution
+            .individual_expr_metrics;
         Ok(Box::pin(ProjectionStream::new(
             Arc::clone(&self.schema),
             self.projection.expr_iter().collect(),
             self.input.execute(partition, context)?,
             BaselineMetrics::new(&self.metrics, partition),
+            &self.metrics,
+            partition,
+            track_individual_metrics,
         )))
     }
 
@@ -345,26 +356,64 @@ impl ProjectionStream {
         expr: Vec<Arc<dyn PhysicalExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        track_individual_metrics: bool,
     ) -> Self {
+        let expr_metrics = if track_individual_metrics {
+            expr.iter()
+                .map(|e| {
+                    // Get SQL representation of the expression for the label
+                    let expr_sql = fmt_sql(e.as_ref()).to_string();
+                    MetricBuilder::new(metrics)
+                        .with_new_label("expr", expr_sql)
+                        .with_type(super::metrics::MetricType::DEV)
+                        .subset_time("expr_time", partition)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         Self {
             schema,
             expr,
             input,
             baseline_metrics,
+            expr_metrics,
+            track_individual_metrics,
         }
     }
 
     fn batch_project(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         // Records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        let arrays = self
-            .expr
-            .iter()
-            .map(|expr| {
-                expr.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
+
+        let arrays = if self.track_individual_metrics {
+            // Measure time for each expression individually
+            self.expr
+                .iter()
+                .zip(self.expr_metrics.iter())
+                .map(|(expr, expr_metric)| {
+                    let start = Instant::now();
+                    let result = expr
+                        .evaluate(batch)
+                        .and_then(|v| v.into_array(batch.num_rows()));
+                    let elapsed = start.elapsed();
+                    expr_metric.add_duration(elapsed);
+                    result
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            // Standard evaluation without individual metrics
+            self.expr
+                .iter()
+                .map(|expr| {
+                    expr.evaluate(batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
 
         if arrays.is_empty() {
             let options =
@@ -383,6 +432,10 @@ struct ProjectionStream {
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
+    /// Individual expression metrics (only populated if tracking is enabled)
+    expr_metrics: Vec<Time>,
+    /// Whether to track individual expression metrics
+    track_individual_metrics: bool,
 }
 
 impl Stream for ProjectionStream {
@@ -1004,6 +1057,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::common::collect;
+    use crate::metrics::MetricValue;
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
@@ -1200,5 +1254,159 @@ mod tests {
             "Expected 2 columns in projection statistics"
         );
         assert!(stats.total_byte_size.is_exact().unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn test_individual_expr_metrics_disabled() -> Result<()> {
+        // Test that individual expression metrics are not tracked by default
+        let exec = test::scan_partitioned(1);
+        let i = col("i", &exec.schema()).unwrap();
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: i,
+                alias: "i".to_string(),
+            }],
+            exec,
+        )?;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let stream = projection.execute(0, task_ctx)?;
+        let _output = collect(stream).await?;
+
+        // Check that no individual expression metrics are present
+        let metrics = projection.metrics().unwrap();
+        let expr_time_metrics: Vec<_> = metrics
+            .iter()
+            .filter(|m| {
+                matches!(m.value(), MetricValue::Time { name, .. } if name == "expr_time")
+            })
+            .collect();
+        assert_eq!(
+            expr_time_metrics.len(),
+            0,
+            "Should not have individual expr metrics when disabled"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_individual_expr_metrics_enabled() -> Result<()> {
+        // Test that individual expression metrics are tracked when enabled
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_execution::config::SessionConfig;
+
+        let mut config = ConfigOptions::new();
+        config.execution.individual_expr_metrics = true;
+        let session_config = SessionConfig::from(config);
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let exec = test::scan_partitioned(1);
+        let i = col("i", &exec.schema()).unwrap();
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: i.clone(),
+                alias: "i".to_string(),
+            }],
+            exec,
+        )?;
+
+        let stream = projection.execute(0, task_ctx)?;
+        let _output = collect(stream).await?;
+
+        // Check that individual expression metrics are present
+        let metrics = projection.metrics().unwrap();
+        let expr_time_metrics: Vec<_> = metrics
+            .iter()
+            .filter(|m| {
+                matches!(m.value(), MetricValue::Time { name, .. } if name == "expr_time")
+            })
+            .collect();
+        assert_eq!(
+            expr_time_metrics.len(),
+            1,
+            "Should have 1 individual expr metric (one for the expression)"
+        );
+
+        // Verify that metrics have the correct labels
+        for metric in &expr_time_metrics {
+            let labels = metric.labels();
+            assert!(!labels.is_empty(), "Metrics should have labels");
+            let expr_label = labels.iter().find(|l| l.name() == "expr");
+            assert!(expr_label.is_some(), "Metrics should have 'expr' label");
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_individual_expr_metrics_multiple_expressions() -> Result<()> {
+        // Test with multiple expressions including complex ones
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_execution::config::SessionConfig;
+
+        let mut config = ConfigOptions::new();
+        config.execution.individual_expr_metrics = true;
+        let session_config = SessionConfig::from(config);
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let exec = test::scan_partitioned(1);
+        let i = col("i", &exec.schema()).unwrap();
+        let i_plus_one = Arc::new(BinaryExpr::new(
+            Arc::clone(&i),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: i.clone(),
+                    alias: "i".to_string(),
+                },
+                ProjectionExpr {
+                    expr: i_plus_one,
+                    alias: "i_plus_one".to_string(),
+                },
+            ],
+            exec,
+        )?;
+
+        let stream = projection.execute(0, task_ctx)?;
+        let _output = collect(stream).await?;
+
+        // Check that we have metrics for all 2 expressions
+        let metrics = projection.metrics().unwrap();
+        let expr_time_metrics: Vec<_> = metrics
+            .iter()
+            .filter(|m| {
+                matches!(m.value(), MetricValue::Time { name, .. } if name == "expr_time")
+            })
+            .collect();
+        assert_eq!(
+            expr_time_metrics.len(),
+            2,
+            "Should have 2 individual expr metrics (one for each expression)"
+        );
+
+        // Verify that each metric has a unique expression label
+        let expr_labels: Vec<String> = expr_time_metrics
+            .iter()
+            .flat_map(|m| {
+                m.labels()
+                    .iter()
+                    .find(|l| l.name() == "expr")
+                    .map(|l| l.value().to_string())
+            })
+            .collect();
+        assert_eq!(
+            expr_labels.len(),
+            2,
+            "Should have 2 unique expression labels"
+        );
+
+        Ok(())
     }
 }
