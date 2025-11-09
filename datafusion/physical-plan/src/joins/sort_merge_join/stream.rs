@@ -35,6 +35,7 @@ use std::task::{Context, Poll};
 
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::utils::{compare_join_arrays, JoinFilter};
+use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
@@ -1462,10 +1463,7 @@ impl SortMergeJoinStream {
     fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
         let record_batch =
             concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
-        self.join_metrics.output_batches().add(1);
-        self.join_metrics
-            .baseline_metrics()
-            .record_output(record_batch.num_rows());
+        (&record_batch).record_output(&self.join_metrics.baseline_metrics());
         // If join filter exists, `self.output_size` is not accurate as we don't know the exact
         // number of rows in the output record batch. If streamed row joined with buffered rows,
         // once join filter is applied, the number of output rows may be more than 1.

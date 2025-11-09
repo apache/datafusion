@@ -277,8 +277,6 @@ struct UnnestMetrics {
     input_batches: metrics::Count,
     /// Number of rows consumed
     input_rows: metrics::Count,
-    /// Number of batches produced
-    output_batches: metrics::Count,
 }
 
 impl UnnestMetrics {
@@ -288,14 +286,10 @@ impl UnnestMetrics {
 
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
 
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
-
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
             input_batches,
             input_rows,
-            output_batches,
         }
     }
 }
@@ -361,7 +355,6 @@ impl UnnestStream {
                     let Some(result_batch) = result else {
                         continue;
                     };
-                    self.metrics.output_batches.add(1);
                     (&result_batch).record_output(&self.metrics.baseline_metrics);
 
                     // Empty record batches should not be emitted.
@@ -375,7 +368,7 @@ impl UnnestStream {
                         produced {} output batches containing {} rows in {}",
                         self.metrics.input_batches,
                         self.metrics.input_rows,
-                        self.metrics.output_batches,
+                        self.metrics.baseline_metrics.output_batches(),
                         self.metrics.baseline_metrics.output_rows(),
                         self.metrics.baseline_metrics.elapsed_compute(),
                     );
