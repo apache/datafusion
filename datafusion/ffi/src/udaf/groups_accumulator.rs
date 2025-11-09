@@ -245,11 +245,11 @@ impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
     }
 }
 
-// impl Drop for FFI_GroupsAccumulator {
-//     fn drop(&mut self) {
-//         unsafe { (self.release)(self) }
-//     }
-// }
+impl Drop for FFI_GroupsAccumulator {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
+    }
+}
 
 /// This struct is used to access an UDF provided by a foreign
 /// library across a FFI boundary.
