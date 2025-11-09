@@ -173,6 +173,86 @@ impl RuntimeEnv {
     ) -> Result<Arc<dyn EncryptionFactory>> {
         self.parquet_encryption_factory_registry.get_factory(id)
     }
+
+    /// Returns the current runtime configuration entries
+    pub fn config_entries(&self) -> Vec<ConfigEntry> {
+        use crate::memory_pool::MemoryLimit;
+
+        let memory_limit_value = match self.memory_pool.memory_limit() {
+            MemoryLimit::Finite(size) => {
+                // Convert bytes to a human-readable format
+                if size >= 1024 * 1024 * 1024 {
+                    Some(format!("{}G", size / (1024 * 1024 * 1024)))
+                } else if size >= 1024 * 1024 {
+                    Some(format!("{}M", size / (1024 * 1024)))
+                } else if size >= 1024 {
+                    Some(format!("{}K", size / 1024))
+                } else {
+                    Some(format!("{}", size))
+                }
+            }
+            MemoryLimit::Infinite => Some("unlimited".to_string()),
+            MemoryLimit::Unknown => None,
+        };
+
+        let max_temp_dir_size = self.disk_manager.max_temp_directory_size();
+        let max_temp_dir_value = if max_temp_dir_size >= 1024 * 1024 * 1024 {
+            format!("{}G", max_temp_dir_size / (1024 * 1024 * 1024))
+        } else if max_temp_dir_size >= 1024 * 1024 {
+            format!("{}M", max_temp_dir_size / (1024 * 1024))
+        } else if max_temp_dir_size >= 1024 {
+            format!("{}K", max_temp_dir_size / 1024)
+        } else {
+            format!("{}", max_temp_dir_size)
+        };
+
+        let temp_paths = self.disk_manager.temp_dir_paths();
+        let temp_dir_value = if temp_paths.is_empty() {
+            None
+        } else {
+            Some(
+                temp_paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
+        };
+
+        let metadata_cache_limit = self.cache_manager.get_metadata_cache_limit();
+        let metadata_cache_value = if metadata_cache_limit >= 1024 * 1024 * 1024 {
+            format!("{}G", metadata_cache_limit / (1024 * 1024 * 1024))
+        } else if metadata_cache_limit >= 1024 * 1024 {
+            format!("{}M", metadata_cache_limit / (1024 * 1024))
+        } else if metadata_cache_limit >= 1024 {
+            format!("{}K", metadata_cache_limit / 1024)
+        } else {
+            format!("{}", metadata_cache_limit)
+        };
+
+        vec![
+            ConfigEntry {
+                key: "datafusion.runtime.memory_limit".to_string(),
+                value: memory_limit_value,
+                description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.max_temp_directory_size".to_string(),
+                value: Some(max_temp_dir_value),
+                description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.temp_directory".to_string(),
+                value: temp_dir_value,
+                description: "The path to the temporary file directory.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.metadata_cache_limit".to_string(),
+                value: Some(metadata_cache_value),
+                description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            }
+        ]
+    }
 }
 
 impl Default for RuntimeEnv {
