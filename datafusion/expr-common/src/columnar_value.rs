@@ -310,6 +310,28 @@ mod tests {
     use arrow::array::Int32Array;
 
     #[test]
+    fn into_array_of_size() {
+        // Array case
+        let arr = make_array(1, 3);
+        let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
+        assert_eq!(&arr_columnar_value.into_array_of_size(3).unwrap(), &arr);
+
+        // Scalar case
+        let scalar_columnar_value = ColumnarValue::Scalar(ScalarValue::Int32(Some(42)));
+        let expected_array = make_array(42, 100);
+        assert_eq!(
+            &scalar_columnar_value.into_array_of_size(100).unwrap(),
+            &expected_array
+        );
+
+        // Array case with wrong size
+        let arr = make_array(1, 3);
+        let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
+        let result = arr_columnar_value.into_array_of_size(5);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn values_to_arrays() {
         // (input, expected)
         let cases = vec![
