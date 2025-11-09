@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Execution plan for reading Arrow IPC files
+
 use std::sync::Arc;
 use std::{any::Any, io::Cursor};
 
@@ -37,8 +39,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
-/// Arrow IPC File format source - supports range-based parallel reading
-/// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
+/// `FileSource` for Arrow IPC file format. Supports range-based parallel reading.
 #[derive(Clone, Default)]
 pub(crate) struct ArrowFileSource {
     metrics: ExecutionPlanMetricsSet,
@@ -117,7 +118,7 @@ impl FileSource for ArrowFileSource {
     }
 }
 
-/// Arrow IPC Stream format source - supports only sequential reading
+/// `FileSource` for Arrow IPC stream format. Supports only sequential reading.
 #[derive(Clone, Default)]
 pub(crate) struct ArrowStreamFileSource {
     metrics: ExecutionPlanMetricsSet,
@@ -213,7 +214,6 @@ impl FileSource for ArrowStreamFileSource {
     }
 }
 
-/// FileOpener for Arrow IPC Stream format - always reads sequentially
 pub(crate) struct ArrowStreamFileOpener {
     object_store: Arc<dyn ObjectStore>,
     projection: Option<Vec<usize>>,
@@ -254,7 +254,6 @@ impl FileOpener for ArrowStreamFileOpener {
     }
 }
 
-/// The struct arrow that implements `[FileOpener]` trait for Arrow IPC File format
 pub(crate) struct ArrowFileOpener {
     object_store: Arc<dyn ObjectStore>,
     projection: Option<Vec<usize>>,
@@ -395,6 +394,7 @@ impl FileOpener for ArrowFileOpener {
     }
 }
 
+/// `FileSource` wrapper for both Arrow IPC file and stream formats
 #[derive(Clone)]
 pub struct ArrowSource {
     pub inner: Arc<dyn FileSource>,
@@ -407,16 +407,19 @@ impl Default for ArrowSource {
 }
 
 impl ArrowSource {
+    /// Creates a new [`ArrowSource`]
     pub fn new(inner: Arc<dyn FileSource>) -> Self {
         Self { inner }
     }
 
+    /// Creates an [`ArrowSource`] for file format
     pub fn default_file_source() -> Self {
         Self {
             inner: Arc::new(ArrowFileSource::default()),
         }
     }
 
+    /// Creates an [`ArrowSource`] for stream format
     pub fn default_stream_file_source() -> Self {
         Self {
             inner: Arc::new(ArrowStreamFileSource::default()),
@@ -476,6 +479,7 @@ impl FileSource for ArrowSource {
     }
 }
 
+/// `FileOpener` wrapper for both Arrow IPC file and stream formats
 pub struct ArrowOpener {
     pub inner: Arc<dyn FileOpener>,
 }
@@ -487,6 +491,7 @@ impl FileOpener for ArrowOpener {
 }
 
 impl ArrowOpener {
+    /// Creates a new [`ArrowOpener`]
     pub fn new(inner: Arc<dyn FileOpener>) -> Self {
         Self { inner }
     }
