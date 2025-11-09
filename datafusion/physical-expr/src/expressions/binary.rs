@@ -573,10 +573,10 @@ impl BinaryExpr {
     ) -> Result<Option<Result<ArrayRef>>> {
         use Operator::*;
         let scalar_result = match &self.op {
-            RegexMatch => regex_match_dyn_scalar(array, scalar, false, false),
-            RegexIMatch => regex_match_dyn_scalar(array, scalar, false, true),
-            RegexNotMatch => regex_match_dyn_scalar(array, scalar, true, false),
-            RegexNotIMatch => regex_match_dyn_scalar(array, scalar, true, true),
+            RegexMatch => regex_match_dyn_scalar(array, &scalar, false, false),
+            RegexIMatch => regex_match_dyn_scalar(array, &scalar, false, true),
+            RegexNotMatch => regex_match_dyn_scalar(array, &scalar, true, false),
+            RegexNotIMatch => regex_match_dyn_scalar(array, &scalar, true, true),
             BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
             BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
             BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
@@ -625,16 +625,16 @@ impl BinaryExpr {
                     )
                 }
             }
-            RegexMatch => regex_match_dyn(left, right, false, false),
-            RegexIMatch => regex_match_dyn(left, right, false, true),
-            RegexNotMatch => regex_match_dyn(left, right, true, false),
-            RegexNotIMatch => regex_match_dyn(left, right, true, true),
+            RegexMatch => regex_match_dyn(&left, &right, false, false),
+            RegexIMatch => regex_match_dyn(&left, &right, false, true),
+            RegexNotMatch => regex_match_dyn(&left, &right, true, false),
+            RegexNotIMatch => regex_match_dyn(&left, &right, true, true),
             BitwiseAnd => bitwise_and_dyn(left, right),
             BitwiseOr => bitwise_or_dyn(left, right),
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => concat_elements(left, right),
+            StringConcat => concat_elements(&left, &right),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
             | IntegerDivide => {
@@ -854,7 +854,7 @@ fn pre_selection_scatter(
     Ok(ColumnarValue::Array(Arc::new(boolean_result)))
 }
 
-fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
+fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),
