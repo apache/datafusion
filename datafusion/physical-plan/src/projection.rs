@@ -32,8 +32,10 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
+use crate::metrics::{Time, MetricValue, Metric};
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -163,6 +165,49 @@ impl ProjectionExec {
         &self.input
     }
 
+    pub fn get_per_expression_metrics(&self) -> Vec<(String, String)> {
+        if let Some(metrics) = self.metrics() {
+            let mut per_expr_metrics = Vec::new();
+            
+            for expr in &self.projection {
+                if let Some(time_value) = metrics.sum_by_name(&expr.alias) {
+                    // Use the same time formatting as DataFusion's baseline metrics
+                    let formatted_time = Self::format_duration_intelligently(time_value.as_usize());
+                    per_expr_metrics.push((expr.alias.clone(), formatted_time));
+                }
+            }
+            
+            per_expr_metrics
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// This helper-function formats the time metric per expression
+    fn format_duration_intelligently(nanos: usize) -> String {
+        let nanos_f = nanos as f64;
+        
+        if nanos_f < 1_000.0 {
+            // Less than 1 microsecond - show nanoseconds
+            format!("{:.0}ns", nanos_f)
+        } else if nanos_f < 1_000_000.0 {
+            // Less than 1 millisecond - show microseconds
+            format!("{:.3}μs", nanos_f / 1_000.0)
+        } else if nanos_f < 1_000_000_000.0 {
+            // Less than 1 second - show milliseconds
+            format!("{:.3}ms", nanos_f / 1_000_000.0)
+        } else if nanos_f < 60_000_000_000.0 {
+            // Less than 1 minute - show seconds
+            format!("{:.3}s", nanos_f / 1_000_000_000.0)
+        } else {
+            // 1 minute or more - show minutes and seconds
+            let total_seconds = nanos_f / 1_000_000_000.0;
+            let minutes = (total_seconds / 60.0) as u32;
+            let seconds = total_seconds % 60.0;
+            format!("{}m{:.3}s", minutes, seconds)
+        }
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
@@ -278,6 +323,8 @@ impl ExecutionPlan for ProjectionExec {
             self.projection.expr_iter().collect(),
             self.input.execute(partition, context)?,
             BaselineMetrics::new(&self.metrics, partition),
+            &self.metrics,
+            self.projection.as_ref()
         )))
     }
 
@@ -345,12 +392,32 @@ impl ProjectionStream {
         expr: Vec<Arc<dyn PhysicalExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
+        metrics_set: &ExecutionPlanMetricsSet,
+        projection_exprs: &[ProjectionExpr],
     ) -> Self {
+        let per_expr_metrics = projection_exprs
+            .iter()
+            .map(|proj_expr| {
+                let time_metric = Time::new();
+
+                metrics_set.register(Arc::new(Metric::new(
+                    MetricValue::Time {
+                        name: Cow::Owned(proj_expr.alias.clone()),
+                        time: time_metric.clone(),
+                    },
+                    None,
+                )));
+                
+                time_metric
+            })
+            .collect();
+
         Self {
             schema,
             expr,
             input,
             baseline_metrics,
+            per_expr_metrics
         }
     }
 
@@ -360,7 +427,9 @@ impl ProjectionStream {
         let arrays = self
             .expr
             .iter()
-            .map(|expr| {
+            .enumerate()
+            .map(|(idx, expr)| {
+                let _expr_timer = self.per_expr_metrics[idx].timer();
                 expr.evaluate(batch)
                     .and_then(|v| v.into_array(batch.num_rows()))
             })
@@ -383,6 +452,7 @@ struct ProjectionStream {
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
+    per_expr_metrics: Vec<Time>,
 }
 
 impl Stream for ProjectionStream {

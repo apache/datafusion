@@ -411,6 +411,20 @@ struct IndentVisitor<'a, 'b> {
     metric_types: &'a [MetricType],
 }
 
+fn get_projection_expr_metrics(projection_exec: &crate::projection::ProjectionExec) -> String {
+    let per_expr_metrics = projection_exec.get_per_expression_metrics();
+    
+    if per_expr_metrics.is_empty() {
+        String::new()
+    } else {
+        per_expr_metrics
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
     type Error = fmt::Error;
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
@@ -425,8 +439,29 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
                         .aggregate_by_name()
                         .sorted_for_display()
                         .timestamps_removed();
-
-                    write!(self.f, ", metrics=[{metrics}]")?;
+            
+                    // Check if this is a ProjectionExec and add per-expression metrics
+                    if plan.name() == "ProjectionExec" {
+                        if let Some(projection_exec) = plan.as_any().downcast_ref::<crate::projection::ProjectionExec>() {
+                            // Get per-expression timing data and append to metrics string
+                            let per_expr_metrics = get_projection_expr_metrics(projection_exec);
+                            if !per_expr_metrics.is_empty() {
+                                let existing_metrics = metrics.to_string();
+                                let combined_metrics = if existing_metrics.is_empty() {
+                                    per_expr_metrics
+                                } else {
+                                    format!("{}, {}", existing_metrics, per_expr_metrics)
+                                };
+                                write!(self.f, ", metrics=[{combined_metrics}]")?;
+                            } else {
+                                write!(self.f, ", metrics=[{metrics}]")?;
+                            }
+                        } else {
+                            write!(self.f, ", metrics=[{metrics}]")?;
+                        }
+                    } else {
+                        write!(self.f, ", metrics=[{metrics}]")?;
+                    }
                 } else {
                     write!(self.f, ", metrics=[]")?;
                 }
