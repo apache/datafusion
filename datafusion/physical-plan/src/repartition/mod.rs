@@ -1201,7 +1201,7 @@ impl RepartitionExec {
         let mut coalesce_batches = vec![];
 
         if is_hash_partitioning {
-            for _ in 0..output_channels.len() {
+            for _ in 0..partitioner.num_partitions() {
                 coalesce_batches.push(BatchCoalescer::new(stream.schema(), 4096));
             }
         }
@@ -1301,30 +1301,31 @@ impl RepartitionExec {
             for (partition, coalesce_batch) in coalesce_batches.iter_mut().enumerate() {
                 while let Some(batch) = coalesce_batch.next_completed_batch() {
                     let size = batch.get_array_memory_size();
-                    let channel = output_channels.get_mut(&partition).unwrap();
+                    // Check if channel still exists (may have been removed if receiver hung up)
+                    if let Some(channel) = output_channels.get_mut(&partition) {
+                        let (batch_to_send, is_memory_batch) =
+                            match channel.reservation.lock().try_grow(size) {
+                                Ok(_) => {
+                                    // Memory available - send in-memory batch
+                                    (RepartitionBatch::Memory(batch), true)
+                                }
+                                Err(_) => {
+                                    // We're memory limited - spill to SpillPool
+                                    // SpillPool handles file handle reuse and rotation
+                                    channel.spill_writer.push_batch(&batch)?;
+                                    // Send marker indicating batch was spilled
+                                    (RepartitionBatch::Spilled, false)
+                                }
+                            };
 
-                    let (batch_to_send, is_memory_batch) =
-                        match channel.reservation.lock().try_grow(size) {
-                            Ok(_) => {
-                                // Memory available - send in-memory batch
-                                (RepartitionBatch::Memory(batch), true)
+                        if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
+                            // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                            // Only shrink memory if it was a memory batch
+                            if is_memory_batch {
+                                channel.reservation.lock().shrink(size);
                             }
-                            Err(_) => {
-                                // We're memory limited - spill to SpillPool
-                                // SpillPool handles file handle reuse and rotation
-                                channel.spill_writer.push_batch(&batch)?;
-                                // Send marker indicating batch was spilled
-                                (RepartitionBatch::Spilled, false)
-                            }
-                        };
-
-                    if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
-                        // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                        // Only shrink memory if it was a memory batch
-                        if is_memory_batch {
-                            channel.reservation.lock().shrink(size);
+                            output_channels.remove(&partition);
                         }
-                        output_channels.remove(&partition);
                     }
                 }
             }
