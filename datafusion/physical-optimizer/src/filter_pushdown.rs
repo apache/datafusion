@@ -422,7 +422,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(
-            push_down_filters(Arc::clone(&plan), vec![], config, self.phase)?
+            push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
                 .updated_node
                 .unwrap_or(plan),
         )
@@ -438,7 +438,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
 }
 
 fn push_down_filters(
-    node: Arc<dyn ExecutionPlan>,
+    node: &Arc<dyn ExecutionPlan>,
     parent_predicates: Vec<Arc<dyn PhysicalExpr>>,
     config: &ConfigOptions,
     phase: FilterPushdownPhase,
@@ -510,7 +510,8 @@ fn push_down_filters(
         let num_parent_filters = all_predicates.len() - num_self_filters;
 
         // Any filters that could not be pushed down to a child are marked as not-supported to our parents
-        let result = push_down_filters(Arc::clone(child), all_predicates, config, phase)?;
+        let result =
+            push_down_filters(&Arc::clone(child), all_predicates, config, phase)?;
 
         if let Some(new_child) = result.updated_node {
             // If we have a filter pushdown result, we need to update our children
@@ -571,7 +572,7 @@ fn push_down_filters(
     }
 
     // Re-create this node with new children
-    let updated_node = with_new_children_if_necessary(Arc::clone(&node), new_children)?;
+    let updated_node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
 
     // TODO: by calling `handle_child_pushdown_result` we are assuming that the
     // `ExecutionPlan` implementation will not change the plan itself.
@@ -596,7 +597,7 @@ fn push_down_filters(
     )?;
     // Compare pointers for new_node and node, if they are different we must replace
     // ourselves because of changes in our children.
-    if res.updated_node.is_none() && !Arc::ptr_eq(&updated_node, &node) {
+    if res.updated_node.is_none() && !Arc::ptr_eq(&updated_node, node) {
         res.updated_node = Some(updated_node)
     }
     Ok(res)

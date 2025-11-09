@@ -121,7 +121,6 @@ use url::Url;
 ///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
 ///         └───────────────────────┘      the ParquetSource does not re-read /
 ///          Parquet File                  decode the thrift footer
-///
 /// ```
 ///
 /// Within a Row Group, Column Chunks store data in DataPages. This example also
