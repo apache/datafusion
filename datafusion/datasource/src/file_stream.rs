@@ -639,10 +639,10 @@ mod tests {
 
             let on_error = self.on_error;
 
+            let table_schema = crate::table_schema::TableSchema::new(file_schema, vec![]);
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema,
-                Arc::new(MockSource::default()),
+                Arc::new(MockSource::new(table_schema)),
             )
             .with_file_group(file_group)
             .with_limit(self.limit)

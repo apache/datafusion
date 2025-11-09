@@ -161,7 +161,7 @@ mod tests {
                 .as_ref()
                 .map(|p| logical2physical(p, &table_schema));
 
-            let mut source = ParquetSource::default();
+            let mut source = ParquetSource::new(table_schema);
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
             }
@@ -186,23 +186,19 @@ mod tests {
                 source = source.with_bloom_filter_on_read(false);
             }
 
-            source.with_schema(TableSchema::new(Arc::clone(&table_schema), vec![]))
+            Arc::new(source)
         }
 
         fn build_parquet_exec(
             &self,
-            file_schema: SchemaRef,
             file_group: FileGroup,
             source: Arc<dyn FileSource>,
         ) -> Arc<DataSourceExec> {
-            let base_config = FileScanConfigBuilder::new(
-                ObjectStoreUrl::local_filesystem(),
-                file_schema,
-                source,
-            )
-            .with_file_group(file_group)
-            .with_projection_indices(self.projection.clone())
-            .build();
+            let base_config =
+                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                    .with_file_group(file_group)
+                    .with_projection_indices(self.projection.clone())
+                    .build();
             DataSourceExec::from_data_source(base_config)
         }
 
@@ -231,11 +227,8 @@ mod tests {
 
             // build a ParquetExec to return the results
             let parquet_source = self.build_file_source(Arc::clone(table_schema));
-            let parquet_exec = self.build_parquet_exec(
-                Arc::clone(table_schema),
-                file_group.clone(),
-                Arc::clone(&parquet_source),
-            );
+            let parquet_exec =
+                self.build_parquet_exec(file_group.clone(), Arc::clone(&parquet_source));
 
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
@@ -243,7 +236,6 @@ mod tests {
                 vec![MetricType::SUMMARY, MetricType::DEV],
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
-                    Arc::clone(table_schema),
                     file_group.clone(),
                     self.build_file_source(Arc::clone(table_schema)),
                 ),
@@ -1550,8 +1542,7 @@ mod tests {
         ) -> Result<()> {
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
-                file_schema,
-                Arc::new(ParquetSource::default()),
+                Arc::new(ParquetSource::new(file_schema)),
             )
             .with_file_groups(file_groups)
             .build();
@@ -1653,23 +1644,26 @@ mod tests {
             ),
         ]);
 
-        let source = Arc::new(ParquetSource::default());
-        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
-            .with_file(partitioned_file)
-            // file has 10 cols so index 12 should be month and 13 should be day
-            .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
-            .with_table_partition_cols(vec![
-                Field::new("year", DataType::Utf8, false),
-                Field::new("month", DataType::UInt8, false),
-                Field::new(
+        let table_schema = TableSchema::new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Field::new("year", DataType::Utf8, false)),
+                Arc::new(Field::new("month", DataType::UInt8, false)),
+                Arc::new(Field::new(
                     "day",
                     DataType::Dictionary(
                         Box::new(DataType::UInt16),
                         Box::new(DataType::Utf8),
                     ),
                     false,
-                ),
-            ])
+                )),
+            ],
+        );
+        let source = Arc::new(ParquetSource::new(table_schema.clone()));
+        let config = FileScanConfigBuilder::new(object_store_url, source)
+            .with_file(partitioned_file)
+            // file has 10 cols so index 12 should be month and 13 should be day
+            .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
             .build();
 
         let parquet_exec = DataSourceExec::from_data_source(config);
@@ -1731,8 +1725,7 @@ mod tests {
         let file_schema = Arc::new(Schema::empty());
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
-            file_schema,
-            Arc::new(ParquetSource::default()),
+            Arc::new(ParquetSource::new(file_schema)),
         )
         .with_file(partitioned_file)
         .build();
@@ -2279,11 +2272,11 @@ mod tests {
         let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
 
         let source = Arc::new(
-            ParquetSource::default()
+            ParquetSource::new(Arc::clone(&schema))
                 .with_parquet_file_reader_factory(reader_factory)
                 .with_metadata_size_hint(456),
         );
-        let config = FileScanConfigBuilder::new(store_url, schema, source)
+        let config = FileScanConfigBuilder::new(store_url, source)
             .with_file(
                 PartitionedFile {
                     object_meta: ObjectMeta {

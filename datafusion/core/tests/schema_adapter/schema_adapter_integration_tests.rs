@@ -27,12 +27,14 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_common::config::CsvOptions;
 use datafusion_common::ColumnStatistics;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::TableSchema;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
@@ -182,17 +184,17 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
 
-    // Create a ParquetSource with the adapter factory
-    let file_source = ParquetSource::default()
-        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
-
     // Create a table schema with uppercase column names
     let table_schema = Arc::new(Schema::new(vec![
         Field::new("ID", DataType::Int32, false),
         Field::new("NAME", DataType::Utf8, true),
     ]));
 
-    let config = FileScanConfigBuilder::new(store_url, table_schema.clone(), file_source)
+    // Create a ParquetSource with the adapter factory
+    let file_source = ParquetSource::new(table_schema.clone())
+        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
+
+    let config = FileScanConfigBuilder::new(store_url, file_source)
         .with_file(PartitionedFile::new(path, file_size))
         .build();
 
@@ -245,10 +247,10 @@ async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
     ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
 
     // Create a ParquetSource with the adapter factory
-    let file_source = ParquetSource::default()
+    let file_source = ParquetSource::new(batch.schema())
         .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
 
-    let config = FileScanConfigBuilder::new(store_url, batch.schema(), file_source)
+    let config = FileScanConfigBuilder::new(store_url, file_source)
         .with_file(PartitionedFile::new(path, file_size))
         .build();
 
@@ -284,7 +286,10 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
 
     // Test ArrowSource
     {
-        let source = ArrowSource::default();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let table_schema = TableSchema::new(schema, vec![]);
+        let source = ArrowSource::new(table_schema);
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())
@@ -304,7 +309,9 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     // Test ParquetSource
     #[cfg(feature = "parquet")]
     {
-        let source = ParquetSource::default();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let source = ParquetSource::new(schema);
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())
@@ -323,7 +330,15 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
 
     // Test CsvSource
     {
-        let source = CsvSource::default();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let source = CsvSource::new(schema).with_csv_options(options);
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())
@@ -342,7 +357,10 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
 
     // Test JsonSource
     {
-        let source = JsonSource::default();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let table_schema = TableSchema::new(schema, vec![]);
+        let source = JsonSource::new(table_schema);
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())
