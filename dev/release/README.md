@@ -83,7 +83,7 @@ A personal access token (PAT) is needed for changelog automation script. If you
 do not already have one, create a token with the `repo` access by navigating to
 [GitHub Developer Settings] page, and [follow these steps].
 
-[GitHub Developer Settings]: https://github.com/settings/developers
+[github developer settings]: https://github.com/settings/developers
 [follow these steps]: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token
 
 ### Add GPG Public Key to SVN `KEYS` file
