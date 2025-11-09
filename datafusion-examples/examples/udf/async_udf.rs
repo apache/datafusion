@@ -38,8 +38,9 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use std::any::Any;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// In this example we register `AskLLM` as an asynchronous user defined function
+/// and invoke it via the DataFrame API and SQL
+pub async fn async_udf() -> Result<()> {
     // Use a hard coded parallelism level of 4 so the explain plan
     // is consistent across machines.
     let config = SessionConfig::new().with_target_partitions(4);

@@ -19,7 +19,7 @@ use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
 use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::seedable_rng;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{case, col, lit, BinaryExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -29,6 +29,7 @@ use rand::distr::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, RngCore};
 use std::fmt::{Display, Formatter};
+use std::hint::black_box;
 use std::ops::Range;
 use std::sync::Arc;
 
