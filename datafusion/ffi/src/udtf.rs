@@ -305,6 +305,10 @@ mod tests {
             None,
             function_registry.into(),
         );
+
+        // Add unit test coverage to check for memory leaks on clone
+        let _ = local_udtf.clone();
+
         local_udtf.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_udf: Arc<dyn TableFunctionImpl> = local_udtf.into();
