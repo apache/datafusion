@@ -19,6 +19,11 @@
 //!
 //! These examples demonstrate how DataFusion reads data.
 //!
+//! ## Usage
+//! ```bash
+//! cargo run --example custom_data_source -- [csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|file_stream_provider]
+//! ```
+//!
 //! Each subcommand runs a corresponding example:
 //! - `csv_json_opener` — use low level FileOpener APIs to read CSV/JSON into Arrow RecordBatches
 //! - `csv_sql_streaming` — build and run a streaming query plan from a SQL statement against a local CSV file

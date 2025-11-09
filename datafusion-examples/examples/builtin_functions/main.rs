@@ -19,6 +19,11 @@
 //!
 //! These examples demonstrate miscellaneous function-related features.
 //!
+//! ## Usage
+//! ```bash
+//! cargo run --example builtin_functions -- [date_time|function_factory|regexp]
+//! ```
+//!
 //! Each subcommand runs a corresponding example:
 //! - `date_time` — examples of date-time related functions and queries
 //! - `function_factory` — register `CREATE FUNCTION` handler to implement SQL macros
