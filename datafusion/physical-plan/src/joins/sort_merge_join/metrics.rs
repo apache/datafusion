@@ -31,8 +31,6 @@ pub(super) struct SortMergeJoinMetrics {
     input_batches: Count,
     /// Number of rows consumed by this operator
     input_rows: Count,
-    /// Number of batches produced by this operator
-    output_batches: Count,
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
     /// Peak memory used for buffered data.
@@ -49,8 +47,6 @@ impl SortMergeJoinMetrics {
         let input_batches =
             MetricBuilder::new(metrics).counter("input_batches", partition);
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
         let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
         let spill_metrics = SpillMetrics::new(metrics, partition);
 
@@ -60,7 +56,6 @@ impl SortMergeJoinMetrics {
             join_time,
             input_batches,
             input_rows,
-            output_batches,
             baseline_metrics,
             peak_mem_used,
             spill_metrics,
@@ -81,9 +76,6 @@ impl SortMergeJoinMetrics {
 
     pub fn input_rows(&self) -> Count {
         self.input_rows.clone()
-    }
-    pub fn output_batches(&self) -> Count {
-        self.output_batches.clone()
     }
 
     pub fn peak_mem_used(&self) -> Gauge {
