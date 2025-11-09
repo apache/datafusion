@@ -300,11 +300,12 @@ mod tests {
         let ctx = Arc::new(SessionContext::default());
         let function_registry =
             Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
-        let local_udtf: FFI_TableFunction = FFI_TableFunction::new(
+        let mut local_udtf: FFI_TableFunction = FFI_TableFunction::new(
             Arc::clone(&original_udtf),
             None,
             function_registry.into(),
         );
+        local_udtf.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_udf: Arc<dyn TableFunctionImpl> = local_udtf.into();
 

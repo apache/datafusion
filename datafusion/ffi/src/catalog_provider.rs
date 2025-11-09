@@ -340,8 +340,9 @@ mod tests {
         let function_registry =
             Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
-        let ffi_catalog =
+        let mut ffi_catalog =
             FFI_CatalogProvider::new(catalog, None, function_registry.into());
+        ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 

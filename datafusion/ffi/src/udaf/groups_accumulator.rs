@@ -457,7 +457,8 @@ mod tests {
     fn test_foreign_bool_groups_accumulator() -> Result<()> {
         let boxed_accum: Box<dyn GroupsAccumulator> =
             Box::new(BooleanGroupsAccumulator::new(|a, b| a && b, true));
-        let ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
+        let mut ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
         let mut foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
 
         // Send in an array to evaluate. We want a mean of 30 and standard deviation of 4.

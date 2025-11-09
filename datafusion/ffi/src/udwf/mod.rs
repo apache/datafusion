@@ -407,7 +407,8 @@ mod tests {
     ) -> datafusion::common::Result<WindowUDF> {
         let original_udwf = Arc::new(WindowUDF::from(original_udwf));
 
-        let local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        let mut local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;
         Ok(WindowUDF::new_from_shared_impl(foreign_udwf))
@@ -419,7 +420,8 @@ mod tests {
         let original_name = original_udwf.name().to_owned();
 
         // Convert to FFI format
-        let local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        let mut local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
         let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;

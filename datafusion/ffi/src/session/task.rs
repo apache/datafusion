@@ -226,36 +226,3 @@ impl From<FFI_TaskContext> for TaskContext {
         }
     }
 }
-//
-// #[cfg(test)]
-// mod tests {
-//     use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
-//
-//     use super::*;
-//
-//     #[test]
-//     fn test_round_trip_ffi_plan_properties() -> Result<()> {
-//         use arrow::datatypes::{DataType, Field, Schema};
-//         let schema =
-//             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-//
-//         let mut eqp = EquivalenceProperties::new(Arc::clone(&schema));
-//         let _ = eqp.reorder([PhysicalSortExpr::new_default(
-//             datafusion::physical_plan::expressions::col("a", &schema)?,
-//         )]);
-//         let original_ctx = TaskContext::new(
-//             eqp,
-//             Partitioning::RoundRobinBatch(3),
-//             EmissionType::Incremental,
-//             Boundedness::Bounded,
-//         );
-//
-//         let local_ctx_ptr = FFI_TaskContext::from(&original_ctx);
-//
-//         let foreign_ctx: TaskContext = local_ctx_ptr.try_into()?;
-//
-//         assert_eq!(format!("{foreign_props:?}"), format!("{original_props:?}"));
-//
-//         Ok(())
-//     }
-// }

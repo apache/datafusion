@@ -381,10 +381,6 @@ mod tests {
         }
     }
 
-    extern "C" fn mock_library_marker_id() -> u64 {
-        crate::get_library_marker_id() + 1
-    }
-
     #[test]
     fn test_round_trip_ffi_execution_plan() -> Result<()> {
         let schema =
@@ -397,7 +393,7 @@ mod tests {
         let mut local_plan = FFI_ExecutionPlan::new(original_plan, ctx.task_ctx(), None);
 
         // Force round trip to go through foreign provider
-        local_plan.library_marker_id = mock_library_marker_id;
+        local_plan.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_plan: Arc<dyn ExecutionPlan> = (&local_plan).try_into()?;
 
@@ -424,7 +420,8 @@ mod tests {
 
         // Version 1: Adding child to the foreign plan
         let child_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let child_local = FFI_ExecutionPlan::new(child_plan, ctx.task_ctx(), None);
+        let mut child_local = FFI_ExecutionPlan::new(child_plan, ctx.task_ctx(), None);
+        child_local.library_marker_id = crate::mock_foreign_marker_id;
         let child_foreign = <Arc<dyn ExecutionPlan>>::try_from(&child_local)?;
 
         let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));

@@ -359,8 +359,9 @@ mod tests {
         let function_registry =
             Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
 
-        let ffi_schema_provider =
+        let mut ffi_schema_provider =
             FFI_SchemaProvider::new(schema_provider, None, function_registry.into());
+        ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =
             (&ffi_schema_provider).into();

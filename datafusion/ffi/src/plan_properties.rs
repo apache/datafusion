@@ -58,57 +58,53 @@ pub struct FFI_PlanProperties {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// The foreign library should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 struct PlanPropertiesPrivateData {
     props: PlanProperties,
 }
 
+impl FFI_PlanProperties {
+    fn inner(&self) -> &PlanProperties {
+        let private_data = self.private_data as *const PlanPropertiesPrivateData;
+        unsafe { &(*private_data).props }
+    }
+}
+
 unsafe extern "C" fn output_partitioning_fn_wrapper(
     properties: &FFI_PlanProperties,
 ) -> FFI_Partitioning {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-    //
-    // let codec = DefaultPhysicalExtensionCodec {};
-    // let partitioning_data =
-    //     rresult_return!(serialize_partitioning(props.output_partitioning(), &codec));
-    // let output_partitioning = partitioning_data.encode_to_vec();
-
-    // ROk(output_partitioning.into())
-    (&props.partitioning).into()
+    (&properties.inner().partitioning).into()
 }
 
 unsafe extern "C" fn emission_type_fn_wrapper(
     properties: &FFI_PlanProperties,
 ) -> FFI_EmissionType {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-    props.emission_type.into()
+    (&properties.inner().emission_type).into()
 }
 
 unsafe extern "C" fn boundedness_fn_wrapper(
     properties: &FFI_PlanProperties,
 ) -> FFI_Boundedness {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-    props.boundedness.into()
+    (&properties.inner().boundedness).into()
 }
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
     properties: &FFI_PlanProperties,
 ) -> ROption<FFI_LexOrdering> {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-
-    props.output_ordering().map(FFI_LexOrdering::from).into()
+    properties
+        .inner()
+        .output_ordering()
+        .map(FFI_LexOrdering::from)
+        .into()
 }
 
 unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-
-    let schema: SchemaRef = Arc::clone(props.eq_properties.schema());
+    let schema: SchemaRef = Arc::clone(properties.inner().eq_properties.schema());
     schema.into()
 }
 
@@ -138,6 +134,7 @@ impl From<&PlanProperties> for FFI_PlanProperties {
             schema: schema_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -146,6 +143,10 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
     type Error = DataFusionError;
 
     fn try_from(ffi_props: FFI_PlanProperties) -> Result<Self, Self::Error> {
+        if (ffi_props.library_marker_id)() == crate::get_library_marker_id() {
+            return Ok(ffi_props.inner().clone());
+        }
+
         let ffi_schema = unsafe { (ffi_props.schema)(&ffi_props) };
         let schema = (&ffi_schema.0).try_into()?;
 
@@ -185,14 +186,14 @@ pub enum FFI_Boundedness {
     Unbounded { requires_infinite_memory: bool },
 }
 
-impl From<Boundedness> for FFI_Boundedness {
-    fn from(value: Boundedness) -> Self {
+impl From<&Boundedness> for FFI_Boundedness {
+    fn from(value: &Boundedness) -> Self {
         match value {
             Boundedness::Bounded => FFI_Boundedness::Bounded,
             Boundedness::Unbounded {
                 requires_infinite_memory,
             } => FFI_Boundedness::Unbounded {
-                requires_infinite_memory,
+                requires_infinite_memory: *requires_infinite_memory,
             },
         }
     }
@@ -221,8 +222,8 @@ pub enum FFI_EmissionType {
     Both,
 }
 
-impl From<EmissionType> for FFI_EmissionType {
-    fn from(value: EmissionType) -> Self {
+impl From<&EmissionType> for FFI_EmissionType {
+    fn from(value: &EmissionType) -> Self {
         match value {
             EmissionType::Incremental => FFI_EmissionType::Incremental,
             EmissionType::Final => FFI_EmissionType::Final,
@@ -264,7 +265,8 @@ mod tests {
             Boundedness::Bounded,
         );
 
-        let local_props_ptr = FFI_PlanProperties::from(&original_props);
+        let mut local_props_ptr = FFI_PlanProperties::from(&original_props);
+        local_props_ptr.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_props: PlanProperties = local_props_ptr.try_into()?;
 

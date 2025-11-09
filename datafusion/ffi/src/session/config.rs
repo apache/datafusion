@@ -167,7 +167,8 @@ mod tests {
         let session_config = SessionConfig::new();
         let original_options = session_config.options().entries();
 
-        let ffi_config: FFI_SessionConfig = (&session_config).into();
+        let mut ffi_config: FFI_SessionConfig = (&session_config).into();
+        ffi_config.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_config: SessionConfig = (&ffi_config).try_into()?;
 

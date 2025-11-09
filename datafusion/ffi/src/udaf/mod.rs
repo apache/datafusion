@@ -665,7 +665,8 @@ mod tests {
     ) -> Result<AggregateUDF> {
         let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
 
-        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        let mut local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        local_udaf.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;
         Ok(AggregateUDF::new_from_shared_impl(foreign_udaf))
@@ -678,7 +679,8 @@ mod tests {
         let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
 
         // Convert to FFI format
-        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        let mut local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        local_udaf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
         let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;
@@ -732,7 +734,8 @@ mod tests {
         let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
 
         // Convert to FFI format
-        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        let mut local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        local_udaf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
         let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;

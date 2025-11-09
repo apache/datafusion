@@ -466,7 +466,8 @@ mod tests {
         let original_udf = datafusion::functions::math::abs::AbsFunc::new();
         let original_udf = Arc::new(ScalarUDF::from(original_udf));
 
-        let local_udf: FFI_ScalarUDF = Arc::clone(&original_udf).into();
+        let mut local_udf: FFI_ScalarUDF = Arc::clone(&original_udf).into();
+        local_udf.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&local_udf).try_into()?;
 
