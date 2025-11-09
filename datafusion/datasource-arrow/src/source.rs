@@ -43,6 +43,7 @@ use datafusion_common::{exec_datafusion_err, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use datafusion_datasource::file_stream::FileOpenFuture;
@@ -183,7 +184,7 @@ impl FileSource for ArrowStreamFileSource {
         &self,
         _target_partitions: usize,
         _repartition_file_min_size: usize,
-        _output_ordering: Option<datafusion_physical_expr_common::sort_expr::LexOrdering>,
+        _output_ordering: Option<LexOrdering>,
         _config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
         // Stream format doesn't support range-based parallel reading
@@ -489,6 +490,36 @@ impl FileSource for ArrowSource {
     fn file_type(&self) -> &str {
         self.inner.file_type()
     }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            inner: self
+                .inner
+                .with_schema_adapter_factory(schema_adapter_factory)?,
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.inner.schema_adapter_factory()
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+        output_ordering: Option<LexOrdering>,
+        config: &FileScanConfig,
+    ) -> Result<Option<FileScanConfig>> {
+        self.inner.repartitioned(
+            target_partitions,
+            repartition_file_min_size,
+            output_ordering,
+            config,
+        )
+    }
 }
 
 /// `FileOpener` wrapper for both Arrow IPC file and stream formats
@@ -506,6 +537,30 @@ impl ArrowOpener {
     /// Creates a new [`ArrowOpener`]
     pub fn new(inner: Arc<dyn FileOpener>) -> Self {
         Self { inner }
+    }
+
+    pub fn new_file_opener(
+        object_store: Arc<dyn ObjectStore>,
+        projection: Option<Vec<usize>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(ArrowFileOpener {
+                object_store,
+                projection,
+            }),
+        }
+    }
+
+    pub fn new_stream_file_opener(
+        object_store: Arc<dyn ObjectStore>,
+        projection: Option<Vec<usize>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(ArrowStreamFileOpener {
+                object_store,
+                projection,
+            }),
+        }
     }
 }
 
