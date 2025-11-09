@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::range::FFI_Range;
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 use abi_stable::{
     std_types::{RResult, RString, RVec},
@@ -27,9 +28,8 @@ use datafusion_common::{
 };
 use datafusion_expr::{window_state::WindowAggState, PartitionEvaluator};
 use prost::Message;
+use std::ptr::null_mut;
 use std::{ffi::c_void, ops::Range};
-
-use super::range::FFI_Range;
 
 /// A stable struct for sharing [`PartitionEvaluator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -173,9 +173,11 @@ unsafe extern "C" fn get_range_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) {
-    let private_data =
-        Box::from_raw(evaluator.private_data as *mut PartitionEvaluatorPrivateData);
-    drop(private_data);
+    if !evaluator.private_data.is_null() {
+        let private_data =
+            Box::from_raw(evaluator.private_data as *mut PartitionEvaluatorPrivateData);
+        drop(private_data);
+    }
 }
 
 impl From<Box<dyn PartitionEvaluator>> for FFI_PartitionEvaluator {
@@ -224,12 +226,13 @@ unsafe impl Send for ForeignPartitionEvaluator {}
 unsafe impl Sync for ForeignPartitionEvaluator {}
 
 impl From<FFI_PartitionEvaluator> for Box<dyn PartitionEvaluator> {
-    fn from(evaluator: FFI_PartitionEvaluator) -> Self {
+    fn from(mut evaluator: FFI_PartitionEvaluator) -> Self {
         if (evaluator.library_marker_id)() == crate::get_library_marker_id() {
             unsafe {
                 let private_data = Box::from_raw(
                     evaluator.private_data as *mut PartitionEvaluatorPrivateData,
                 );
+                evaluator.private_data = null_mut();
                 private_data.evaluator
             }
         } else {

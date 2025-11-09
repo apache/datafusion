@@ -101,11 +101,8 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_AccumulatorArgs) -> Result<Self, Self::Error> {
-        let exprs: Vec<Arc<dyn PhysicalExpr>> = value
-            .exprs
-            .into_iter()
-            .map(Into::into)
-            .collect();
+        let exprs: Vec<Arc<dyn PhysicalExpr>> =
+            value.exprs.into_iter().map(Into::into).collect();
 
         let return_field = Arc::new((&value.return_field.0).try_into()?);
         let schema = Schema::try_from(&value.schema.0)?;
