@@ -35,15 +35,15 @@ To prepare for a new release series, we:
 - Prepare the release branch for release:
   - Update version numbers in `Cargo.toml` files and create `CHANGELOG.md`
   - Backport any needed changes from `main` to the release branch
-- When the code is ready, we create github tags and create release candidate (rc) artifacts from the release branch.
-- After the release is approved, we publish to crates.io, the ASF distribution servers, and github tags.
+- When the code is ready, we create GitHub tags and create release candidate (rc) artifacts from the release branch.
+- After the release is approved, we publish to crates.io, the ASF distribution servers, and GitHub tags.
 
 For patch releases, we backport changes from `main` to the release branch as
-needed and repeat the release process as needed
+needed and repeat the release process as needed.
 
 ## Backporting (add changes) to `branch-*` branch
 
-If you would like to propose your change for inclusion in patch release, the
+If you would like to propose your change for inclusion in a patch release, the
 change must be applied to the relevant release branch. To do so please follow
 these steps:
 
@@ -83,7 +83,7 @@ A personal access token (PAT) is needed for changelog automation script. If you
 do not already have one, create a token with the `repo` access by navigating to
 [GitHub Developer Settings] page, and [follow these steps].
 
-[github developer settings]: https://github.com/settings/developers
+[GitHub Developer Settings]: https://github.com/settings/developers
 [follow these steps]: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token
 
 ### Add GPG Public Key to SVN `KEYS` file
@@ -95,7 +95,7 @@ If you will be releasing the final tarball, your GPG public key must be present 
 
 See instructions at https://infra.apache.org/release-signing.html#generate for generating keys.
 
-Committers can add signing keys using the Subversion client and their ASF account. e.g.:
+Committers can add signing keys using the Subversion client and their ASF account:
 
 ```shell
 $ svn co https://dist.apache.org/repos/dist/dev/datafusion
@@ -115,7 +115,7 @@ svn commit KEYS -m "Add key for John Doe"
 
 As part of the Apache governance model, official releases consist of signed
 source tarballs approved by the PMC.
-We then use the code in the approved artifacts to release to crates.io.
+We then publish the code in the approved artifacts to crates.io.
 
 ### 1. Create Release Branch
 
