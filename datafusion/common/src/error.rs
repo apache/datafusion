@@ -1180,7 +1180,7 @@ mod test {
     #[test]
     fn test_assert_or_internal_err_with_format_arguments() {
         fn check() -> Result<()> {
-            assert_or_internal_err!(false, format!("custom {}", 42));
+            assert_or_internal_err!(false, "custom {}", 42);
             ok_result()
         }
 
