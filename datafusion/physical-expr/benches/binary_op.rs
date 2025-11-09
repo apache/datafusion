@@ -20,13 +20,14 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
 };
 use arrow::{array::StringArray, record_batch::RecordBatch};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_expr::{and, binary_expr, col, lit, or, Operator};
 use datafusion_physical_expr::{
     expressions::{BinaryExpr, Column},
     planner::logical2physical,
     PhysicalExpr,
 };
+use std::hint::black_box;
 use std::sync::Arc;
 
 /// Generates BooleanArrays with different true/false distributions for benchmarking.

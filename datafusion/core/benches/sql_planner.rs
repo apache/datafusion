@@ -30,6 +30,7 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{config::Dialect, ScalarValue};
 use datafusion_expr::col;
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
 use test_utils::tpcds::tpcds_schemas;
@@ -43,12 +44,12 @@ const CLICKBENCH_DATA_PATH: &str = "data/hits_partitioned/";
 
 /// Create a logical plan from the specified sql
 fn logical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
-    criterion::black_box(rt.block_on(ctx.sql(sql)).unwrap());
+    black_box(rt.block_on(ctx.sql(sql)).unwrap());
 }
 
 /// Create a physical ExecutionPlan (by way of logical plan)
 fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
-    criterion::black_box(rt.block_on(async {
+    black_box(rt.block_on(async {
         ctx.sql(sql)
             .await
             .unwrap()
@@ -145,7 +146,7 @@ fn benchmark_with_param_values_many_columns(
         rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
     b.iter(|| {
         let plan = plan.clone();
-        criterion::black_box(plan.with_param_values(vec![ScalarValue::from(1)]).unwrap());
+        black_box(plan.with_param_values(vec![ScalarValue::from(1)]).unwrap());
     });
 }
 

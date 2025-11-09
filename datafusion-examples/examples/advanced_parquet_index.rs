@@ -121,7 +121,6 @@ use url::Url;
 ///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
 ///         └───────────────────────┘      the ParquetSource does not re-read /
 ///          Parquet File                  decode the thrift footer
-///
 /// ```
 ///
 /// Within a Row Group, Column Chunks store data in DataPages. This example also
@@ -492,19 +491,18 @@ impl TableProvider for IndexTableProvider {
                 .with_file(indexed_file);
 
         let file_source = Arc::new(
-            ParquetSource::default()
+            ParquetSource::new(schema.clone())
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
                 .with_predicate(predicate)
                 // provide the factory to create parquet reader without re-reading metadata
                 .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
-        let file_scan_config =
-            FileScanConfigBuilder::new(object_store_url, schema, file_source)
-                .with_limit(limit)
-                .with_projection_indices(projection.cloned())
-                .with_file(partitioned_file)
-                .build();
+        let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
+            .with_limit(limit)
+            .with_projection_indices(projection.cloned())
+            .with_file(partitioned_file)
+            .build();
 
         // Finally, put it all together into a DataSourceExec
         Ok(DataSourceExec::from_data_source(file_scan_config))

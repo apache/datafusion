@@ -791,11 +791,11 @@ mod tests {
         result: PropagationResult,
         schema: &Schema,
     ) -> Result<()> {
-        let col_stats = vec![
+        let col_stats = [
             (Arc::clone(&exprs_with_interval.0), left_interval),
             (Arc::clone(&exprs_with_interval.1), right_interval),
         ];
-        let expected = vec![
+        let expected = [
             (Arc::clone(&exprs_with_interval.0), left_expected),
             (Arc::clone(&exprs_with_interval.1), right_expected),
         ];

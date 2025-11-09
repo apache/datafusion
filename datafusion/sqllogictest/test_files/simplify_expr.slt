@@ -107,3 +107,14 @@ query B
 SELECT a / NULL::DECIMAL(4,3) > 1.2::decimal(2,1) FROM VALUES (1) AS t(a);
 ----
 NULL
+
+query TT
+explain SELECT CASE WHEN 1 > 0 THEN MAP {'x': 100} ELSE MAP {'y': 200} END AS a;
+----
+logical_plan
+01)Projection: Map([{"x":"100"}]) AS a
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[[{x:100}] as a]
+02)--PlaceholderRowExec
+
