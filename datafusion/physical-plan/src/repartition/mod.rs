@@ -1202,7 +1202,9 @@ impl RepartitionExec {
 
         if is_hash_partitioning {
             for _ in 0..partitioner.num_partitions() {
-                coalesce_batches.push(BatchCoalescer::new(stream.schema(), 8192));
+                let coalescer = BatchCoalescer::new(stream.schema(), 8192)
+                    .with_biggest_coalesce_batch_size(Some(4096));
+                coalesce_batches.push(coalescer);
             }
         }
 
