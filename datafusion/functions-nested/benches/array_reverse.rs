@@ -24,7 +24,7 @@ use std::{hint::black_box, sync::Arc};
 use crate::criterion::Criterion;
 use arrow::{
     array::{ArrayRef, FixedSizeListArray, Int32Array, ListArray, ListViewArray},
-    buffer::{OffsetBuffer, ScalarBuffer},
+    buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field},
 };
 use datafusion_functions_nested::reverse::array_reverse_inner;
@@ -34,43 +34,79 @@ fn array_reverse(array: &ArrayRef) -> ArrayRef {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // Construct large arrays for benchmarking
-    let array_len = 100000;
-    let step_size: usize = 1000;
-    let offsets: Vec<i32> = (0..array_len as i32).step_by(step_size).collect();
+    // Create array sizes with step size of 100, starting from 100.
+    let number_of_arrays = 1000;
+    let sizes = (0..number_of_arrays)
+        .map(|i| 100 + i * 100)
+        .collect::<Vec<i32>>();
+
+    // Calculate the total number of values
+    let total_values = sizes.iter().sum::<i32>();
+
+    // Calculate sizes and offsets from array lengths
+    let offsets = sizes
+        .iter()
+        .scan(0, |acc, &x| {
+            let offset = *acc;
+            *acc += x;
+            Some(offset)
+        })
+        .collect::<Vec<i32>>();
     let offsets = ScalarBuffer::from(offsets);
-    let sizes: Vec<i32> = vec![step_size as i32; array_len / step_size];
-    let values = (0..array_len as i32).collect::<Vec<i32>>();
+    // Set every 10th array to null
+    let nulls = (0..number_of_arrays)
+        .map(|i| i % 10 != 0)
+        .collect::<Vec<bool>>();
+
+    let values = (0..total_values).collect::<Vec<i32>>();
+    let values = Arc::new(Int32Array::from(values));
+
+    // Create ListArray and ListViewArray
+    let nulls_list_array = Some(NullBuffer::from(
+        nulls[..((number_of_arrays as usize) - 1)].to_vec(),
+    ));
     let list_array: ArrayRef = Arc::new(ListArray::new(
         Arc::new(Field::new("a", DataType::Int32, false)),
         OffsetBuffer::new(offsets.clone()),
-        Arc::new(Int32Array::from(values.clone())),
-        None,
+        values.clone(),
+        nulls_list_array,
     ));
-    let fixed_size_list_array: ArrayRef = Arc::new(FixedSizeListArray::new(
-        Arc::new(Field::new("a", DataType::Int32, false)),
-        step_size as i32,
-        Arc::new(Int32Array::from(values.clone())),
-        None,
+    let nulls_list_view_array = Some(NullBuffer::from(
+        nulls[..(number_of_arrays as usize)].to_vec(),
     ));
     let list_view_array: ArrayRef = Arc::new(ListViewArray::new(
         Arc::new(Field::new("a", DataType::Int32, false)),
         offsets,
         ScalarBuffer::from(sizes),
-        Arc::new(Int32Array::from(values)),
-        None,
+        values.clone(),
+        nulls_list_view_array,
     ));
 
     c.bench_function("array_reverse_list", |b| {
         b.iter(|| array_reverse(&list_array))
     });
 
-    c.bench_function("array_reverse_fixed_size_list", |b| {
-        b.iter(|| array_reverse(&fixed_size_list_array))
-    });
-
     c.bench_function("array_reverse_list_view", |b| {
         b.iter(|| array_reverse(&list_view_array))
+    });
+
+    // Create FixedSizeListArray
+    let array_len = 1000;
+    let num_arrays = 5000;
+    let total_values = num_arrays * array_len;
+    let values = (0..total_values).collect::<Vec<i32>>();
+    let values = Arc::new(Int32Array::from(values));
+    // Set every 10th array to null
+    let nulls = (0..num_arrays).map(|i| i % 10 != 0).collect::<Vec<bool>>();
+    let nulls = Some(NullBuffer::from(nulls));
+    let fixed_size_list_array: ArrayRef = Arc::new(FixedSizeListArray::new(
+        Arc::new(Field::new("a", DataType::Int32, false)),
+        array_len,
+        values.clone(),
+        nulls.clone(),
+    ));
+    c.bench_function("array_reverse_fixed_size_list", |b| {
+        b.iter(|| array_reverse(&fixed_size_list_array))
     });
 }
 
