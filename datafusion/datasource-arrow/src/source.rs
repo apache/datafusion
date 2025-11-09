@@ -40,7 +40,7 @@ use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 /// Arrow IPC File format source - supports range-based parallel reading
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
 #[derive(Clone, Default)]
-pub struct ArrowFileSource {
+pub(crate) struct ArrowFileSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
@@ -119,7 +119,7 @@ impl FileSource for ArrowFileSource {
 
 /// Arrow IPC Stream format source - supports only sequential reading
 #[derive(Clone, Default)]
-pub struct ArrowStreamFileSource {
+pub(crate) struct ArrowStreamFileSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
@@ -138,7 +138,7 @@ impl FileSource for ArrowStreamFileSource {
         base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
-        Arc::new(ArrowStreamOpener {
+        Arc::new(ArrowStreamFileOpener {
             object_store,
             projection: base_config.file_column_projection_indices(),
         })
@@ -214,12 +214,12 @@ impl FileSource for ArrowStreamFileSource {
 }
 
 /// FileOpener for Arrow IPC Stream format - always reads sequentially
-pub struct ArrowStreamOpener {
-    pub object_store: Arc<dyn ObjectStore>,
-    pub projection: Option<Vec<usize>>,
+pub(crate) struct ArrowStreamFileOpener {
+    object_store: Arc<dyn ObjectStore>,
+    projection: Option<Vec<usize>>,
 }
 
-impl FileOpener for ArrowStreamOpener {
+impl FileOpener for ArrowStreamFileOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         if partitioned_file.range.is_some() {
             return Err(exec_datafusion_err!(
@@ -255,9 +255,9 @@ impl FileOpener for ArrowStreamOpener {
 }
 
 /// The struct arrow that implements `[FileOpener]` trait for Arrow IPC File format
-pub struct ArrowFileOpener {
-    pub object_store: Arc<dyn ObjectStore>,
-    pub projection: Option<Vec<usize>>,
+pub(crate) struct ArrowFileOpener {
+    object_store: Arc<dyn ObjectStore>,
+    projection: Option<Vec<usize>>,
 }
 
 impl FileOpener for ArrowFileOpener {
@@ -392,6 +392,109 @@ impl FileOpener for ArrowFileOpener {
                 }
             }
         }))
+    }
+}
+
+#[derive(Clone)]
+pub struct ArrowSource {
+    pub inner: Arc<dyn FileSource>,
+}
+
+impl Default for ArrowSource {
+    fn default() -> Self {
+        Self::default_file_source()
+    }
+}
+
+impl ArrowSource {
+    pub fn new(inner: Arc<dyn FileSource>) -> Self {
+        Self { inner }
+    }
+
+    pub fn default_file_source() -> Self {
+        Self {
+            inner: Arc::new(ArrowFileSource::default()),
+        }
+    }
+
+    pub fn default_stream_file_source() -> Self {
+        Self {
+            inner: Arc::new(ArrowStreamFileSource::default()),
+        }
+    }
+}
+
+impl FileSource for ArrowSource {
+    fn create_file_opener(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Arc<dyn FileOpener> {
+        self.inner
+            .create_file_opener(object_store, base_config, partition)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self.inner.as_any()
+    }
+
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            inner: self.inner.with_batch_size(batch_size),
+        })
+    }
+
+    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            inner: self.inner.with_schema(schema),
+        })
+    }
+
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            inner: self.inner.with_projection(config),
+        })
+    }
+
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            inner: self.inner.with_statistics(statistics),
+        })
+    }
+
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        self.inner.metrics()
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        self.inner.statistics()
+    }
+
+    fn file_type(&self) -> &str {
+        self.inner.file_type()
+    }
+}
+
+pub struct ArrowOpener {
+    pub inner: Arc<dyn FileOpener>,
+}
+
+impl FileOpener for ArrowOpener {
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+        self.inner.open(partitioned_file)
+    }
+}
+
+impl ArrowOpener {
+    pub fn new(inner: Arc<dyn FileOpener>) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<ArrowSource> for Arc<dyn FileSource> {
+    fn from(source: ArrowSource) -> Self {
+        as_file_source(source)
     }
 }
 
@@ -580,7 +683,7 @@ mod tests {
             .put(&partitioned_file.object_meta.location, bytes.into())
             .await?;
 
-        let opener = ArrowStreamOpener {
+        let opener = ArrowStreamFileOpener {
             object_store,
             projection: Some(vec![0]), // just the first column
         };

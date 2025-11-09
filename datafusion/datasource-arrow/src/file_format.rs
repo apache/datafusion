@@ -49,7 +49,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::source::{ArrowFileSource, ArrowStreamFileSource};
+use crate::source::ArrowSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -200,8 +200,8 @@ impl FileFormat for ArrowFormat {
         let source: Arc<dyn FileSource> =
             match is_object_in_arrow_ipc_file_format(object_store, object_location).await
             {
-                Ok(true) => Arc::new(ArrowFileSource::default()),
-                Ok(false) => Arc::new(ArrowStreamFileSource::default()),
+                Ok(true) => Arc::new(ArrowSource::default_file_source()),
+                Ok(false) => Arc::new(ArrowSource::default_stream_file_source()),
                 Err(e) => Err(e)?,
             };
 
@@ -231,7 +231,7 @@ impl FileFormat for ArrowFormat {
     fn file_source(&self) -> Arc<dyn FileSource> {
         // defaulting to the file format source since it's
         // more capable in general
-        Arc::new(ArrowFileSource::default())
+        ArrowSource::default_file_source().into()
     }
 }
 
