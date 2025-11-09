@@ -19,16 +19,9 @@ use abi_stable::{
     std_types::{RHashMap, RString},
     StableAbi,
 };
-use datafusion_common::{
-    config::ConfigOptions,
-    error::{DataFusionError, Result},
-};
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::config::SessionConfig;
-use std::sync::Arc;
-use std::{
-    collections::HashMap,
-    ffi::{c_char, c_void, CString},
-};
+use std::{collections::HashMap, ffi::c_void};
 
 /// A stable struct for sharing [`SessionConfig`] across FFI boundaries.
 /// Instead of attempting to expose the entire SessionConfig interface, we
@@ -58,16 +51,26 @@ pub struct FFI_SessionConfig {
 
     /// Internal data. This is only to be accessed by the provider of the plan.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_SessionConfig {}
 unsafe impl Sync for FFI_SessionConfig {}
 
+impl FFI_SessionConfig {
+    fn inner(&self) -> &SessionConfig {
+        let private_data = self.private_data as *mut SessionConfigPrivateData;
+        unsafe { &(*private_data).config }
+    }
+}
+
 unsafe extern "C" fn config_options_fn_wrapper(
     config: &FFI_SessionConfig,
 ) -> RHashMap<RString, RString> {
-    let private_data = config.private_data as *mut SessionConfigPrivateData;
-    let config_options = &(*private_data).config;
+    let config_options = config.inner().options();
 
     let mut options = RHashMap::default();
     for config_entry in config_options.entries() {
@@ -87,7 +90,7 @@ unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
 
 unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig {
     let old_private_data = config.private_data as *mut SessionConfigPrivateData;
-    let old_config = Arc::clone(&(*old_private_data).config);
+    let old_config = (*old_private_data).config.clone();
 
     let private_data = Box::new(SessionConfigPrivateData { config: old_config });
 
@@ -96,31 +99,18 @@ unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_Session
         private_data: Box::into_raw(private_data) as *mut c_void,
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
 struct SessionConfigPrivateData {
-    pub config: Arc<ConfigOptions>,
+    pub config: SessionConfig,
 }
 
 impl From<&SessionConfig> for FFI_SessionConfig {
     fn from(session: &SessionConfig) -> Self {
-        let mut config_keys = Vec::new();
-        let mut config_values = Vec::new();
-        for config_entry in session.options().entries() {
-            if let Some(value) = config_entry.value {
-                let key_cstr = CString::new(config_entry.key).unwrap_or_default();
-                let key_ptr = key_cstr.into_raw() as *const c_char;
-                config_keys.push(key_ptr);
-
-                config_values
-                    .push(CString::new(value).unwrap_or_default().into_raw()
-                        as *const c_char);
-            }
-        }
-
         let private_data = Box::new(SessionConfigPrivateData {
-            config: Arc::clone(session.options()),
+            config: session.clone(),
         });
 
         Self {
@@ -128,6 +118,7 @@ impl From<&SessionConfig> for FFI_SessionConfig {
             private_data: Box::into_raw(private_data) as *mut c_void,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -152,6 +143,10 @@ impl TryFrom<&FFI_SessionConfig> for SessionConfig {
     type Error = DataFusionError;
 
     fn try_from(config: &FFI_SessionConfig) -> Result<Self, Self::Error> {
+        if (config.library_marker_id)() == crate::get_library_marker_id() {
+            return Ok(config.inner().clone());
+        }
+
         let config_options = unsafe { (config.config_options)(config) };
 
         let mut options_map = HashMap::new();
