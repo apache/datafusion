@@ -1271,4 +1271,95 @@ mod tests {
         );
         assert!(stats.total_byte_size.is_exact().unwrap_or(false));
     }
+
+    #[test]
+    fn test_format_duration_intelligently() {
+        // Test nanoseconds
+        assert_eq!(ProjectionExec::format_duration_intelligently(500), "500ns");
+        assert_eq!(ProjectionExec::format_duration_intelligently(999), "999ns");
+
+        // Test microseconds
+        assert_eq!(ProjectionExec::format_duration_intelligently(1_500), "1.500μs");
+        assert_eq!(ProjectionExec::format_duration_intelligently(999_999), "999.999μs");
+
+        // Test milliseconds
+        assert_eq!(ProjectionExec::format_duration_intelligently(1_500_000), "1.500ms");
+        assert_eq!(ProjectionExec::format_duration_intelligently(999_999_999), "999.999ms");
+
+        // Test seconds
+        assert_eq!(ProjectionExec::format_duration_intelligently(1_500_000_000), "1.500s");
+        assert_eq!(ProjectionExec::format_duration_intelligently(59_999_999_999), "59.999s");
+
+        // Test minutes and seconds
+        assert_eq!(ProjectionExec::format_duration_intelligently(60_000_000_000), "1m0.000s");
+        assert_eq!(ProjectionExec::format_duration_intelligently(90_500_000_000), "1m30.500s");
+        assert_eq!(ProjectionExec::format_duration_intelligently(125_750_000_000), "2m5.750s");
+    }
+
+    #[tokio::test]
+    async fn test_projection_per_expression_metrics() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let exec = test::scan_partitioned(1);
+        let schema = exec.schema();
+
+        // Create projection with multiple expressions
+        let exprs = vec![
+            ProjectionExpr {
+                expr: col("i", &schema)?,
+                alias: "i_copy".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    col("i", &schema)?,
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                )),
+                alias: "i_plus_one".to_string(),
+            },
+        ];
+
+        let projection = ProjectionExec::try_new(exprs, exec)?;
+
+        // Execute the projection to generate metrics
+        let stream = projection.execute(0, Arc::clone(&task_ctx))?;
+        let _results = collect(stream).await?;
+
+        // Check that metrics were collected
+        let metrics_set = projection.metrics().unwrap();
+        
+        // Verify that per-expression metrics exist
+        assert!(metrics_set.sum_by_name("i_copy").is_some());
+        assert!(metrics_set.sum_by_name("i_plus_one").is_some());
+
+        // Test the get_per_expression_metrics method
+        let per_expr_metrics = projection.get_per_expression_metrics();
+        assert_eq!(per_expr_metrics.len(), 2);
+        
+        // Check that metric names match expression aliases
+        let metric_names: Vec<String> = per_expr_metrics.iter().map(|(name, _)| name.clone()).collect();
+        assert!(metric_names.contains(&"i_copy".to_string()));
+        assert!(metric_names.contains(&"i_plus_one".to_string()));
+
+        // Check that metric values are properly formatted
+        for (_, value) in per_expr_metrics {
+            // Should contain time unit (ns, μs, ms, s)
+            assert!(value.ends_with("ns") || value.ends_with("μs") || value.ends_with("ms") || value.ends_with("s"));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_projection_metrics_with_no_expressions() -> Result<()> {
+        let exec = test::scan_partitioned(1);
+        
+        // Create projection with no expressions
+        let projection = ProjectionExec::try_new(vec![] as Vec<ProjectionExpr>, exec)?;
+        
+        // Test that get_per_expression_metrics returns empty vector
+        let per_expr_metrics = projection.get_per_expression_metrics();
+        assert!(per_expr_metrics.is_empty());
+
+        Ok(())
+    }
 }
