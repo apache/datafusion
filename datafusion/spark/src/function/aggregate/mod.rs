@@ -25,7 +25,11 @@ pub mod expr_fn {
     use datafusion_functions::export_functions;
 
     export_functions!((avg, "Returns the average value of a given column", arg1));
-    export_functions!((try_sum, "Returns the sum of values for a column, or NULL if overflow occurs", arg1));
+    export_functions!((
+        try_sum,
+        "Returns the sum of values for a column, or NULL if overflow occurs",
+        arg1
+    ));
 }
 
 // TODO: try use something like datafusion_functions_aggregate::create_func!()
