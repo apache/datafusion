@@ -37,6 +37,7 @@ use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
@@ -229,8 +230,7 @@ fn parquet_exec_multiple_sorted(
 ) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema(),
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(schema())),
     )
     .with_file_groups(vec![
         FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
@@ -247,14 +247,19 @@ fn csv_exec() -> Arc<DataSourceExec> {
 }
 
 fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> {
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        schema(),
-        Arc::new(CsvSource::new(false, b',', b'"')),
-    )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .with_output_ordering(output_ordering)
-    .build();
+    let config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
+            let options = CsvOptions {
+                has_header: Some(false),
+                delimiter: b',',
+                quote: b'"',
+                ..Default::default()
+            };
+            Arc::new(CsvSource::new(schema()).with_csv_options(options))
+        })
+        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_output_ordering(output_ordering)
+        .build();
 
     DataSourceExec::from_data_source(config)
 }
@@ -265,17 +270,22 @@ fn csv_exec_multiple() -> Arc<DataSourceExec> {
 
 // Created a sorted parquet exec with multiple files
 fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> {
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        schema(),
-        Arc::new(CsvSource::new(false, b',', b'"')),
-    )
-    .with_file_groups(vec![
-        FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
-        FileGroup::new(vec![PartitionedFile::new("y".to_string(), 100)]),
-    ])
-    .with_output_ordering(output_ordering)
-    .build();
+    let config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
+            let options = CsvOptions {
+                has_header: Some(false),
+                delimiter: b',',
+                quote: b'"',
+                ..Default::default()
+            };
+            Arc::new(CsvSource::new(schema()).with_csv_options(options))
+        })
+        .with_file_groups(vec![
+            FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
+            FileGroup::new(vec![PartitionedFile::new("y".to_string(), 100)]),
+        ])
+        .with_output_ordering(output_ordering)
+        .build();
 
     DataSourceExec::from_data_source(config)
 }
@@ -2592,51 +2602,50 @@ fn parallelization_compressed_csv() -> Result<()> {
         FileCompressionType::UNCOMPRESSED,
     ];
 
-    #[rustfmt::skip]
-    insta::allow_duplicates! {
-        for compression_type in compression_types {
-            let plan = aggregate_exec_with_alias(
-                DataSourceExec::from_data_source(
-                    FileScanConfigBuilder::new(
-                        ObjectStoreUrl::parse("test:///").unwrap(),
-                        schema(),
-                        Arc::new(CsvSource::new(false, b',', b'"')),
-                    )
-                    .with_file(PartitionedFile::new("x".to_string(), 100))
-                    .with_file_compression_type(compression_type)
-                    .build(),
-                ),
-                vec![("a".to_string(), "a".to_string())],
-            );
-            let test_config = TestConfig::default()
-                .with_query_execution_partitions(2)
-                .with_prefer_repartition_file_scans(10);
+    let expected_not_partitioned = [
+        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
+        "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+        "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+    ];
 
-            let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
-            if compression_type.is_compressed() {
-                // Compressed files cannot be partitioned
-                assert_plan!(plan_distrib,
-                    @r"
-AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
-  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
-      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-");
-            } else {
-                // Uncompressed files can be partitioned
-                assert_plan!(plan_distrib,
-                    @r"
-AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
-  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
-      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-");
-            }
+    let expected_partitioned = [
+        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
+        "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+        "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+    ];
 
-            let plan_sort = test_config.to_plan(plan, &SORT_DISTRIB_DISTRIB);
-            assert_plan!(plan_distrib, plan_sort);
-        }
+    for compression_type in compression_types {
+        let expected = if compression_type.is_compressed() {
+            &expected_not_partitioned[..]
+        } else {
+            &expected_partitioned[..]
+        };
+
+        let plan = aggregate_exec_with_alias(
+            DataSourceExec::from_data_source(
+                FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
+                    let options = CsvOptions {
+                        has_header: Some(false),
+                        delimiter: b',',
+                        quote: b'"',
+                        ..Default::default()
+                    };
+                    Arc::new(CsvSource::new(schema()).with_csv_options(options))
+                })
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_file_compression_type(compression_type)
+                .build(),
+            ),
+            vec![("a".to_string(), "a".to_string())],
+        );
+        let test_config = TestConfig::default()
+            .with_query_execution_partitions(2)
+            .with_prefer_repartition_file_scans(10);
+        test_config.run(expected, plan.clone(), &DISTRIB_DISTRIB_SORT)?;
+        test_config.run(expected, plan, &SORT_DISTRIB_DISTRIB)?;
     }
     Ok(())
 }

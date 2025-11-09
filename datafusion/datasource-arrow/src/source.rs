@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::TableSchema;
 
 use arrow::buffer::Buffer;
 use arrow_ipc::reader::FileDecoder;
@@ -39,11 +38,24 @@ use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
 /// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ArrowSource {
+    table_schema: datafusion_datasource::TableSchema,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+}
+
+impl ArrowSource {
+    /// Initialize an ArrowSource with the provided schema
+    pub fn new(table_schema: impl Into<datafusion_datasource::TableSchema>) -> Self {
+        Self {
+            table_schema: table_schema.into(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            projected_statistics: None,
+            schema_adapter_factory: None,
+        }
+    }
 }
 
 impl From<ArrowSource> for Arc<dyn FileSource> {
@@ -69,13 +81,14 @@ impl FileSource for ArrowSource {
         self
     }
 
+    fn table_schema(&self) -> &datafusion_datasource::TableSchema {
+        &self.table_schema
+    }
+
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
-    fn with_schema(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projected_statistics = Some(statistics);
