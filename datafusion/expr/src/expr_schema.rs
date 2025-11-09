@@ -282,63 +282,51 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
-                let nullable_then = if case.expr.is_some() {
-                    // Case-with-expression is nullable if any of the 'then' expressions.
-                    // Assume all 'then' expressions are reachable
-                    case.when_then_expr
-                        .iter()
-                        .filter_map(|(_, t)| match t.nullable(input_schema) {
-                            Ok(n) => {
-                                if n {
-                                    Some(Ok(()))
-                                } else {
-                                    None
-                                }
-                            }
-                            Err(e) => Some(Err(e)),
-                        })
-                        .next()
-                } else {
-                    // case-without-expression is nullable if any of the 'then' expressions is nullable
-                    // and reachable when the 'then' expression evaluates to `null`.
-                    case.when_then_expr
-                        .iter()
-                        .filter_map(|(w, t)| {
-                            match t.nullable(input_schema) {
-                                // Branches with a then expression that is not nullable can be skipped
-                                Ok(false) => None,
-                                // Pass on error determining nullability verbatim
-                                Err(e) => Some(Err(e)),
-                                // For branches with a nullable 'then' expression, try to determine
-                                // using limited const evaluation if the branch will be taken when
-                                // the 'then' expression evaluates to null.
-                                Ok(true) => {
-                                    let is_null = |expr: &Expr /* Type */| {
-                                        if expr.eq(t) {
-                                            Some(true)
-                                        } else {
-                                            None
-                                        }
-                                    };
+                let nullable_then = case
+                    .when_then_expr
+                    .iter()
+                    .filter_map(|(w, t)| {
+                        let is_nullable = match t.nullable(input_schema) {
+                            Err(e) => return Some(Err(e)),
+                            Ok(n) => n,
+                        };
 
-                                    let bounds = predicate_bounds::evaluate_bounds(
-                                        w,
-                                        is_null,
-                                        input_schema,
-                                    );
-                                    if bounds.is_certainly_not_true() {
-                                        // The branch will certainly never be taken.
-                                        // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                                        None
-                                    } else {
-                                        // The branch might be taken
-                                        Some(Ok(()))
-                                    }
-                                }
+                        // Branches with a then expression that is not nullable do not impact the
+                        // nullability of the case expression.
+                        if !is_nullable {
+                            return None;
+                        }
+
+                        // For case-with-expression assume all 'then' expressions are reachable
+                        if case.expr.is_some() {
+                            return Some(Ok(()));
+                        }
+
+                        // For branches with a nullable 'then' expression, try to determine
+                        // if the 'then' expression is ever reachable in the situation where
+                        // it would evaluate to null.
+                        let is_null = |expr: &Expr /* Type */| {
+                            if expr.eq(t) {
+                                Some(true)
+                            } else {
+                                None
                             }
-                        })
-                        .next()
-                };
+                        };
+
+                        let bounds =
+                            predicate_bounds::evaluate_bounds(w, is_null, input_schema);
+
+                        if bounds.is_certainly_not_true() {
+                            // The predicate will never evaluate to true, so the 'then' expression
+                            // is never reachable.
+                            // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                            None
+                        } else {
+                            // The branch might be taken
+                            Some(Ok(()))
+                        }
+                    })
+                    .next();
 
                 if let Some(nullable_then) = nullable_then {
                     // There is at least one reachable nullable then

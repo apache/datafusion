@@ -1283,57 +1283,53 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        let nullable_then = if self.body.expr.is_some() {
-            // Case-with-expression is nullable if any of the 'then' expressions.
-            // Assume all 'then' expressions are reachable
-            self.body
-                .when_then_expr
-                .iter()
-                .filter_map(|(_, t)| match t.nullable(input_schema) {
-                    Ok(n) => {
-                        if n {
-                            Some(Ok(()))
-                        } else {
-                            None
-                        }
-                    }
-                    Err(e) => Some(Err(e)),
-                })
-                .next()
-        } else {
-            // case-without-expression is nullable if any of the 'then' expressions is nullable
-            // and reachable when the 'then' expression evaluates to `null`.
-            self.body
-                .when_then_expr
-                .iter()
-                .filter_map(|(w, t)| {
-                    match t.nullable(input_schema) {
-                        // Branches with a then expression that is not nullable can be skipped
-                        Ok(false) => None,
-                        // Pass on error determining nullability verbatim
-                        Err(e) => Some(Err(e)),
-                        Ok(true) => {
-                            // For branches with a nullable 'then' expression, try to determine
-                            // using const evaluation if the branch will be taken when
-                            // the 'then' expression evaluates to null.
-                            let is_null = |expr: &dyn PhysicalExpr /* Type */| {
-                                expr.dyn_eq(t.as_ref())
-                            };
+        let nullable_then = self
+            .body
+            .when_then_expr
+            .iter()
+            .filter_map(|(w, t)| {
+                let is_nullable = match t.nullable(input_schema) {
+                    // Pass on error determining nullability verbatim
+                    Err(e) => return Some(Err(e)),
+                    Ok(n) => n,
+                };
 
-                            match const_eval_predicate(w, is_null, input_schema) {
-                                // Const evaluation was inconclusive or determined the branch
-                                // would be taken
-                                Ok(None) | Ok(Some(true)) => Some(Ok(())),
-                                // Const evaluation proves the branch will never be taken.
-                                // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                                Ok(Some(false)) => None,
-                                Err(e) => Some(Err(e)),
-                            }
-                        }
-                    }
-                })
-                .next()
-        };
+                // Branches with a then expression that is not nullable do not impact the
+                // nullability of the case expression.
+                if !is_nullable {
+                    return None;
+                }
+
+                // For case-with-expression assume all 'then' expressions are reachable
+                if self.body.expr.is_some() {
+                    return Some(Ok(()));
+                }
+
+                // For branches with a nullable 'then' expression, try to determine
+                // if the 'then' expression is ever reachable in the situation where
+                // it would evaluate to null.
+
+                // Replace the `then` expression with `NULL` in the `when` expression
+                let with_null = match replace_with_null(w, t.as_ref(), input_schema) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(e) => e,
+                };
+
+                // Try to const evaluate the modified `when` expression.
+                let predicate_result = match evaluate_predicate(&with_null) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(b) => b,
+                };
+
+                match predicate_result {
+                    // Evaluation was inconclusive or true, so the 'then' expression is reachable
+                    None | Some(true) => Some(Ok(())),
+                    // Evaluation proves the branch will never be taken.
+                    // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                    Some(false) => None,
+                }
+            })
+            .next();
 
         if let Some(nullable_then) = nullable_then {
             // There is at least one reachable nullable then
@@ -1441,32 +1437,12 @@ impl PhysicalExpr for CaseExpr {
     }
 }
 
-/// Attempts to const evaluate the given `predicate` with the assumption that `value` evaluates to `NULL`.
+/// Attempts to const evaluate the given `predicate`.
 /// Returns:
 /// - `Some(true)` if the predicate evaluates to a truthy value.
 /// - `Some(false)` if the predicate evaluates to a falsy value.
 /// - `None` if the predicate could not be evaluated.
-fn const_eval_predicate<F>(
-    predicate: &Arc<dyn PhysicalExpr>,
-    evaluates_to_null: F,
-    input_schema: &Schema,
-) -> Result<Option<bool>>
-where
-    F: Fn(&dyn PhysicalExpr) -> bool,
-{
-    // Replace `value` with `NULL` in `predicate`
-    let with_null = Arc::clone(predicate)
-        .transform_down(|e| {
-            if evaluates_to_null(e.as_ref()) {
-                let data_type = e.data_type(input_schema)?;
-                let null_literal = lit(ScalarValue::try_new_null(&data_type)?);
-                Ok(Transformed::yes(null_literal))
-            } else {
-                Ok(Transformed::no(e))
-            }
-        })?
-        .data;
-
+fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<Option<bool>> {
     // Create a dummy record with no columns and one row
     let batch = RecordBatch::try_new_with_options(
         Arc::new(Schema::empty()),
@@ -1475,7 +1451,7 @@ where
     )?;
 
     // Evaluate the predicate and interpret the result as a boolean
-    let result = match with_null.evaluate(&batch) {
+    let result = match predicate.evaluate(&batch) {
         // An error during evaluation means we couldn't const evaluate the predicate, so return `None`
         Err(_) => None,
         Ok(ColumnarValue::Array(array)) => Some(
@@ -1485,6 +1461,25 @@ where
         Ok(ColumnarValue::Scalar(scalar)) => Some(scalar.cast_to(&DataType::Boolean)?),
     };
     Ok(result.map(|v| matches!(v, ScalarValue::Boolean(Some(true)))))
+}
+
+fn replace_with_null(
+    expr: &Arc<dyn PhysicalExpr>,
+    expr_to_replace: &dyn PhysicalExpr,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    let with_null = Arc::clone(expr)
+        .transform_down(|e| {
+            if e.as_ref().dyn_eq(expr_to_replace) {
+                let data_type = e.data_type(input_schema)?;
+                let null_literal = lit(ScalarValue::try_new_null(&data_type)?);
+                Ok(Transformed::yes(null_literal))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        })?
+        .data;
+    Ok(with_null)
 }
 
 /// Create a CASE expression
