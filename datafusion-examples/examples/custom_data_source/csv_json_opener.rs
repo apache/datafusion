@@ -40,8 +40,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 /// read data from (CSV/JSON) into Arrow RecordBatches.
 ///
 /// If you want to query data in CSV or JSON files, see the [`dataframe.rs`] and [`sql_query.rs`] examples
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn csv_json_opener() -> Result<()> {
     csv_opener().await?;
     json_opener().await?;
     Ok(())

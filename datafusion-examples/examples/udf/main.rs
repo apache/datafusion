@@ -19,6 +19,11 @@
 //!
 //! These examples demonstrate user-defined functions in DataFusion.
 //!
+//! ## Usage
+//! ```bash
+//! cargo run --example udf -- [adv_udaf|adv_udf|adv_udwf|async_udf|udaf|udf|udtf|udwf]
+//! ```
+//!
 //! Each subcommand runs a corresponding example:
 //! - `adv_udaf` — user defined aggregate function example
 //! - `adv_udf` — user defined scalar function example
