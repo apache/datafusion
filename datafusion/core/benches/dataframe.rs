@@ -26,6 +26,7 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::col;
 use datafusion_functions::expr_fn::btrim;
+use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -45,7 +46,7 @@ fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionCont
 }
 
 fn run(column_count: u32, ctx: Arc<SessionContext>, rt: &Runtime) {
-    criterion::black_box(rt.block_on(async {
+    black_box(rt.block_on(async {
         let mut data_frame = ctx.table("t").await.unwrap();
 
         for i in 0..column_count {

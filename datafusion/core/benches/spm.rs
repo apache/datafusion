@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
@@ -25,7 +26,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{collect, ExecutionPlan};
 
 use criterion::async_executor::FuturesExecutor;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_datasource::memory::MemorySourceConfig;
 
 fn generate_spm_for_round_robin_tie_breaker(

@@ -129,7 +129,7 @@ fn try_push_down_join_filter(
 
     let join_filter = minimize_join_filter(
         Arc::clone(rhs_rewrite.data.1.expression()),
-        rhs_rewrite.data.1.column_indices().to_vec(),
+        rhs_rewrite.data.1.column_indices(),
         lhs_rewrite.data.0.schema().as_ref(),
         rhs_rewrite.data.0.schema().as_ref(),
     );
@@ -238,7 +238,7 @@ fn try_push_down_projection(
 /// columns are not needed anymore.
 fn minimize_join_filter(
     expr: Arc<dyn PhysicalExpr>,
-    old_column_indices: Vec<ColumnIndex>,
+    old_column_indices: &[ColumnIndex],
     lhs_schema: &Schema,
     rhs_schema: &Schema,
 ) -> JoinFilter {

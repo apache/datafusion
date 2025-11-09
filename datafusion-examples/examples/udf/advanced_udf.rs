@@ -245,10 +245,35 @@ fn maybe_pow_in_place(base: f64, exp_array: ArrayRef) -> Result<ArrayRef> {
     }
 }
 
+/// create local execution context with an in-memory table:
+///
+/// ```text
+/// +-----+-----+
+/// | a   | b   |
+/// +-----+-----+
+/// | 2.1 | 1.0 |
+/// | 3.1 | 2.0 |
+/// | 4.1 | 3.0 |
+/// | 5.1 | 4.0 |
+/// +-----+-----+
+/// ```
+fn create_context() -> Result<SessionContext> {
+    // define data.
+    let a: ArrayRef = Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1]));
+    let b: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
+    let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
+
+    // declare a new context. In Spark API, this corresponds to a new SparkSession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In Spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    Ok(ctx)
+}
+
 /// In this example we register `PowUdf` as a user defined function
 /// and invoke it via the DataFrame API and SQL
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn advanced_udf() -> Result<()> {
     let ctx = create_context()?;
 
     // create the UDF
@@ -294,30 +319,4 @@ async fn main() -> Result<()> {
     );
 
     Ok(())
-}
-
-/// create local execution context with an in-memory table:
-///
-/// ```text
-/// +-----+-----+
-/// | a   | b   |
-/// +-----+-----+
-/// | 2.1 | 1.0 |
-/// | 3.1 | 2.0 |
-/// | 4.1 | 3.0 |
-/// | 5.1 | 4.0 |
-/// +-----+-----+
-/// ```
-fn create_context() -> Result<SessionContext> {
-    // define data.
-    let a: ArrayRef = Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1]));
-    let b: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
-    let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
-
-    // declare a new context. In Spark API, this corresponds to a new SparkSession
-    let ctx = SessionContext::new();
-
-    // declare a table in memory. In Spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
-    Ok(ctx)
 }

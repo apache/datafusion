@@ -355,11 +355,11 @@ impl TestFull {
         let source = if let Some(predicate) = predicate {
             let df_schema = DFSchema::try_from(schema.clone())?;
             let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
-            Arc::new(ParquetSource::default().with_predicate(predicate))
+            Arc::new(ParquetSource::new(schema.clone()).with_predicate(predicate))
         } else {
-            Arc::new(ParquetSource::default())
+            Arc::new(ParquetSource::new(schema.clone()))
         };
-        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
+        let config = FileScanConfigBuilder::new(object_store_url, source)
             .with_file(partitioned_file)
             .build();
 
