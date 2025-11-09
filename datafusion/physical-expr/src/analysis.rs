@@ -218,7 +218,7 @@ pub fn analyze(
             .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
         {
             PropagationResult::Success => {
-                shrink_boundaries(graph, target_boundaries, target_expr_and_indices)
+                shrink_boundaries(&graph, target_boundaries, &target_expr_and_indices)
             }
             PropagationResult::Infeasible => {
                 // If the propagation result is infeasible, set intervals to None
@@ -239,9 +239,9 @@ pub fn analyze(
 /// Following this, it constructs and returns a new `AnalysisContext` with the
 /// updated parameters.
 fn shrink_boundaries(
-    graph: ExprIntervalGraph,
+    graph: &ExprIntervalGraph,
     mut target_boundaries: Vec<ExprBoundaries>,
-    target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
+    target_expr_and_indices: &[(Arc<dyn PhysicalExpr>, usize)],
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
     target_expr_and_indices.iter().for_each(|(expr, i)| {
