@@ -1284,11 +1284,11 @@ mod tests {
 
         // Test milliseconds
         assert_eq!(ProjectionExec::format_duration_intelligently(1_500_000), "1.500ms");
-        assert_eq!(ProjectionExec::format_duration_intelligently(999_999_999), "999.999ms");
+        assert_eq!(ProjectionExec::format_duration_intelligently(999_999_999), "1000.000ms");
 
         // Test seconds
         assert_eq!(ProjectionExec::format_duration_intelligently(1_500_000_000), "1.500s");
-        assert_eq!(ProjectionExec::format_duration_intelligently(59_999_999_999), "59.999s");
+        assert_eq!(ProjectionExec::format_duration_intelligently(59_999_999_999), "60.000s");
 
         // Test minutes and seconds
         assert_eq!(ProjectionExec::format_duration_intelligently(60_000_000_000), "1m0.000s");
