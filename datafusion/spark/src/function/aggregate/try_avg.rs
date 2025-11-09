@@ -15,17 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{cast::AsArray, types::{Float64Type, Int64Type}, Array, ArrayRef, Int64Array, IntervalYearMonthArray, PrimitiveArray};
+use arrow::array::{
+    cast::AsArray,
+    types::{Float64Type, Int64Type},
+    Array, ArrayRef, Int64Array, IntervalYearMonthArray, PrimitiveArray,
+};
 use arrow::array::{BooleanArray, Decimal128Array, Float64Array};
-use arrow::datatypes::{DataType, Decimal128Type, Field, FieldRef, IntervalUnit, IntervalYearMonthType};
+use arrow::datatypes::{
+    DataType, Decimal128Type, Field, FieldRef, IntervalUnit, IntervalYearMonthType,
+};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 
+use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature};
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use datafusion_expr::Volatility::Immutable;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SparkTryAvg {
@@ -82,7 +88,9 @@ impl TryAvgAccumulator {
         match self.dtype {
             DataType::Float64 => ScalarValue::Float64(None),
             DataType::Decimal128(p, s) => ScalarValue::Decimal128(None, p, s),
-            DataType::Interval(IntervalUnit::YearMonth) => ScalarValue::IntervalYearMonth(None),
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                ScalarValue::IntervalYearMonth(None)
+            }
             _ => ScalarValue::Null,
         }
     }
@@ -281,7 +289,9 @@ impl Accumulator for TryAvgAccumulator {
             DataType::Float64 => {
                 if let Some(int_arr) = values[0].as_any().downcast_ref::<Int64Array>() {
                     self.update_i64(int_arr);
-                } else if let Some(f_arr) = values[0].as_any().downcast_ref::<Float64Array>() {
+                } else if let Some(f_arr) =
+                    values[0].as_any().downcast_ref::<Float64Array>()
+                {
                     self.update_f64(f_arr);
                 } else {
                     return Err(DataFusionError::Execution(
@@ -318,7 +328,9 @@ impl Accumulator for TryAvgAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>, DataFusionError> {
         let sum_scalar = match &self.dtype {
             DataType::Float64 => ScalarValue::Float64(self.sum_f64),
-            DataType::Decimal128(p, s) => ScalarValue::Decimal128(self.sum_dec128, *p, *s),
+            DataType::Decimal128(p, s) => {
+                ScalarValue::Decimal128(self.sum_dec128, *p, *s)
+            }
             DataType::Interval(IntervalUnit::YearMonth) => match self.sum_ym_i64 {
                 Some(v) => ScalarValue::IntervalYearMonth(Some(v as i32)),
                 None => ScalarValue::IntervalYearMonth(None),
@@ -401,7 +413,9 @@ impl Accumulator for TryAvgAccumulator {
                     for value in int_arr.iter().flatten() {
                         self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + (value as f64));
                     }
-                } else if let Some(f_arr) = states[0].as_any().downcast_ref::<Float64Array>() {
+                } else if let Some(f_arr) =
+                    states[0].as_any().downcast_ref::<Float64Array>()
+                {
                     for value in f_arr.iter().flatten() {
                         self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + value);
                     }
@@ -498,10 +512,7 @@ impl AggregateUDFImpl for SparkTryAvg {
         Ok(result_type)
     }
 
-    fn accumulator(
-        &self,
-        acc_args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let dtype = acc_args.return_field.data_type().clone();
         Ok(Box::new(TryAvgAccumulator::new(dtype)))
     }
@@ -515,13 +526,13 @@ impl AggregateUDFImpl for SparkTryAvg {
                 DataType::Int64,
                 false,
             )
-                .into(),
+            .into(),
             Field::new(
                 format_state_name(args.name, "failed"),
                 DataType::Boolean,
                 false,
             )
-                .into(),
+            .into(),
         ])
     }
 
@@ -557,10 +568,10 @@ impl AggregateUDFImpl for SparkTryAvg {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use arrow::array::Int32Array;
     use datafusion_common::arrow::array::Float64Array;
     use datafusion_common::ScalarValue;
+    use std::sync::Arc;
 
     use super::*;
 
