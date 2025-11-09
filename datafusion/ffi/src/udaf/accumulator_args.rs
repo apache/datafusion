@@ -18,17 +18,21 @@
 use std::sync::Arc;
 
 use crate::arrow_wrappers::WrappedSchema;
-use crate::physical_expr::sort::FFI_PhysicalSortExpr;
-use crate::physical_expr::FFI_PhysicalExpr;
 use abi_stable::{
     std_types::{RString, RVec},
     StableAbi,
 };
 use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
+use prost::Message;
 use datafusion_common::error::DataFusionError;
+use datafusion_common::exec_datafusion_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+use datafusion_proto::physical_plan::from_proto::{parse_physical_exprs, parse_physical_sort_exprs};
+use datafusion_proto::physical_plan::to_proto::{serialize_physical_exprs, serialize_physical_sort_exprs};
+use datafusion_proto::protobuf::PhysicalAggregateExprNode;
 
 /// A stable struct for sharing [`AccumulatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding field
@@ -43,8 +47,7 @@ pub struct FFI_AccumulatorArgs {
     is_distinct: bool,
     is_reversed: bool,
     name: RString,
-    order_bys: RVec<FFI_PhysicalSortExpr>,
-    exprs: RVec<FFI_PhysicalExpr>,
+    physical_expr_def: RVec<u8>,
 }
 
 impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
@@ -55,18 +58,22 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
-        let exprs = args
-            .exprs
-            .iter()
-            .map(Arc::clone)
-            .map(FFI_PhysicalExpr::from)
-            .collect();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let ordering_req =
+            serialize_physical_sort_exprs(args.order_bys.to_owned(), &codec)?;
 
-        let order_bys = args
-            .order_bys
-            .iter()
-            .map(FFI_PhysicalSortExpr::from)
-            .collect();
+        let expr = serialize_physical_exprs(args.exprs, &codec)?;
+
+        let physical_expr_def = PhysicalAggregateExprNode {
+            expr,
+            ordering_req,
+            distinct: args.is_distinct,
+            ignore_nulls: args.ignore_nulls,
+            fun_definition: None,
+            aggregate_function: None,
+            human_display: args.name.to_string(),
+        };
+        let physical_expr_def = physical_expr_def.encode_to_vec().into();
 
         Ok(Self {
             return_field,
@@ -75,8 +82,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             ignore_nulls: args.ignore_nulls,
             is_distinct: args.is_distinct,
             name: args.name.into(),
-            order_bys,
-            exprs,
+            physical_expr_def,
         })
     }
 }
@@ -101,13 +107,30 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_AccumulatorArgs) -> Result<Self, Self::Error> {
-        let exprs: Vec<Arc<dyn PhysicalExpr>> =
-            value.exprs.into_iter().map(Into::into).collect();
+        let proto_def = PhysicalAggregateExprNode::decode(
+            value.physical_expr_def.as_ref(),
+        )
+            .map_err(|e| {
+                exec_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {e}")
+            })?;
 
         let return_field = Arc::new((&value.return_field.0).try_into()?);
         let schema = Schema::try_from(&value.schema.0)?;
 
-        let order_bys = value.order_bys.iter().map(PhysicalSortExpr::from).collect();
+        let task_ctx = default_ctx.task_ctx();
+        let codex = DefaultPhysicalExtensionCodec {};
+
+        let order_bys = parse_physical_sort_exprs(
+            &proto_def.ordering_req,
+            &task_ctx,
+            &schema,
+            &codex,
+        )?;
+
+        let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
+
+        let return_field = Arc::new((&value.return_field.0).try_into()?);
+        let schema = Schema::try_from(&value.schema.0)?;
 
         let expr_fields = exprs
             .iter()

@@ -30,7 +30,6 @@ pub mod execution_plan;
 pub mod expr;
 pub mod function_registry;
 pub mod insert_op;
-pub mod physical_expr;
 pub mod plan_properties;
 pub mod record_batch_stream;
 pub mod schema_provider;
