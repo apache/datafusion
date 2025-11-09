@@ -360,39 +360,6 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
     Ok(())
 }
 
-/// Test for https://github.com/apache/datafusion/issues/18102
-#[tokio::test]
-async fn test_query_parameters_in_values_list_relation() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let df = ctx
-        .sql("SELECT a, b FROM (VALUES ($1, $2)) AS t(a, b)")
-        .await
-        .unwrap();
-
-    let df_with_params_replaced = df
-        .with_param_values(ParamValues::List(vec![
-            ScalarAndMetadata::new(ScalarValue::UInt32(Some(1)), None),
-            ScalarAndMetadata::new(ScalarValue::Utf8(Some("two".to_string())), None),
-        ]))
-        .unwrap();
-
-    let schema = df_with_params_replaced.schema();
-    assert_eq!(schema.field(0).data_type(), &DataType::UInt32);
-    assert_eq!(schema.field(1).data_type(), &DataType::Utf8);
-
-    let batches = df_with_params_replaced.collect().await.unwrap();
-    assert_snapshot!(batches_to_sort_string(&batches), @r"
-    +---+-----+
-    | a | b   |
-    +---+-----+
-    | 1 | two |
-    +---+-----+
-    ");
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn test_version_function() {
     let expected_version = format!(

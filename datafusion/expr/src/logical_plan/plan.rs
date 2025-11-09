@@ -633,46 +633,8 @@ impl LogicalPlan {
             LogicalPlan::Dml(_) => Ok(self),
             LogicalPlan::Copy(_) => Ok(self),
             LogicalPlan::Values(Values { schema, values }) => {
-                // We cannot compute the correct schema if we only use values.
-                //
-                // For example, given the following plan:
-                //   Projection: col_1, col_2
-                //     Values: (Float32(1), Float32(10)), (Float32(100), Float32(10))
-                //
-                // We wouldn't know about `col_1`, and `col_2` if we only relied on `values`.
-                // To correctly recompute the new schema, we also need to retain some information
-                // from the original schema.
-                let new_plan = LogicalPlanBuilder::values(values.clone())?.build()?;
-
-                let qualified_fields = schema
-                    .iter()
-                    .zip(new_plan.schema().fields())
-                    .map(|((table_ref, old_field), new_field)| {
-                        // `old_field`'s data type is unknown but `new_field`'s is known
-                        if old_field.data_type().is_null()
-                            && !new_field.data_type().is_null()
-                        {
-                            let field = old_field
-                                .as_ref()
-                                .clone()
-                                .with_data_type(new_field.data_type().clone());
-                            (table_ref.cloned(), Arc::new(field))
-                        } else {
-                            (table_ref.cloned(), Arc::clone(old_field))
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                let schema = DFSchema::new_with_metadata(
-                    qualified_fields,
-                    schema.metadata().clone(),
-                )?
-                .with_functional_dependencies(schema.functional_dependencies().clone())?;
-
-                Ok(LogicalPlan::Values(Values {
-                    schema: Arc::new(schema),
-                    values,
-                }))
+                // todo it isn't clear why the schema is not recomputed here
+                Ok(LogicalPlan::Values(Values { schema, values }))
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
@@ -4865,53 +4827,6 @@ mod tests {
             .clone()
             .with_param_values(param_values)
             .expect_err("prepared field metadata mismatch unexpectedly succeeded");
-    }
-
-    #[test]
-    fn test_replace_placeholder_values_list_relation_valid_schema() {
-        // SELECT a, b, c FROM (VALUES (1, $1, $2 + $3) AS t(a, b, c);
-        let plan = LogicalPlanBuilder::values(vec![vec![
-            lit(1),
-            placeholder("$1"),
-            binary_expr(placeholder("$2"), Operator::Plus, placeholder("$3")),
-        ]])
-        .unwrap()
-        .project(vec![
-            col("column1").alias("a"),
-            col("column2").alias("b"),
-            col("column3").alias("c"),
-        ])
-        .unwrap()
-        .alias("t")
-        .unwrap()
-        .project(vec![col("a"), col("b"), col("c")])
-        .unwrap()
-        .build()
-        .unwrap();
-
-        // original
-        assert_snapshot!(plan.display_indent_schema(), @r"
-        Projection: t.a, t.b, t.c [a:Int32;N, b:Null;N, c:Int64;N]
-          SubqueryAlias: t [a:Int32;N, b:Null;N, c:Int64;N]
-            Projection: column1 AS a, column2 AS b, column3 AS c [a:Int32;N, b:Null;N, c:Int64;N]
-              Values: (Int32(1), $1, $2 + $3) [column1:Int32;N, column2:Null;N, column3:Int64;N]
-        ");
-
-        let plan = plan
-            .with_param_values(vec![
-                ScalarValue::from(1i32),
-                ScalarValue::from(2i32),
-                ScalarValue::from(3i32),
-            ])
-            .unwrap();
-
-        // replaced
-        assert_snapshot!(plan.display_indent_schema(), @r"
-        Projection: t.a, t.b, t.c [a:Int32;N, b:Int32;N, c:Int64;N]
-          SubqueryAlias: t [a:Int32;N, b:Int32;N, c:Int64;N]
-            Projection: column1 AS a, column2 AS b, column3 AS c [a:Int32;N, b:Int32;N, c:Int64;N]
-              Values: (Int32(1), Int32(1) AS $1, Int32(2) + Int32(3) AS $2 + $3) [column1:Int32;N, column2:Int32;N, column3:Int64;N]
-        ");
     }
 
     #[test]

@@ -216,9 +216,10 @@ impl LogicalPlanBuilder {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
-
-        // values list can have no columns, see: https://github.com/apache/datafusion/pull/12339
         let n_cols = values[0].len();
+        if n_cols == 0 {
+            return plan_err!("Values list cannot be zero length");
+        }
         for (i, row) in values.iter().enumerate() {
             if row.len() != n_cols {
                 return plan_err!(
