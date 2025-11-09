@@ -40,19 +40,19 @@ jobs:
   check-files:
     runs-on: ubuntu-latest
     outputs:
-      should_skip: ${{ steps.filter.outputs.code == 'false' }}
+      should_skip: ${{ steps.filter.outputs.docs-only == 'true' }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
         id: filter
         with:
           filters: |
-            code:
-              - '**'
-              - '!**.md'
-              - '!docs/**'
-              - '!.github/ISSUE_TEMPLATE/**'
-              - '!.github/pull_request_template.md'
+            docs-only:
+              - 'docs/**'
+              - '**/*.md'
+              - '.github/ISSUE_TEMPLATE/**'
+              - '.github/pull_request_template.md'
+          predicate-quantifier: 'every'
 
   # Check crate compiles and base cargo check passes
   linux-build-lib:
