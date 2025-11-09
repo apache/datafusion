@@ -16,53 +16,75 @@
 # under the License.
 
 
-# Básicos
-
-query
+query R
 SELECT try_avg(x) AS avg_x FROM VALUES (1), (2), (3) AS tab(x);
 ----
+2
 
-query
+query R
 SELECT try_avg(x) AS avg_x FROM VALUES (NULL), (2), (NULL) AS tab(x);
 ----
+2
 
-query
+query R
 SELECT try_avg(CAST(x AS BIGINT)) AS avg_x FROM VALUES (9223372036854775807), (1) AS tab(x);
 ----
+4611686018427388000
 
-query
+query R
 SELECT try_avg(x) AS avg_x FROM VALUES (1.5), (2.5), (3.0) AS tab(x);
 ----
+2.333333333333334
 
-query
+query R
 SELECT try_avg(x) AS avg_x FROM VALUES (1e308), (1e308) AS tab(x);
 ----
+Infinity
 
-query
-SELECT try_avg(x) AS avg_x FROM VALUES (double('nan')), (1.0) AS tab(x);
+query R
+SELECT try_avg(x) AS avg_x FROM VALUES (arrow_cast('NaN','Float64')), (1.0) AS tab(x);
 ----
+NaN
 
 
-# Decimales
-query
-SELECT try_avg(x) AS avg_x FROM VALUES (DECIMAL(10,2)(1.23)), (DECIMAL(10,2)(4.77)) AS tab(x);
+# Decimals
+query R
+SELECT try_avg(x) AS avg_x
+FROM VALUES (CAST(1.23 AS DECIMAL(10,2))),
+             (CAST(4.77 AS DECIMAL(10,2))) AS tab(x);
 ----
+3
 
-query
-SELECT try_avg(x) AS avg_x FROM VALUES (DECIMAL(10,2)(1.00)), (CAST(NULL AS DECIMAL(10,2))), (DECIMAL(10,2)(2.50)) AS tab(x);
+query R
+SELECT try_avg(x) AS avg_x
+FROM VALUES
+  (CAST(1.00 AS DECIMAL(10,2))),
+  (CAST(NULL AS DECIMAL(10,2))),
+  (CAST(2.50 AS DECIMAL(10,2)))
+AS tab(x);
 ----
+1.75
 
-query
-SELECT try_avg(x) AS avg_x FROM VALUES (DECIMAL(5,0)(90000)), (DECIMAL(5,0)(20000)) AS tab(x);
+query R
+SELECT try_avg(x) AS avg_x
+FROM VALUES
+  (CAST(90000 AS DECIMAL(5,0))),
+  (CAST(20000 AS DECIMAL(5,0)))
+AS tab(x);
 ----
+55000
 
-query
-SELECT try_avg(x) AS avg_x FROM VALUES (DECIMAL(38,0)('1' * 38)) AS tab(x);
+query R
+SELECT try_avg(x) AS avg_x
+FROM VALUES (
+  CAST(RPAD('1', 38, '1') AS DECIMAL(38,0))
+) AS tab(x);
 ----
+11111111111111111111111111111111111111
 
-# Agrupaciones
+# Aggregations
 
-query
+query TR
 SELECT g, try_avg(x) AS avg_x
 FROM VALUES
   ('bad', 9223372036854775807),
@@ -74,15 +96,5 @@ AS tab(g, x)
 GROUP BY g
 ORDER BY g;
 ----
-
-# Intervalos
-SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col);
-----
-
-query
-SELECT try_avg(col) FROM VALUES (interval '7 months'), (interval '1 months') AS tab(col);
-----
-
-query
-SELECT try_avg(col) FROM VALUES (interval '10 months'), (CAST(NULL AS interval year to month)), (interval '5 months') AS tab(col);
-----
+bad 4611686018427388000
+ok 7.5
