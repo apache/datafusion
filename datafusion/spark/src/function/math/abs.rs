@@ -27,8 +27,8 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{
-    downcast_named_arg, make_abs_function, make_decimal_abs_function,
-    make_try_abs_function,
+    downcast_named_arg, make_abs_function, make_try_abs_function,
+    make_wrapping_abs_function,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -152,7 +152,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             | DataType::UInt64 => Ok(args[0].clone()),
             DataType::Int8 => {
                 if !fail_on_error {
-                    let abs_fun = make_decimal_abs_function!(Int8Array);
+                    let abs_fun = make_wrapping_abs_function!(Int8Array);
                     abs_fun(array).map(ColumnarValue::Array)
                 } else {
                     let abs_fun = make_try_abs_function!(Int8Array);
@@ -161,7 +161,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             }
             DataType::Int16 => {
                 if !fail_on_error {
-                    let abs_fun = make_decimal_abs_function!(Int16Array);
+                    let abs_fun = make_wrapping_abs_function!(Int16Array);
                     abs_fun(array).map(ColumnarValue::Array)
                 } else {
                     let abs_fun = make_try_abs_function!(Int16Array);
@@ -170,7 +170,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             }
             DataType::Int32 => {
                 if !fail_on_error {
-                    let abs_fun = make_decimal_abs_function!(Int32Array);
+                    let abs_fun = make_wrapping_abs_function!(Int32Array);
                     abs_fun(array).map(ColumnarValue::Array)
                 } else {
                     let abs_fun = make_try_abs_function!(Int32Array);
@@ -179,7 +179,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             }
             DataType::Int64 => {
                 if !fail_on_error {
-                    let abs_fun = make_decimal_abs_function!(Int64Array);
+                    let abs_fun = make_wrapping_abs_function!(Int64Array);
                     abs_fun(array).map(ColumnarValue::Array)
                 } else {
                     let abs_fun = make_try_abs_function!(Int64Array);
@@ -196,7 +196,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             }
             DataType::Decimal128(_, _) => {
                 if !fail_on_error {
-                    let abs_fun = make_decimal_abs_function!(Decimal128Array);
+                    let abs_fun = make_wrapping_abs_function!(Decimal128Array);
                     abs_fun(array).map(ColumnarValue::Array)
                 } else {
                     let abs_fun = make_try_abs_function!(Decimal128Array);
@@ -205,7 +205,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             }
             DataType::Decimal256(_, _) => {
                 if !fail_on_error {
-                    let abs_fun = make_decimal_abs_function!(Decimal256Array);
+                    let abs_fun = make_wrapping_abs_function!(Decimal256Array);
                     abs_fun(array).map(ColumnarValue::Array)
                 } else {
                     let abs_fun = make_try_abs_function!(Decimal256Array);
@@ -215,7 +215,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             DataType::Interval(unit) => match unit {
                 IntervalUnit::YearMonth => {
                     if !fail_on_error {
-                        let abs_fun = make_decimal_abs_function!(IntervalYearMonthArray);
+                        let abs_fun = make_wrapping_abs_function!(IntervalYearMonthArray);
                         abs_fun(array).map(ColumnarValue::Array)
                     } else {
                         let abs_fun = make_try_abs_function!(IntervalYearMonthArray);
@@ -224,7 +224,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 }
                 IntervalUnit::DayTime => {
                     if !fail_on_error {
-                        let abs_fun = make_decimal_abs_function!(IntervalDayTimeArray);
+                        let abs_fun = make_wrapping_abs_function!(IntervalDayTimeArray);
                         abs_fun(array).map(ColumnarValue::Array)
                     } else {
                         let abs_fun = make_try_abs_function!(IntervalDayTimeArray);
