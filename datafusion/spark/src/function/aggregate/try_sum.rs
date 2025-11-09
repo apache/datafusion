@@ -191,7 +191,7 @@ impl Accumulator for TrySumAccumulator {
             }
             ref dt => {
                 return Err(DataFusionError::Plan(format!(
-                    "try_sum: type not supported update_batch: {dt:?}"
+                    "try_sum: unsupported type in update_batch: {dt:?}"
                 )))
             }
         }
@@ -287,7 +287,7 @@ impl Accumulator for TrySumAccumulator {
             }
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
-                    "try_sum: type not suported in merge_batch: {dt:?}"
+                    "try_sum: type not supported in merge_batch: {dt:?}"
                 )))
             }
         }
@@ -296,7 +296,7 @@ impl Accumulator for TrySumAccumulator {
     }
 }
 
-// Helpers to determine is exceeds decimal
+// Helpers to determine if it exceeds decimal precision
 fn pow10_i128(p: u8) -> Option<i128> {
     let mut v: i128 = 1;
     for _ in 0..p {
@@ -649,7 +649,7 @@ mod tests {
         assert_eq!(
             f.return_type(&[DataType::Decimal128(10, 2)])?,
             DataType::Decimal128(20, 2),
-            "Spark need more precision in +10"
+            "Spark needs +10 more digits of precision"
         );
 
         let mut acc = TrySumAccumulator::new(DataType::Decimal128(20, 2));
