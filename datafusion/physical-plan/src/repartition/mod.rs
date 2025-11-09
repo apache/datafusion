@@ -1232,6 +1232,7 @@ impl RepartitionExec {
                     coalesce_batches_partition.push_batch(batch)?;
 
                     if coalesce_batches_partition.has_completed_batch() {
+                        coalesce_batches_partition.finish_buffered_batch()?;
                         batch = coalesce_batches_partition
                             .next_completed_batch()
                             .expect("has_completed_batch returned true");
