@@ -535,7 +535,7 @@ impl FileSource for ArrowSource {
     }
 
     fn table_schema(&self) -> &TableSchema {
-        &self.inner.table_schema()
+        self.inner.table_schema()
     }
 }
 
