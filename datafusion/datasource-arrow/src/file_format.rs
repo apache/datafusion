@@ -381,7 +381,6 @@ const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 async fn infer_stream_schema(
     mut stream: BoxStream<'static, object_store::Result<Bytes>>,
 ) -> Result<SchemaRef> {
-
     // 16 bytes covers the preamble and metadata length no matter
     // which version or format is used
     let bytes = extend_bytes_to_n_length_from_stream(vec![], 16, &mut stream).await?;
