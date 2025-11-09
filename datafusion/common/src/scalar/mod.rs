@@ -222,9 +222,8 @@ pub use struct_builder::ScalarStructBuilder;
 /// for the definitive reference.
 ///
 /// [`NullArray`]: arrow::array::NullArray
-
 /// Scalar value for RunEndEncoded type
-/// 
+///
 /// RunEndEncoded is an Arrow data type for efficient storage of repeated values
 /// through run-length encoding. It consists of two arrays:
 /// - run_ends: defines the end positions of each run
@@ -354,7 +353,7 @@ impl PartialEq for RunEndEncodedScalar {
     fn eq(&self, other: &Self) -> bool {
         // For RunEndEncoded, we need to compare both run_ends and values
         // Use as_ref() to compare the arrays without moving
-        self.run_ends.as_ref() == other.run_ends.as_ref() 
+        self.run_ends.as_ref() == other.run_ends.as_ref()
             && self.values.as_ref() == other.values.as_ref()
     }
 }
@@ -378,7 +377,7 @@ fn partial_cmp_arrays(arr1: &ArrayRef, arr2: &ArrayRef) -> Option<Ordering> {
     if arr1.data_type() != arr2.data_type() {
         return None;
     }
-    
+
     let min_length = arr1.len().min(arr2.len());
     let arr1_trimmed = arr1.slice(0, min_length);
     let arr2_trimmed = arr2.slice(0, min_length);
@@ -408,8 +407,8 @@ fn partial_cmp_arrays(arr1: &ArrayRef, arr2: &ArrayRef) -> Option<Ordering> {
 impl Hash for RunEndEncodedScalar {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Use hash_nested_array for both run_ends and values
-        hash_nested_array(self.run_ends.clone(), state);
-        hash_nested_array(self.values.clone(), state);
+        hash_nested_array(Arc::clone(&self.run_ends), state);
+        hash_nested_array(Arc::clone(&self.values), state);
     }
 }
 
@@ -1269,6 +1268,15 @@ impl ScalarValue {
             DataType::Union(fields, mode) => {
                 ScalarValue::Union(None, fields.clone(), *mode)
             }
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
+                // Create empty arrays for null RunEndEncoded scalar
+                let run_ends_array = new_null_array(run_ends_field.data_type(), 0);
+                let values_array = new_null_array(values_field.data_type(), 0);
+                ScalarValue::RunEndEncoded(Arc::new(RunEndEncodedScalar {
+                    run_ends: run_ends_array,
+                    values: values_array,
+                }))
+            }
             DataType::Null => ScalarValue::Null,
             _ => {
                 return _not_impl_err!(
@@ -1967,7 +1975,11 @@ impl ScalarValue {
                 // RunEndEncoded type is determined by the values array type
                 // We need to construct the RunEndEncoded type from the values array
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", ree.run_ends.data_type().clone(), false)),
+                    Arc::new(Field::new(
+                        "run_ends",
+                        ree.run_ends.data_type().clone(),
+                        false,
+                    )),
                     Arc::new(Field::new("values", ree.values.data_type().clone(), true)),
                 )
             }
@@ -2102,7 +2114,9 @@ impl ScalarValue {
                 ))
             }
             ScalarValue::RunEndEncoded(_) => {
-                _internal_err!("Can not run arithmetic negative on RunEndEncoded scalar value")
+                _internal_err!(
+                    "Can not run arithmetic negative on RunEndEncoded scalar value"
+                )
             }
             value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
@@ -2255,7 +2269,7 @@ impl ScalarValue {
             ScalarValue::Dictionary(_, v) => v.is_null(),
             ScalarValue::RunEndEncoded(ree) => {
                 // RunEndEncoded is null if both arrays are empty or all values are null
-                ree.values.len() == 0 || ree.values.null_count() == ree.values.len()
+                ree.values.is_empty() || ree.values.null_count() == ree.values.len()
             }
         }
     }
@@ -4144,7 +4158,8 @@ impl ScalarValue {
                 }
                 ScalarValue::RunEndEncoded(ree) => {
                     // Size of the Arc wrapper + size of the arrays
-                    ree.run_ends.get_array_memory_size() + ree.values.get_array_memory_size()
+                    ree.run_ends.get_array_memory_size()
+                        + ree.values.get_array_memory_size()
                 }
             }
     }
@@ -4883,8 +4898,12 @@ impl fmt::Display for ScalarValue {
             },
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
             ScalarValue::RunEndEncoded(ree) => {
-                write!(f, "RunEndEncoded(run_ends: {}, values: {})", 
-                    ree.run_ends.len(), ree.values.len())?;
+                write!(
+                    f,
+                    "RunEndEncoded(run_ends: {}, values: {})",
+                    ree.run_ends.len(),
+                    ree.values.len()
+                )?;
             }
             ScalarValue::Null => write!(f, "NULL")?,
         };
@@ -5065,8 +5084,12 @@ impl fmt::Debug for ScalarValue {
             },
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
             ScalarValue::RunEndEncoded(ree) => {
-                write!(f, "RunEndEncoded(run_ends: {}, values: {})", 
-                    ree.run_ends.len(), ree.values.len())
+                write!(
+                    f,
+                    "RunEndEncoded(run_ends: {}, values: {})",
+                    ree.run_ends.len(),
+                    ree.values.len()
+                )
             }
             ScalarValue::Null => write!(f, "NULL"),
         }
@@ -8835,6 +8858,11 @@ mod tests {
                 UnionMode::Dense,
             ))
             .unwrap(),
+            ScalarValue::try_new_null(&DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
+            ))
+            .unwrap(),
         ];
         assert!(scalars.iter().all(|s| s.is_null()));
     }
@@ -9300,16 +9328,16 @@ mod tests {
             run_ends: run_ends1,
             values: values1,
         };
-        
+
         let run_ends2 = Arc::new(Int32Array::from(vec![2, 4, 6]));
         let values2 = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let ree2 = RunEndEncodedScalar {
             run_ends: run_ends2,
             values: values2,
         };
-        
+
         assert_eq!(ree1, ree2);
-        
+
         let scalar1 = ScalarValue::RunEndEncoded(Arc::new(ree1));
         let scalar2 = ScalarValue::RunEndEncoded(Arc::new(ree2));
         assert_eq!(scalar1, scalar2);
@@ -9324,22 +9352,22 @@ mod tests {
             run_ends: run_ends.clone(),
             values: values.clone(),
         };
-        
+
         let scalar1 = ScalarValue::RunEndEncoded(Arc::new(ree));
         let scalar2 = ScalarValue::RunEndEncoded(Arc::new(RunEndEncodedScalar {
             run_ends: run_ends,
             values: values,
         }));
-        
+
         use std::collections::hash_map::DefaultHasher;
         use std::hash::Hash;
-        
+
         let mut hasher1 = DefaultHasher::new();
         let mut hasher2 = DefaultHasher::new();
-        
+
         scalar1.hash(&mut hasher1);
         scalar2.hash(&mut hasher2);
-        
+
         assert_eq!(hasher1.finish(), hasher2.finish());
     }
 
@@ -9352,17 +9380,17 @@ mod tests {
             run_ends: run_ends1,
             values: values1,
         };
-        
+
         let run_ends2 = Arc::new(Int32Array::from(vec![2, 4, 6]));
         let values2 = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let ree2 = RunEndEncodedScalar {
             run_ends: run_ends2,
             values: values2,
         };
-        
+
         let scalar1 = ScalarValue::RunEndEncoded(Arc::new(ree1));
         let scalar2 = ScalarValue::RunEndEncoded(Arc::new(ree2));
-        
+
         assert_eq!(scalar1.partial_cmp(&scalar2), Some(Ordering::Equal));
     }
 }
