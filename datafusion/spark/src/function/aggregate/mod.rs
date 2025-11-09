@@ -19,17 +19,23 @@ use datafusion_expr::AggregateUDF;
 use std::sync::Arc;
 
 pub mod avg;
+pub mod try_sum;
+
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
     export_functions!((avg, "Returns the average value of a given column", arg1));
+    export_functions!((try_sum, "Returns the average value of a given column", arg1));
 }
 
 // TODO: try use something like datafusion_functions_aggregate::create_func!()
 pub fn avg() -> Arc<AggregateUDF> {
     Arc::new(AggregateUDF::new_from_impl(avg::SparkAvg::new()))
 }
+pub fn try_sum() -> Arc<AggregateUDF> {
+    Arc::new(AggregateUDF::new_from_impl(try_sum::TrySumFunction::new()))
+}
 
 pub fn functions() -> Vec<Arc<AggregateUDF>> {
-    vec![avg()]
+    vec![avg(), try_sum()]
 }
