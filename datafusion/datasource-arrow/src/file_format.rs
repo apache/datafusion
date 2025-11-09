@@ -45,6 +45,7 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::{
     get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
+use datafusion_datasource::TableSchema;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -197,11 +198,16 @@ impl FileFormat for ArrowFormat {
             .object_meta
             .location;
 
+        let table_schema = TableSchema::new(
+            Arc::clone(conf.file_schema()),
+            conf.table_partition_cols().clone(),
+        );
+
         let source: Arc<dyn FileSource> =
             match is_object_in_arrow_ipc_file_format(object_store, object_location).await
             {
-                Ok(true) => Arc::new(ArrowSource::default_file_source()),
-                Ok(false) => Arc::new(ArrowSource::default_stream_file_source()),
+                Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
+                Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema)),
                 Err(e) => Err(e)?,
             };
 
@@ -228,10 +234,8 @@ impl FileFormat for ArrowFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        // defaulting to the file format source since it's
-        // more capable in general
-        ArrowSource::default_file_source().into()
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+        Arc::new(ArrowSource::new_file_source(table_schema))
     }
 }
 

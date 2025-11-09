@@ -32,9 +32,8 @@
 use std::sync::Arc;
 use std::{any::Any, io::Cursor};
 
-use datafusion_datasource::as_file_source;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::{as_file_source, TableSchema};
 
 use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
@@ -53,11 +52,24 @@ use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
 /// `FileSource` for Arrow IPC file format. Supports range-based parallel reading.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct ArrowFileSource {
+    table_schema: TableSchema,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+}
+
+impl ArrowFileSource {
+    /// Initialize an ArrowFileSource with the provided schema
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        Self {
+            table_schema: table_schema.into(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            projected_statistics: None,
+            schema_adapter_factory: None,
+        }
+    }
 }
 
 impl From<ArrowFileSource> for Arc<dyn FileSource> {
@@ -83,11 +95,11 @@ impl FileSource for ArrowFileSource {
         self
     }
 
-    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+    fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
     }
 
-    fn with_schema(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
+    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
@@ -132,11 +144,24 @@ impl FileSource for ArrowFileSource {
 }
 
 /// `FileSource` for Arrow IPC stream format. Supports only sequential reading.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct ArrowStreamFileSource {
+    table_schema: TableSchema,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+}
+
+impl ArrowStreamFileSource {
+    /// Initialize an ArrowStreamFileSource with the provided schema
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        Self {
+            table_schema: table_schema.into(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            projected_statistics: None,
+            schema_adapter_factory: None,
+        }
+    }
 }
 
 impl From<ArrowStreamFileSource> for Arc<dyn FileSource> {
@@ -163,10 +188,6 @@ impl FileSource for ArrowStreamFileSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
-    fn with_schema(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
@@ -224,6 +245,10 @@ impl FileSource for ArrowStreamFileSource {
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
+    }
+
+    fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
     }
 }
 
@@ -413,12 +438,6 @@ pub struct ArrowSource {
     pub inner: Arc<dyn FileSource>,
 }
 
-impl Default for ArrowSource {
-    fn default() -> Self {
-        Self::default_file_source()
-    }
-}
-
 impl ArrowSource {
     /// Creates a new [`ArrowSource`]
     pub fn new(inner: Arc<dyn FileSource>) -> Self {
@@ -426,16 +445,16 @@ impl ArrowSource {
     }
 
     /// Creates an [`ArrowSource`] for file format
-    pub fn default_file_source() -> Self {
+    pub fn new_file_source(table_schema: impl Into<TableSchema>) -> Self {
         Self {
-            inner: Arc::new(ArrowFileSource::default()),
+            inner: Arc::new(ArrowFileSource::new(table_schema)),
         }
     }
 
     /// Creates an [`ArrowSource`] for stream format
-    pub fn default_stream_file_source() -> Self {
+    pub fn new_stream_file_source(table_schema: impl Into<TableSchema>) -> Self {
         Self {
-            inner: Arc::new(ArrowStreamFileSource::default()),
+            inner: Arc::new(ArrowStreamFileSource::new(table_schema)),
         }
     }
 }
@@ -458,12 +477,6 @@ impl FileSource for ArrowSource {
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(Self {
             inner: self.inner.with_batch_size(batch_size),
-        })
-    }
-
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
-        Arc::new(Self {
-            inner: self.inner.with_schema(schema),
         })
     }
 
@@ -519,6 +532,10 @@ impl FileSource for ArrowSource {
             output_ordering,
             config,
         )
+    }
+
+    fn table_schema(&self) -> &TableSchema {
+        &self.inner.table_schema()
     }
 }
 
@@ -607,14 +624,13 @@ mod tests {
             };
 
             let source: Arc<dyn FileSource> = if filename.contains("stream") {
-                Arc::new(ArrowStreamFileSource::default())
+                Arc::new(ArrowStreamFileSource::new(schema))
             } else {
-                Arc::new(ArrowFileSource::default())
+                Arc::new(ArrowFileSource::new(schema))
             };
 
             let scan_config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
-                schema,
                 source.clone(),
             )
             .build();
@@ -653,11 +669,10 @@ mod tests {
 
         let schema = FileReader::try_new(File::open(path_str)?, None)?.schema();
 
-        let source = Arc::new(ArrowFileSource::default());
+        let source = Arc::new(ArrowFileSource::new(schema));
 
         let scan_config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
-            schema,
             source.clone(),
         )
         .build();
@@ -695,11 +710,10 @@ mod tests {
 
         let schema = StreamReader::try_new(File::open(path_str)?, None)?.schema();
 
-        let source = Arc::new(ArrowStreamFileSource::default());
+        let source = Arc::new(ArrowStreamFileSource::new(schema));
 
         let scan_config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
-            schema,
             source.clone(),
         )
         .build();
@@ -713,13 +727,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_arrow_stream_repartitioning_not_supported() -> Result<()> {
-        let source = ArrowStreamFileSource::default();
         let schema =
             Arc::new(Schema::new(vec![Field::new("f0", DataType::Int64, false)]));
+        let source = ArrowStreamFileSource::new(schema);
 
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
-            schema,
             Arc::new(source.clone()) as Arc<dyn FileSource>,
         )
         .build();
