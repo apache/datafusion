@@ -208,13 +208,15 @@ impl FileSource for ArrowStreamFileSource {
         _output_ordering: Option<LexOrdering>,
         _config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
-        // Stream format doesn't support range-based parallel reading
-        // because it lacks a footer that would be needed to make range-based
-        // seeking practical. Without that, you would either need to read
-        // the entire file and index it up front before doing parallel reading
-        // or else each partition would need to read the entire file up to the
-        // correct offset which is a lot of duplicate I/O. We're opting to avoid
-        // that entirely by only acting on a single partition and reading sequentially.
+        // The Arrow IPC stream format doesn't support range-based parallel reading
+        // because it lacks a footer with the information that would be needed to
+        // make range-based parallel reading practical. Without the data in the
+        // footer you would either need to read the the entire file and record the
+        // offsets of the record batches and dictionaries, essentially recreating
+        // the footer's contents, or else each partition would need to read the
+        // entire file up to the correct offset which is a lot of duplicate I/O.
+        // We're opting to avoid that entirely by only acting on a single partition
+        // and reading sequentially.
         Ok(None)
     }
 
