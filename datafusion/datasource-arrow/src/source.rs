@@ -119,19 +119,19 @@ impl FileSource for ArrowFileSource {
 
 /// Arrow IPC Stream format source - supports only sequential reading
 #[derive(Clone, Default)]
-pub struct ArrowStreamSource {
+pub struct ArrowStreamFileSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
-impl From<ArrowStreamSource> for Arc<dyn FileSource> {
-    fn from(source: ArrowStreamSource) -> Self {
+impl From<ArrowStreamFileSource> for Arc<dyn FileSource> {
+    fn from(source: ArrowStreamFileSource) -> Self {
         as_file_source(source)
     }
 }
 
-impl FileSource for ArrowStreamSource {
+impl FileSource for ArrowStreamFileSource {
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
@@ -432,7 +432,7 @@ mod tests {
             };
 
             let source: Arc<dyn FileSource> = if filename.contains("stream") {
-                Arc::new(ArrowStreamSource::default())
+                Arc::new(ArrowStreamFileSource::default())
             } else {
                 Arc::new(ArrowFileSource::default())
             };
@@ -520,7 +520,7 @@ mod tests {
 
         let schema = StreamReader::try_new(File::open(path_str)?, None)?.schema();
 
-        let source = Arc::new(ArrowStreamSource::default());
+        let source = Arc::new(ArrowStreamFileSource::default());
 
         let scan_config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
@@ -538,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_arrow_stream_repartitioning_not_supported() -> Result<()> {
-        let source = ArrowStreamSource::default();
+        let source = ArrowStreamFileSource::default();
         let schema =
             Arc::new(Schema::new(vec![Field::new("f0", DataType::Int64, false)]));
 

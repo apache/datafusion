@@ -23,7 +23,8 @@ use bytes::{BufMut, BytesMut};
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
-    ArrowFileSource, ArrowStreamSource, CsvSource, FileSource, JsonSource, ParquetSource,
+    ArrowFileSource, ArrowStreamFileSource, CsvSource, FileSource, JsonSource,
+    ParquetSource,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -301,9 +302,9 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         );
     }
 
-    // Test ArrowStreamSource
+    // Test ArrowStreamFileSource
     {
-        let source = ArrowStreamSource::default();
+        let source = ArrowStreamFileSource::default();
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())

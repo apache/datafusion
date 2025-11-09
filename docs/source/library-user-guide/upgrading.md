@@ -125,9 +125,9 @@ Users may need to update their paths to account for these changes.
 
 See [issue #17713] for more details.
 
-### Renaming of `ArrowSource` to `ArrowFileSource` and adding `ArrowStreamSource`
+### Renaming of `ArrowSource` to `ArrowFileSource` and adding `ArrowStreamFileSource`
 
-Support has been added for querying files in the [Arrow IPC stream format](https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format). To better support this feature, `ArrowSource` has been split into two separate sources: `ArrowFileSource` and `ArrowStreamSource`.
+Support has been added for querying files in the [Arrow IPC stream format](https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format). To better support this feature, `ArrowSource` has been split into two separate sources: `ArrowFileSource` and `ArrowStreamFileSource`.
 
 See [issue #16688] for details.
 
