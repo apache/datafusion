@@ -33,7 +33,7 @@ use datafusion_datasource::{
 };
 
 use arrow::csv;
-use arrow::datatypes::SchemaRef;
+use datafusion_common::config::CsvOptions;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
@@ -61,111 +61,118 @@ use tokio::io::AsyncWriteExt;
 /// # use datafusion_datasource_csv::source::CsvSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_datasource::source::DataSourceExec;
+/// # use datafusion_common::config::CsvOptions;
 ///
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let file_schema = Arc::new(Schema::empty());
 ///
-/// let source = Arc::new(CsvSource::new(
-///         true,
-///         b',',
-///         b'"',
-///     )
-///     .with_terminator(Some(b'#')
-/// ));
+/// let options = CsvOptions {
+///     has_header: Some(true),
+///     delimiter: b',',
+///     quote: b'"',
+///     ..Default::default()
+/// };
+/// let source = Arc::new(CsvSource::new(file_schema.clone())
+///     .with_csv_options(options)
+///     .with_terminator(Some(b'#'))
+/// );
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
-/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+/// let config = FileScanConfigBuilder::new(object_store_url, source)
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
 ///     .with_newlines_in_values(true) // The file contains newlines in values;
 ///     .build();
 /// let exec = (DataSourceExec::from_data_source(config));
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CsvSource {
+    options: CsvOptions,
     batch_size: Option<usize>,
-    file_schema: Option<SchemaRef>,
+    table_schema: TableSchema,
     file_projection: Option<Vec<usize>>,
-    pub(crate) has_header: bool,
-    delimiter: u8,
-    quote: u8,
-    terminator: Option<u8>,
-    escape: Option<u8>,
-    comment: Option<u8>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    truncate_rows: bool,
 }
 
 impl CsvSource {
     /// Returns a [`CsvSource`]
-    pub fn new(has_header: bool, delimiter: u8, quote: u8) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         Self {
-            has_header,
-            delimiter,
-            quote,
-            ..Self::default()
+            options: CsvOptions::default(),
+            table_schema: table_schema.into(),
+            batch_size: None,
+            file_projection: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projected_statistics: None,
+            schema_adapter_factory: None,
         }
+    }
+
+    /// Sets the CSV options
+    pub fn with_csv_options(mut self, options: CsvOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// true if the first line of each file is a header
     pub fn has_header(&self) -> bool {
-        self.has_header
+        self.options.has_header.unwrap_or(true)
     }
 
     // true if rows length support truncate
     pub fn truncate_rows(&self) -> bool {
-        self.truncate_rows
+        self.options.truncated_rows.unwrap_or(false)
     }
     /// A column delimiter
     pub fn delimiter(&self) -> u8 {
-        self.delimiter
+        self.options.delimiter
     }
 
     /// The quote character
     pub fn quote(&self) -> u8 {
-        self.quote
+        self.options.quote
     }
 
     /// The line terminator
     pub fn terminator(&self) -> Option<u8> {
-        self.terminator
+        self.options.terminator
     }
 
     /// Lines beginning with this byte are ignored.
     pub fn comment(&self) -> Option<u8> {
-        self.comment
+        self.options.comment
     }
 
     /// The escape character
     pub fn escape(&self) -> Option<u8> {
-        self.escape
+        self.options.escape
     }
 
     /// Initialize a CsvSource with escape
     pub fn with_escape(&self, escape: Option<u8>) -> Self {
         let mut conf = self.clone();
-        conf.escape = escape;
+        conf.options.escape = escape;
         conf
     }
 
     /// Initialize a CsvSource with terminator
     pub fn with_terminator(&self, terminator: Option<u8>) -> Self {
         let mut conf = self.clone();
-        conf.terminator = terminator;
+        conf.options.terminator = terminator;
         conf
     }
 
     /// Initialize a CsvSource with comment
     pub fn with_comment(&self, comment: Option<u8>) -> Self {
         let mut conf = self.clone();
-        conf.comment = comment;
+        conf.options.comment = comment;
         conf
     }
 
     /// Whether to support truncate rows when read csv file
     pub fn with_truncate_rows(&self, truncate_rows: bool) -> Self {
         let mut conf = self.clone();
-        conf.truncate_rows = truncate_rows;
+        conf.options.truncated_rows = Some(truncate_rows);
         conf
     }
 }
@@ -176,29 +183,26 @@ impl CsvSource {
     }
 
     fn builder(&self) -> csv::ReaderBuilder {
-        let mut builder = csv::ReaderBuilder::new(Arc::clone(
-            self.file_schema
-                .as_ref()
-                .expect("Schema must be set before initializing builder"),
-        ))
-        .with_delimiter(self.delimiter)
-        .with_batch_size(
-            self.batch_size
-                .expect("Batch size must be set before initializing builder"),
-        )
-        .with_header(self.has_header)
-        .with_quote(self.quote)
-        .with_truncated_rows(self.truncate_rows);
-        if let Some(terminator) = self.terminator {
+        let mut builder =
+            csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
+                .with_delimiter(self.delimiter())
+                .with_batch_size(
+                    self.batch_size
+                        .expect("Batch size must be set before initializing builder"),
+                )
+                .with_header(self.has_header())
+                .with_quote(self.quote())
+                .with_truncated_rows(self.truncate_rows());
+        if let Some(terminator) = self.terminator() {
             builder = builder.with_terminator(terminator);
         }
         if let Some(proj) = &self.file_projection {
             builder = builder.with_projection(proj.clone());
         }
-        if let Some(escape) = self.escape {
+        if let Some(escape) = self.escape() {
             builder = builder.with_escape(escape)
         }
-        if let Some(comment) = self.comment {
+        if let Some(comment) = self.comment() {
             builder = builder.with_comment(comment);
         }
 
@@ -252,15 +256,13 @@ impl FileSource for CsvSource {
         self
     }
 
+    fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
-        Arc::new(conf)
-    }
-
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_schema = Some(Arc::clone(schema.file_schema()));
         Arc::new(conf)
     }
 
@@ -291,7 +293,7 @@ impl FileSource for CsvSource {
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, ", has_header={}", self.has_header)
+                write!(f, ", has_header={}", self.has_header())
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
@@ -340,18 +342,16 @@ impl FileOpener for CsvOpener {
         // `self.config.has_header` controls whether to skip reading the 1st line header
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line
-        let mut csv_has_header = self.config.has_header;
+        let mut csv_has_header = self.config.has_header();
         if let Some(FileRange { start, .. }) = partitioned_file.range {
             if start != 0 {
                 csv_has_header = false;
             }
         }
 
-        let config = CsvSource {
-            has_header: csv_has_header,
-            truncate_rows: self.config.truncate_rows,
-            ..(*self.config).clone()
-        };
+        let mut config = (*self.config).clone();
+        config.options.has_header = Some(csv_has_header);
+        config.options.truncated_rows = Some(config.truncate_rows());
 
         let file_compression_type = self.file_compression_type.to_owned();
 
@@ -363,7 +363,7 @@ impl FileOpener for CsvOpener {
         }
 
         let store = Arc::clone(&self.object_store);
-        let terminator = self.config.terminator;
+        let terminator = self.config.terminator();
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
