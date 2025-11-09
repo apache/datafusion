@@ -95,7 +95,7 @@ use datafusion_physical_plan::filter_pushdown::{
 ///               │   ┊                                                                 ┊
 ///               │   ┊                                                                 ┊
 ///    ┌──────────▼──────────┐                                               ┌──────────▼──────────┐
-///    │                     │                                               │   ArrowFileSource   │
+///    │                     │                                               │     ArrowSource     │
 ///    │ FileSource(trait)   ◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│          ...        │
 ///    │                     │                                               │    ParquetSource    │
 ///    └─────────────────────┘                                               └─────────────────────┘
@@ -104,7 +104,7 @@ use datafusion_physical_plan::filter_pushdown::{
 ///               │
 ///               │
 ///    ┌──────────▼──────────┐
-///    │   ArrowFileSource   │
+///    │     ArrowSource     │
 ///    │          ...        │
 ///    │    ParquetSource    │
 ///    └─────────────────────┘

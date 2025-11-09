@@ -26,7 +26,6 @@ use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use crate::schema_adapter::SchemaAdapterFactory;
-use crate::TableSchema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
@@ -44,8 +43,7 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
 /// file format specific behaviors for elements in [`DataSource`]
 ///
 /// See more details on specific implementations:
-/// * [`ArrowFileSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowFileSource.html)
-/// * [`ArrowStreamFileSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowStreamFileSource.html)
+/// * [`ArrowSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowSource.html)
 /// * [`AvroSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.AvroSource.html)
 /// * [`CsvSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html)
 /// * [`JsonSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.JsonSource.html)
@@ -62,10 +60,12 @@ pub trait FileSource: Send + Sync {
     ) -> Arc<dyn FileOpener>;
     /// Any
     fn as_any(&self) -> &dyn Any;
+    /// Returns the table schema for this file source.
+    ///
+    /// This always returns the unprojected schema (the full schema of the data).
+    fn table_schema(&self) -> &crate::table_schema::TableSchema;
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
-    /// Initialize new instance with a new schema
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource>;
     /// Initialize new instance with projection information
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
     /// Initialize new instance with projected statistics

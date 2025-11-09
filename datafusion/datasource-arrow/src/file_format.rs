@@ -45,11 +45,12 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::{
     get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
+use datafusion_datasource::TableSchema;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::source::{ArrowFileSource, ArrowStreamFileSource};
+use crate::source::ArrowSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -73,8 +74,8 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// If the buffered Arrow data exceeds this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
+/// Factory struct used to create [`ArrowFormat`]
 #[derive(Default, Debug)]
-/// Factory struct used to create [ArrowFormat]
 pub struct ArrowFormatFactory;
 
 impl ArrowFormatFactory {
@@ -109,7 +110,7 @@ impl GetExt for ArrowFormatFactory {
     }
 }
 
-/// Arrow `FileFormat` implementation.
+/// Arrow [`FileFormat`] implementation.
 #[derive(Default, Debug)]
 pub struct ArrowFormat;
 
@@ -197,11 +198,16 @@ impl FileFormat for ArrowFormat {
             .object_meta
             .location;
 
+        let table_schema = TableSchema::new(
+            Arc::clone(conf.file_schema()),
+            conf.table_partition_cols().clone(),
+        );
+
         let source: Arc<dyn FileSource> =
             match is_object_in_arrow_ipc_file_format(object_store, object_location).await
             {
-                Ok(true) => Arc::new(ArrowFileSource::default()),
-                Ok(false) => Arc::new(ArrowStreamFileSource::default()),
+                Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
+                Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema)),
                 Err(e) => Err(e)?,
             };
 
@@ -228,14 +234,12 @@ impl FileFormat for ArrowFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        // defaulting to the file format source since it's
-        // more capable in general
-        Arc::new(ArrowFileSource::default())
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+        Arc::new(ArrowSource::new_file_source(table_schema))
     }
 }
 
-/// Implements [`FileSink`] for writing to arrow_ipc files
+/// Implements [`FileSink`] for Arrow IPC files
 struct ArrowFileSink {
     config: FileSinkConfig,
 }
@@ -381,19 +385,6 @@ const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 async fn infer_stream_schema(
     mut stream: BoxStream<'static, object_store::Result<Bytes>>,
 ) -> Result<SchemaRef> {
-    // Expected IPC format is either:
-    //
-    // stream:
-    //   <continuation: 0xFFFFFFFF> - 4 bytes (added in v0.15.0+)
-    //   <metadata_size: int32> - 4 bytes
-    //   <metadata_flatbuffer: bytes>
-    //   <rest of file bytes>
-    //
-    // file:
-    //   <magic number "ARROW1"> - 6 bytes
-    //   <empty padding bytes [to 8 byte boundary]> - 2 bytes
-    //   <stream format above>
-
     // 16 bytes covers the preamble and metadata length no matter
     // which version or format is used
     let bytes = extend_bytes_to_n_length_from_stream(vec![], 16, &mut stream).await?;
