@@ -54,6 +54,10 @@ pub struct FFI_TaskContext {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// The foreign library should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 struct TaskContextPrivateData {
@@ -138,6 +142,7 @@ impl From<Arc<TaskContext>> for FFI_TaskContext {
             window_functions: window_functions_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -145,6 +150,10 @@ impl From<Arc<TaskContext>> for FFI_TaskContext {
 impl From<FFI_TaskContext> for TaskContext {
     fn from(ffi_ctx: FFI_TaskContext) -> Self {
         unsafe {
+            if (ffi_ctx.library_marker_id)() == crate::get_library_marker_id() {
+                return ffi_ctx.inner().clone();
+            }
+
             let task_id = (ffi_ctx.task_id)(&ffi_ctx).map(|s| s.to_string()).into();
             let sesion_id = (ffi_ctx.session_id)(&ffi_ctx).into();
             let session_config = (ffi_ctx.session_config)(&ffi_ctx);
