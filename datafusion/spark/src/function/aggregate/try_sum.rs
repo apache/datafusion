@@ -31,17 +31,17 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct TrySumFunction {
+pub struct SparkTrySum {
     signature: Signature,
 }
 
-impl Default for TrySumFunction {
+impl Default for SparkTrySum {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TrySumFunction {
+impl SparkTrySum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Immutable),
@@ -49,9 +49,9 @@ impl TrySumFunction {
     }
 }
 
-impl Debug for TrySumFunction {
+impl Debug for SparkTrySum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrySumFunction")
+        f.debug_struct("SparkTrySum")
             .field("signature", &self.signature)
             .finish()
     }
@@ -314,7 +314,7 @@ fn exceeds_decimal128_precision(sum: i128, p: u8) -> bool {
     }
 }
 
-impl AggregateUDFImpl for TrySumFunction {
+impl AggregateUDFImpl for SparkTrySum {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn try_sum_return_type_matches_input() -> Result<()> {
-        let f = TrySumFunction::new();
+        let f = SparkTrySum::new();
         assert_eq!(f.return_type(&[DataType::Int64])?, DataType::Int64);
         assert_eq!(f.return_type(&[DataType::Float64])?, DataType::Float64);
         Ok(())
@@ -645,7 +645,7 @@ mod tests {
     #[test]
     fn decimal_10_2_sum_and_schema_widened() -> Result<()> {
         // input: DECIMAL(10,2)  -> result: DECIMAL(20,2)
-        let f = TrySumFunction::new();
+        let f = SparkTrySum::new();
         assert_eq!(
             f.return_type(&[DataType::Decimal128(10, 2)])?,
             DataType::Decimal128(20, 2),
@@ -661,7 +661,7 @@ mod tests {
     #[test]
     fn decimal_5_0_fits_after_widening() -> Result<()> {
         // input: DECIMAL(5,0) -> result: DECIMAL(15,0)
-        let f = TrySumFunction::new();
+        let f = SparkTrySum::new();
         assert_eq!(
             f.return_type(&[DataType::Decimal128(5, 0)])?,
             DataType::Decimal128(15, 0)
@@ -678,7 +678,7 @@ mod tests {
 
     #[test]
     fn decimal_38_0_max_precision_overflows_to_null() -> Result<()> {
-        let f = TrySumFunction::new();
+        let f = SparkTrySum::new();
         assert_eq!(
             f.return_type(&[DataType::Decimal128(38, 0)])?,
             DataType::Decimal128(38, 0)

@@ -37,7 +37,7 @@ pub fn avg() -> Arc<AggregateUDF> {
     Arc::new(AggregateUDF::new_from_impl(avg::SparkAvg::new()))
 }
 pub fn try_sum() -> Arc<AggregateUDF> {
-    Arc::new(AggregateUDF::new_from_impl(try_sum::TrySumFunction::new()))
+    Arc::new(AggregateUDF::new_from_impl(try_sum::SparkTrySum::new()))
 }
 
 pub fn functions() -> Vec<Arc<AggregateUDF>> {
