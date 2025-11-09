@@ -435,6 +435,7 @@ impl DependentJoinRewriter {
             let right_id = stack_with_subquery[i];
             let left_id = stack_with_table_provider[i];
 
+
             if right_id == left_id {
                 // common parent
                 lowest_common_ancestor = right_id;
@@ -489,7 +490,7 @@ impl DependentJoinRewriter {
         field: &FieldRef,
         col: &Column,
     ) {
-        // iter from bottom to top, the goal is to mark the dependent node
+        // the goal is to mark the dependent node
         // the current child's access
         self.all_outer_ref_columns
             .entry(col.clone())
@@ -661,6 +662,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         // for each node, find which column it is accessing, which column it is providing
         // Set of columns current node access
         let mut subquery_types = VecDeque::new();
+        let mut stop = false;
         match &node {
             LogicalPlan::Filter(f) => {
                 collect_subquery_types(
@@ -852,6 +854,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 alias.schema.columns().iter().try_for_each(|col| {
                     self.conclude_lowest_dependent_join_node_if_any(new_id, col)
                 })?;
+                stop = true;
             }
             _ => {}
         };
@@ -871,6 +874,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 is_lateral_join: false,
             },
         );
+        if stop{
+            return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+        }
 
         Ok(Transformed::no(node))
     }

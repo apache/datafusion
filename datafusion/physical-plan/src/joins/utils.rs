@@ -481,7 +481,7 @@ fn estimate_join_cardinality(
             // it is greater than the minimum cardinality constraints of these
             // joins (so that we don't underestimate the cardinality).
             let cardinality = match join_type {
-                JoinType::Inner => ij_cardinality,
+                JoinType::Inner|JoinType::LeftSingle => ij_cardinality,
                 JoinType::Left => ij_cardinality.max(&left_stats.num_rows),
                 JoinType::Right => ij_cardinality.max(&right_stats.num_rows),
                 JoinType::Full => ij_cardinality
