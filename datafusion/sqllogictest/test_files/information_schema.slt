@@ -314,6 +314,10 @@ datafusion.optimizer.repartition_sorts true
 datafusion.optimizer.repartition_windows true
 datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
+datafusion.runtime.max_temp_directory_size 100G
+datafusion.runtime.memory_limit unlimited
+datafusion.runtime.metadata_cache_limit 50M
+datafusion.runtime.temp_directory NULL
 datafusion.sql_parser.collect_spans false
 datafusion.sql_parser.default_null_ordering nulls_max
 datafusion.sql_parser.dialect generic
