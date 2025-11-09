@@ -49,7 +49,7 @@ jobs:
           filters: |
             code:
               - '**'
-              - '!**.md'
+              - '!**/*.md'
               - '!docs/**'
               - '!.github/ISSUE_TEMPLATE/**'
               - '!.github/pull_request_template.md'
