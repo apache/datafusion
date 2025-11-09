@@ -178,33 +178,31 @@ impl RuntimeEnv {
     pub fn config_entries(&self) -> Vec<ConfigEntry> {
         use crate::memory_pool::MemoryLimit;
 
-        let memory_limit_value = match self.memory_pool.memory_limit() {
-            MemoryLimit::Finite(size) => {
-                // Convert bytes to a human-readable format
-                if size >= 1024 * 1024 * 1024 {
-                    Some(format!("{}G", size / (1024 * 1024 * 1024)))
-                } else if size >= 1024 * 1024 {
-                    Some(format!("{}M", size / (1024 * 1024)))
-                } else if size >= 1024 {
-                    Some(format!("{}K", size / 1024))
-                } else {
-                    Some(format!("{}", size))
-                }
+        /// Convert bytes to a human-readable format
+        fn format_byte_size(size: u64) -> String {
+            const GB: u64 = 1024 * 1024 * 1024;
+            const MB: u64 = 1024 * 1024;
+            const KB: u64 = 1024;
+
+            match size {
+                s if s >= GB => format!("{}G", s / GB),
+                s if s >= MB => format!("{}M", s / MB),
+                s if s >= KB => format!("{}K", s / KB),
+                s => format!("{s}"),
             }
+        }
+
+        let memory_limit_value = match self.memory_pool.memory_limit() {
+            MemoryLimit::Finite(size) => Some(format_byte_size(
+                size.try_into()
+                    .expect("Memory limit size conversion failed"),
+            )),
             MemoryLimit::Infinite => Some("unlimited".to_string()),
             MemoryLimit::Unknown => None,
         };
 
         let max_temp_dir_size = self.disk_manager.max_temp_directory_size();
-        let max_temp_dir_value = if max_temp_dir_size >= 1024 * 1024 * 1024 {
-            format!("{}G", max_temp_dir_size / (1024 * 1024 * 1024))
-        } else if max_temp_dir_size >= 1024 * 1024 {
-            format!("{}M", max_temp_dir_size / (1024 * 1024))
-        } else if max_temp_dir_size >= 1024 {
-            format!("{}K", max_temp_dir_size / 1024)
-        } else {
-            format!("{}", max_temp_dir_size)
-        };
+        let max_temp_dir_value = format_byte_size(max_temp_dir_size);
 
         let temp_paths = self.disk_manager.temp_dir_paths();
         let temp_dir_value = if temp_paths.is_empty() {
@@ -220,15 +218,11 @@ impl RuntimeEnv {
         };
 
         let metadata_cache_limit = self.cache_manager.get_metadata_cache_limit();
-        let metadata_cache_value = if metadata_cache_limit >= 1024 * 1024 * 1024 {
-            format!("{}G", metadata_cache_limit / (1024 * 1024 * 1024))
-        } else if metadata_cache_limit >= 1024 * 1024 {
-            format!("{}M", metadata_cache_limit / (1024 * 1024))
-        } else if metadata_cache_limit >= 1024 {
-            format!("{}K", metadata_cache_limit / 1024)
-        } else {
-            format!("{}", metadata_cache_limit)
-        };
+        let metadata_cache_value = format_byte_size(
+            metadata_cache_limit
+                .try_into()
+                .expect("Metadata cache size conversion failed"),
+        );
 
         vec![
             ConfigEntry {

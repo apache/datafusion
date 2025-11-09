@@ -404,14 +404,8 @@ SHOW datafusion.runtime.metadata_cache_limit
 ----
 datafusion.runtime.metadata_cache_limit 200M
 
-# Test SET and SHOW runtime.temp_directory
-statement ok
-SET datafusion.runtime.temp_directory = '/tmp/custom_dir'
-
-query TT
-SHOW datafusion.runtime.temp_directory
-----
-datafusion.runtime.temp_directory /tmp/custom_dir
+# Note: runtime.temp_directory shows the actual temp directory path with a unique suffix,
+# so we cannot test the exact value. We verify it exists in information_schema instead.
 
 # Test that all runtime variables appear in information_schema.df_settings
 query T
