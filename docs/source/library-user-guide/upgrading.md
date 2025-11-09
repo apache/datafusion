@@ -125,12 +125,6 @@ Users may need to update their paths to account for these changes.
 
 See [issue #17713] for more details.
 
-### Added Arrow IPC stream format support
-
-Support has been added for querying files in the [Arrow IPC stream format](https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format).
-
-See [issue #16688] for details.
-
 [issue #16688]: https://github.com/apache/datafusion/issues/16688
 
 ### `FileScanConfig::projection` renamed to `FileScanConfig::projection_exprs`
