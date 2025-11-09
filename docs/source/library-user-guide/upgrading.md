@@ -125,8 +125,6 @@ Users may need to update their paths to account for these changes.
 
 See [issue #17713] for more details.
 
-[issue #16688]: https://github.com/apache/datafusion/issues/16688
-
 ### `FileScanConfig::projection` renamed to `FileScanConfig::projection_exprs`
 
 The `projection` field in `FileScanConfig` has been renamed to `projection_exprs` and its type has changed from `Option<Vec<usize>>` to `Option<ProjectionExprs>`. This change enables more powerful projection pushdown capabilities by supporting arbitrary physical expressions rather than just column indices.
