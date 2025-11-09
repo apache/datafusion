@@ -40,7 +40,7 @@ use std::sync::Arc;
 /// Returns NULL if input is NULL, returns NaN if input is NaN.
 ///
 /// Differences with DataFusion abs:
-///  - Spark's ANSI-compliant dialect, when off (i.e. `spark.sql.ansi.enabled=false`), taking absolute values on minimal values of signed integers returns the value as is. DataFusion's abs throws "DataFusion error: Arrow error: Compute error" on arithmetic overflow
+///  - Spark's ANSI-compliant dialect, when off (i.e. `spark.sql.ansi.enabled=false`), taking absolute value on the minimal value of a signed integer returns the value as is. DataFusion's abs throws "DataFusion error: Arrow error: Compute error" on arithmetic overflow
 ///  - Spark's abs also supports ANSI interval types: YearMonthIntervalType and DayTimeIntervalType. DataFusion's abs doesn't.
 ///
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -109,7 +109,7 @@ impl ScalarUDFImpl for SparkAbs {
                 } else {
                     Err(unsupported_data_type_exec_err(
                         "abs",
-                        "Numeric Type or Interval Type",
+                        "Numeric Type or ANSI Interval Type",
                         &arg_types[0],
                     ))
                 }
