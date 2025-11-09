@@ -41,7 +41,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::take_arrays;
+use arrow::compute::{take_arrays, BatchCoalescer};
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
@@ -1194,8 +1194,17 @@ impl RepartitionExec {
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
     ) -> Result<()> {
+        let is_hash_partitioning = matches!(&partitioning, Partitioning::Hash(_, _));
         let mut partitioner =
             BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
+
+        let mut coalesce_batches = vec![];
+
+        if is_hash_partitioning {
+            for _ in 0..output_channels.len() {
+                coalesce_batches.push(BatchCoalescer::new(stream.schema(), 4096));
+            }
+        }
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
@@ -1217,7 +1226,20 @@ impl RepartitionExec {
             }
 
             for res in partitioner.partition_iter(batch)? {
-                let (partition, batch) = res?;
+                let (partition, mut batch) = res?;
+                if is_hash_partitioning {
+                    let coalesce_batches_partition = &mut coalesce_batches[partition];
+                    coalesce_batches_partition.push_batch(batch)?;
+
+                    if coalesce_batches_partition.has_completed_batch() {
+                        batch = coalesce_batches_partition
+                            .next_completed_batch()
+                            .expect("has_completed_batch returned true");
+                    } else {
+                        // skip sending this batch
+                        continue;
+                    }
+                }
                 let size = batch.get_array_memory_size();
 
                 let timer = metrics.send_time[partition].timer();
@@ -1271,6 +1293,40 @@ impl RepartitionExec {
                 batches_until_yield = partitioner.num_partitions();
             } else {
                 batches_until_yield -= 1;
+            }
+        }
+
+        if is_hash_partitioning {
+            // flush any remaining coalesced batches
+            for (partition, coalesce_batch) in coalesce_batches.iter_mut().enumerate() {
+                while let Some(batch) = coalesce_batch.next_completed_batch() {
+                    let size = batch.get_array_memory_size();
+                    let channel = output_channels.get_mut(&partition).unwrap();
+
+                    let (batch_to_send, is_memory_batch) =
+                        match channel.reservation.lock().try_grow(size) {
+                            Ok(_) => {
+                                // Memory available - send in-memory batch
+                                (RepartitionBatch::Memory(batch), true)
+                            }
+                            Err(_) => {
+                                // We're memory limited - spill to SpillPool
+                                // SpillPool handles file handle reuse and rotation
+                                channel.spill_writer.push_batch(&batch)?;
+                                // Send marker indicating batch was spilled
+                                (RepartitionBatch::Spilled, false)
+                            }
+                        };
+
+                    if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
+                        // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                        // Only shrink memory if it was a memory batch
+                        if is_memory_batch {
+                            channel.reservation.lock().shrink(size);
+                        }
+                        output_channels.remove(&partition);
+                    }
+                }
             }
         }
 
