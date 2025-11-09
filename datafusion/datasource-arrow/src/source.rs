@@ -252,6 +252,7 @@ impl FileSource for ArrowStreamFileSource {
     }
 }
 
+/// `FileOpener` for Arrow IPC stream format. Supports only sequential reading.
 pub(crate) struct ArrowStreamFileOpener {
     object_store: Arc<dyn ObjectStore>,
     projection: Option<Vec<usize>>,
@@ -292,6 +293,7 @@ impl FileOpener for ArrowStreamFileOpener {
     }
 }
 
+/// `FileOpener` for Arrow IPC file format. Supports range-based parallel reading.
 pub(crate) struct ArrowFileOpener {
     object_store: Arc<dyn ObjectStore>,
     projection: Option<Vec<usize>>,
