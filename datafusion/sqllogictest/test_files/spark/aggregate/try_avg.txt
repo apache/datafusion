@@ -1,0 +1,88 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# Básicos
+
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (1), (2), (3) AS tab(x);
+----
+
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (NULL), (2), (NULL) AS tab(x);
+----
+
+query
+SELECT try_avg(CAST(x AS BIGINT)) AS avg_x FROM VALUES (9223372036854775807), (1) AS tab(x);
+----
+
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (1.5), (2.5), (3.0) AS tab(x);
+----
+
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (1e308), (1e308) AS tab(x);
+----
+
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (double('nan')), (1.0) AS tab(x);
+----
+
+
+# Decimales
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (DECIMAL(10,2)(1.23)), (DECIMAL(10,2)(4.77)) AS tab(x);
+----
+
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (DECIMAL(10,2)(1.00)), (CAST(NULL AS DECIMAL(10,2))), (DECIMAL(10,2)(2.50)) AS tab(x);
+----
+
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (DECIMAL(5,0)(90000)), (DECIMAL(5,0)(20000)) AS tab(x);
+----
+
+query
+SELECT try_avg(x) AS avg_x FROM VALUES (DECIMAL(38,0)('1' * 38)) AS tab(x);
+----
+
+# Agrupaciones
+
+query
+SELECT g, try_avg(x) AS avg_x
+FROM VALUES
+  ('bad', 9223372036854775807),
+  ('bad', 1),
+  ('ok', 10),
+  ('ok', NULL),
+  ('ok', 5)
+AS tab(g, x)
+GROUP BY g
+ORDER BY g;
+----
+
+# Intervalos
+SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col);
+----
+
+query
+SELECT try_avg(col) FROM VALUES (interval '7 months'), (interval '1 months') AS tab(col);
+----
+
+query
+SELECT try_avg(col) FROM VALUES (interval '10 months'), (CAST(NULL AS interval year to month)), (interval '5 months') AS tab(col);
+----
