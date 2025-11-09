@@ -16,6 +16,18 @@
 // under the License.
 
 //! Execution plan for reading Arrow IPC files
+//!
+//! # Naming Note
+//!
+//! The naming in this module can be confusing:
+//! - `ArrowFileSource` / `ArrowFileOpener` handle the Arrow IPC **file format**
+//!   (with footer, supports parallel reading)
+//! - `ArrowStreamFileSource` / `ArrowStreamFileOpener` handle the Arrow IPC **stream format**
+//!   (without footer, sequential only)
+//!
+//! Despite the name "ArrowStreamFileSource", it still reads from files - the "Stream"
+//! refers to the Arrow IPC stream format, not streaming I/O. Both formats can be stored
+//! in files on disk or object storage.
 
 use std::sync::Arc;
 use std::{any::Any, io::Cursor};
