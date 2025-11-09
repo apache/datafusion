@@ -118,8 +118,41 @@ impl ScalarUDFImpl for SparkAbs {
     }
 }
 
-fn arithmetic_overflow_error(from_type: &str) -> DataFusionError {
-    DataFusionError::Execution(format!("overflow on abs {from_type}"))
+macro_rules! scalar_compute_op {
+    ($FLAG:expr, $INPUT:ident, $SCALAR_TYPE:ident) => {{
+        let result = if !$FLAG {
+            $INPUT.wrapping_abs()
+        } else {
+            $INPUT.checked_abs().ok_or_else(|| {
+                ArrowError::ComputeError(format!(
+                    "{} overflow on abs({:?})",
+                    stringify!($SCALAR_TYPE),
+                    $INPUT
+                ))
+            })?
+        };
+        Ok(ColumnarValue::Scalar(ScalarValue::$SCALAR_TYPE(Some(
+            result,
+        ))))
+    }};
+    ($FLAG:expr, $INPUT:ident, $PRECISION:expr, $SCALE:expr, $SCALAR_TYPE:ident) => {{
+        let result = if !$FLAG {
+            $INPUT.wrapping_abs()
+        } else {
+            $INPUT.checked_abs().ok_or_else(|| {
+                ArrowError::ComputeError(format!(
+                    "{} overflow on abs({:?})",
+                    stringify!($SCALAR_TYPE),
+                    $INPUT
+                ))
+            })?
+        };
+        Ok(ColumnarValue::Scalar(ScalarValue::$SCALAR_TYPE(
+            Some(result),
+            $PRECISION,
+            $SCALE,
+        )))
+    }};
 }
 
 pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
@@ -245,67 +278,19 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             | ScalarValue::UInt64(_) => Ok(args[0].clone()),
             ScalarValue::Int8(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => match v.checked_abs() {
-                    Some(abs_val) => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(abs_val))))
-                    }
-                    None => {
-                        if !fail_on_error {
-                            // return the original value
-                            Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(*v))))
-                        } else {
-                            Err(arithmetic_overflow_error("Int8"))
-                        }
-                    }
-                },
+                Some(v) => scalar_compute_op!(fail_on_error, v, Int8),
             },
             ScalarValue::Int16(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => match v.checked_abs() {
-                    Some(abs_val) => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(abs_val))))
-                    }
-                    None => {
-                        if !fail_on_error {
-                            // return the original value
-                            Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(*v))))
-                        } else {
-                            Err(arithmetic_overflow_error("Int16"))
-                        }
-                    }
-                },
+                Some(v) => scalar_compute_op!(fail_on_error, v, Int16),
             },
             ScalarValue::Int32(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => match v.checked_abs() {
-                    Some(abs_val) => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(abs_val))))
-                    }
-                    None => {
-                        if !fail_on_error {
-                            // return the original value
-                            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(*v))))
-                        } else {
-                            Err(arithmetic_overflow_error("Int32"))
-                        }
-                    }
-                },
+                Some(v) => scalar_compute_op!(fail_on_error, v, Int32),
             },
             ScalarValue::Int64(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => match v.checked_abs() {
-                    Some(abs_val) => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(abs_val))))
-                    }
-                    None => {
-                        if !fail_on_error {
-                            // return the original value
-                            Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(*v))))
-                        } else {
-                            Err(arithmetic_overflow_error("Int64"))
-                        }
-                    }
-                },
+                Some(v) => scalar_compute_op!(fail_on_error, v, Int64),
             },
             ScalarValue::Float32(a) => match a {
                 None => Ok(args[0].clone()),
@@ -315,85 +300,25 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 None => Ok(args[0].clone()),
                 Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(v.abs())))),
             },
-            ScalarValue::Decimal128(a, precision, scale) => {
-                match a {
-                    None => Ok(args[0].clone()),
-                    Some(v) => match v.checked_abs() {
-                        Some(abs_val) => Ok(ColumnarValue::Scalar(
-                            ScalarValue::Decimal128(Some(abs_val), *precision, *scale),
-                        )),
-                        None => {
-                            if !fail_on_error {
-                                // return the original value
-                                Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
-                                    Some(*v),
-                                    *precision,
-                                    *scale,
-                                )))
-                            } else {
-                                Err(arithmetic_overflow_error("Decimal128"))
-                            }
-                        }
-                    },
+            ScalarValue::Decimal128(a, precision, scale) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => {
+                    scalar_compute_op!(fail_on_error, v, *precision, *scale, Decimal128)
                 }
-            }
-            ScalarValue::Decimal256(a, precision, scale) => {
-                match a {
-                    None => Ok(args[0].clone()),
-                    Some(v) => match v.checked_abs() {
-                        Some(abs_val) => Ok(ColumnarValue::Scalar(
-                            ScalarValue::Decimal256(Some(abs_val), *precision, *scale),
-                        )),
-                        None => {
-                            if !fail_on_error {
-                                // return the original value
-                                Ok(ColumnarValue::Scalar(ScalarValue::Decimal256(
-                                    Some(*v),
-                                    *precision,
-                                    *scale,
-                                )))
-                            } else {
-                                Err(arithmetic_overflow_error("Decimal256"))
-                            }
-                        }
-                    },
+            },
+            ScalarValue::Decimal256(a, precision, scale) => match a {
+                None => Ok(args[0].clone()),
+                Some(v) => {
+                    scalar_compute_op!(fail_on_error, v, *precision, *scale, Decimal256)
                 }
-            }
+            },
             ScalarValue::IntervalYearMonth(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => match v.checked_abs() {
-                    Some(abs_val) => Ok(ColumnarValue::Scalar(
-                        ScalarValue::IntervalYearMonth(Some(abs_val)),
-                    )),
-                    None => {
-                        if !fail_on_error {
-                            // return the original value
-                            Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(
-                                Some(*v),
-                            )))
-                        } else {
-                            Err(arithmetic_overflow_error("IntervalYearMonth"))
-                        }
-                    }
-                },
+                Some(v) => scalar_compute_op!(fail_on_error, v, IntervalYearMonth),
             },
             ScalarValue::IntervalDayTime(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => match v.checked_abs() {
-                    Some(abs_val) => Ok(ColumnarValue::Scalar(
-                        ScalarValue::IntervalDayTime(Some(abs_val)),
-                    )),
-                    None => {
-                        if !fail_on_error {
-                            // return the original value
-                            Ok(ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                                *v,
-                            ))))
-                        } else {
-                            Err(arithmetic_overflow_error("IntervalYearMonth"))
-                        }
-                    }
-                },
+                Some(v) => scalar_compute_op!(fail_on_error, v, IntervalDayTime),
             },
 
             dt => internal_err!("Not supported datatype for Spark ABS: {dt}"),
