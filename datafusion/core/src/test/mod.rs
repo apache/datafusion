@@ -35,12 +35,15 @@ use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
 
+use datafusion_common::config::CsvOptions;
+
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "compression")]
 use datafusion_common::DataFusionError;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::TableSchema;
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -92,11 +95,17 @@ pub fn scan_partitioned_csv(
         FileCompressionType::UNCOMPRESSED,
         work_dir,
     )?;
-    let source = Arc::new(CsvSource::new(true, b'"', b'"'));
-    let config =
-        FileScanConfigBuilder::from(partitioned_csv_config(schema, file_groups, source))
-            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .build();
+    let options = CsvOptions {
+        has_header: Some(true),
+        delimiter: b',',
+        quote: b'"',
+        ..Default::default()
+    };
+    let table_schema = TableSchema::from_file_schema(schema);
+    let source = Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
+    let config = FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source))
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build();
     Ok(DataSourceExec::from_data_source(config))
 }
 

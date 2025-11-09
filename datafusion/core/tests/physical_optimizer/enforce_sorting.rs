@@ -31,7 +31,7 @@ use crate::physical_optimizer::test_utils::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_common::{Result,  TableReference};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -72,10 +72,15 @@ fn csv_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
+    let options = CsvOptions {
+        has_header: Some(false),
+        delimiter: 0,
+        quote: 0,
+        ..Default::default()
+    };
     let mut builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
-        Arc::new(CsvSource::new(false, 0, 0)),
+        Arc::new(CsvSource::new(schema.clone()).with_csv_options(options)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100));
     if let Some(ordering) = LexOrdering::new(sort_exprs) {

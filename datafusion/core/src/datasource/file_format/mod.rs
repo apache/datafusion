@@ -40,6 +40,7 @@ pub(crate) mod test_util {
     use datafusion_catalog::Session;
     use datafusion_common::Result;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::TableSchema;
     use datafusion_datasource::{file_format::FileFormat, PartitionedFile};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use std::sync::Arc;
@@ -66,6 +67,8 @@ pub(crate) mod test_util {
                 .await?
         };
 
+        let table_schema = TableSchema::new(file_schema.clone(), vec![]);
+
         let statistics = format
             .infer_stats(state, &store, file_schema.clone(), &meta)
             .await?;
@@ -85,8 +88,7 @@ pub(crate) mod test_util {
                 state,
                 FileScanConfigBuilder::new(
                     ObjectStoreUrl::local_filesystem(),
-                    file_schema,
-                    format.file_source(),
+                    format.file_source(table_schema),
                 )
                 .with_file_groups(file_groups)
                 .with_statistics(statistics)
