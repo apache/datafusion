@@ -27,7 +27,8 @@ use crate::aggregates::{
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::filter_pushdown::{
-    ChildFilterDescription, FilterDescription, FilterPushdownPhase, PushedDownPredicate,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
@@ -37,6 +38,7 @@ use crate::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::utils::collect_columns;
+use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
@@ -44,12 +46,14 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
+use datafusion_common::{
+    internal_err, not_impl_err, Constraint, Constraints, Result, ScalarValue,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{lit, Column, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{
     physical_exprs_contains, ConstExpr, EquivalenceProperties,
 };
@@ -389,6 +393,88 @@ impl From<StreamType> for SendableRecordBatchStream {
     }
 }
 
+/// # Overview
+///
+/// For queries like
+///   -- `example_table(type TEXT, val INT)`
+///   SELECT min(val)
+///   FROM example_table
+///   WHERE type='A';
+///
+/// And `example_table`'s physical representation is a partitioned parquet file with
+/// column statistics
+/// - part-0.parquet: val {min=0, max=100}
+/// - part-1.parquet: val {min=100, max=200}
+/// - ...
+/// - part-100.parquet: val {min=10000, max=10100}
+///
+/// After scanning the 1st file, we know we only have to read files if their minimal
+/// value on `val` column is less than 0, the minimal `val` value in the 1st file.
+///
+/// We can skip scanning the remaining file by implementing dynamic filter, the
+/// intuition is we keep a shared data structure for current min in both `AggregateExec
+/// and `DataSourceExec`, and let it update during execution, so the scanner can
+/// know during execution if it's possible to skip scanning certain files. See
+/// physical optimizer rule `FilterPushdown` for details.
+///
+/// # Implementation
+/// ## Enable Condition
+/// - No grouping (no `GROUP BY` clause in the sql, only a single global group to aggregate)
+/// - The aggregate expression must be `min`/`max`, and evaluate directly on columns.
+///   Note multiple aggregate expressions that satisfy this requirement are allowed,
+///   and a dynamic filter will be constructed combining all applicable expr's
+///   states. See more in the following example with dynamic filter on multiple columns.
+/// ## Filter Construction
+/// The filter is kept in the `DataSourceExec`, and it will gets update during execution,
+/// the reader will interpret it as "the upstream only needs rows that such filter
+/// predicate is evaluated to true", and certain scanner implementation like `parquet`
+/// can evalaute column statistics on those dynamic filters, to decide if they can
+/// prune a whole range.
+///
+/// ### Examples
+/// - Expr: `min(a)`, Dynmaic Filter: `a < a_cur_min`
+/// - Expr: `min(a), max(a), min(b)`, Dynamic Filter: `(a < a_cur_min) OR (a > a_cur_max) OR (b < b_cur_min)`
+#[derive(Debug, Clone)]
+struct AggrDynFilter {
+    filter: Arc<DynamicFilterPhysicalExpr>,
+    supported_accumulators_info: Vec<PerAccumulatorDynFilter>,
+    // Inside `AggregateExec`, the dynamic filter is initialized if the operator supports
+    // it, however it do not known if such dynamic filter is able to be pushed down.
+    // If it fails to push down, then this flag is set to `false`, the filter update
+    // operations become no-op.
+    enabled: bool,
+}
+
+impl AggrDynFilter {
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+}
+
+// ---- Aggregate Dynamic Filter Utility Structs ----
+
+/// Aggregate expressions that support the dynamic filter pushdown in aggregation.
+/// See comments in [`AggrDynFilter`] for conditions.
+#[derive(Debug, Clone)]
+struct PerAccumulatorDynFilter {
+    aggr_type: DynamicFilterAggregateType,
+    /// During planning and optimization, the parent structure is kept in `AggregateExec`,
+    /// this index is into `aggr_expr` vec inside `AggregateExec`.
+    /// During execution, the parent struct is moved into `AggregateStream` (stream
+    /// for no grouping aggregate execution), and this index is into    `aggregate_expressions`
+    /// vec inside `AggregateStreamInner`
+    aggr_index: usize,
+    // The current bound
+    shared_bound: Arc<Mutex<ScalarValue>>,
+}
+
+/// Aggregate types that are supported for dynamic filter in `AggregateExec`
+#[derive(Debug, Clone)]
+enum DynamicFilterAggregateType {
+    Min,
+    Max,
+}
+
 /// Hash aggregate execution plan
 #[derive(Debug, Clone)]
 pub struct AggregateExec {
@@ -418,6 +504,8 @@ pub struct AggregateExec {
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
     cache: PlanProperties,
+    /// None if not supported.
+    dynamic_filter: Option<Arc<AggrDynFilter>>,
 }
 
 impl AggregateExec {
@@ -442,6 +530,7 @@ impl AggregateExec {
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
+            dynamic_filter: self.dynamic_filter.clone(),
         }
     }
 
@@ -554,7 +643,7 @@ impl AggregateExec {
             aggr_expr.as_slice(),
         )?;
 
-        Ok(AggregateExec {
+        let mut exec = AggregateExec {
             mode,
             group_by,
             aggr_expr,
@@ -567,7 +656,12 @@ impl AggregateExec {
             limit: None,
             input_order_mode,
             cache,
-        })
+            dynamic_filter: None,
+        };
+
+        exec.init_dynamic_filter();
+
+        Ok(exec)
     }
 
     /// Aggregation mode (full, partial)
@@ -815,6 +909,72 @@ impl AggregateExec {
             }
         }
     }
+
+    /// TODO(now): Polish comment
+    /// Check if dynamic filter is possible for the current plan node.
+    /// - If yes, init one inside `AggregateExec`'s `dynamic_filter` field.
+    /// - If not supported, `self.dynamic_filter` should be kept `None`
+    fn init_dynamic_filter(&mut self) {
+        if (!self.group_by.is_single()) || (!matches!(self.mode, AggregateMode::Partial))
+        {
+            debug_assert!(
+                self.dynamic_filter.is_none(),
+                "The current operator node does not support dynamic filter"
+            );
+            return;
+        }
+
+        // Already initialized.
+        // Question: do we do multiple round of filter pushdown, so that this function
+        // is possible to get called multiple times?
+        if self.dynamic_filter.is_some() {
+            return;
+        }
+
+        // Collect supported accumulators
+        // It is assumed the order of aggregate expressions are not changed from `AggregateExec`
+        // to `AggregateStream`
+        // TODO: validate inside AggregateStream
+        let mut aggr_dyn_filters = Vec::new();
+        // All column references in the dynamic filter, used when initializing the dynamic
+        // filter, and it's used to decide if this dynamic filter is able to get push
+        // through certain node during optimization.
+        let mut all_cols: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
+        for (i, aggr_expr) in self.aggr_expr.iter().enumerate() {
+            // 1. Only `min` or `max` aggregate function
+            let fun_name = aggr_expr.fun().name();
+            // Hack: Cheking function type by name is risky since DataFusion users
+            // might override function with a different implementation.
+            // Need to address in the final version.
+            let aggr_type = if fun_name.eq_ignore_ascii_case("min") {
+                DynamicFilterAggregateType::Min
+            } else if fun_name.eq_ignore_ascii_case("max") {
+                DynamicFilterAggregateType::Max
+            } else {
+                continue;
+            };
+
+            // 2. arg should be only 1 column reference
+            if let [arg] = aggr_expr.expressions().as_slice() {
+                if arg.as_any().is::<Column>() {
+                    all_cols.push(Arc::clone(arg));
+                    aggr_dyn_filters.push(PerAccumulatorDynFilter {
+                        aggr_type,
+                        aggr_index: i,
+                        shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
+                    });
+                }
+            }
+        }
+
+        if !aggr_dyn_filters.is_empty() {
+            self.dynamic_filter = Some(Arc::new(AggrDynFilter {
+                filter: Arc::new(DynamicFilterPhysicalExpr::new(all_cols, lit(true))),
+                supported_accumulators_info: aggr_dyn_filters,
+                enabled: false,
+            }))
+        }
+    }
 }
 
 impl DisplayAs for AggregateExec {
@@ -1003,6 +1163,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.schema),
         )?;
         me.limit = self.limit;
+        me.dynamic_filter = self.dynamic_filter.clone();
 
         Ok(Arc::new(me))
     }
@@ -1036,7 +1197,7 @@ impl ExecutionPlan for AggregateExec {
     /// but do not introduce any new self filters.
     fn gather_filters_for_pushdown(
         &self,
-        _phase: FilterPushdownPhase,
+        phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -1111,7 +1272,41 @@ impl ExecutionPlan for AggregateExec {
                 .map(PushedDownPredicate::unsupported),
         );
 
+        // TODO: add configuration to enable dynamic filter pushdown
+        if matches!(phase, FilterPushdownPhase::Post) {
+            if let Some(self_dyn_filter) = &self.dynamic_filter {
+                let dyn_filter = Arc::clone(&self_dyn_filter.filter);
+                child_desc = child_desc.with_self_filter(dyn_filter);
+            }
+        }
+
         Ok(FilterDescription::new().with_child(child_desc))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
+
+        let child_self_filter = &child_pushdown_result.self_filters[0]; // Only have 1 child
+
+        if let Some(_filter) = child_self_filter.first() {
+            let mut new_node = self.clone();
+            if let Some(dynamic_filter) = new_node.dynamic_filter.as_mut() {
+                // Now the filter is owned exclusively during optimization, it's wrapped
+                // with `Arc` because later in execution, it will be shared among
+                // streams, so it's safe to mutate now.
+                let inner = Arc::make_mut(dynamic_filter);
+                inner.enable();
+            }
+            result =
+                result.with_updated_node(Arc::new(new_node) as Arc<dyn ExecutionPlan>);
+        }
+
+        Ok(result)
     }
 }
 
