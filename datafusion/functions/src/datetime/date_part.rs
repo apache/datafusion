@@ -236,7 +236,7 @@ impl ScalarUDFImpl for DatePartFunc {
             }
         } else if let Timestamp(time_unit, None) = array.data_type() {
             // For naive timestamps, interpret in session timezone
-            let tz: Tz = config.execution.time_zone.parse().map_err(|_| {
+            let tz: Tz = config.execution.time_zone.as_str().parse().map_err(|_| {
                 DataFusionError::Execution("Invalid timezone".to_string())
             })?;
             match time_unit {
