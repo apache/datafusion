@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
@@ -50,6 +51,8 @@ pub struct FFI_WeakFunctionRegistry {
         unsafe extern "C" fn(&Self, name: RString) -> RResult<FFI_AggregateUDF, RString>,
     pub udwf:
         unsafe extern "C" fn(&Self, name: RString) -> RResult<FFI_WindowUDF, RString>,
+
+    pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the registry. This should
     /// only need to be called by the receiver of the plan.
@@ -125,7 +128,10 @@ unsafe extern "C" fn udaf_fn_wrapper(
 ) -> RResult<FFI_AggregateUDF, RString> {
     let inner = rresult_return!(registry.inner());
     let udaf = rresult_return!(inner.udaf(name.as_str()));
-    RResult::ROk(FFI_AggregateUDF::from(udaf))
+    RResult::ROk(FFI_AggregateUDF::new(
+        udaf,
+        registry.task_ctx_accessor.clone(),
+    ))
 }
 unsafe extern "C" fn udwf_fn_wrapper(
     registry: &FFI_WeakFunctionRegistry,
@@ -133,7 +139,7 @@ unsafe extern "C" fn udwf_fn_wrapper(
 ) -> RResult<FFI_WindowUDF, RString> {
     let inner = rresult_return!(registry.inner());
     let udwf = rresult_return!(inner.udwf(name.as_str()));
-    RResult::ROk(FFI_WindowUDF::from(udwf))
+    RResult::ROk(FFI_WindowUDF::new(udwf, registry.task_ctx_accessor.clone()))
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_WeakFunctionRegistry) {
@@ -162,6 +168,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
+        task_ctx_accessor: provider.task_ctx_accessor.clone(),
         private_data,
         library_marker_id: crate::get_library_marker_id,
     }
@@ -173,9 +180,12 @@ impl Drop for FFI_WeakFunctionRegistry {
     }
 }
 
-impl From<Arc<dyn FunctionRegistry + Send + Sync>> for FFI_WeakFunctionRegistry {
+impl FFI_WeakFunctionRegistry {
     /// Creates a new [`FFI_WeakFunctionRegistry`].
-    fn from(registry: Arc<dyn FunctionRegistry + Send + Sync>) -> Self {
+    pub fn new(
+        registry: Arc<dyn FunctionRegistry + Send + Sync>,
+        task_ctx_accessor: FFI_TaskContextAccessor,
+    ) -> Self {
         let registry = Arc::downgrade(&registry);
         let private_data = Box::new(RegistryPrivateData { registry });
 
@@ -188,6 +198,7 @@ impl From<Arc<dyn FunctionRegistry + Send + Sync>> for FFI_WeakFunctionRegistry 
             udaf: udaf_fn_wrapper,
             udwf: udwf_fn_wrapper,
 
+            task_ctx_accessor,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -345,6 +356,7 @@ impl FunctionRegistry for ForeignWeakFunctionRegistry {
 mod tests {
     use super::*;
     use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextAccessor;
     use datafusion_expr::registry::FunctionRegistry;
 
     #[tokio::test]
@@ -352,8 +364,10 @@ mod tests {
         let ctx = Arc::new(SessionContext::new());
         let function_registry =
             Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
-        let mut ffi_registry = FFI_WeakFunctionRegistry::from(function_registry);
+        let mut ffi_registry =
+            FFI_WeakFunctionRegistry::new(function_registry, task_ctx_accessor.into());
         ffi_registry.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_registry: Arc<dyn FunctionRegistry + Send + Sync> =

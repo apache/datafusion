@@ -22,7 +22,7 @@ mod tests {
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
     use datafusion_catalog::{CatalogProvider, TableProvider};
-    use datafusion_expr::registry::FunctionRegistry;
+    use datafusion_execution::TaskContextAccessor;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
@@ -34,8 +34,7 @@ mod tests {
         let table_provider_module = get_module()?;
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry =
-            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
         // By calling the code below, the table provided will be created within
         // the module's code.
@@ -43,7 +42,7 @@ mod tests {
             DataFusionError::NotImplemented(
                 "External table provider failed to implement create_table".to_string(),
             ),
-        )?(synchronous, function_registry.into());
+        )?(synchronous, task_ctx_accessor.into());
 
         // In order to access the table provider within this executable, we need to
         // turn it into a `ForeignTableProvider`.
@@ -76,8 +75,7 @@ mod tests {
     async fn test_catalog() -> Result<()> {
         let module = get_module()?;
         let ctx = Arc::new(SessionContext::default());
-        let function_registry =
-            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
         let ffi_catalog =
             module
@@ -85,7 +83,7 @@ mod tests {
                 .ok_or(DataFusionError::NotImplemented(
                     "External catalog provider failed to implement create_catalog"
                         .to_string(),
-                ))?(function_registry.into());
+                ))?(task_ctx_accessor.into());
         let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 
         let _ = ctx.register_catalog("fruit", foreign_catalog);

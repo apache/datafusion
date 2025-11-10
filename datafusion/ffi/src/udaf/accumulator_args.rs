@@ -18,21 +18,27 @@
 use std::sync::Arc;
 
 use crate::arrow_wrappers::WrappedSchema;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use abi_stable::{
     std_types::{RString, RVec},
     StableAbi,
 };
 use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
-use prost::Message;
 use datafusion_common::error::DataFusionError;
 use datafusion_common::exec_datafusion_err;
+use datafusion_execution::TaskContext;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_proto::physical_plan::from_proto::{
+    parse_physical_exprs, parse_physical_sort_exprs,
+};
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_physical_exprs, serialize_physical_sort_exprs,
+};
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
-use datafusion_proto::physical_plan::from_proto::{parse_physical_exprs, parse_physical_sort_exprs};
-use datafusion_proto::physical_plan::to_proto::{serialize_physical_exprs, serialize_physical_sort_exprs};
 use datafusion_proto::protobuf::PhysicalAggregateExprNode;
+use prost::Message;
 
 /// A stable struct for sharing [`AccumulatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding field
@@ -48,12 +54,14 @@ pub struct FFI_AccumulatorArgs {
     is_reversed: bool,
     name: RString,
     physical_expr_def: RVec<u8>,
+    task_ctx_accessor: FFI_TaskContextAccessor,
 }
 
-impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
-    type Error = DataFusionError;
-
-    fn try_from(args: AccumulatorArgs) -> Result<Self, Self::Error> {
+impl FFI_AccumulatorArgs {
+    pub fn try_new(
+        args: AccumulatorArgs,
+        task_ctx_accessor: FFI_TaskContextAccessor,
+    ) -> Result<Self, DataFusionError> {
         let return_field =
             WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
@@ -83,6 +91,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             is_distinct: args.is_distinct,
             name: args.name.into(),
             physical_expr_def,
+            task_ctx_accessor,
         })
     }
 }
@@ -110,14 +119,14 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
         let proto_def = PhysicalAggregateExprNode::decode(
             value.physical_expr_def.as_ref(),
         )
-            .map_err(|e| {
-                exec_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {e}")
-            })?;
+        .map_err(|e| {
+            exec_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {e}")
+        })?;
 
         let return_field = Arc::new((&value.return_field.0).try_into()?);
         let schema = Schema::try_from(&value.schema.0)?;
 
-        let task_ctx = default_ctx.task_ctx();
+        let task_ctx: Arc<TaskContext> = (&value.task_ctx_accessor).try_into()?;
         let codex = DefaultPhysicalExtensionCodec {};
 
         let order_bys = parse_physical_sort_exprs(
@@ -128,9 +137,6 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
         )?;
 
         let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
-
-        let return_field = Arc::new((&value.return_field.0).try_into()?);
-        let schema = Schema::try_from(&value.schema.0)?;
 
         let expr_fields = exprs
             .iter()
@@ -171,10 +177,13 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
 mod tests {
     use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::prelude::SessionContext;
     use datafusion::{
         error::Result, logical_expr::function::AccumulatorArgs,
         physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
     };
+    use datafusion_execution::TaskContextAccessor;
+    use std::sync::Arc;
 
     #[test]
     fn test_round_trip_accumulator_args() -> Result<()> {
@@ -191,8 +200,10 @@ mod tests {
             exprs: &[col("a", &schema)?],
         };
         let orig_str = format!("{orig_args:?}");
+        let task_ctx_accessor =
+            Arc::new(SessionContext::new()) as Arc<dyn TaskContextAccessor>;
 
-        let ffi_args: FFI_AccumulatorArgs = orig_args.try_into()?;
+        let ffi_args = FFI_AccumulatorArgs::try_new(orig_args, task_ctx_accessor.into())?;
         let foreign_args: ForeignAccumulatorArgs = ffi_args.try_into()?;
         let round_trip_args: AccumulatorArgs = (&foreign_args).into();
 

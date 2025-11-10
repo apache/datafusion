@@ -27,12 +27,11 @@ use datafusion_catalog::{SchemaProvider, TableProvider};
 use datafusion_common::error::{DataFusionError, Result};
 use tokio::runtime::Handle;
 
-use crate::function_registry::FFI_WeakFunctionRegistry;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::{
     df_result, rresult_return,
     table_provider::{FFI_TableProvider, ForeignTableProvider},
 };
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing [`SchemaProvider`] across FFI boundaries.
 #[repr(C)]
@@ -65,7 +64,6 @@ pub struct FFI_SchemaProvider {
 
     pub table_exist: unsafe extern "C" fn(provider: &Self, name: RString) -> bool,
 
-    pub function_registry: FFI_WeakFunctionRegistry,
     pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the execution plan. This should
@@ -120,14 +118,13 @@ unsafe extern "C" fn table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
 ) -> FfiFuture<RResult<ROption<FFI_TableProvider>, RString>> {
-    let function_registry = provider.function_registry.clone();
     let task_ctx_accessor = provider.task_ctx_accessor.clone();
     let runtime = provider.runtime();
     let provider = Arc::clone(provider.inner());
 
     async move {
         let table = rresult_return!(provider.table(name.as_str()).await)
-            .map(|t| FFI_TableProvider::new(t, true, runtime, function_registry, task_ctx_accessor))
+            .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_accessor))
             .into();
 
         RResult::ROk(table)
@@ -141,14 +138,13 @@ unsafe extern "C" fn register_table_fn_wrapper(
     table: FFI_TableProvider,
 ) -> RResult<ROption<FFI_TableProvider>, RString> {
     let runtime = provider.runtime();
-    let function_registry = provider.function_registry.clone();
     let task_ctx_accessor = provider.task_ctx_accessor.clone();
     let provider = provider.inner();
 
     let table = Arc::new(ForeignTableProvider(table));
 
     let returned_table = rresult_return!(provider.register_table(name.into(), table))
-        .map(|t| FFI_TableProvider::new(t, true, runtime, function_registry, task_ctx_accessor));
+        .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_accessor));
 
     RResult::ROk(returned_table.into())
 }
@@ -157,13 +153,12 @@ unsafe extern "C" fn deregister_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
 ) -> RResult<ROption<FFI_TableProvider>, RString> {
-    let function_registry = provider.function_registry.clone();
     let task_ctx_accessor = provider.task_ctx_accessor.clone();
     let runtime = provider.runtime();
     let provider = provider.inner();
 
     let returned_table = rresult_return!(provider.deregister_table(name.as_str()))
-        .map(|t| FFI_TableProvider::new(t, true, runtime, function_registry, task_ctx_accessor));
+        .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_accessor));
 
     RResult::ROk(returned_table.into())
 }
@@ -202,7 +197,6 @@ unsafe extern "C" fn clone_fn_wrapper(
         register_table: register_table_fn_wrapper,
         deregister_table: deregister_table_fn_wrapper,
         table_exist: table_exist_fn_wrapper,
-        function_registry: provider.function_registry.clone(),
         task_ctx_accessor: provider.task_ctx_accessor.clone(),
         library_marker_id: crate::get_library_marker_id,
     }
@@ -219,7 +213,6 @@ impl FFI_SchemaProvider {
     pub fn new(
         provider: Arc<dyn SchemaProvider + Send>,
         runtime: Option<Handle>,
-        function_registry: FFI_WeakFunctionRegistry,
         task_ctx_accessor: FFI_TaskContextAccessor,
     ) -> Self {
         let owner_name = provider.owner_name().map(|s| s.into()).into();
@@ -236,7 +229,6 @@ impl FFI_SchemaProvider {
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
-            function_registry,
             task_ctx_accessor,
             library_marker_id: crate::get_library_marker_id,
         }
@@ -315,7 +307,6 @@ impl SchemaProvider for ForeignSchemaProvider {
                     table,
                     true,
                     None,
-                    self.0.function_registry.clone(),
                     self.0.task_ctx_accessor.clone(),
                 ),
             };
@@ -351,7 +342,6 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
     use datafusion_execution::TaskContextAccessor;
-    use datafusion_expr::registry::FunctionRegistry;
 
     fn empty_table() -> Arc<dyn TableProvider> {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
@@ -366,12 +356,10 @@ mod tests {
             .unwrap()
             .is_none());
         let ctx = Arc::new(SessionContext::new());
-        let function_registry =
-            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
         let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
         let mut ffi_schema_provider =
-            FFI_SchemaProvider::new(schema_provider, None, function_registry.into(), task_ctx_accessor.into());
+            FFI_SchemaProvider::new(schema_provider, None, task_ctx_accessor.into());
         ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =

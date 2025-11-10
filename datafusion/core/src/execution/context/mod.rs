@@ -91,10 +91,10 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_execution::TaskContextAccessor;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
-use datafusion_execution::TaskContextAccessor;
 
 mod csv;
 mod json;

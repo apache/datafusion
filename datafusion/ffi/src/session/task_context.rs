@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::session::config::FFI_SessionConfig;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
@@ -29,7 +30,6 @@ use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 use std::{ffi::c_void, sync::Arc};
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing [`TaskContext`] across FFI boundaries.
 #[repr(C)]
@@ -104,10 +104,16 @@ unsafe extern "C" fn scalar_functions_fn_wrapper(
 unsafe extern "C" fn aggregate_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
 ) -> RHashMap<RString, FFI_AggregateUDF> {
+    let task_ctx_accessor = &ctx.task_ctx_accessor;
     let ctx = ctx.inner();
     ctx.aggregate_functions()
         .iter()
-        .map(|(name, udf)| (name.to_owned().into(), udf.into()))
+        .map(|(name, udaf)| {
+            (
+                name.to_owned().into(),
+                FFI_AggregateUDF::new(Arc::clone(udaf), task_ctx_accessor.clone()),
+            )
+        })
         .collect()
 }
 
@@ -118,7 +124,12 @@ unsafe extern "C" fn window_functions_fn_wrapper(
     let ctx = ctx.inner();
     ctx.window_functions()
         .iter()
-        .map(|(name, udf)| (name.to_owned().into(), FFI_WindowUDF::new(Arc::clone(udf), task_ctx_accessor.clone())))
+        .map(|(name, udf)| {
+            (
+                name.to_owned().into(),
+                FFI_WindowUDF::new(Arc::clone(udf), task_ctx_accessor.clone()),
+            )
+        })
         .collect()
 }
 
@@ -134,7 +145,10 @@ impl Drop for FFI_TaskContext {
 }
 
 impl FFI_TaskContext {
-    pub fn new(ctx: Arc<TaskContext>, task_ctx_accessor: FFI_TaskContextAccessor) -> Self {
+    pub fn new(
+        ctx: Arc<TaskContext>,
+        task_ctx_accessor: FFI_TaskContextAccessor,
+    ) -> Self {
         let private_data = Box::new(TaskContextPrivateData { ctx });
 
         FFI_TaskContext {

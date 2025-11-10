@@ -35,7 +35,7 @@ use datafusion_proto::{
 use prost::Message;
 use tokio::runtime::Handle;
 
-use crate::function_registry::FFI_WeakFunctionRegistry;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::session::{FFI_Session, ForeignSession};
 use crate::{
     arrow_wrappers::WrappedSchema,
@@ -46,11 +46,10 @@ use crate::{
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 ///
@@ -139,8 +138,6 @@ pub struct FFI_TableProvider {
             insert_op: FFI_InsertOp,
         ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
 
-    pub function_registry: FFI_WeakFunctionRegistry,
-
     pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the execution plan. This should
@@ -195,7 +192,7 @@ unsafe extern "C" fn table_type_fn_wrapper(
 fn supports_filters_pushdown_internal(
     provider: &Arc<dyn TableProvider + Send + Sync>,
     filters_serialized: &[u8],
-    function_registry: &dyn FunctionRegistry,
+    task_ctx: &Arc<TaskContext>,
 ) -> Result<RVec<FFI_TableProviderFilterPushDown>> {
     let codec = DefaultLogicalExtensionCodec {};
 
@@ -205,7 +202,7 @@ fn supports_filters_pushdown_internal(
             let proto_filters = LogicalExprList::decode(filters_serialized)
                 .map_err(|e| DataFusionError::Plan(e.to_string()))?;
 
-            parse_exprs(proto_filters.expr.iter(), function_registry, &codec)?
+            parse_exprs(proto_filters.expr.iter(), task_ctx.as_ref(), &codec)?
         }
     };
     let filters_borrowed: Vec<&Expr> = filters.iter().collect();
@@ -223,17 +220,12 @@ unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
 ) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
-    let function_registry = rresult_return!(
-        <Arc<dyn FunctionRegistry + Send + Sync>>::try_from(&provider.function_registry)
-    );
+    let task_ctx =
+        rresult_return!(<Arc<TaskContext>>::try_from(&provider.task_ctx_accessor));
 
-    supports_filters_pushdown_internal(
-        provider.inner(),
-        &filters_serialized,
-        function_registry.as_ref(),
-    )
-    .map_err(|e| e.to_string().into())
-    .into()
+    supports_filters_pushdown_internal(provider.inner(), &filters_serialized, &task_ctx)
+        .map_err(|e| e.to_string().into())
+        .into()
 }
 
 unsafe extern "C" fn scan_fn_wrapper(
@@ -243,16 +235,16 @@ unsafe extern "C" fn scan_fn_wrapper(
     filters_serialized: RVec<u8>,
     limit: ROption<usize>,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+    let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
+        (&provider.task_ctx_accessor).try_into();
     let task_ctx_accessor = provider.task_ctx_accessor.clone();
-    let function_registry =
-        <Arc<dyn FunctionRegistry + Send + Sync>>::try_from(&provider.function_registry)
-            .expect("");
     let session = ForeignSession::try_from(session);
     let internal_provider = Arc::clone(provider.inner());
     let runtime = provider.runtime().clone();
 
     async move {
         let session = rresult_return!(session);
+        let task_ctx = rresult_return!(task_ctx);
 
         let filters = match filters_serialized.is_empty() {
             true => vec![],
@@ -265,7 +257,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 
                 rresult_return!(parse_exprs(
                     proto_filters.expr.iter(),
-                    function_registry.as_ref(),
+                    task_ctx.as_ref(),
                     &codec
                 ))
             }
@@ -344,7 +336,6 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         table_type: table_type_fn_wrapper,
         supports_filters_pushdown: provider.supports_filters_pushdown,
         insert_into: provider.insert_into,
-        function_registry: provider.function_registry.clone(),
         task_ctx_accessor: provider.task_ctx_accessor.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
@@ -366,7 +357,6 @@ impl FFI_TableProvider {
         provider: Arc<dyn TableProvider + Send + Sync>,
         can_support_pushdown_filters: bool,
         runtime: Option<Handle>,
-        function_registry: FFI_WeakFunctionRegistry,
         task_ctx_accessor: FFI_TaskContextAccessor,
     ) -> Self {
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
@@ -380,7 +370,6 @@ impl FFI_TableProvider {
                 false => None,
             },
             insert_into: insert_into_fn_wrapper,
-            function_registry,
             task_ctx_accessor,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -440,7 +429,7 @@ impl TableProvider for ForeignTableProvider {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // let session_config: FFI_SessionConfig = session.config().into();
-        let session = FFI_Session::new(session, self.0.function_registry.clone(), self.0.task_ctx_accessor.clone(), None);
+        let session = FFI_Session::new(session, self.0.task_ctx_accessor.clone(), None);
 
         let projections: Option<RVec<usize>> =
             projection.map(|p| p.iter().map(|v| v.to_owned()).collect());
@@ -505,7 +494,7 @@ impl TableProvider for ForeignTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let rc = Handle::try_current().ok();
         let session =
-            FFI_Session::new(session, self.0.function_registry.clone(), self.0.task_ctx_accessor.clone(), rc.clone());
+            FFI_Session::new(session, self.0.task_ctx_accessor.clone(), rc.clone());
 
         let input = FFI_ExecutionPlan::new(input, self.0.task_ctx_accessor.clone(), rc);
         let insert_op: FFI_InsertOp = insert_op.into();
@@ -527,7 +516,6 @@ mod tests {
     use arrow::datatypes::Schema;
     use datafusion::prelude::{col, lit, SessionContext};
     use datafusion_execution::TaskContextAccessor;
-    use datafusion_expr::registry::FunctionRegistry;
 
     #[tokio::test]
     async fn test_round_trip_ffi_table_provider_scan() -> Result<()> {
@@ -551,15 +539,13 @@ mod tests {
         )?;
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry =
-            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
         let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
 
         let mut ffi_provider =
-            FFI_TableProvider::new(provider, true, None, function_registry.into(), task_ctx_accessor.into());
+            FFI_TableProvider::new(provider, true, None, task_ctx_accessor.into());
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
@@ -598,15 +584,13 @@ mod tests {
         )?;
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry =
-            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
         let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
 
         let mut ffi_provider =
-            FFI_TableProvider::new(provider, true, None, function_registry.into(), task_ctx_accessor.into());
+            FFI_TableProvider::new(provider, true, None, task_ctx_accessor.into());
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
@@ -650,14 +634,12 @@ mod tests {
         )?;
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry =
-            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
         let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
         let provider = Arc::new(MemTable::try_new(schema, vec![vec![batch1]])?);
 
         let mut ffi_provider =
-            FFI_TableProvider::new(provider, true, None, function_registry.into(), task_ctx_accessor.into());
+            FFI_TableProvider::new(provider, true, None, task_ctx_accessor.into());
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();

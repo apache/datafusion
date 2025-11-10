@@ -18,6 +18,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::arrow_wrappers::WrappedSchema;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use abi_stable::{std_types::RVec, StableAbi};
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -25,17 +26,16 @@ use arrow::{
     ffi::FFI_ArrowSchema,
 };
 use arrow_schema::FieldRef;
-use prost::Message;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::exec_datafusion_err;
-use datafusion_execution::{TaskContext, TaskContextAccessor};
+use datafusion_execution::TaskContext;
 use datafusion_expr::function::PartitionEvaluatorArgs;
 use datafusion_physical_plan::{expressions::Column, PhysicalExpr};
-use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_exprs;
+use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use datafusion_proto::protobuf::PhysicalExprNode;
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use prost::Message;
 
 /// A stable struct for sharing [`PartitionEvaluatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -53,7 +53,10 @@ pub struct FFI_PartitionEvaluatorArgs {
 }
 
 impl FFI_PartitionEvaluatorArgs {
-    pub fn try_new(args: PartitionEvaluatorArgs, task_ctx_accessor: FFI_TaskContextAccessor) -> Result<Self, DataFusionError> {
+    pub fn try_new(
+        args: PartitionEvaluatorArgs,
+        task_ctx_accessor: FFI_TaskContextAccessor,
+    ) -> Result<Self, DataFusionError> {
         // This is a bit of a hack. Since PartitionEvaluatorArgs does not carry a schema
         // around, and instead passes the data types directly we are unable to decode the
         // protobuf PhysicalExpr correctly. In evaluating the code the only place these
@@ -145,9 +148,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .collect::<std::result::Result<Vec<_>, prost::DecodeError>>()
             .map_err(|e| exec_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
             .iter()
-            .map(|expr_node| {
-                parse_physical_expr(expr_node, &task_ctx, &schema, &codec)
-            })
+            .map(|expr_node| parse_physical_expr(expr_node, &task_ctx, &schema, &codec))
             .collect::<Result<Vec<_>>>()?;
 
         let input_fields = input_exprs

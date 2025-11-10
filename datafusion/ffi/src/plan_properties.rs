@@ -18,24 +18,27 @@
 use std::{ffi::c_void, sync::Arc};
 
 use crate::arrow_wrappers::WrappedSchema;
-use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use crate::{df_result, rresult_return};
+use abi_stable::std_types::{RResult, RString, RVec};
 use abi_stable::StableAbi;
 use arrow::datatypes::SchemaRef;
-use prost::Message;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::{
     execution_plan::{Boundedness, EmissionType},
     PlanProperties,
 };
+use datafusion_proto::physical_plan::from_proto::{
+    parse_physical_sort_exprs, parse_protobuf_partitioning,
+};
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_partitioning, serialize_physical_sort_exprs,
+};
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
-use datafusion_proto::physical_plan::from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning};
-use datafusion_proto::physical_plan::to_proto::{serialize_partitioning, serialize_physical_sort_exprs};
 use datafusion_proto::protobuf::{Partitioning, PhysicalSortExprNodeCollection};
-use crate::{df_result, rresult_return};
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use prost::Message;
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
@@ -44,7 +47,8 @@ use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 pub struct FFI_PlanProperties {
     /// The output partitioning is a [`Partitioning`] protobuf message serialized
     /// into bytes to pass across the FFI boundary.
-    pub output_partitioning: unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RString>,
+    pub output_partitioning:
+        unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RString>,
 
     /// Return the emission type of the plan.
     pub emission_type: unsafe extern "C" fn(plan: &Self) -> FFI_EmissionType,
@@ -150,7 +154,10 @@ impl Drop for FFI_PlanProperties {
 }
 
 impl FFI_PlanProperties {
-    pub fn new(props: &PlanProperties, task_ctx_accessor: FFI_TaskContextAccessor) -> Self {
+    pub fn new(
+        props: &PlanProperties,
+        task_ctx_accessor: FFI_TaskContextAccessor,
+    ) -> Self {
         let private_data = Box::new(PlanPropertiesPrivateData {
             props: props.clone(),
         });
@@ -206,10 +213,10 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             &schema,
             &codex,
         )?
-            .ok_or(DataFusionError::Plan(
-                "Unable to deserialize partitioning protobuf in FFI_PlanProperties"
-                    .to_string(),
-            ))?;
+        .ok_or(DataFusionError::Plan(
+            "Unable to deserialize partitioning protobuf in FFI_PlanProperties"
+                .to_string(),
+        ))?;
 
         let eq_properties = if sort_exprs.is_empty() {
             EquivalenceProperties::new(Arc::new(schema))
@@ -299,10 +306,10 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
-    use datafusion::prelude::SessionContext;
-    use datafusion_execution::TaskContextAccessor;
     use super::*;
+    use datafusion::prelude::SessionContext;
+    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
+    use datafusion_execution::TaskContextAccessor;
 
     #[test]
     fn test_round_trip_ffi_plan_properties() -> Result<()> {

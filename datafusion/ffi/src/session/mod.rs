@@ -17,9 +17,9 @@
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution_plan::FFI_ExecutionPlan;
-use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::session::config::FFI_SessionConfig;
 use crate::session::task_context::FFI_TaskContext;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
@@ -40,7 +40,6 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, ScalarUDFImpl,
     WindowUDF, WindowUDFImpl,
@@ -60,7 +59,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::{ffi::c_void, sync::Arc};
 use tokio::runtime::Handle;
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 pub mod config;
 pub mod task_context;
@@ -104,7 +102,6 @@ pub struct FFI_Session {
 
     pub task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
 
-    pub function_registry: FFI_WeakFunctionRegistry,
     pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the registry. This should
@@ -140,10 +137,8 @@ impl FFI_Session {
         unsafe { (*private_data).session }
     }
 
-    fn function_registry(
-        &self,
-    ) -> Result<Arc<dyn FunctionRegistry + Send + Sync>, DataFusionError> {
-        (&self.function_registry).try_into()
+    fn task_ctx(&self) -> Result<Arc<TaskContext>, DataFusionError> {
+        (&self.task_ctx_accessor).try_into()
     }
 
     unsafe fn runtime(&self) -> &Option<Handle> {
@@ -194,13 +189,12 @@ unsafe extern "C" fn create_physical_expr_fn_wrapper(
     expr_serialized: RVec<u8>,
     schema: WrappedSchema,
 ) -> RResult<RVec<u8>, RString> {
-    let function_registry = rresult_return!(session.function_registry());
+    let task_ctx = rresult_return!(session.task_ctx());
     let session = session.inner();
 
     let codec = DefaultLogicalExtensionCodec {};
     let logical_expr = LogicalExprNode::decode(expr_serialized.as_slice()).unwrap();
-    let logical_expr =
-        parse_expr(&logical_expr, function_registry.as_ref(), &codec).unwrap();
+    let logical_expr = parse_expr(&logical_expr, task_ctx.as_ref(), &codec).unwrap();
     let schema: SchemaRef = schema.into();
     let schema: DFSchema = rresult_return!(schema.try_into());
 
@@ -227,6 +221,7 @@ unsafe extern "C" fn scalar_functions_fn_wrapper(
 unsafe extern "C" fn aggregate_functions_fn_wrapper(
     session: &FFI_Session,
 ) -> RHashMap<RString, FFI_AggregateUDF> {
+    let task_ctx_accessor = &session.task_ctx_accessor;
     let session = session.inner();
     session
         .aggregate_functions()
@@ -234,7 +229,7 @@ unsafe extern "C" fn aggregate_functions_fn_wrapper(
         .map(|(name, udaf)| {
             (
                 name.clone().into(),
-                FFI_AggregateUDF::from(Arc::clone(udaf)),
+                FFI_AggregateUDF::new(Arc::clone(udaf), task_ctx_accessor.clone()),
             )
         })
         .collect()
@@ -248,7 +243,12 @@ unsafe extern "C" fn window_functions_fn_wrapper(
     session
         .window_functions()
         .iter()
-        .map(|(name, udwf)| (name.clone().into(), FFI_WindowUDF::new(Arc::clone(udwf), task_ctx_accessor.clone())))
+        .map(|(name, udwf)| {
+            (
+                name.clone().into(),
+                FFI_WindowUDF::new(Arc::clone(udwf), task_ctx_accessor.clone()),
+            )
+        })
         .collect()
 }
 
@@ -307,7 +307,6 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_Session) -> FFI_Session {
         table_options: table_options_fn_wrapper,
         default_table_options: default_table_options_fn_wrapper,
         task_ctx: task_ctx_fn_wrapper,
-        function_registry: provider.function_registry.clone(),
         task_ctx_accessor: provider.task_ctx_accessor.clone(),
 
         clone: clone_fn_wrapper,
@@ -328,7 +327,6 @@ impl FFI_Session {
     /// Creates a new [`FFI_Session`].
     pub fn new(
         session: &(dyn Session + Send + Sync),
-        function_registry: FFI_WeakFunctionRegistry,
         task_ctx_accessor: FFI_TaskContextAccessor,
         runtime: Option<Handle>,
     ) -> Self {
@@ -345,7 +343,6 @@ impl FFI_Session {
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
-            function_registry,
             task_ctx_accessor,
 
             clone: clone_fn_wrapper,

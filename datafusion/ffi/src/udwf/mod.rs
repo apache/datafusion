@@ -44,6 +44,7 @@ mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 use crate::{
     arrow_wrappers::WrappedSchema,
@@ -51,7 +52,6 @@ use crate::{
     util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
     volatility::FFI_Volatility,
 };
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing a [`WindowUDF`] across FFI boundaries.
 #[repr(C)]
@@ -327,7 +327,10 @@ impl WindowUDFImpl for ForeignWindowUDF {
         args: datafusion_expr::function::PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let evaluator = unsafe {
-            let args = FFI_PartitionEvaluatorArgs::try_new(args, self.udf.task_ctx_accessor.clone())?;
+            let args = FFI_PartitionEvaluatorArgs::try_new(
+                args,
+                self.udf.task_ctx_accessor.clone(),
+            )?;
             (self.udf.partition_evaluator)(&self.udf, args)
         };
 
@@ -399,8 +402,8 @@ mod tests {
     use datafusion::logical_expr::expr::Sort;
     use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
     use datafusion::prelude::SessionContext;
-    use std::sync::Arc;
     use datafusion_execution::TaskContextAccessor;
+    use std::sync::Arc;
 
     fn create_test_foreign_udwf(
         original_udwf: impl WindowUDFImpl + 'static,
@@ -419,10 +422,12 @@ mod tests {
     fn test_round_trip_udwf() -> datafusion::common::Result<()> {
         let original_udwf = lag_udwf();
         let original_name = original_udwf.name().to_owned();
-        let task_ctx_accessor = Arc::new(SessionContext::default()) as Arc<dyn TaskContextAccessor>;
+        let task_ctx_accessor =
+            Arc::new(SessionContext::default()) as Arc<dyn TaskContextAccessor>;
 
         // Convert to FFI format
-        let mut local_udwf =  FFI_WindowUDF::new(Arc::clone(&original_udwf).into(), task_ctx_accessor.into());
+        let mut local_udwf =
+            FFI_WindowUDF::new(Arc::clone(&original_udwf), task_ctx_accessor.into());
         local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
@@ -436,7 +441,10 @@ mod tests {
     #[tokio::test]
     async fn test_lag_udwf() -> datafusion::common::Result<()> {
         let ctx = Arc::new(SessionContext::default());
-        let udwf = create_test_foreign_udwf(WindowShift::lag(), Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>)?;
+        let udwf = create_test_foreign_udwf(
+            WindowShift::lag(),
+            Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>,
+        )?;
 
         let df = ctx.read_batch(create_record_batch(-5, 5))?;
 

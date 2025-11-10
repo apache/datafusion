@@ -29,9 +29,8 @@ use crate::{
     schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider},
 };
 
-use crate::function_registry::FFI_WeakFunctionRegistry;
-use datafusion_common::error::Result;
 use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use datafusion_common::error::Result;
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
 #[repr(C)]
@@ -59,7 +58,6 @@ pub struct FFI_CatalogProvider {
             cascade: bool,
         ) -> RResult<ROption<FFI_SchemaProvider>, RString>,
 
-    function_registry: FFI_WeakFunctionRegistry,
     task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the execution plan. This should
@@ -118,7 +116,6 @@ unsafe extern "C" fn schema_fn_wrapper(
             FFI_SchemaProvider::new(
                 schema,
                 provider.runtime(),
-                provider.function_registry.clone(),
                 provider.task_ctx_accessor.clone(),
             )
         })
@@ -137,7 +134,7 @@ unsafe extern "C" fn register_schema_fn_wrapper(
         .inner()
         .register_schema(name.as_str(), schema))
     .map(|schema| {
-        FFI_SchemaProvider::new(schema, runtime, provider.function_registry.clone(), provider.task_ctx_accessor.clone())
+        FFI_SchemaProvider::new(schema, runtime, provider.task_ctx_accessor.clone())
     })
     .into();
 
@@ -160,7 +157,6 @@ unsafe extern "C" fn deregister_schema_fn_wrapper(
                 FFI_SchemaProvider::new(
                     schema,
                     runtime,
-                    provider.function_registry.clone(),
                     provider.task_ctx_accessor.clone(),
                 )
             })
@@ -189,7 +185,6 @@ unsafe extern "C" fn clone_fn_wrapper(
         schema: schema_fn_wrapper,
         register_schema: register_schema_fn_wrapper,
         deregister_schema: deregister_schema_fn_wrapper,
-        function_registry: provider.function_registry.clone(),
         task_ctx_accessor: provider.task_ctx_accessor.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
@@ -210,7 +205,6 @@ impl FFI_CatalogProvider {
     pub fn new(
         provider: Arc<dyn CatalogProvider + Send>,
         runtime: Option<Handle>,
-        function_registry: FFI_WeakFunctionRegistry,
         task_ctx_accessor: FFI_TaskContextAccessor,
     ) -> Self {
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
@@ -220,7 +214,6 @@ impl FFI_CatalogProvider {
             schema: schema_fn_wrapper,
             register_schema: register_schema_fn_wrapper,
             deregister_schema: deregister_schema_fn_wrapper,
-            function_registry,
             task_ctx_accessor,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -295,7 +288,6 @@ impl CatalogProvider for ForeignCatalogProvider {
                 None => &FFI_SchemaProvider::new(
                     schema,
                     None,
-                    self.0.function_registry.clone(),
                     self.0.task_ctx_accessor.clone(),
                 ),
             };
@@ -332,7 +324,6 @@ mod tests {
     use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
     use datafusion::prelude::SessionContext;
     use datafusion_execution::TaskContextAccessor;
-    use datafusion_expr::registry::FunctionRegistry;
 
     #[test]
     fn test_round_trip_ffi_catalog_provider() {
@@ -346,12 +337,10 @@ mod tests {
             .is_none());
 
         let ctx = Arc::new(SessionContext::new());
-        let function_registry =
-            Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
         let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
         let mut ffi_catalog =
-            FFI_CatalogProvider::new(catalog, None, function_registry.into(), task_ctx_accessor.into());
+            FFI_CatalogProvider::new(catalog, None, task_ctx_accessor.into());
         ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();

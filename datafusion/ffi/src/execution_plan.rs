@@ -17,7 +17,11 @@
 
 use std::{ffi::c_void, pin::Pin, sync::Arc};
 
-use crate::{df_result, plan_properties::FFI_PlanProperties, record_batch_stream::FFI_RecordBatchStream, rresult, rresult_return};
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use crate::{
+    df_result, plan_properties::FFI_PlanProperties,
+    record_batch_stream::FFI_RecordBatchStream, rresult, rresult_return,
+};
 use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
@@ -27,7 +31,6 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use tokio::runtime::Handle;
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing a [`ExecutionPlan`] across FFI boundaries.
 #[repr(C)]
@@ -136,11 +139,7 @@ unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_Execution
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan_data = &(*private_data);
 
-    FFI_ExecutionPlan::new(
-        Arc::clone(&plan_data.plan),
-        ctx,
-        plan_data.runtime.clone(),
-    )
+    FFI_ExecutionPlan::new(Arc::clone(&plan_data.plan), ctx, plan_data.runtime.clone())
 }
 
 impl Clone for FFI_ExecutionPlan {
@@ -156,10 +155,7 @@ impl FFI_ExecutionPlan {
         context: FFI_TaskContextAccessor,
         runtime: Option<Handle>,
     ) -> Self {
-        let private_data = Box::new(ExecutionPlanPrivateData {
-            plan,
-            runtime,
-        });
+        let private_data = Box::new(ExecutionPlanPrivateData { plan, runtime });
 
         Self {
             properties: properties_fn_wrapper,
@@ -298,6 +294,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
         physical_plan::{
@@ -307,7 +304,6 @@ mod tests {
         prelude::SessionContext,
     };
     use datafusion_execution::TaskContextAccessor;
-    use super::*;
 
     #[derive(Debug)]
     pub struct EmptyExec {

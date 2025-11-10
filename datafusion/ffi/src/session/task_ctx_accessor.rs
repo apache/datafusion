@@ -15,20 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::execution_plan::{ExecutionPlanPrivateData, FFI_ExecutionPlan};
-use crate::session::config::FFI_SessionConfig;
 use crate::session::task_context::FFI_TaskContext;
-use crate::udaf::FFI_AggregateUDF;
-use crate::udf::FFI_ScalarUDF;
-use crate::udwf::FFI_WindowUDF;
 use crate::{df_result, rresult};
-use abi_stable::pmr::ROption;
-use abi_stable::std_types::{RHashMap, RResult};
+use abi_stable::std_types::RResult;
 use abi_stable::{std_types::RString, StableAbi};
-use arrow_schema::ArrowError;
 use datafusion_common::{exec_datafusion_err, DataFusionError};
-use datafusion_execution::config::SessionConfig;
-use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::{TaskContext, TaskContextAccessor};
 use std::sync::Weak;
 use std::{ffi::c_void, sync::Arc};
@@ -74,11 +65,16 @@ impl FFI_TaskContextAccessor {
 }
 
 unsafe extern "C" fn get_task_context_fn_wrapper(
-    ctx: &FFI_TaskContextAccessor,
+    ctx_accessor: &FFI_TaskContextAccessor,
 ) -> RResult<FFI_TaskContext, RString> {
-    rresult!(ctx.inner().map(FFI_TaskContext::from).ok_or_else(|| {
-        exec_datafusion_err!("TaskContextAccessor went out of scope over FFI boundary.")
-    }))
+    rresult!(ctx_accessor
+        .inner()
+        .map(|ctx| FFI_TaskContext::new(ctx, ctx_accessor.clone()))
+        .ok_or_else(|| {
+            exec_datafusion_err!(
+                "TaskContextAccessor went out of scope over FFI boundary."
+            )
+        }))
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
@@ -147,7 +143,7 @@ impl TryFrom<&FFI_TaskContextAccessor> for Arc<TaskContext> {
                 });
             }
 
-            df_result!((ffi_ctx.get_task_context)(&ffi_ctx))
+            df_result!((ffi_ctx.get_task_context)(ffi_ctx))
                 .map(Into::into)
                 .map(Arc::new)
         }

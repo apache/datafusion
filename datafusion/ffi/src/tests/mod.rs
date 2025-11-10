@@ -34,7 +34,7 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udwf::FFI_WindowUDF;
 
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
-use crate::function_registry::FFI_WeakFunctionRegistry;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
@@ -44,7 +44,6 @@ use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
     create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
 };
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 mod async_provider;
 pub mod catalog;
@@ -61,12 +60,11 @@ pub mod utils;
 pub struct ForeignLibraryModule {
     /// Construct an opinionated catalog provider
     pub create_catalog:
-        extern "C" fn(function_registry: FFI_WeakFunctionRegistry, task_ctx_accessor: FFI_TaskContextAccessor) -> FFI_CatalogProvider,
+        extern "C" fn(task_ctx_accessor: FFI_TaskContextAccessor) -> FFI_CatalogProvider,
 
     /// Constructs the table provider
     pub create_table: extern "C" fn(
         synchronous: bool,
-        function_registry: FFI_WeakFunctionRegistry,
         task_ctx_accessor: FFI_TaskContextAccessor,
     ) -> FFI_TableProvider,
 
@@ -76,14 +74,13 @@ pub struct ForeignLibraryModule {
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub create_table_function:
-        extern "C" fn(function_registry: FFI_WeakFunctionRegistry,
-        task_ctx_accessor: FFI_TaskContextAccessor) -> FFI_TableFunction,
+        extern "C" fn(task_ctx_accessor: FFI_TaskContextAccessor) -> FFI_TableFunction,
 
     /// Create an aggregate UDAF using sum
-    pub create_sum_udaf: extern "C" fn() -> FFI_AggregateUDF,
+    pub create_sum_udaf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_AggregateUDF,
 
     /// Create  grouping UDAF using stddev
-    pub create_stddev_udaf: extern "C" fn() -> FFI_AggregateUDF,
+    pub create_stddev_udaf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_AggregateUDF,
 
     pub create_rank_udwf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_WindowUDF,
 
@@ -120,12 +117,11 @@ pub fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
 /// We create an in-memory table and convert it to it's FFI counterpart.
 extern "C" fn construct_table_provider(
     synchronous: bool,
-    function_registry: FFI_WeakFunctionRegistry,
     task_ctx_accessor: FFI_TaskContextAccessor,
 ) -> FFI_TableProvider {
     match synchronous {
-        true => create_sync_table_provider(function_registry, task_ctx_accessor),
-        false => create_async_table_provider(function_registry, task_ctx_accessor),
+        true => create_sync_table_provider(task_ctx_accessor),
+        false => create_async_table_provider(task_ctx_accessor),
     }
 }
 

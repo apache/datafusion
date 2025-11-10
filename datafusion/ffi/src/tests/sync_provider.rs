@@ -16,14 +16,12 @@
 // under the License.
 
 use super::{create_record_batch, create_test_schema};
-use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::table_provider::FFI_TableProvider;
 use datafusion_catalog::MemTable;
 use std::sync::Arc;
 
 pub(crate) fn create_sync_table_provider(
-    function_registry: FFI_WeakFunctionRegistry,
     task_ctx_accessor: FFI_TaskContextAccessor,
 ) -> FFI_TableProvider {
     let schema = create_test_schema();
@@ -38,11 +36,5 @@ pub(crate) fn create_sync_table_provider(
 
     let table_provider = MemTable::try_new(schema, vec![batches]).unwrap();
 
-    FFI_TableProvider::new(
-        Arc::new(table_provider),
-        true,
-        None,
-        function_registry,
-        task_ctx_accessor,
-    )
+    FFI_TableProvider::new(Arc::new(table_provider), true, None, task_ctx_accessor)
 }
