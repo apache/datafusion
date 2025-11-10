@@ -31,11 +31,11 @@ use arrow::datatypes::{
     ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
+
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{logical_date, NativeType};
-use std::ops::Add;
 
+use super::adjust_to_local_time;
 use datafusion_common::{
     cast::{
         as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
@@ -43,7 +43,7 @@ use datafusion_common::{
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
     },
-    exec_err, internal_datafusion_err, internal_err, not_impl_err,
+    exec_err, internal_err, not_impl_err,
     types::logical_string,
     utils::take_function_args,
     Result, ScalarValue,
@@ -131,7 +131,7 @@ impl DatePartFunc {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("datepart")],
+            aliases: vec![String::from("datepart"), String::from("extract")],
         }
     }
 }
@@ -206,8 +206,13 @@ impl ScalarUDFImpl for DatePartFunc {
             _ => (false, None),
         };
 
-        // Adjust timestamps for extraction
-        let array = if is_timezone_aware {
+        let part_trim = part_normalization(&part);
+        let is_epoch = is_epoch(&part);
+
+        // Epoch is timezone-independent - it always returns seconds since 1970-01-01 UTC
+        let array = if is_epoch {
+            array
+        } else if is_timezone_aware {
             // For timezone-aware timestamps, extract in their own timezone
             let tz_str = tz_str_opt.as_ref().unwrap();
             let tz = match tz_str.parse::<Tz>() {
@@ -251,12 +256,10 @@ impl ScalarUDFImpl for DatePartFunc {
             array
         };
 
-        let part_trim = part_normalization(&part);
-
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
         let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
-            match interval_unit {
+            let extracted = match interval_unit {
                 IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
                 IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
                 IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
@@ -267,8 +270,39 @@ impl ScalarUDFImpl for DatePartFunc {
                 IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
                 IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
                 IntervalUnit::Nanosecond => seconds_as_i32(array.as_ref(), Nanosecond)?,
-                // century and decade are not supported by `DatePart`, although they are supported in postgres
                 _ => return exec_err!("Date part '{part}' not supported"),
+            };
+
+            // For fixed offsets (like +04:00, -05:30), apply the offset to extract values.
+            // Named timezones (like 'America/New_York') are handled by adjust_to_local_time
+            // and DST is already applied via chrono.
+            if is_timezone_aware {
+                let tz_str = tz_str_opt.as_ref().unwrap().as_ref();
+                if is_fixed_offset(tz_str) {
+                    if let Some(offset_info) = extract_offset_components(tz_str) {
+                        match interval_unit {
+                            IntervalUnit::Hour => apply_hour_offset(
+                                extracted.as_ref(),
+                                offset_info.hours,
+                                offset_info.minutes,
+                            )?,
+                            IntervalUnit::Minute => apply_minute_offset(
+                                extracted.as_ref(),
+                                offset_info.minutes,
+                            )?,
+                            IntervalUnit::Day => {
+                                apply_day_offset(extracted.as_ref(), offset_info.hours)?
+                            }
+                            _ => extracted,
+                        }
+                    } else {
+                        extracted
+                    }
+                } else {
+                    extracted
+                }
+            } else {
+                extracted
             }
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
@@ -298,54 +332,6 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 }
 
-fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
-    fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
-    where
-        F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,
-    {
-        match converter(ts) {
-            MappedLocalTime::Ambiguous(earliest, latest) => exec_err!(
-                "Ambiguous timestamp. Do you mean {:?} or {:?}",
-                earliest,
-                latest
-            ),
-            MappedLocalTime::None => exec_err!(
-                "The local time does not exist because there is a gap in the local time."
-            ),
-            MappedLocalTime::Single(date_time) => Ok(date_time),
-        }
-    }
-
-    let date_time = match T::UNIT {
-        Nanosecond => Utc.timestamp_nanos(ts),
-        Microsecond => convert_timestamp(ts, |ts| Utc.timestamp_micros(ts))?,
-        Millisecond => convert_timestamp(ts, |ts| Utc.timestamp_millis_opt(ts))?,
-        Second => convert_timestamp(ts, |ts| Utc.timestamp_opt(ts, 0))?,
-    };
-
-    let offset_seconds: i64 = tz
-        .offset_from_utc_datetime(&date_time.naive_utc())
-        .fix()
-        .local_minus_utc() as i64;
-
-    let adjusted_date_time = date_time.add(
-        TimeDelta::try_seconds(offset_seconds)
-            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
-    );
-
-    // convert back to i64
-    match T::UNIT {
-        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(|| {
-            internal_datafusion_err!(
-                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
-            )
-        }),
-        Microsecond => Ok(adjusted_date_time.timestamp_micros()),
-        Millisecond => Ok(adjusted_date_time.timestamp_millis()),
-        Second => Ok(adjusted_date_time.timestamp()),
-    }
-}
-
 fn adjust_timestamp_array<T: ArrowTimestampType>(
     array: &ArrayRef,
     tz: Tz,
@@ -369,18 +355,108 @@ fn is_epoch(part: &str) -> bool {
     matches!(part.to_lowercase().as_str(), "epoch")
 }
 
-// Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
+// Check if a timezone string is a fixed offset
+fn is_fixed_offset(tz_str: &str) -> bool {
+    tz_str.starts_with('+') || tz_str.starts_with('-')
+}
+
+// Holds the components of a timezone offset (hours and minutes).
+struct OffsetInfo {
+    hours: i32,
+    minutes: i32,
+}
+
+// Extracts the offset components from a timezone string like "+04:00" or "-05:30".
+fn extract_offset_components(tz_str: &str) -> Option<OffsetInfo> {
+    if tz_str.len() < 6 {
+        return None;
+    }
+
+    let sign = match &tz_str[0..1] {
+        "+" => 1,
+        "-" => -1,
+        _ => return None,
+    };
+
+    let hours: i32 = tz_str[1..3].parse().ok()?;
+    let minutes: i32 = tz_str[4..6].parse().ok()?;
+
+    Some(OffsetInfo {
+        hours: sign * hours,
+        minutes: sign * minutes,
+    })
+}
+
+// Applies the timezone offset to hour values in an array.
+fn apply_hour_offset(
+    array: &dyn Array,
+    offset_hours: i32,
+    offset_minutes: i32,
+) -> Result<ArrayRef> {
+    let hour_array = as_int32_array(array)?;
+    let result: Int32Array = hour_array
+        .iter()
+        .map(|hour| {
+            hour.map(|h| {
+                let mut adjusted = h + offset_hours;
+                if offset_minutes.abs() >= 30 {
+                    adjusted += if offset_minutes > 0 { 1 } else { -1 };
+                }
+                ((adjusted % 24) + 24) % 24
+            })
+        })
+        .collect();
+    Ok(Arc::new(result))
+}
+
+// Applies the timezone offset to minute values in an array.
+fn apply_minute_offset(array: &dyn Array, offset_minutes: i32) -> Result<ArrayRef> {
+    let minute_array = as_int32_array(array)?;
+    let result: Int32Array = minute_array
+        .iter()
+        .map(|minute| {
+            minute.map(|m| {
+                let adjusted = m + offset_minutes;
+                ((adjusted % 60) + 60) % 60
+            })
+        })
+        .collect();
+    Ok(Arc::new(result))
+}
+
+// Applies the timezone offset to day values in an array.
+fn apply_day_offset(array: &dyn Array, offset_hours: i32) -> Result<ArrayRef> {
+    let day_array = as_int32_array(array)?;
+    let result: Int32Array = day_array
+        .iter()
+        .map(|day| {
+            day.map(|d| {
+                if offset_hours >= 24 {
+                    d + (offset_hours / 24)
+                } else if offset_hours <= -24 {
+                    d + (offset_hours / 24)
+                } else if offset_hours > 0 {
+                    d + 1
+                } else if offset_hours < 0 {
+                    d - 1
+                } else {
+                    d
+                }
+            })
+        })
+        .collect();
+    Ok(Arc::new(result))
+}
+
+// Try to remove quotes if they exist. If the quotes are invalid, return original string.
 fn part_normalization(part: &str) -> &str {
     part.strip_prefix(|c| c == '\'' || c == '\"')
         .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
         .unwrap_or(part)
 }
 
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds
+// Converts seconds to i32 with the specified time unit.
 fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
-    // Nanosecond is neither supported in Postgres nor DuckDB, to avoid dealing
     // with overflow and precision issue we don't support nanosecond
     if unit == Nanosecond {
         return not_impl_err!("Date part {unit:?} not supported");
@@ -401,7 +477,6 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     };
 
     let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
     let secs = as_int32_array(secs.as_ref())?;
     let subsecs = date_part(array, DatePart::Nanosecond)?;
     let subsecs = as_int32_array(subsecs.as_ref())?;
@@ -429,11 +504,8 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     }
 }
 
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds
-///
-/// Given epoch return f64, this is a duplicated function to optimize for f64 type
+// Converts seconds to f64 with the specified time unit.
+// Used for Interval and Duration types that need floating-point precision.
 fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let sf = match unit {
         Second => 1_f64,
@@ -442,7 +514,6 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
         Nanosecond => 1_000_000_000_f64,
     };
     let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
     let secs = as_int32_array(secs.as_ref())?;
     let subsecs = date_part(array, DatePart::Nanosecond)?;
     let subsecs = as_int32_array(subsecs.as_ref())?;
