@@ -46,7 +46,7 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err,
     types::logical_string,
     utils::take_function_args,
-    Result, ScalarValue,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
@@ -236,10 +236,9 @@ impl ScalarUDFImpl for DatePartFunc {
             }
         } else if let Timestamp(time_unit, None) = array.data_type() {
             // For naive timestamps, interpret in session timezone
-            let tz = match config.execution.time_zone.parse::<Tz>() {
-                Ok(tz) => tz,
-                Err(_) => return exec_err!("Invalid timezone"),
-            };
+            let tz: Tz = config.execution.time_zone.parse().map_err(|_| {
+                DataFusionError::Execution("Invalid timezone".to_string())
+            })?;
             match time_unit {
                 Nanosecond => {
                     adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?
