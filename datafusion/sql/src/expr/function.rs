@@ -490,6 +490,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let (mut args, mut arg_names) =
                     self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
+                // If the UDAF does not opt into WITHIN GROUP support, then the planner
+                // must reject queries that use WITHIN GROUP with this function.
+                // Previously the fallback path silently forwarded the WITHIN GROUP
+                // ordering as an aggregate ORDER BY which allowed SUM(x) WITHIN GROUP (...) to
+                // plan incorrectly. Enforce the contract here and emit a planning error
+                // to match Postgres semantics.
+                if !within_group.is_empty() && !fm.supports_within_group_clause() {
+                    return plan_err!(
+                        "WITHIN GROUP is only supported for ordered-set aggregate functions"
+                    );
+                }
+
                 let order_by = if fm.supports_within_group_clause() {
                     let within_group = self.order_by_to_sort_expr(
                         within_group,
