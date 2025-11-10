@@ -312,7 +312,6 @@ impl fmt::Display for ColumnarValue {
 mod tests {
     use super::*;
     use arrow::array::Int32Array;
-    use datafusion_common::DataFusionError;
 
     #[test]
     fn into_array_of_size() {
@@ -333,13 +332,10 @@ mod tests {
         let arr = make_array(1, 3);
         let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
         let result = arr_columnar_value.into_array_of_size(5);
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            DataFusionError::Internal(
-                "Array length 3 does not match expected length 5".to_string()
-            )
+        assert!(result
+            .unwrap_err()
             .to_string()
-        );
+            .starts_with("Array length 3 does not match expected length 5"),);
     }
 
     #[test]
