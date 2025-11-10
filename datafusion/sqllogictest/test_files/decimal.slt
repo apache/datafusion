@@ -945,6 +945,8 @@ SELECT power(2.5, 0)
 ----
 1
 
+# TODO: check backward compatibility for a case with base in64 and exponent float64 since the power coercion is introduced
+
 # query error Unsupported data type Decimal128\(2, 1\) for power function
 # SELECT power(2.5, 4.0)
 
