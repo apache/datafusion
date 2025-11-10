@@ -1051,10 +1051,13 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
 
     for sql in &sql {
         let df = ctx.sql(sql).await?;
-        let (state, plan) = df.into_parts();
-        let plan = state.optimize(&plan)?;
-        if create_physical {
-            let _ = state.create_physical_plan(&plan).await?;
+        // attempt to mimic planning steps
+        if !create_physical {
+            let (state, plan) = df.into_parts();
+            let _ = state.optimize(&plan)?;
+        } else {
+            // this is what df.execute() does internally
+            let _ = df.create_physical_plan().await?;
         }
     }
 
