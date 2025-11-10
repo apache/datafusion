@@ -21,7 +21,9 @@
 
 ## DataFusion `52.0.0`
 
-TODO(tsaucer) Add link to issue for 52 release.
+**Note:** DataFusion `52.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+You can see the current [status of the `52.0.0`release here](https://github.com/apache/datafusion/issues/18566)
 
 ### Removal of `pyarrow` feature
 
@@ -29,10 +31,6 @@ The `pyarrow` feature flag has been removed. This feature has been migrated to
 the `datafusion-python` repository since version `44.0.0`.
 
 ## DataFusion `51.0.0`
-
-**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-
-You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
 
 ### `arrow` / `parquet` updated to 57.0.0
 
