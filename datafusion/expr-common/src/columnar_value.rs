@@ -118,6 +118,8 @@ impl ColumnarValue {
     /// which is not as efficient as handling the scalar directly.
     /// [`Self::Array`] will just be returned as is.
     ///
+    /// See [`Self::into_array_of_size`] if you need to validate the length of the output array.
+    ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
     ///
@@ -135,7 +137,7 @@ impl ColumnarValue {
     /// number of rows. [`Self::Scalar`] is converted by repeating the same
     /// scalar multiple times which is not as efficient as handling the scalar
     /// directly.
-    /// This validates that [`Self::Array`], if it exists, has the expected length.
+    /// This validates that if this is [`Self::Array`], it has the expected length.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -166,6 +168,8 @@ impl ColumnarValue {
     /// which is not as efficient as handling the scalar directly.
     /// [`Self::Array`] will just be returned as is.
     ///
+    /// See [`Self::to_array_of_size`] if you need to validate the length of the output array.
+    ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
     ///
@@ -183,7 +187,7 @@ impl ColumnarValue {
     /// number of rows. [`Self::Scalar`] is converted by repeating the same
     /// scalar multiple times which is not as efficient as handling the scalar
     /// directly.
-    /// This validates that [`Self::Array`], if it exists, has the expected length.
+    /// This validates that if this is [`Self::Array`], it has the expected length.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -308,6 +312,7 @@ impl fmt::Display for ColumnarValue {
 mod tests {
     use super::*;
     use arrow::array::Int32Array;
+    use datafusion_common::DataFusionError;
 
     #[test]
     fn into_array_of_size() {
@@ -328,7 +333,13 @@ mod tests {
         let arr = make_array(1, 3);
         let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
         let result = arr_columnar_value.into_array_of_size(5);
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            DataFusionError::Internal(
+                "Array length 3 does not match expected length 5".to_string()
+            )
+            .to_string()
+        );
     }
 
     #[test]
