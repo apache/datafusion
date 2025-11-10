@@ -211,6 +211,11 @@ impl FunctionRegistry for TaskContext {
     }
 }
 
+pub trait TaskContextAccessor {
+    fn get_task_context(&self) -> Arc<TaskContext>;
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

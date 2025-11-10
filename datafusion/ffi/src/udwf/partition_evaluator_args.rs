@@ -28,12 +28,14 @@ use arrow_schema::FieldRef;
 use prost::Message;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::exec_datafusion_err;
+use datafusion_execution::{TaskContext, TaskContextAccessor};
 use datafusion_expr::function::PartitionEvaluatorArgs;
 use datafusion_physical_plan::{expressions::Column, PhysicalExpr};
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_exprs;
 use datafusion_proto::protobuf::PhysicalExprNode;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing [`PartitionEvaluatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -47,11 +49,11 @@ pub struct FFI_PartitionEvaluatorArgs {
     is_reversed: bool,
     ignore_nulls: bool,
     schema: WrappedSchema,
+    task_ctx_accessor: FFI_TaskContextAccessor,
 }
 
-impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
-    type Error = DataFusionError;
-    fn try_from(args: PartitionEvaluatorArgs) -> Result<Self, DataFusionError> {
+impl FFI_PartitionEvaluatorArgs {
+    pub fn try_new(args: PartitionEvaluatorArgs, task_ctx_accessor: FFI_TaskContextAccessor) -> Result<Self, DataFusionError> {
         // This is a bit of a hack. Since PartitionEvaluatorArgs does not carry a schema
         // around, and instead passes the data types directly we are unable to decode the
         // protobuf PhysicalExpr correctly. In evaluating the code the only place these
@@ -111,6 +113,7 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
             schema,
             is_reversed: args.is_reversed(),
             ignore_nulls: args.ignore_nulls(),
+            task_ctx_accessor,
         })
     }
 }
@@ -133,6 +136,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
         let codec = DefaultPhysicalExtensionCodec {};
 
         let schema: SchemaRef = value.schema.into();
+        let task_ctx: Arc<TaskContext> = (&value.task_ctx_accessor).try_into()?;
 
         let input_exprs = value
             .input_exprs
@@ -142,7 +146,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .map_err(|e| exec_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
             .iter()
             .map(|expr_node| {
-                parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)
+                parse_physical_expr(expr_node, &task_ctx, &schema, &codec)
             })
             .collect::<Result<Vec<_>>>()?;
 

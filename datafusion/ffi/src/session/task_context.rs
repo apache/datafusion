@@ -29,6 +29,7 @@ use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 use std::{ffi::c_void, sync::Arc};
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing [`TaskContext`] across FFI boundaries.
 #[repr(C)]
@@ -47,6 +48,8 @@ pub struct FFI_TaskContext {
         unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_AggregateUDF>,
 
     pub window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
+
+    pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
@@ -111,10 +114,11 @@ unsafe extern "C" fn aggregate_functions_fn_wrapper(
 unsafe extern "C" fn window_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
 ) -> RHashMap<RString, FFI_WindowUDF> {
+    let task_ctx_accessor = &ctx.task_ctx_accessor;
     let ctx = ctx.inner();
     ctx.window_functions()
         .iter()
-        .map(|(name, udf)| (name.to_owned().into(), udf.into()))
+        .map(|(name, udf)| (name.to_owned().into(), FFI_WindowUDF::new(Arc::clone(udf), task_ctx_accessor.clone())))
         .collect()
 }
 
@@ -129,8 +133,8 @@ impl Drop for FFI_TaskContext {
     }
 }
 
-impl From<Arc<TaskContext>> for FFI_TaskContext {
-    fn from(ctx: Arc<TaskContext>) -> Self {
+impl FFI_TaskContext {
+    pub fn new(ctx: Arc<TaskContext>, task_ctx_accessor: FFI_TaskContextAccessor) -> Self {
         let private_data = Box::new(TaskContextPrivateData { ctx });
 
         FFI_TaskContext {
@@ -140,6 +144,7 @@ impl From<Arc<TaskContext>> for FFI_TaskContext {
             scalar_functions: scalar_functions_fn_wrapper,
             aggregate_functions: aggregate_functions_fn_wrapper,
             window_functions: window_functions_fn_wrapper,
+            task_ctx_accessor,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,

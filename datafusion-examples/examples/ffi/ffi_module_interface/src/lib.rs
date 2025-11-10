@@ -23,6 +23,7 @@ use abi_stable::{
     StableAbi,
 };
 use datafusion_ffi::function_registry::FFI_WeakFunctionRegistry;
+use datafusion_ffi::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 
 #[repr(C)]
@@ -35,7 +36,7 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 /// how a user may wish to separate these concerns.
 pub struct TableProviderModule {
     /// Constructs the table provider
-    pub create_table: extern "C" fn(FFI_WeakFunctionRegistry) -> FFI_TableProvider,
+    pub create_table: extern "C" fn(FFI_WeakFunctionRegistry, FFI_TaskContextAccessor) -> FFI_TableProvider,
 }
 
 impl RootModule for TableProviderModuleRef {

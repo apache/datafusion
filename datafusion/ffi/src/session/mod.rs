@@ -19,7 +19,7 @@ use crate::arrow_wrappers::WrappedSchema;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::function_registry::FFI_WeakFunctionRegistry;
 use crate::session::config::FFI_SessionConfig;
-use crate::session::task::FFI_TaskContext;
+use crate::session::task_context::FFI_TaskContext;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
@@ -60,9 +60,11 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::{ffi::c_void, sync::Arc};
 use tokio::runtime::Handle;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 pub mod config;
-mod task;
+pub mod task_context;
+pub mod task_ctx_accessor;
 
 /// A stable struct for sharing [`Session`] across FFI boundaries.
 #[repr(C)]
@@ -103,6 +105,7 @@ pub struct FFI_Session {
     pub task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
 
     pub function_registry: FFI_WeakFunctionRegistry,
+    pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the registry. This should
     /// only need to be called by the receiver of the plan.
@@ -163,6 +166,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
     session: &FFI_Session,
     logical_plan_serialized: RVec<u8>,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+    let task_ctx_accessor = session.task_ctx_accessor.clone();
     let runtime = session.runtime().clone();
     let session = session.clone();
     async move {
@@ -178,7 +182,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
 
         rresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(
             plan,
-            task_ctx,
+            task_ctx_accessor,
             runtime
         )))
     }
@@ -239,11 +243,12 @@ unsafe extern "C" fn aggregate_functions_fn_wrapper(
 unsafe extern "C" fn window_functions_fn_wrapper(
     session: &FFI_Session,
 ) -> RHashMap<RString, FFI_WindowUDF> {
+    let task_ctx_accessor = &session.task_ctx_accessor;
     let session = session.inner();
     session
         .window_functions()
         .iter()
-        .map(|(name, udwf)| (name.clone().into(), FFI_WindowUDF::from(Arc::clone(udwf))))
+        .map(|(name, udwf)| (name.clone().into(), FFI_WindowUDF::new(Arc::clone(udwf), task_ctx_accessor.clone())))
         .collect()
 }
 
@@ -273,8 +278,9 @@ unsafe extern "C" fn default_table_options_fn_wrapper(
 }
 
 unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_Session) -> FFI_TaskContext {
+    let task_ctx_accessor = session.task_ctx_accessor.clone();
     let session = session.inner();
-    FFI_TaskContext::from(session.task_ctx())
+    FFI_TaskContext::new(session.task_ctx(), task_ctx_accessor)
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_Session) {
@@ -302,6 +308,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_Session) -> FFI_Session {
         default_table_options: default_table_options_fn_wrapper,
         task_ctx: task_ctx_fn_wrapper,
         function_registry: provider.function_registry.clone(),
+        task_ctx_accessor: provider.task_ctx_accessor.clone(),
 
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
@@ -322,6 +329,7 @@ impl FFI_Session {
     pub fn new(
         session: &(dyn Session + Send + Sync),
         function_registry: FFI_WeakFunctionRegistry,
+        task_ctx_accessor: FFI_TaskContextAccessor,
         runtime: Option<Handle>,
     ) -> Self {
         let private_data = Box::new(SessionPrivateData { session, runtime });
@@ -338,6 +346,7 @@ impl FFI_Session {
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
             function_registry,
+            task_ctx_accessor,
 
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,

@@ -30,6 +30,7 @@ use datafusion_functions_aggregate::sum::Sum;
 use datafusion_functions_table::generate_series::RangeFunc;
 use datafusion_functions_window::rank::Rank;
 use std::sync::Arc;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(AbsFunc::new().into());
@@ -45,10 +46,11 @@ pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
 
 pub(crate) extern "C" fn create_ffi_table_func(
     function_registry: FFI_WeakFunctionRegistry,
+    task_ctx_accessor: FFI_TaskContextAccessor,
 ) -> FFI_TableFunction {
     let udtf: Arc<dyn TableFunctionImpl> = Arc::new(RangeFunc {});
 
-    FFI_TableFunction::new(udtf, None, function_registry)
+    FFI_TableFunction::new(udtf, None, function_registry, task_ctx_accessor)
 }
 
 pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
@@ -63,7 +65,7 @@ pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
     udaf.into()
 }
 
-pub(crate) extern "C" fn create_ffi_rank_func() -> FFI_WindowUDF {
+pub(crate) extern "C" fn create_ffi_rank_func(task_ctx_accessor: FFI_TaskContextAccessor) -> FFI_WindowUDF {
     let udwf: Arc<WindowUDF> = Arc::new(
         Rank::new(
             "rank_demo".to_string(),
@@ -72,5 +74,5 @@ pub(crate) extern "C" fn create_ffi_rank_func() -> FFI_WindowUDF {
         .into(),
     );
 
-    udwf.into()
+    FFI_WindowUDF::new(udwf, task_ctx_accessor)
 }

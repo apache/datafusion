@@ -37,6 +37,7 @@ use datafusion_catalog::{
 };
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::exec_err;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// This schema provider is intended only for unit tests. It prepopulates with one
 /// table and only allows for tables named sales and purchases.
@@ -177,7 +178,8 @@ impl CatalogProvider for FixedCatalogProvider {
 
 pub(crate) extern "C" fn create_catalog_provider(
     function_registry: FFI_WeakFunctionRegistry,
+    task_ctx_accessor: FFI_TaskContextAccessor,
 ) -> FFI_CatalogProvider {
     let catalog_provider = Arc::new(FixedCatalogProvider::default());
-    FFI_CatalogProvider::new(catalog_provider, None, function_registry)
+    FFI_CatalogProvider::new(catalog_provider, None, function_registry, task_ctx_accessor)
 }

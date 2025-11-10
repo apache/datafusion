@@ -36,6 +36,7 @@ use datafusion_proto::{
 };
 use prost::Message;
 use tokio::runtime::Handle;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
@@ -50,6 +51,8 @@ pub struct FFI_TableFunction {
     ) -> RResult<FFI_TableProvider, RString>,
 
     pub function_registry: FFI_WeakFunctionRegistry,
+
+    pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the udtf. This should
     /// only need to be called by the receiver of the udtf.
@@ -92,6 +95,7 @@ unsafe extern "C" fn call_fn_wrapper(
     args: RVec<u8>,
 ) -> RResult<FFI_TableProvider, RString> {
     let function_registry = udtf.function_registry.clone();
+    let task_ctx_accessor = udtf.task_ctx_accessor.clone();
     let foreign_registry = rresult_return!(
         <Arc<dyn FunctionRegistry + Send + Sync>>::try_from(&udtf.function_registry)
     );
@@ -115,6 +119,7 @@ unsafe extern "C" fn call_fn_wrapper(
         false,
         runtime,
         function_registry,
+        task_ctx_accessor,
     ))
 }
 
@@ -125,10 +130,11 @@ unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
 
 unsafe extern "C" fn clone_fn_wrapper(udtf: &FFI_TableFunction) -> FFI_TableFunction {
     let function_registry = udtf.function_registry.clone();
+    let task_ctx_accessor = udtf.task_ctx_accessor.clone();
     let runtime = udtf.runtime();
     let udtf = udtf.inner();
 
-    FFI_TableFunction::new(Arc::clone(udtf), runtime, function_registry)
+    FFI_TableFunction::new(Arc::clone(udtf), runtime, function_registry, task_ctx_accessor)
 }
 
 impl Clone for FFI_TableFunction {
@@ -142,12 +148,14 @@ impl FFI_TableFunction {
         udtf: Arc<dyn TableFunctionImpl>,
         runtime: Option<Handle>,
         function_registry: FFI_WeakFunctionRegistry,
+        task_ctx_accessor: FFI_TaskContextAccessor,
     ) -> Self {
         let private_data = Box::new(TableFunctionPrivateData { udtf, runtime });
 
         Self {
             call: call_fn_wrapper,
             function_registry,
+            task_ctx_accessor,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -213,6 +221,7 @@ mod tests {
     use datafusion::{
         catalog::MemTable, common::exec_err, prelude::lit, scalar::ScalarValue,
     };
+    use datafusion_execution::TaskContextAccessor;
     use datafusion_expr::registry::FunctionRegistry;
 
     #[derive(Debug)]
@@ -300,10 +309,12 @@ mod tests {
         let ctx = Arc::new(SessionContext::default());
         let function_registry =
             Arc::clone(&ctx) as Arc<dyn FunctionRegistry + Send + Sync>;
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
         let mut local_udtf: FFI_TableFunction = FFI_TableFunction::new(
             Arc::clone(&original_udtf),
             None,
             function_registry.into(),
+            task_ctx_accessor.into(),
         );
 
         // Add unit test coverage to check for memory leaks on clone

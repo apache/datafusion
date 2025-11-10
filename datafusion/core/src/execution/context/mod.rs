@@ -94,6 +94,7 @@ use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
+use datafusion_execution::TaskContextAccessor;
 
 mod csv;
 mod json;
@@ -1791,6 +1792,12 @@ impl FunctionRegistry for SessionContext {
 
     fn udwfs(&self) -> HashSet<String> {
         self.state.read().udwfs()
+    }
+}
+
+impl TaskContextAccessor for SessionContext {
+    fn get_task_context(&self) -> Arc<TaskContext> {
+        self.task_ctx()
     }
 }
 
