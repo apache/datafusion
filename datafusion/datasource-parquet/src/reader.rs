@@ -97,6 +97,7 @@ impl DefaultParquetFileReaderFactory {
 pub struct ParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
+    partitioned_file: PartitionedFile,
 }
 
 impl AsyncFileReader for ParquetFileReader {
@@ -129,6 +130,17 @@ impl AsyncFileReader for ParquetFileReader {
     }
 }
 
+impl Drop for ParquetFileReader {
+    fn drop(&mut self) {
+        self.file_metrics
+            .scan_efficiency_ratio
+            .add_part(self.file_metrics.bytes_scanned.value() as usize);
+        self.file_metrics
+            .scan_efficiency_ratio
+            .add_total(self.partitioned_file.object_meta.size as usize);
+    }
+}
+
 impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
     fn create_reader(
         &self,
@@ -156,6 +168,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
         Ok(Box::new(ParquetFileReader {
             inner,
             file_metrics,
+            partitioned_file,
         }))
     }
 }
@@ -283,6 +296,17 @@ impl AsyncFileReader for CachedParquetFileReader {
                 })
         }
         .boxed()
+    }
+}
+
+impl Drop for CachedParquetFileReader {
+    fn drop(&mut self) {
+        self.file_metrics
+            .scan_efficiency_ratio
+            .add_part(self.file_metrics.bytes_scanned.value() as usize);
+        self.file_metrics
+            .scan_efficiency_ratio
+            .add_total(self.partitioned_file.object_meta.size as usize);
     }
 }
 
