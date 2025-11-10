@@ -21,10 +21,8 @@ use object_store::http::HttpBuilder;
 use std::sync::Arc;
 use url::Url;
 
-/// This example demonstrates executing a simple query against an Arrow data source (CSV) and
-/// fetching results
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Configure `object_store` and run a query against files via HTTP
+pub async fn query_http_csv() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
