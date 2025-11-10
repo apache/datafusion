@@ -264,7 +264,7 @@ impl FileOpener for ArrowStreamFileOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         if partitioned_file.range.is_some() {
             return Err(exec_datafusion_err!(
-                "ArrowStreamOpener does not support range-based reading"
+                "ArrowStreamFileOpener does not support range-based reading"
             ));
         }
         let object_store = Arc::clone(&self.object_store);
