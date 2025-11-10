@@ -79,6 +79,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                     target_batch_size,
                 ))))
             } else if let Some(async_exec) = plan_any.downcast_ref::<AsyncFuncExec>() {
+                // Coalesce inputs to async functions to reduce number of async function invocations
                 let children = async_exec.children();
                 if children.len() != 1 {
                     return internal_err!(
