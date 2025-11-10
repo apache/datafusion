@@ -134,7 +134,7 @@ impl Drop for ParquetFileReader {
     fn drop(&mut self) {
         self.file_metrics
             .scan_efficiency_ratio
-            .add_part(self.file_metrics.bytes_scanned.value() as usize);
+            .add_part(self.file_metrics.bytes_scanned.value());
         self.file_metrics
             .scan_efficiency_ratio
             .add_total(self.partitioned_file.object_meta.size as usize);
@@ -303,7 +303,7 @@ impl Drop for CachedParquetFileReader {
     fn drop(&mut self) {
         self.file_metrics
             .scan_efficiency_ratio
-            .add_part(self.file_metrics.bytes_scanned.value() as usize);
+            .add_part(self.file_metrics.bytes_scanned.value());
         self.file_metrics
             .scan_efficiency_ratio
             .add_total(self.partitioned_file.object_meta.size as usize);
