@@ -38,7 +38,7 @@ impl From<SchemaRef> for WrappedSchema {
             Ok(s) => s,
             Err(e) => {
                 error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}");
-                FFI_ArrowSchema::empty()
+                FFI_ArrowSchema::try_from(Schema::empty()).unwrap()
             }
         };
 
@@ -92,5 +92,31 @@ impl TryFrom<&ArrayRef> for WrappedArray {
         let schema = WrappedSchema(schema);
 
         Ok(WrappedArray { array, schema })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::arrow_wrappers::WrappedSchema;
+    use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+    use std::sync::Arc;
+
+    /// Test an unsupported field type. This is necessary only so we can get good unit test coverage
+    /// so that we can also verify memory is properly maintained since we are doing `unsafe` operations.
+    #[test]
+    fn test_unsupported_schema() -> Result<(), ArrowError> {
+        let field = Arc::new(Field::new("a", DataType::Int32, false));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::ListView(field),
+            false,
+        )]));
+
+        let wrapped_schema = WrappedSchema::from(schema);
+
+        let schema: SchemaRef = wrapped_schema.into();
+        assert!(schema.fields().is_empty());
+
+        Ok(())
     }
 }
