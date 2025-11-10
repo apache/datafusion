@@ -124,16 +124,13 @@ mod tests {
         let f2 = Field::new("extra_column", DataType::Utf8, true);
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
-        let source = ParquetSource::default()
+        let source = ParquetSource::new(Arc::clone(&schema))
             .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}))
             .unwrap();
-        let base_conf = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            schema,
-            source,
-        )
-        .with_file(partitioned_file)
-        .build();
+        let base_conf =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .with_file(partitioned_file)
+                .build();
 
         let parquet_exec = DataSourceExec::from_data_source(base_conf);
 

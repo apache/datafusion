@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::config::CsvOptions;
 use datafusion::{
     assert_batches_eq,
     datasource::{
@@ -31,9 +32,7 @@ use datafusion::{
     test_util::aggr_test_schema,
 };
 
-use datafusion::datasource::{
-    physical_plan::FileScanConfigBuilder, table_schema::TableSchema,
-};
+use datafusion::datasource::physical_plan::FileScanConfigBuilder;
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
@@ -41,8 +40,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 /// read data from (CSV/JSON) into Arrow RecordBatches.
 ///
 /// If you want to query data in CSV or JSON files, see the [`dataframe.rs`] and [`sql_query.rs`] examples
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn csv_json_opener() -> Result<()> {
     csv_opener().await?;
     json_opener().await?;
     Ok(())
@@ -57,19 +55,25 @@ async fn csv_opener() -> Result<()> {
 
     let path = std::path::Path::new(&path).canonicalize()?;
 
+    let options = CsvOptions {
+        has_header: Some(true),
+        delimiter: b',',
+        quote: b'"',
+        ..Default::default()
+    };
+
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
-        Arc::clone(&schema),
-        Arc::new(CsvSource::default()),
+        Arc::new(CsvSource::new(Arc::clone(&schema)).with_csv_options(options.clone())),
     )
     .with_projection_indices(Some(vec![12, 0]))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.display().to_string(), 10))
     .build();
 
-    let config = CsvSource::new(true, b',', b'"')
+    let config = CsvSource::new(Arc::clone(&schema))
+        .with_csv_options(options)
         .with_comment(Some(b'#'))
-        .with_schema(TableSchema::from_file_schema(schema))
         .with_batch_size(8192)
         .with_projection(&scan_config);
 
@@ -125,8 +129,7 @@ async fn json_opener() -> Result<()> {
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
-        schema,
-        Arc::new(JsonSource::default()),
+        Arc::new(JsonSource::new(schema)),
     )
     .with_projection_indices(Some(vec![1, 0]))
     .with_limit(Some(5))

@@ -185,7 +185,6 @@ macro_rules! get_row_value {
 /// [NULL Values and empty strings]: https://duckdb.org/dev/sqllogictest/result_verification#null-values-and-empty-strings
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
-///
 pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"

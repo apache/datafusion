@@ -1943,6 +1943,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), 5, 1, -2), array_slice(make_array(
 ----
 [5, 3, 1] [o, l, h]
 
+# Test NULL stride
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 1, 5, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 1, 5, NULL);
+----
+NULL NULL
+
+# Test NULL stride
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 1, 5, NULL),
+       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 1, 5, NULL);
+----
+NULL NULL
+
 query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 1, 2);
 ----
@@ -1964,6 +1977,14 @@ query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0, 6), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 0, 5);
 ----
 [1, 2, 3, 4, 5] [h, e, l, l, o]
+
+# TODO: Enable once arrow_cast supports ListView types.
+# Expected output (once supported):
+# ----
+# [1, 2, 3, 4, 5] [h, e, l, l, o]
+query error DataFusion error: Execution error: Unsupported type 'ListView\(Int64\)'. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'. Error unknown token: ListView
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'ListView(Int64)'), 0, 6),
+       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'ListView(Utf8)'), 0, 5);
 
 query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 0, 6),
@@ -2003,6 +2024,14 @@ query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 6), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 3, 7);
 ----
 [2, 3, 4, 5] [l, l, o]
+
+# TODO: Enable once arrow_cast supports LargeListView types.
+# Expected output (once supported):
+# ----
+# [2, 3, 4, 5] [l, l, o]
+query error DataFusion error: Execution error: Unsupported type 'LargeListView\(Int64\)'. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'. Error unknown token: LargeListView
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeListView(Int64)'), 2, 6),
+       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeListView(Utf8)'), 3, 7);
 
 # array_slice scalar function #6 (with positive indexes; nested array)
 query ?

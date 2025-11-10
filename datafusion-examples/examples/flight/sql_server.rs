@@ -68,7 +68,6 @@ macro_rules! status {
 ///
 /// Based heavily on Ballista's implementation: https://github.com/apache/datafusion-ballista/blob/main/ballista/scheduler/src/flight_sql.rs
 /// and the example in arrow-rs: https://github.com/apache/arrow-rs/blob/master/arrow-flight/examples/flight_sql_server.rs
-///
 pub async fn sql_server() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let addr = "0.0.0.0:50051".parse()?;
