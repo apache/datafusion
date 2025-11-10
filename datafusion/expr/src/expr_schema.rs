@@ -305,16 +305,14 @@ impl ExprSchemable for Expr {
                         // For branches with a nullable 'then' expression, try to determine
                         // if the 'then' expression is ever reachable in the situation where
                         // it would evaluate to null.
-                        let is_null = |expr: &Expr /* Type */| {
-                            if expr.eq(t) {
-                                Some(true)
-                            } else {
-                                None
-                            }
+                        let bounds = match predicate_bounds::evaluate_bounds(
+                            w,
+                            Some(t),
+                            input_schema,
+                        ) {
+                            Err(e) => return Some(Err(e)),
+                            Ok(b) => b,
                         };
-
-                        let bounds =
-                            predicate_bounds::evaluate_bounds(w, is_null, input_schema);
 
                         if bounds.is_certainly_not_true() {
                             // The predicate will never evaluate to true, so the 'then' expression

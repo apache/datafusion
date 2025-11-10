@@ -19,7 +19,7 @@ use crate::{BinaryExpr, Expr, ExprSchemable};
 use arrow::datatypes::DataType;
 use bitflags::bitflags;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{ExprSchema, ScalarValue};
+use datafusion_common::{DataFusionError, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr_common::operator::Operator;
 
@@ -34,24 +34,6 @@ bitflags! {
 }
 
 impl TernarySet {
-    fn try_from(value: &ScalarValue) -> TernarySet {
-        match value {
-            ScalarValue::Null => TernarySet::UNKNOWN,
-            ScalarValue::Boolean(b) => match b {
-                Some(true) => TernarySet::TRUE,
-                Some(false) => TernarySet::FALSE,
-                None => TernarySet::UNKNOWN,
-            },
-            _ => {
-                if let Ok(b) = value.cast_to(&DataType::Boolean) {
-                    Self::try_from(&b)
-                } else {
-                    TernarySet::empty()
-                }
-            }
-        }
-    }
-
     /// Returns the set of possible values after applying the `is true` test on all
     /// values in this set.
     /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
@@ -188,6 +170,25 @@ impl TernarySet {
     }
 }
 
+impl TryFrom<&ScalarValue> for TernarySet {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ScalarValue) -> Result<Self> {
+        Ok(match value {
+            ScalarValue::Null => TernarySet::UNKNOWN,
+            ScalarValue::Boolean(b) => match b {
+                Some(true) => TernarySet::TRUE,
+                Some(false) => TernarySet::FALSE,
+                None => TernarySet::UNKNOWN,
+            },
+            _ => {
+                let b = value.cast_to(&DataType::Boolean)?;
+                Self::try_from(&b)?
+            }
+        })
+    }
+}
+
 /// Computes the output interval for the given boolean expression based on statically
 /// available information.
 ///
@@ -233,21 +234,19 @@ impl TernarySet {
 /// * `NullableInterval::MaybeNull { values: Interval::UNCERTAIN }` - The predicate may
 ///   evaluate to any of TRUE, FALSE, or NULL
 ///
-pub(super) fn evaluate_bounds<F>(
+pub(super) fn evaluate_bounds(
     predicate: &Expr,
-    is_null: F,
+    certainly_null_expr: Option<&Expr>,
     input_schema: &dyn ExprSchema,
-) -> NullableInterval
-where
-    F: Fn(&Expr) -> Option<bool>,
-{
+) -> Result<NullableInterval> {
     let evaluator = PredicateBoundsEvaluator {
         input_schema,
-        is_null,
+        certainly_null_expr: certainly_null_expr.map(unwrap_certainly_null_expr),
     };
-    let possible_results = evaluator.evaluate_bounds(predicate);
+    let possible_results = evaluator.evaluate_bounds(predicate)?;
 
-    if possible_results.is_empty() || possible_results == TernarySet::all() {
+    let interval = if possible_results.is_empty() || possible_results == TernarySet::all()
+    {
         NullableInterval::MaybeNull {
             values: Interval::UNCERTAIN,
         }
@@ -279,77 +278,85 @@ where
         } else {
             NullableInterval::NotNull { values }
         }
+    };
+
+    Ok(interval)
+}
+
+/// Returns the innermost [Expr] that is provably null if `expr` is null.
+fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Not(e) => unwrap_certainly_null_expr(e),
+        Expr::Negative(e) => unwrap_certainly_null_expr(e),
+        Expr::Cast(e) => unwrap_certainly_null_expr(e.expr.as_ref()),
+        _ => expr,
     }
 }
 
-pub(super) struct PredicateBoundsEvaluator<'a, F> {
+struct PredicateBoundsEvaluator<'a> {
     input_schema: &'a dyn ExprSchema,
-    is_null: F,
+    certainly_null_expr: Option<&'a Expr>,
 }
 
-impl<F> PredicateBoundsEvaluator<'_, F>
-where
-    F: Fn(&Expr) -> Option<bool>,
-{
+impl PredicateBoundsEvaluator<'_> {
     /// Derives the bounds of the given boolean expression
-    fn evaluate_bounds(&self, predicate: &Expr) -> TernarySet {
-        match predicate {
+    fn evaluate_bounds(&self, predicate: &Expr) -> Result<TernarySet> {
+        Ok(match predicate {
             Expr::Literal(scalar, _) => {
                 // Interpret literals as boolean, coercing if necessary
-                TernarySet::try_from(scalar)
+                TernarySet::try_from(scalar)?
             }
-            Expr::Negative(e) => self.evaluate_bounds(e),
             Expr::IsNull(e) => {
                 // If `e` is not nullable, then `e IS NULL` is provably false
-                if let Ok(false) = e.nullable(self.input_schema) {
-                    return TernarySet::FALSE;
-                }
-
-                match e.get_type(self.input_schema) {
-                    // If `e` is a boolean expression, try to evaluate it and test for unknown
-                    Ok(DataType::Boolean) => self.evaluate_bounds(e).is_unknown(),
-                    // If `e` is not a boolean expression, check if `e` is provably null
-                    Ok(_) => self.is_null(e),
-                    Err(_) => TernarySet::empty(),
+                if !e.nullable(self.input_schema)? {
+                    TernarySet::FALSE
+                } else {
+                    match e.get_type(self.input_schema)? {
+                        // If `e` is a boolean expression, check if `e` is provably 'unknown'.
+                        DataType::Boolean => self.evaluate_bounds(e)?.is_unknown(),
+                        // If `e` is not a boolean expression, check if `e` is provably null
+                        _ => self.is_null(e),
+                    }
                 }
             }
             Expr::IsNotNull(e) => {
                 // If `e` is not nullable, then `e IS NOT NULL` is provably true
-                if let Ok(false) = e.nullable(self.input_schema) {
-                    return TernarySet::TRUE;
-                }
-
-                match e.get_type(self.input_schema) {
-                    // If `e` is a boolean expression, try to evaluate it and test for not unknown
-                    Ok(DataType::Boolean) => {
-                        TernarySet::not(self.evaluate_bounds(e).is_unknown())
+                if !e.nullable(self.input_schema)? {
+                    TernarySet::TRUE
+                } else {
+                    match e.get_type(self.input_schema)? {
+                        // If `e` is a boolean expression, try to evaluate it and test for not unknown
+                        DataType::Boolean => {
+                            TernarySet::not(self.evaluate_bounds(e)?.is_unknown())
+                        }
+                        // If `e` is not a boolean expression, check if `e` is provably null
+                        _ => TernarySet::not(self.is_null(e)),
                     }
-                    // If `e` is not a boolean expression, check if `e` is provably null
-                    Ok(_) => TernarySet::not(self.is_null(e)),
-                    Err(_) => TernarySet::empty(),
                 }
             }
-            Expr::IsTrue(e) => self.evaluate_bounds(e).is_true(),
-            Expr::IsNotTrue(e) => TernarySet::not(self.evaluate_bounds(e).is_true()),
-            Expr::IsFalse(e) => self.evaluate_bounds(e).is_false(),
-            Expr::IsNotFalse(e) => TernarySet::not(self.evaluate_bounds(e).is_false()),
-            Expr::IsUnknown(e) => self.evaluate_bounds(e).is_unknown(),
+            Expr::IsTrue(e) => self.evaluate_bounds(e)?.is_true(),
+            Expr::IsNotTrue(e) => TernarySet::not(self.evaluate_bounds(e)?.is_true()),
+            Expr::IsFalse(e) => self.evaluate_bounds(e)?.is_false(),
+            Expr::IsNotFalse(e) => TernarySet::not(self.evaluate_bounds(e)?.is_false()),
+            Expr::IsUnknown(e) => self.evaluate_bounds(e)?.is_unknown(),
             Expr::IsNotUnknown(e) => {
-                TernarySet::not(self.evaluate_bounds(e).is_unknown())
+                TernarySet::not(self.evaluate_bounds(e)?.is_unknown())
             }
-            Expr::Not(e) => TernarySet::not(self.evaluate_bounds(e)),
+            Expr::Not(e) => TernarySet::not(self.evaluate_bounds(e)?),
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::And,
                 right,
             }) => {
-                TernarySet::and(self.evaluate_bounds(left), self.evaluate_bounds(right))
+                TernarySet::and(self.evaluate_bounds(left)?, self.evaluate_bounds(right)?)
             }
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::Or,
                 right,
-            }) => TernarySet::or(self.evaluate_bounds(left), self.evaluate_bounds(right)),
+            }) => {
+                TernarySet::or(self.evaluate_bounds(left)?, self.evaluate_bounds(right)?)
+            }
             e => {
                 let mut result = TernarySet::empty();
                 let is_null = self.is_null(e);
@@ -366,7 +373,7 @@ where
 
                 result
             }
-        }
+        })
     }
 
     /// Determines if the given expression can evaluate to `NULL`.
@@ -387,50 +394,51 @@ where
             return TernarySet::FALSE;
         }
 
-        // Check if the callback can decide for us
-        if let Some(expr_is_null) = (self.is_null)(expr) {
-            return if expr_is_null {
-                TernarySet::TRUE
-            } else {
-                TernarySet::FALSE
-            };
+        // Check if the expression is the `certainly_null_expr` that was passed in.
+        if let Some(certainly_null_expr) = &self.certainly_null_expr {
+            if expr.eq(certainly_null_expr) {
+                return TernarySet::TRUE;
+            }
         }
 
         // `expr` is nullable, so our default answer for `is null` is going to be `{ TRUE, FALSE }`.
         // Try to see if we can narrow it down to just one option.
         match expr {
+            Expr::BinaryExpr(BinaryExpr { op, .. }) if op.returns_null_on_null() => {
+                self.is_null_if_any_child_null(expr)
+            }
             Expr::Alias(_)
-            | Expr::Between(_)
-            | Expr::BinaryExpr(_)
             | Expr::Cast(_)
             | Expr::Like(_)
             | Expr::Negative(_)
             | Expr::Not(_)
-            | Expr::SimilarTo(_) => {
-                // These expressions are null if any of their direct children is null
-                // If any child is inconclusive, the result for this expression is also inconclusive
-                let mut is_null = TernarySet::FALSE.clone();
-                let _ = expr.apply_children(|child| {
-                    let child_is_null = self.is_null(child);
-
-                    if child_is_null.contains(TernarySet::TRUE) {
-                        // If a child might be null, then the result may also be null
-                        is_null.insert(TernarySet::TRUE);
-                    }
-
-                    if !child_is_null.contains(TernarySet::FALSE) {
-                        // If the child is never not null, then the result can also never be not null
-                        // and we can stop traversing the children
-                        is_null.remove(TernarySet::FALSE);
-                        Ok(TreeNodeRecursion::Stop)
-                    } else {
-                        Ok(TreeNodeRecursion::Continue)
-                    }
-                });
-                is_null
-            }
+            | Expr::SimilarTo(_) => self.is_null_if_any_child_null(expr),
             _ => TernarySet::TRUE | TernarySet::FALSE,
         }
+    }
+
+    fn is_null_if_any_child_null(&self, expr: &Expr) -> TernarySet {
+        // These expressions are null if any of their direct children is null
+        // If any child is inconclusive, the result for this expression is also inconclusive
+        let mut is_null = TernarySet::FALSE.clone();
+        let _ = expr.apply_children(|child| {
+            let child_is_null = self.is_null(child);
+
+            if child_is_null.contains(TernarySet::TRUE) {
+                // If a child might be null, then the result may also be null
+                is_null.insert(TernarySet::TRUE);
+            }
+
+            if !child_is_null.contains(TernarySet::FALSE) {
+                // If the child is never not null, then the result can also never be not null
+                // and we can stop traversing the children
+                is_null.remove(TernarySet::FALSE);
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        });
+        is_null
     }
 }
 
@@ -443,7 +451,7 @@ mod tests {
         is_not_unknown, is_null, is_true, is_unknown, lit, not, Expr,
     };
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{DFSchema, ExprSchema, ScalarValue};
+    use datafusion_common::{DFSchema, ExprSchema, Result, ScalarValue};
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_expr_common::operator::Operator::{And, Eq, Or};
     use datafusion_expr_common::signature::Volatility;
@@ -459,14 +467,16 @@ mod tests {
             (ScalarValue::UInt8(None), TernarySet::UNKNOWN),
             (ScalarValue::UInt8(Some(0)), TernarySet::FALSE),
             (ScalarValue::UInt8(Some(1)), TernarySet::TRUE),
-            (
-                ScalarValue::Utf8(Some("abc".to_string())),
-                TernarySet::empty(),
-            ),
         ];
 
         for case in cases {
-            assert_eq!(TernarySet::try_from(&case.0), case.1);
+            assert_eq!(TernarySet::try_from(&case.0).unwrap(), case.1);
+        }
+
+        let error_cases = vec![ScalarValue::Utf8(Some("abc".to_string()))];
+
+        for case in error_cases {
+            assert!(TernarySet::try_from(&case).is_err());
         }
     }
 
@@ -649,64 +659,55 @@ mod tests {
         }
     }
 
-    fn const_eval_predicate<F>(
+    fn try_eval_predicate_bounds(
         predicate: &Expr,
-        evaluates_to_null: F,
+        evaluates_to_null: Option<&Expr>,
         input_schema: &dyn ExprSchema,
-    ) -> Option<bool>
-    where
-        F: Fn(&Expr) -> Option<bool>,
-    {
-        let bounds = evaluate_bounds(predicate, evaluates_to_null, input_schema);
+    ) -> Result<Option<bool>> {
+        let bounds = evaluate_bounds(predicate, evaluates_to_null, input_schema)?;
 
-        if bounds.is_certainly_true() {
+        Ok(if bounds.is_certainly_true() {
             Some(true)
         } else if bounds.is_certainly_not_true() {
             Some(false)
         } else {
             None
-        }
+        })
     }
 
-    fn const_eval(predicate: &Expr) -> Option<bool> {
-        let schema = DFSchema::try_from(Schema::empty()).unwrap();
-        const_eval_predicate(predicate, |_| None, &schema)
-    }
-
-    fn const_eval_with_null(
+    fn eval_predicate_bounds(
         predicate: &Expr,
-        schema: &DFSchema,
-        null_expr: &Expr,
+        evaluates_to_null: Option<&Expr>,
+        input_schema: &dyn ExprSchema,
     ) -> Option<bool> {
-        const_eval_predicate(
-            predicate,
-            |e| {
-                if e.eq(null_expr) {
-                    Some(true)
-                } else {
-                    None
-                }
-            },
-            schema,
-        )
+        try_eval_predicate_bounds(predicate, evaluates_to_null, input_schema).unwrap()
+    }
+
+    fn try_eval_bounds(predicate: &Expr) -> Result<Option<bool>> {
+        let schema = DFSchema::try_from(Schema::empty())?;
+        try_eval_predicate_bounds(predicate, None, &schema)
+    }
+
+    fn eval_bounds(predicate: &Expr) -> Option<bool> {
+        try_eval_bounds(predicate).unwrap()
     }
 
     #[test]
-    fn predicate_eval_literal() {
-        assert_eq!(const_eval(&lit(ScalarValue::Null)), Some(false));
+    fn evaluate_bounds_literal() {
+        assert_eq!(eval_bounds(&lit(ScalarValue::Null)), Some(false));
 
-        assert_eq!(const_eval(&lit(false)), Some(false));
-        assert_eq!(const_eval(&lit(true)), Some(true));
+        assert_eq!(eval_bounds(&lit(false)), Some(false));
+        assert_eq!(eval_bounds(&lit(true)), Some(true));
 
-        assert_eq!(const_eval(&lit(0)), Some(false));
-        assert_eq!(const_eval(&lit(1)), Some(true));
+        assert_eq!(eval_bounds(&lit(0)), Some(false));
+        assert_eq!(eval_bounds(&lit(1)), Some(true));
 
-        assert_eq!(const_eval(&lit("foo")), None);
-        assert_eq!(const_eval(&lit(ScalarValue::Utf8(None))), Some(false));
+        assert_eq!(eval_bounds(&lit(ScalarValue::Utf8(None))), Some(false));
+        assert!(try_eval_bounds(&lit("foo")).is_err());
     }
 
     #[test]
-    fn predicate_eval_and() {
+    fn evaluate_bounds_and() {
         let null = lit(ScalarValue::Null);
         let zero = lit(0);
         let one = lit(1);
@@ -715,168 +716,89 @@ mod tests {
         let func = make_scalar_func_expr();
 
         assert_eq!(
-            const_eval(&binary_expr(null.clone(), And, null.clone())),
+            eval_bounds(&binary_expr(null.clone(), And, null.clone())),
             Some(false)
         );
         assert_eq!(
-            const_eval(&binary_expr(null.clone(), And, one.clone())),
+            eval_bounds(&binary_expr(null.clone(), And, one.clone())),
             Some(false)
         );
         assert_eq!(
-            const_eval(&binary_expr(null.clone(), And, zero.clone())),
-            Some(false)
-        );
-
-        assert_eq!(
-            const_eval(&binary_expr(one.clone(), And, one.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(one.clone(), And, zero.clone())),
+            eval_bounds(&binary_expr(null.clone(), And, zero.clone())),
             Some(false)
         );
 
         assert_eq!(
-            const_eval(&binary_expr(null.clone(), And, t.clone())),
-            Some(false)
+            eval_bounds(&binary_expr(one.clone(), And, one.clone())),
+            Some(true)
         );
         assert_eq!(
-            const_eval(&binary_expr(t.clone(), And, null.clone())),
-            Some(false)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(null.clone(), And, f.clone())),
-            Some(false)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(f.clone(), And, null.clone())),
+            eval_bounds(&binary_expr(one.clone(), And, zero.clone())),
             Some(false)
         );
 
         assert_eq!(
-            const_eval(&binary_expr(t.clone(), And, t.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(t.clone(), And, f.clone())),
+            eval_bounds(&binary_expr(null.clone(), And, t.clone())),
             Some(false)
         );
         assert_eq!(
-            const_eval(&binary_expr(f.clone(), And, t.clone())),
+            eval_bounds(&binary_expr(t.clone(), And, null.clone())),
             Some(false)
         );
         assert_eq!(
-            const_eval(&binary_expr(f.clone(), And, f.clone())),
-            Some(false)
-        );
-
-        assert_eq!(const_eval(&binary_expr(t.clone(), And, func.clone())), None);
-        assert_eq!(const_eval(&binary_expr(func.clone(), And, t.clone())), None);
-        assert_eq!(
-            const_eval(&binary_expr(f.clone(), And, func.clone())),
+            eval_bounds(&binary_expr(null.clone(), And, f.clone())),
             Some(false)
         );
         assert_eq!(
-            const_eval(&binary_expr(func.clone(), And, f.clone())),
-            Some(false)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(null.clone(), And, func.clone())),
-            Some(false)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(func.clone(), And, null.clone())),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn predicate_eval_or() {
-        let null = lit(ScalarValue::Null);
-        let zero = lit(0);
-        let one = lit(1);
-        let t = lit(true);
-        let f = lit(false);
-        let func = make_scalar_func_expr();
-
-        assert_eq!(
-            const_eval(&binary_expr(null.clone(), Or, null.clone())),
-            Some(false)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(null.clone(), Or, one.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(null.clone(), Or, zero.clone())),
+            eval_bounds(&binary_expr(f.clone(), And, null.clone())),
             Some(false)
         );
 
         assert_eq!(
-            const_eval(&binary_expr(one.clone(), Or, one.clone())),
+            eval_bounds(&binary_expr(t.clone(), And, t.clone())),
             Some(true)
         );
         assert_eq!(
-            const_eval(&binary_expr(one.clone(), Or, zero.clone())),
-            Some(true)
-        );
-
-        assert_eq!(
-            const_eval(&binary_expr(null.clone(), Or, t.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(t.clone(), Or, null.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(null.clone(), Or, f.clone())),
+            eval_bounds(&binary_expr(t.clone(), And, f.clone())),
             Some(false)
         );
         assert_eq!(
-            const_eval(&binary_expr(f.clone(), Or, null.clone())),
+            eval_bounds(&binary_expr(f.clone(), And, t.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(f.clone(), And, f.clone())),
             Some(false)
         );
 
         assert_eq!(
-            const_eval(&binary_expr(t.clone(), Or, t.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(t.clone(), Or, f.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(f.clone(), Or, t.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(f.clone(), Or, f.clone())),
-            Some(false)
-        );
-
-        assert_eq!(
-            const_eval(&binary_expr(t.clone(), Or, func.clone())),
-            Some(true)
-        );
-        assert_eq!(
-            const_eval(&binary_expr(func.clone(), Or, t.clone())),
-            Some(true)
-        );
-        assert_eq!(const_eval(&binary_expr(f.clone(), Or, func.clone())), None);
-        assert_eq!(const_eval(&binary_expr(func.clone(), Or, f.clone())), None);
-        assert_eq!(
-            const_eval(&binary_expr(null.clone(), Or, func.clone())),
+            eval_bounds(&binary_expr(t.clone(), And, func.clone())),
             None
         );
         assert_eq!(
-            const_eval(&binary_expr(func.clone(), Or, null.clone())),
+            eval_bounds(&binary_expr(func.clone(), And, t.clone())),
             None
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(f.clone(), And, func.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(func.clone(), And, f.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(null.clone(), And, func.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(func.clone(), And, null.clone())),
+            Some(false)
         );
     }
 
     #[test]
-    fn predicate_eval_not() {
+    fn evaluate_bounds_or() {
         let null = lit(ScalarValue::Null);
         let zero = lit(0);
         let one = lit(1);
@@ -884,18 +806,103 @@ mod tests {
         let f = lit(false);
         let func = make_scalar_func_expr();
 
-        assert_eq!(const_eval(&not(null.clone())), Some(false));
-        assert_eq!(const_eval(&not(one.clone())), Some(false));
-        assert_eq!(const_eval(&not(zero.clone())), Some(true));
+        assert_eq!(
+            eval_bounds(&binary_expr(null.clone(), Or, null.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(null.clone(), Or, one.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(null.clone(), Or, zero.clone())),
+            Some(false)
+        );
 
-        assert_eq!(const_eval(&not(t.clone())), Some(false));
-        assert_eq!(const_eval(&not(f.clone())), Some(true));
+        assert_eq!(
+            eval_bounds(&binary_expr(one.clone(), Or, one.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(one.clone(), Or, zero.clone())),
+            Some(true)
+        );
 
-        assert_eq!(const_eval(&not(func.clone())), None);
+        assert_eq!(
+            eval_bounds(&binary_expr(null.clone(), Or, t.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(t.clone(), Or, null.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(null.clone(), Or, f.clone())),
+            Some(false)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(f.clone(), Or, null.clone())),
+            Some(false)
+        );
+
+        assert_eq!(
+            eval_bounds(&binary_expr(t.clone(), Or, t.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(t.clone(), Or, f.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(f.clone(), Or, t.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(f.clone(), Or, f.clone())),
+            Some(false)
+        );
+
+        assert_eq!(
+            eval_bounds(&binary_expr(t.clone(), Or, func.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(func.clone(), Or, t.clone())),
+            Some(true)
+        );
+        assert_eq!(eval_bounds(&binary_expr(f.clone(), Or, func.clone())), None);
+        assert_eq!(eval_bounds(&binary_expr(func.clone(), Or, f.clone())), None);
+        assert_eq!(
+            eval_bounds(&binary_expr(null.clone(), Or, func.clone())),
+            None
+        );
+        assert_eq!(
+            eval_bounds(&binary_expr(func.clone(), Or, null.clone())),
+            None
+        );
     }
 
     #[test]
-    fn predicate_eval_is() {
+    fn evaluate_bounds_not() {
+        let null = lit(ScalarValue::Null);
+        let zero = lit(0);
+        let one = lit(1);
+        let t = lit(true);
+        let f = lit(false);
+        let func = make_scalar_func_expr();
+
+        assert_eq!(eval_bounds(&not(null.clone())), Some(false));
+        assert_eq!(eval_bounds(&not(one.clone())), Some(false));
+        assert_eq!(eval_bounds(&not(zero.clone())), Some(true));
+
+        assert_eq!(eval_bounds(&not(t.clone())), Some(false));
+        assert_eq!(eval_bounds(&not(f.clone())), Some(true));
+
+        assert_eq!(eval_bounds(&not(func.clone())), None);
+    }
+
+    #[test]
+    fn evaluate_bounds_is() {
         let null = lit(ScalarValue::Null);
         let zero = lit(0);
         let one = lit(1);
@@ -915,73 +922,77 @@ mod tests {
         )]))
         .unwrap();
 
-        assert_eq!(const_eval(&is_null(null.clone())), Some(true));
-        assert_eq!(const_eval(&is_null(one.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_null(null.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_null(one.clone())), Some(false));
+        let predicate = &is_null(col.clone());
         assert_eq!(
-            const_eval_with_null(&is_null(col.clone()), &nullable_schema, &col),
+            eval_predicate_bounds(predicate, Some(&col), &nullable_schema),
             Some(true)
         );
+        let predicate = &is_null(col.clone());
         assert_eq!(
-            const_eval_with_null(&is_null(col.clone()), &not_nullable_schema, &col),
+            eval_predicate_bounds(predicate, Some(&col), &not_nullable_schema),
             Some(false)
         );
 
-        assert_eq!(const_eval(&is_not_null(null.clone())), Some(false));
-        assert_eq!(const_eval(&is_not_null(one.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_null(null.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_not_null(one.clone())), Some(true));
+        let predicate = &is_not_null(col.clone());
         assert_eq!(
-            const_eval_with_null(&is_not_null(col.clone()), &nullable_schema, &col),
+            eval_predicate_bounds(predicate, Some(&col), &nullable_schema),
             Some(false)
         );
+        let predicate = &is_not_null(col.clone());
         assert_eq!(
-            const_eval_with_null(&is_not_null(col.clone()), &not_nullable_schema, &col),
+            eval_predicate_bounds(predicate, Some(&col), &not_nullable_schema),
             Some(true)
         );
 
-        assert_eq!(const_eval(&is_true(null.clone())), Some(false));
-        assert_eq!(const_eval(&is_true(t.clone())), Some(true));
-        assert_eq!(const_eval(&is_true(f.clone())), Some(false));
-        assert_eq!(const_eval(&is_true(zero.clone())), Some(false));
-        assert_eq!(const_eval(&is_true(one.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_true(null.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_true(t.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_true(f.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_true(zero.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_true(one.clone())), Some(true));
 
-        assert_eq!(const_eval(&is_not_true(null.clone())), Some(true));
-        assert_eq!(const_eval(&is_not_true(t.clone())), Some(false));
-        assert_eq!(const_eval(&is_not_true(f.clone())), Some(true));
-        assert_eq!(const_eval(&is_not_true(zero.clone())), Some(true));
-        assert_eq!(const_eval(&is_not_true(one.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_not_true(null.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_true(t.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_not_true(f.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_true(zero.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_true(one.clone())), Some(false));
 
-        assert_eq!(const_eval(&is_false(null.clone())), Some(false));
-        assert_eq!(const_eval(&is_false(t.clone())), Some(false));
-        assert_eq!(const_eval(&is_false(f.clone())), Some(true));
-        assert_eq!(const_eval(&is_false(zero.clone())), Some(true));
-        assert_eq!(const_eval(&is_false(one.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_false(null.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_false(t.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_false(f.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_false(zero.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_false(one.clone())), Some(false));
 
-        assert_eq!(const_eval(&is_not_false(null.clone())), Some(true));
-        assert_eq!(const_eval(&is_not_false(t.clone())), Some(true));
-        assert_eq!(const_eval(&is_not_false(f.clone())), Some(false));
-        assert_eq!(const_eval(&is_not_false(zero.clone())), Some(false));
-        assert_eq!(const_eval(&is_not_false(one.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_false(null.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_false(t.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_false(f.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_not_false(zero.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_not_false(one.clone())), Some(true));
 
-        assert_eq!(const_eval(&is_unknown(null.clone())), Some(true));
-        assert_eq!(const_eval(&is_unknown(t.clone())), Some(false));
-        assert_eq!(const_eval(&is_unknown(f.clone())), Some(false));
-        assert_eq!(const_eval(&is_unknown(zero.clone())), Some(false));
-        assert_eq!(const_eval(&is_unknown(one.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_unknown(null.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_unknown(t.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_unknown(f.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_unknown(zero.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_unknown(one.clone())), Some(false));
 
-        assert_eq!(const_eval(&is_not_unknown(null.clone())), Some(false));
-        assert_eq!(const_eval(&is_not_unknown(t.clone())), Some(true));
-        assert_eq!(const_eval(&is_not_unknown(f.clone())), Some(true));
-        assert_eq!(const_eval(&is_not_unknown(zero.clone())), Some(true));
-        assert_eq!(const_eval(&is_not_unknown(one.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_unknown(null.clone())), Some(false));
+        assert_eq!(eval_bounds(&is_not_unknown(t.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_unknown(f.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_unknown(zero.clone())), Some(true));
+        assert_eq!(eval_bounds(&is_not_unknown(one.clone())), Some(true));
     }
 
     #[test]
-    fn predicate_eval_udf() {
+    fn evaluate_bounds_udf() {
         let func = make_scalar_func_expr();
 
-        assert_eq!(const_eval(&func.clone()), None);
-        assert_eq!(const_eval(&not(func.clone())), None);
+        assert_eq!(eval_bounds(&func.clone()), None);
+        assert_eq!(eval_bounds(&not(func.clone())), None);
         assert_eq!(
-            const_eval(&binary_expr(func.clone(), And, func.clone())),
+            eval_bounds(&binary_expr(func.clone(), And, func.clone())),
             None
         );
     }
@@ -1000,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn predicate_eval_when_then() {
+    fn evaluate_bounds_when_then() {
         let nullable_schema =
             DFSchema::try_from(Schema::new(vec![Field::new("x", DataType::UInt8, true)]))
                 .unwrap();
@@ -1021,11 +1032,11 @@ mod tests {
         );
 
         assert_eq!(
-            const_eval_with_null(&when, &nullable_schema, &x),
+            eval_predicate_bounds(&when, Some(&x), &nullable_schema),
             Some(false)
         );
         assert_eq!(
-            const_eval_with_null(&when, &not_nullable_schema, &x),
+            eval_predicate_bounds(&when, Some(&x), &not_nullable_schema),
             Some(true)
         );
     }
