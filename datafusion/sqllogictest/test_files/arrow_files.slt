@@ -353,3 +353,21 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 # Errors in partition filters should be reported
 query error Divide by zero error
 SELECT f0 FROM arrow_partitioned_stream WHERE CASE WHEN true THEN 1 / 0 ELSE part END = 1;
+
+# Test CREATE EXTERNAL TABLE with empty stream format
+statement ok
+CREATE EXTERNAL TABLE arrow_stream_empty
+STORED AS ARROW
+LOCATION '../datasource-arrow/tests/data/example_stream_empty.arrow'; 
+
+# physical plan for stream format
+query TT
+EXPLAIN SELECT * FROM arrow_stream_empty
+----
+logical_plan TableScan: arrow_stream_empty projection=[f0, f1, f2]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/datasource-arrow/tests/data/example_stream_empty.arrow]]}, projection=[f0, f1, f2], file_type=arrow_stream
+
+# stream format should return same data as file format
+query ITB
+SELECT * FROM arrow_stream_empty
+----
