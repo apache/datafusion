@@ -391,7 +391,6 @@ impl RefCountedTempFile {
         self.current_file_disk_usage.load(Ordering::Relaxed)
     }
 
-
     pub fn clone_refcounted(&self) -> Result<Self> {
         let reopened = std::fs::File::open(self.path())?;
         let temp_path = TempPath::from_path(self.path());

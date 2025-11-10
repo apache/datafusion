@@ -20,9 +20,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::utils::{
-    reorder_output_after_swap, swap_join_projection, OnceFut,
-};
+use crate::joins::utils::{reorder_output_after_swap, swap_join_projection, OnceFut};
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -33,12 +31,12 @@ use crate::{
     common::can_project,
     joins::utils::{
         build_join_schema, check_join_is_valid, estimate_join_statistics,
-        symmetric_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
+        symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
+        JoinFilter,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{ExecutionPlanProperties, SpillManager};
 use std::fmt;
@@ -52,8 +50,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, JoinSide, JoinType,
-    NullEquality, Result,
+    internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality, Result,
 };
 use datafusion_execution::TaskContext;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
@@ -670,7 +667,7 @@ impl ExecutionPlan for GraceHashJoinExec {
                 spill_right_clone,
                 partition,
             )
-                .await?;
+            .await?;
             accumulator_clone
                 .report_partition(partition, left_idx.clone(), right_idx.clone())
                 .await;
@@ -730,11 +727,11 @@ impl ExecutionPlan for GraceHashJoinExec {
         }
 
         if let Some(JoinData {
-                        projected_left_child,
-                        projected_right_child,
-                        join_filter,
-                        join_on,
-                    }) = try_pushdown_through_join(
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join(
             projection,
             self.left(),
             self.right(),
@@ -820,7 +817,7 @@ impl ExecutionPlan for GraceHashJoinExec {
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
-        // We expect 0 or 1 self filters
+                                                                               // We expect 0 or 1 self filters
         if let Some(filter) = right_child_self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
@@ -855,7 +852,6 @@ impl ExecutionPlan for GraceHashJoinExec {
     }
 }
 
-
 #[allow(clippy::too_many_arguments)]
 pub async fn partition_and_spill(
     random_state: RandomState,
@@ -883,7 +879,7 @@ pub async fn partition_and_spill(
         &join_metrics,
         enable_dynamic_filter_pushdown,
     )
-        .await?;
+    .await?;
 
     // RIGHT side partitioning
     let right_index = partition_and_spill_one_side(
@@ -896,7 +892,7 @@ pub async fn partition_and_spill(
         &join_metrics,
         enable_dynamic_filter_pushdown,
     )
-        .await?;
+    .await?;
     Ok((left_index, right_index))
 }
 

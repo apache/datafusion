@@ -17,11 +17,11 @@
 
 //! Define the `SpillManager` struct, which is responsible for reading and writing `RecordBatch`es to raw files based on the provided configurations.
 
-use std::slice;
 use arrow::array::StringViewArray;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use std::slice;
 use std::sync::Arc;
 
 use datafusion_common::{config::SpillCompression, DataFusionError, Result};
@@ -30,8 +30,8 @@ use datafusion_execution::SendableRecordBatchStream;
 
 use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
 use crate::coop::cooperative;
-use crate::{common::spawn_buffered, metrics::SpillMetrics};
 use crate::spill::in_memory_spill_buffer::InMemorySpillBuffer;
+use crate::{common::spawn_buffered, metrics::SpillMetrics};
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -177,7 +177,11 @@ impl SpillManager {
 
     /// Automatically decides whether to spill the given RecordBatch to memory or disk,
     /// depending on available memory pool capacity.
-    pub(crate) fn spill_batch_auto(&self, batch: &RecordBatch, request_msg: &str) -> Result<SpillLocation> {
+    pub(crate) fn spill_batch_auto(
+        &self,
+        batch: &RecordBatch,
+        request_msg: &str,
+    ) -> Result<SpillLocation> {
         let size = batch.get_sliced_size()?;
 
         // Check current memory usage and total limit from the runtime memory pool
@@ -188,14 +192,16 @@ impl SpillManager {
         };
 
         // If there's enough memory (with a safety margin), keep it in memory
-        if used + size * 3 / 2  <= limit {
+        if used + size * 3 / 2 <= limit {
             let buf = Arc::new(InMemorySpillBuffer::from_batch(batch)?);
             self.metrics.spilled_bytes.add(size);
             self.metrics.spilled_rows.add(batch.num_rows());
             Ok(SpillLocation::Memory(buf))
         } else {
             // Otherwise spill to disk using the existing SpillManager logic
-            let Some(file) = self.spill_record_batch_and_finish(slice::from_ref(batch), request_msg)? else {
+            let Some(file) =
+                self.spill_record_batch_and_finish(slice::from_ref(batch), request_msg)?
+            else {
                 return Err(DataFusionError::Execution(
                     "failed to spill batch to disk".into(),
                 ));
@@ -251,12 +257,13 @@ impl SpillManager {
         spill: &SpillLocation,
     ) -> Result<SendableRecordBatchStream> {
         match spill {
-            SpillLocation::Memory(buf) => Ok(Arc::clone(buf).as_stream(Arc::clone(&self.schema))?),
+            SpillLocation::Memory(buf) => {
+                Ok(Arc::clone(buf).as_stream(Arc::clone(&self.schema))?)
+            }
             SpillLocation::Disk(file) => self.read_spill_as_stream_ref(file),
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub enum SpillLocation {
