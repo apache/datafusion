@@ -42,7 +42,7 @@ use crate::{
     DisplayFormatType, ExecutionPlan,
 };
 
-use arrow::compute::filter_record_batch;
+use arrow::compute::{filter_record_batch, BatchCoalescer};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
@@ -392,6 +392,8 @@ impl ExecutionPlan for FilterExec {
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
+            batch_coalescer: BatchCoalescer::new(self.schema(), 8192)
+                .with_biggest_coalesce_batch_size(Some(4096)),
         }))
     }
 
@@ -627,6 +629,8 @@ struct FilterExecStream {
     metrics: FilterExecMetrics,
     /// The projection indices of the columns in the input schema
     projection: Option<Vec<usize>>,
+    /// Batch coalescer to combine small batches
+    batch_coalescer: BatchCoalescer,
 }
 
 /// The metrics for `FilterExec`
@@ -652,14 +656,13 @@ pub fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Result<RecordBatch> {
-    filter_and_project(batch, predicate, None, &batch.schema())
+    filter_and_project(batch, predicate, None)
 }
 
 fn filter_and_project(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
     projection: Option<&Vec<usize>>,
-    output_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
@@ -669,14 +672,7 @@ fn filter_and_project(
                 // Apply filter array to record batch
                 (Ok(filter_array), None) => filter_record_batch(batch, filter_array)?,
                 (Ok(filter_array), Some(projection)) => {
-                    let projected_columns = projection
-                        .iter()
-                        .map(|i| Arc::clone(batch.column(*i)))
-                        .collect();
-                    let projected_batch = RecordBatch::try_new(
-                        Arc::clone(output_schema),
-                        projected_columns,
-                    )?;
+                    let projected_batch = batch.project(projection)?;
                     filter_record_batch(&projected_batch, filter_array)?
                 }
                 (Err(_), _) => {
@@ -699,23 +695,54 @@ impl Stream for FilterExecStream {
         loop {
             match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let timer = self.metrics.baseline_metrics.elapsed_compute().timer();
-                    let filtered_batch = filter_and_project(
-                        &batch,
-                        &self.predicate,
-                        self.projection.as_ref(),
-                        &self.schema,
-                    )?;
-                    timer.done();
+                    // let timer = &self.metrics.baseline_metrics.elapsed_compute().timer();
+                    let _ = self.predicate.as_ref()
+                        .evaluate(&batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                        .and_then(|array| {
+                            Ok(match (as_boolean_array(&array), self.projection.as_ref()) {
+                                // Apply filter array to record batch
+                                (Ok(filter_array), None) => {
+                                    self.metrics.selectivity.add_part(filter_array.true_count());
+                                    self.metrics.selectivity.add_total(batch.num_rows());
 
-                    self.metrics.selectivity.add_part(filtered_batch.num_rows());
-                    self.metrics.selectivity.add_total(batch.num_rows());
+                                    self.batch_coalescer.push_batch_with_filter(batch.clone(), filter_array)?;
 
-                    // Skip entirely filtered batches
-                    if filtered_batch.num_rows() == 0 {
-                        continue;
+                                }
+                                (Ok(filter_array), Some(ref projection)) => {
+                                    let projected_batch = batch.project(projection)?;
+                                    self.metrics.selectivity.add_part(filter_array.true_count());
+                                    self.metrics.selectivity.add_total(projected_batch.num_rows());
+
+                                    self.batch_coalescer.push_batch_with_filter(projected_batch, filter_array)?;
+
+                                }
+                                (Err(_), _) => {
+                                    return internal_err!(
+                                        "Cannot create filter_array from non-boolean predicates"
+                                    );
+                                }
+                            })
+                        });
+
+                    //timer.done();
+
+                    if self.batch_coalescer.has_completed_batch() {
+                        poll = Poll::Ready(Some(Ok(self
+                            .batch_coalescer
+                            .next_completed_batch()
+                            .expect("has_completed_batch is true"))));
+                        break;
                     }
-                    poll = Poll::Ready(Some(Ok(filtered_batch)));
+                    continue;
+                }
+                None => {
+                    self.batch_coalescer.finish_buffered_batch().unwrap();
+                    if let Some(batch) = self.batch_coalescer.next_completed_batch() {
+                        poll = Poll::Ready(Some(Ok(batch)));
+                    } else {
+                        poll = Poll::Ready(None);
+                    }
                     break;
                 }
                 value => {
