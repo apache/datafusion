@@ -385,8 +385,46 @@ const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 async fn infer_stream_schema(
     mut stream: BoxStream<'static, object_store::Result<Bytes>>,
 ) -> Result<SchemaRef> {
-    // 16 bytes covers the preamble and metadata length no matter
-    // which version or format is used
+    // IPC streaming format.
+    // See https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+    //
+    //   <SCHEMA>
+    //   <DICTIONARY 0>
+    //   ...
+    //   <DICTIONARY k - 1>
+    //   <RECORD BATCH 0>
+    //   ...
+    //   <DICTIONARY x DELTA>
+    //   ...
+    //   <DICTIONARY y DELTA>
+    //   ...
+    //   <RECORD BATCH n - 1>
+    //   <EOS [optional]: 0xFFFFFFFF 0x00000000>
+
+    // The streaming format is made up of a sequence of encapsulated messages.
+    // See https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format
+    //
+    //   <continuation: 0xFFFFFFFF>  (added in v0.15.0)
+    //   <metadata_size: int32>
+    //   <metadata_flatbuffer: bytes>
+    //   <padding>
+    //   <message body>
+    //
+    // The first message is the schema.
+
+    // IPC file format is a wrapper around the streaming format with indexing information.
+    // See https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
+    //
+    //   <magic number "ARROW1">
+    //   <empty padding bytes [to 8 byte boundary]>
+    //   <STREAMING FORMAT with EOS>
+    //   <FOOTER>
+    //   <FOOTER SIZE: int32>
+    //   <magic number "ARROW1">
+
+    // For the purposes of this function, the arrow "preamble" is the magic number, padding,
+    // and the continuation marker. 16 bytes covers the preamble and metadata length
+    // no matter which version or format is used.
     let bytes = extend_bytes_to_n_length_from_stream(vec![], 16, &mut stream).await?;
 
     // The preamble length is everything before the metadata length
