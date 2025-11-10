@@ -34,7 +34,7 @@ use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
 };
 use datafusion_datasource::{
-    compute_all_files_statistics, ListingTableUrl, PartitionedFile,
+    compute_all_files_statistics, ListingTableUrl, PartitionedFile, TableSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -338,7 +338,16 @@ impl ListingTable {
     fn create_file_source_with_schema_adapter(
         &self,
     ) -> datafusion_common::Result<Arc<dyn FileSource>> {
-        let mut source = self.options.format.file_source();
+        let table_schema = TableSchema::new(
+            Arc::clone(&self.file_schema),
+            self.options
+                .table_partition_cols
+                .iter()
+                .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
+                .collect(),
+        );
+
+        let mut source = self.options.format.file_source(table_schema);
         // Apply schema adapter to source if available
         //
         // The source will use this SchemaAdapter to adapt data batches as they flow up the plan.
@@ -418,7 +427,7 @@ impl TableProvider for ListingTable {
             .options
             .table_partition_cols
             .iter()
-            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
+            .map(|col| Ok(Arc::new(self.table_schema.field_with_name(&col.0)?.clone())))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
 
         let table_partition_col_names = table_partition_cols
@@ -491,20 +500,15 @@ impl TableProvider for ListingTable {
             .format
             .create_physical_plan(
                 state,
-                FileScanConfigBuilder::new(
-                    object_store_url,
-                    Arc::clone(&self.file_schema),
-                    file_source,
-                )
-                .with_file_groups(partitioned_file_lists)
-                .with_constraints(self.constraints.clone())
-                .with_statistics(statistics)
-                .with_projection_indices(projection)
-                .with_limit(limit)
-                .with_output_ordering(output_ordering)
-                .with_table_partition_cols(table_partition_cols)
-                .with_expr_adapter(self.expr_adapter_factory.clone())
-                .build(),
+                FileScanConfigBuilder::new(object_store_url, file_source)
+                    .with_file_groups(partitioned_file_lists)
+                    .with_constraints(self.constraints.clone())
+                    .with_statistics(statistics)
+                    .with_projection_indices(projection)
+                    .with_limit(limit)
+                    .with_output_ordering(output_ordering)
+                    .with_expr_adapter(self.expr_adapter_factory.clone())
+                    .build(),
             )
             .await?;
 

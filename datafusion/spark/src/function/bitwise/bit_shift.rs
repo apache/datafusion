@@ -42,7 +42,6 @@ use crate::function::error_utils::{
 ///
 /// # Returns
 /// A new array with the shifted values.
-///
 fn shift_left<T: ArrowPrimitiveType>(
     value: &PrimitiveArray<T>,
     shift: &PrimitiveArray<Int32Type>,
@@ -71,7 +70,6 @@ where
 ///
 /// # Returns
 /// A new array with the shifted values.
-///
 fn shift_right<T: ArrowPrimitiveType>(
     value: &PrimitiveArray<T>,
     shift: &PrimitiveArray<Int32Type>,
@@ -132,7 +130,6 @@ impl UShr<i32> for i64 {
 ///
 /// # Returns
 /// A new array with the shifted values.
-///
 fn shift_right_unsigned<T: ArrowPrimitiveType>(
     value: &PrimitiveArray<T>,
     shift: &PrimitiveArray<Int32Type>,

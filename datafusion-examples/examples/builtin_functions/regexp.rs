@@ -28,12 +28,11 @@ use datafusion::prelude::*;
 ///
 /// Supported flags can be found at
 /// https://docs.rs/regex/latest/regex/#grouping-and-flags
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn regexp() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_csv(
         "examples",
-        "../../datafusion/physical-expr/tests/data/regex.csv",
+        "datafusion/physical-expr/tests/data/regex.csv",
         CsvReadOptions::new(),
     )
     .await?;

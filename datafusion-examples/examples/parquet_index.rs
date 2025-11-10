@@ -99,7 +99,6 @@ use url::Url;
 ///                   Thus some parquet files are      │             │
 ///                   "pruned" and thus are not        └─────────────┘
 ///                   scanned at all                   Parquet Files
-///
 /// ```
 ///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable
@@ -243,9 +242,10 @@ impl TableProvider for IndexTableProvider {
         let files = self.index.get_files(predicate.clone())?;
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let source = Arc::new(ParquetSource::default().with_predicate(predicate));
+        let source =
+            Arc::new(ParquetSource::new(self.schema()).with_predicate(predicate));
         let mut file_scan_config_builder =
-            FileScanConfigBuilder::new(object_store_url, self.schema(), source)
+            FileScanConfigBuilder::new(object_store_url, source)
                 .with_projection_indices(projection.cloned())
                 .with_limit(limit);
 

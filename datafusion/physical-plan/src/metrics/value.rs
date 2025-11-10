@@ -551,6 +551,8 @@ pub enum MetricValue {
     SpilledBytes(Count),
     /// Total size of output bytes produced: "output_bytes" metric
     OutputBytes(Count),
+    /// Total number of output batches produced: "output_batches" metric
+    OutputBatches(Count),
     /// Total size of spilled rows produced: "spilled_rows" metric
     SpilledRows(Count),
     /// Current memory used
@@ -616,6 +618,9 @@ impl PartialEq for MetricValue {
                 count == other
             }
             (MetricValue::OutputBytes(count), MetricValue::OutputBytes(other)) => {
+                count == other
+            }
+            (MetricValue::OutputBatches(count), MetricValue::OutputBatches(other)) => {
                 count == other
             }
             (MetricValue::SpilledRows(count), MetricValue::SpilledRows(other)) => {
@@ -699,6 +704,7 @@ impl MetricValue {
             Self::SpillCount(_) => "spill_count",
             Self::SpilledBytes(_) => "spilled_bytes",
             Self::OutputBytes(_) => "output_bytes",
+            Self::OutputBatches(_) => "output_batches",
             Self::SpilledRows(_) => "spilled_rows",
             Self::CurrentMemoryUsage(_) => "mem_used",
             Self::ElapsedCompute(_) => "elapsed_compute",
@@ -721,6 +727,7 @@ impl MetricValue {
             Self::SpillCount(count) => count.value(),
             Self::SpilledBytes(bytes) => bytes.value(),
             Self::OutputBytes(bytes) => bytes.value(),
+            Self::OutputBatches(count) => count.value(),
             Self::SpilledRows(count) => count.value(),
             Self::CurrentMemoryUsage(used) => used.value(),
             Self::ElapsedCompute(time) => time.value(),
@@ -755,6 +762,7 @@ impl MetricValue {
             Self::SpillCount(_) => Self::SpillCount(Count::new()),
             Self::SpilledBytes(_) => Self::SpilledBytes(Count::new()),
             Self::OutputBytes(_) => Self::OutputBytes(Count::new()),
+            Self::OutputBatches(_) => Self::OutputBatches(Count::new()),
             Self::SpilledRows(_) => Self::SpilledRows(Count::new()),
             Self::CurrentMemoryUsage(_) => Self::CurrentMemoryUsage(Gauge::new()),
             Self::ElapsedCompute(_) => Self::ElapsedCompute(Time::new()),
@@ -802,6 +810,7 @@ impl MetricValue {
             | (Self::SpillCount(count), Self::SpillCount(other_count))
             | (Self::SpilledBytes(count), Self::SpilledBytes(other_count))
             | (Self::OutputBytes(count), Self::OutputBytes(other_count))
+            | (Self::OutputBatches(count), Self::OutputBatches(other_count))
             | (Self::SpilledRows(count), Self::SpilledRows(other_count))
             | (
                 Self::Count { count, .. },
@@ -879,6 +888,7 @@ impl MetricValue {
             Self::OutputRows(_) => 0,
             Self::ElapsedCompute(_) => 1,
             Self::OutputBytes(_) => 2,
+            Self::OutputBatches(_) => 3,
             // Other metrics
             Self::PruningMetrics { name, .. } => match name.as_ref() {
                 // The following metrics belong to `DataSourceExec` with a Parquet data source.
@@ -888,23 +898,23 @@ impl MetricValue {
                 // You may update these metrics as long as their relative order remains unchanged.
                 //
                 // Reference PR: <https://github.com/apache/datafusion/pull/18379>
-                "files_ranges_pruned_statistics" => 3,
-                "row_groups_pruned_statistics" => 4,
-                "row_groups_pruned_bloom_filter" => 5,
-                "page_index_rows_pruned" => 6,
-                _ => 7,
+                "files_ranges_pruned_statistics" => 4,
+                "row_groups_pruned_statistics" => 5,
+                "row_groups_pruned_bloom_filter" => 6,
+                "page_index_rows_pruned" => 7,
+                _ => 8,
             },
-            Self::SpillCount(_) => 8,
-            Self::SpilledBytes(_) => 9,
-            Self::SpilledRows(_) => 10,
-            Self::CurrentMemoryUsage(_) => 11,
-            Self::Count { .. } => 12,
-            Self::Gauge { .. } => 13,
-            Self::Time { .. } => 14,
-            Self::Ratio { .. } => 15,
-            Self::StartTimestamp(_) => 16, // show timestamps last
-            Self::EndTimestamp(_) => 17,
-            Self::Custom { .. } => 18,
+            Self::SpillCount(_) => 9,
+            Self::SpilledBytes(_) => 10,
+            Self::SpilledRows(_) => 11,
+            Self::CurrentMemoryUsage(_) => 12,
+            Self::Count { .. } => 13,
+            Self::Gauge { .. } => 14,
+            Self::Time { .. } => 15,
+            Self::Ratio { .. } => 16,
+            Self::StartTimestamp(_) => 17, // show timestamps last
+            Self::EndTimestamp(_) => 18,
+            Self::Custom { .. } => 19,
         }
     }
 
@@ -919,6 +929,7 @@ impl Display for MetricValue {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::OutputRows(count)
+            | Self::OutputBatches(count)
             | Self::SpillCount(count)
             | Self::SpilledRows(count)
             | Self::Count { count, .. } => {

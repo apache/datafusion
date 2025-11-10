@@ -26,7 +26,9 @@ use datafusion_expr::{ColumnarValue, Operator};
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
-use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
+use super::metrics::{
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
+};
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
@@ -596,7 +598,7 @@ impl TopK {
         // break into record batches as needed
         let mut batches = vec![];
         if let Some(mut batch) = heap.emit()? {
-            metrics.baseline.output_rows().add(batch.num_rows());
+            (&batch).record_output(&metrics.baseline);
 
             loop {
                 if batch.num_rows() <= batch_size {

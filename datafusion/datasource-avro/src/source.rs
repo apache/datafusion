@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use arrow_avro::schema::AvroSchema;
 use datafusion_common::error::Result;
@@ -33,10 +32,11 @@ use datafusion_datasource::TableSchema;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use object_store::ObjectStore;
+
 /// AvroSource holds the extra configuration that is necessary for opening avro files
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AvroSource {
-    schema: Option<SchemaRef>,
+    table_schema: TableSchema,
     batch_size: Option<usize>,
     file_projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
@@ -45,17 +45,20 @@ pub struct AvroSource {
 }
 
 impl AvroSource {
-    /// Initialize an AvroSource with default values
-    pub fn new() -> Self {
-        Self::default()
+    /// Initialize an AvroSource with the provided schema
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        Self {
+            table_schema: table_schema.into(),
+            batch_size: None,
+            file_projection: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projected_statistics: None,
+            schema_adapter_factory: None,
+        }
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
-        let schema = self
-            .schema
-            .as_ref()
-            .expect("Schema must set before open")
-            .as_ref(); // todo - avro metadata loading
+        let schema = self.table_schema.file_schema().as_ref(); // todo - avro metadata loading
 
         let projected_schema = if let Some(projection) = &self.file_projection {
             &schema.project(projection)?
@@ -90,16 +93,13 @@ impl FileSource for AvroSource {
         self
     }
 
+    fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
-        Arc::new(conf)
-    }
-
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        // TableSchema may have partition columns, but AvroSource does not use partition columns or values atm
-        conf.schema = Some(Arc::clone(schema.file_schema()));
         Arc::new(conf)
     }
 

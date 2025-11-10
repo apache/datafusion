@@ -675,11 +675,11 @@ query TT
 ----
 logical_plan
 01)Sort: log_c11_base_c12 ASC NULLS LAST
-02)--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c11_base_c12
+02)--Projection: log(aggregate_test_100.c12, aggregate_test_100.c11) AS log_c11_base_c12
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
 01)SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c11_base_c12]
+02)--ProjectionExec: expr=[log(c12@1, c11@0) as log_c11_base_c12]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
 
@@ -690,11 +690,11 @@ ORDER BY log_c12_base_c11 DESC NULLS LAST;
 ----
 logical_plan
 01)Sort: log_c12_base_c11 DESC NULLS LAST
-02)--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c12_base_c11
+02)--Projection: log(aggregate_test_100.c11, aggregate_test_100.c12) AS log_c12_base_c11
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
 01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC NULLS LAST]
-02)--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c12_base_c11]
+02)--ProjectionExec: expr=[log(c11@0, c12@1) as log_c12_base_c11]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
 
@@ -1024,10 +1024,10 @@ ORDER BY SUM(column1)
 
 # ORDER BY with a GROUP BY clause
 query I
-SELECT SUM(column1) 
-  FROM foo 
-GROUP BY column2 
-ORDER BY SUM(column1) 
+SELECT SUM(column1)
+  FROM foo
+GROUP BY column2
+ORDER BY SUM(column1)
 ----
 0
 2
@@ -1039,12 +1039,12 @@ ORDER BY SUM(column1)
 
 # ORDER BY with a GROUP BY clause and a HAVING clause
 query I
-SELECT 
-  SUM(column1) 
-FROM foo 
-GROUP BY column2 
-HAVING SUM(column1) < 3 
-ORDER BY SUM(column1) 
+SELECT
+  SUM(column1)
+FROM foo
+GROUP BY column2
+HAVING SUM(column1) < 3
+ORDER BY SUM(column1)
 ----
 0
 2
@@ -1179,7 +1179,7 @@ physical_plan
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-drop table ordered_table; 
+drop table ordered_table;
 
 
 # ABS(x) breaks the ordering if x's range contains both negative and positive values.
@@ -1215,7 +1215,7 @@ physical_plan
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-drop table ordered_table; 
+drop table ordered_table;
 
 # ABS(x) preserves the ordering if x's range falls into positive values.
 # Since x is defined as INT UNSIGNED, its range is assumed to be from 0 to INF.
