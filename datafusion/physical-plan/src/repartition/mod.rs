@@ -41,7 +41,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::{take_arrays, BatchCoalescer};
+use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
@@ -1198,15 +1198,7 @@ impl RepartitionExec {
         let mut partitioner =
             BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
 
-        let mut coalesce_batches = vec![];
-
-        if is_hash_partitioning {
-            for _ in 0..partitioner.num_partitions() {
-                let coalescer = BatchCoalescer::new(stream.schema(), 8192)
-                    .with_biggest_coalesce_batch_size(Some(4096));
-                coalesce_batches.push(coalescer);
-            }
-        }
+        let mut row_counts = vec![0usize; partitioner.num_partitions()];
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
@@ -1228,18 +1220,12 @@ impl RepartitionExec {
             }
 
             for res in partitioner.partition_iter(batch)? {
-                let (partition, mut batch) = res?;
+                let (partition, batch) = res?;
                 if is_hash_partitioning {
-                    let coalesce_batches_partition = &mut coalesce_batches[partition];
-                    coalesce_batches_partition.push_batch(batch)?;
-
-                    if coalesce_batches_partition.has_completed_batch() {
-                        batch = coalesce_batches_partition
-                            .next_completed_batch()
-                            .expect("has_completed_batch returned true");
-                    } else {
-                        // skip sending this batch
-                        continue;
+                    row_counts[partition] += batch.num_rows();
+                    if row_counts[partition] >= 8192 {
+                        row_counts[partition] = 0;
+                        batches_until_yield = 0; // force yield
                     }
                 }
                 let size = batch.get_array_memory_size();
@@ -1293,44 +1279,8 @@ impl RepartitionExec {
             if batches_until_yield == 0 {
                 tokio::task::yield_now().await;
                 batches_until_yield = partitioner.num_partitions();
-            } else {
+            } else if !is_hash_partitioning {
                 batches_until_yield -= 1;
-            }
-        }
-
-        if is_hash_partitioning {
-            // flush any remaining coalesced batches
-            for (partition, coalesce_batch) in coalesce_batches.iter_mut().enumerate() {
-                coalesce_batch.finish_buffered_batch()?;
-                if let Some(batch) = coalesce_batch.next_completed_batch() {
-                    let size = batch.get_array_memory_size();
-                    // Check if channel still exists (may have been removed if receiver hung up)
-                    if let Some(channel) = output_channels.get_mut(&partition) {
-                        let (batch_to_send, is_memory_batch) =
-                            match channel.reservation.lock().try_grow(size) {
-                                Ok(_) => {
-                                    // Memory available - send in-memory batch
-                                    (RepartitionBatch::Memory(batch), true)
-                                }
-                                Err(_) => {
-                                    // We're memory limited - spill to SpillPool
-                                    // SpillPool handles file handle reuse and rotation
-                                    channel.spill_writer.push_batch(&batch)?;
-                                    // Send marker indicating batch was spilled
-                                    (RepartitionBatch::Spilled, false)
-                                }
-                            };
-
-                        if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
-                            // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                            // Only shrink memory if it was a memory batch
-                            if is_memory_batch {
-                                channel.reservation.lock().shrink(size);
-                            }
-                            output_channels.remove(&partition);
-                        }
-                    }
-                }
             }
         }
 
