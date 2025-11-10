@@ -33,7 +33,7 @@ fn rewrite(
   &self,
   plan: LogicalPlan,
   _config: &dyn OptimizerConfig,
-) -> Result<Transformed> {
+) -> Result<Transformed<LogicalPlan>> {
     // Attempts to rewrite a logical plan to a uwheel-based plan that either provides
     // plan-time aggregates or skips execution based on min/max pruning.
     if let Some(rewritten) = self.try_rewrite(&plan) {
@@ -44,7 +44,7 @@ fn rewrite(
 }
 
 // Converts a uwheel aggregate result to a TableScan with a MemTable as source
-fn agg_to_table_scan(result: f64, schema: SchemaRef) -> Result {
+fn agg_to_table_scan(result: f64, schema: SchemaRef) -> Result<LogicalPlan> {
   let data = Float64Array::from(vec![result]);
   let record_batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(data)])?;
   let df_schema = Arc::new(DFSchema::try_from(schema.clone())?);
