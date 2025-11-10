@@ -27,7 +27,6 @@
 pub mod arrow_wrappers;
 pub mod catalog_provider;
 pub mod execution_plan;
-pub mod function_registry;
 pub mod insert_op;
 pub mod plan_properties;
 pub mod record_batch_stream;
