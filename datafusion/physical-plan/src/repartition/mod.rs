@@ -1225,7 +1225,7 @@ impl RepartitionExec {
                     row_counts[partition] += batch.num_rows();
                     if row_counts[partition] >= 8192 {
                         row_counts[partition] = 0;
-                        batches_until_yield = 0; // force yield
+                        batches_until_yield -= 1;
                     }
                 }
                 let size = batch.get_array_memory_size();
