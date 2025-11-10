@@ -88,7 +88,7 @@ impl TernarySet {
     ///  U  |  U
     ///  T  |  F
     /// ```
-    fn not(set: Self) -> Self {
+    fn not(set: &Self) -> Self {
         let mut not = Self::empty();
         if set.contains(Self::TRUE) {
             not.toggle(Self::FALSE);
@@ -114,7 +114,7 @@ impl TernarySet {
     ///     U │ F U U
     ///     T │ F U T
     /// ```
-    fn and(lhs: Self, rhs: Self) -> Self {
+    fn and(lhs: &Self, rhs: &Self) -> Self {
         if lhs.is_empty() || rhs.is_empty() {
             return Self::empty();
         }
@@ -149,7 +149,7 @@ impl TernarySet {
     ///     U │ U U T
     ///     T │ T T T
     /// ```
-    fn or(lhs: Self, rhs: Self) -> Self {
+    fn or(lhs: &Self, rhs: &Self) -> Self {
         let mut or = Self::empty();
         if lhs.contains(Self::TRUE) || rhs.contains(Self::TRUE) {
             or.toggle(Self::TRUE);
@@ -327,36 +327,38 @@ impl PredicateBoundsEvaluator<'_> {
                     match e.get_type(self.input_schema)? {
                         // If `e` is a boolean expression, try to evaluate it and test for not unknown
                         DataType::Boolean => {
-                            TernarySet::not(self.evaluate_bounds(e)?.is_unknown())
+                            TernarySet::not(&self.evaluate_bounds(e)?.is_unknown())
                         }
                         // If `e` is not a boolean expression, check if `e` is provably null
-                        _ => TernarySet::not(self.is_null(e)),
+                        _ => TernarySet::not(&self.is_null(e)),
                     }
                 }
             }
             Expr::IsTrue(e) => self.evaluate_bounds(e)?.is_true(),
-            Expr::IsNotTrue(e) => TernarySet::not(self.evaluate_bounds(e)?.is_true()),
+            Expr::IsNotTrue(e) => TernarySet::not(&self.evaluate_bounds(e)?.is_true()),
             Expr::IsFalse(e) => self.evaluate_bounds(e)?.is_false(),
-            Expr::IsNotFalse(e) => TernarySet::not(self.evaluate_bounds(e)?.is_false()),
+            Expr::IsNotFalse(e) => TernarySet::not(&self.evaluate_bounds(e)?.is_false()),
             Expr::IsUnknown(e) => self.evaluate_bounds(e)?.is_unknown(),
             Expr::IsNotUnknown(e) => {
-                TernarySet::not(self.evaluate_bounds(e)?.is_unknown())
+                TernarySet::not(&self.evaluate_bounds(e)?.is_unknown())
             }
-            Expr::Not(e) => TernarySet::not(self.evaluate_bounds(e)?),
+            Expr::Not(e) => TernarySet::not(&self.evaluate_bounds(e)?),
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::And,
                 right,
-            }) => {
-                TernarySet::and(self.evaluate_bounds(left)?, self.evaluate_bounds(right)?)
-            }
+            }) => TernarySet::and(
+                &self.evaluate_bounds(left)?,
+                &self.evaluate_bounds(right)?,
+            ),
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::Or,
                 right,
-            }) => {
-                TernarySet::or(self.evaluate_bounds(left)?, self.evaluate_bounds(right)?)
-            }
+            }) => TernarySet::or(
+                &self.evaluate_bounds(left)?,
+                &self.evaluate_bounds(right)?,
+            ),
             e => {
                 let mut result = TernarySet::empty();
                 let is_null = self.is_null(e);
@@ -505,7 +507,7 @@ mod tests {
         ];
 
         for case in cases {
-            assert_eq!(TernarySet::not(case.0), case.1);
+            assert_eq!(TernarySet::not(&case.0), case.1);
         }
     }
 
@@ -571,7 +573,7 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                TernarySet::and(case.0.clone(), case.1.clone()),
+                TernarySet::and(&case.0, &case.1),
                 case.2.clone(),
                 "{:?} & {:?} = {:?}",
                 case.0.clone(),
@@ -579,12 +581,12 @@ mod tests {
                 case.2.clone()
             );
             assert_eq!(
-                TernarySet::and(case.1.clone(), case.0.clone()),
+                TernarySet::and(&case.1, &case.0),
                 case.2.clone(),
                 "{:?} & {:?} = {:?}",
-                case.1.clone(),
-                case.0.clone(),
-                case.2.clone()
+                case.1,
+                case.0,
+                case.2
             );
         }
     }
@@ -641,20 +643,20 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                TernarySet::or(case.0.clone(), case.1.clone()),
+                TernarySet::or(&case.0, &case.1),
                 case.2.clone(),
                 "{:?} | {:?} = {:?}",
-                case.0.clone(),
-                case.1.clone(),
-                case.2.clone()
+                case.0,
+                case.1,
+                case.2
             );
             assert_eq!(
-                TernarySet::or(case.1.clone(), case.0.clone()),
+                TernarySet::or(&case.1, &case.0),
                 case.2.clone(),
                 "{:?} | {:?} = {:?}",
-                case.1.clone(),
-                case.0.clone(),
-                case.2.clone()
+                case.1,
+                case.0,
+                case.2
             );
         }
     }
