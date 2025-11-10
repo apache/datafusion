@@ -17,7 +17,6 @@
 
 //! Math function: `power()`.
 use std::any::Any;
-use std::sync::Arc;
 
 use super::log::LogFunc;
 
@@ -366,6 +365,7 @@ mod tests {
         as_decimal128_array, as_float64_array, as_int64_array,
     };
     use datafusion_common::config::ConfigOptions;
+    use std::sync::Arc;
 
     #[cfg(test)]
     #[ctor::ctor]
