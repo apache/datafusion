@@ -439,7 +439,7 @@ impl FileOpener for ArrowFileOpener {
 /// `FileSource` wrapper for both Arrow IPC file and stream formats
 #[derive(Clone)]
 pub struct ArrowSource {
-    pub inner: Arc<dyn FileSource>,
+    pub(crate) inner: Arc<dyn FileSource>,
 }
 
 impl ArrowSource {
