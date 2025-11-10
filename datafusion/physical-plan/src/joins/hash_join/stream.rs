@@ -491,7 +491,6 @@ impl HashJoinStream {
                 &self.column_indices,
                 self.join_type,
             )?;
-            self.join_metrics.output_batches.add(1);
             timer.done();
 
             self.state = HashJoinStreamState::FetchProbeBatch;
@@ -594,7 +593,6 @@ impl HashJoinStream {
             )?
         };
 
-        self.join_metrics.output_batches.add(1);
         timer.done();
 
         if next_offset.is_none() {
@@ -650,8 +648,6 @@ impl HashJoinStream {
         if let Ok(ref batch) = result {
             self.join_metrics.input_batches.add(1);
             self.join_metrics.input_rows.add(batch.num_rows());
-
-            self.join_metrics.output_batches.add(1);
         }
         timer.done();
 

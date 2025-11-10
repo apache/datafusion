@@ -34,7 +34,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
-use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile};
+use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile, TableSchema};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
@@ -481,6 +481,37 @@ pub fn parse_protobuf_file_scan_schema(
     Ok(Arc::new(convert_required!(proto.schema)?))
 }
 
+/// Parses a TableSchema from protobuf, extracting the file schema and partition columns
+pub fn parse_table_schema_from_proto(
+    proto: &protobuf::FileScanExecConf,
+) -> Result<TableSchema> {
+    let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
+
+    // Reacquire the partition column types from the schema before removing them below.
+    let table_partition_cols = proto
+        .table_partition_cols
+        .iter()
+        .map(|col| Ok(Arc::new(schema.field_with_name(col)?.clone())))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Remove partition columns from the schema after recreating table_partition_cols
+    // because the partition columns are not in the file. They are present to allow
+    // the partition column types to be reconstructed after serde.
+    let file_schema = Arc::new(
+        Schema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !table_partition_cols.contains(field))
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+        .with_metadata(schema.metadata.clone()),
+    );
+
+    Ok(TableSchema::new(file_schema, table_partition_cols))
+}
+
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     ctx: &TaskContext,
@@ -508,28 +539,6 @@ pub fn parse_protobuf_file_scan_config(
         true => ObjectStoreUrl::local_filesystem(),
     };
 
-    // Reacquire the partition column types from the schema before removing them below.
-    let table_partition_cols = proto
-        .table_partition_cols
-        .iter()
-        .map(|col| Ok(schema.field_with_name(col)?.clone()))
-        .collect::<Result<Vec<_>>>()?;
-
-    // Remove partition columns from the schema after recreating table_partition_cols
-    // because the partition columns are not in the file. They are present to allow
-    // the partition column types to be reconstructed after serde.
-    let file_schema = Arc::new(
-        Schema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|field| !table_partition_cols.contains(field))
-                .cloned()
-                .collect::<Vec<_>>(),
-        )
-        .with_metadata(schema.metadata.clone()),
-    );
-
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
         let sort_exprs = parse_physical_sort_exprs(
@@ -541,13 +550,12 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.extend(LexOrdering::new(sort_exprs));
     }
 
-    let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+    let config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_projection_indices(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
-        .with_table_partition_cols(table_partition_cols)
         .with_output_ordering(output_ordering)
         .with_batch_size(proto.batch_size.map(|s| s as usize))
         .build();

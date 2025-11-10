@@ -76,6 +76,7 @@ pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
@@ -83,6 +84,7 @@ use datafusion_expr::{
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use datafusion_session::SessionStore;
@@ -1269,14 +1271,18 @@ impl SessionContext {
             exec_datafusion_err!("Prepared statement '{}' does not exist", name)
         })?;
 
+        let state = self.state.read();
+        let context = SimplifyContext::new(state.execution_props());
+        let simplifier = ExprSimplifier::new(context);
+
         // Only allow literals as parameters for now.
         let mut params: Vec<ScalarAndMetadata> = parameters
             .into_iter()
-            .map(|e| match e {
+            .map(|e| match simplifier.simplify(e)? {
                 Expr::Literal(scalar, metadata) => {
                     Ok(ScalarAndMetadata::new(scalar, metadata))
                 }
-                _ => not_impl_err!("Unsupported parameter type: {}", e),
+                e => not_impl_err!("Unsupported parameter type: {e}"),
             })
             .collect::<Result<_>>()?;
 

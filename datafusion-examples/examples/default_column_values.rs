@@ -235,7 +235,7 @@ impl TableProvider for DefaultValueTableProvider {
             &df_schema,
         )?;
 
-        let parquet_source = ParquetSource::default()
+        let parquet_source = ParquetSource::new(schema.clone())
             .with_predicate(filter)
             .with_pushdown_filters(true);
 
@@ -257,7 +257,6 @@ impl TableProvider for DefaultValueTableProvider {
 
         let file_scan_config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("memory://")?,
-            self.schema.clone(),
             Arc::new(parquet_source),
         )
         .with_projection_indices(projection.cloned())
