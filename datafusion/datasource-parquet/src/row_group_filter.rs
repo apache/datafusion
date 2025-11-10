@@ -1552,8 +1552,9 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
-        let inner = ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
-            .with_file_size(object_meta.size);
+        let inner =
+            ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
+                .with_file_size(object_meta.size);
 
         let partitioned_file = PartitionedFile {
             object_meta,
