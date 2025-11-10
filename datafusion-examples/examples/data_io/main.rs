@@ -17,7 +17,7 @@
 
 //! # These examples of data formats and I/O
 //!
-//! These example demonstrate data formats and I/O.
+//! These examples demonstrate data formats and I/O.
 //!
 //! ## Usage
 //! ```bash
