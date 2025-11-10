@@ -276,6 +276,7 @@ impl ScalarUDFImpl for DateTruncFunc {
                     T::UNIT,
                     array,
                     granularity,
+                    tz_opt.clone(),
                 )?;
                 return Ok(ColumnarValue::Array(result));
             }
@@ -522,6 +523,7 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     tu: TimeUnit,
     array: &PrimitiveArray<T>,
     granularity: DateTruncGranularity,
+    tz_opt: Option<Arc<str>>,
 ) -> Result<ArrayRef> {
     let unit = match (tu, granularity) {
         (Second, DateTruncGranularity::Minute) => NonZeroI64::new(60),
@@ -556,7 +558,8 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
                 .iter()
                 .map(|v| *v - i64::rem_euclid(*v, unit)),
             array.nulls().cloned(),
-        );
+        )
+        .with_timezone_opt(tz_opt);
         Ok(Arc::new(array))
     } else {
         // truncate to the same or smaller unit
