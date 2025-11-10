@@ -21,17 +21,15 @@ use std::sync::Arc;
 
 use super::log::LogFunc;
 
-use crate::utils::calculate_binary_math;
-use arrow::array::{Array, ArrayRef, PrimitiveArray};
+use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
     ArrowNativeTypeOp, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, DecimalType, Float64Type, Int64Type,
+    Decimal64Type, Float64Type, Int64Type,
 };
 use arrow::error::ArrowError;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, Result, ScalarValue,
-};
+use datafusion_common::{exec_err, plan_datafusion_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::type_coercion::is_decimal;
@@ -152,28 +150,6 @@ where
     pow_decimal_int(base, scale, exp as i64)
 }
 
-/// Helper function to set precision and scale on a decimal array
-fn rescale_decimal<T>(
-    array: Arc<PrimitiveArray<T>>,
-    precision: u8,
-    scale: i8,
-) -> Result<Arc<PrimitiveArray<T>>>
-where
-    T: DecimalType,
-{
-    if scale < 0 {
-        return not_impl_err!(
-            "Negative scale is not supported for power for decimal types"
-        );
-    }
-    Ok(Arc::new(
-        array
-            .as_ref()
-            .clone()
-            .with_precision_and_scale(precision, scale)?,
-    ))
-}
-
 impl ScalarUDFImpl for PowerFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -251,84 +227,74 @@ impl ScalarUDFImpl for PowerFunc {
                     },
                 )?
             }
-            (DataType::Decimal32(precision, scale), DataType::Int64) => rescale_decimal(
-                    calculate_binary_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
+            (DataType::Decimal32(precision, scale), DataType::Int64) =>
+                    calculate_binary_decimal_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
                         &base,
                         exponent,
                         |b, e| pow_decimal_int(b, *scale, e),
-                    )?,
                     *precision,
                     *scale,
                 )?,
-            (DataType::Decimal32(precision, scale), DataType::Float64) => rescale_decimal(
-                    calculate_binary_math::<Decimal32Type, Float64Type, Decimal32Type, _>(
+            (DataType::Decimal32(precision, scale), DataType::Float64) =>
+                    calculate_binary_decimal_math::<Decimal32Type, Float64Type, Decimal32Type, _>(
                         &base,
                         exponent,
                         |b, e| pow_decimal_float(b, *scale, e),
-                    )?,
                     *precision,
                     *scale,
                 )?,
             (DataType::Decimal64(precision, scale), DataType::Int64) =>
-                rescale_decimal(
-                    calculate_binary_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
+                    calculate_binary_decimal_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
                         &base,
                         exponent,
                         |b, e| pow_decimal_int(b, *scale, e),
-                    )?,
                     *precision,
                     *scale,
                 )?,
-            (DataType::Decimal64(precision, scale), DataType::Float64) => rescale_decimal(
-                    calculate_binary_math::<Decimal64Type, Float64Type, Decimal64Type, _>(
+            (DataType::Decimal64(precision, scale), DataType::Float64) =>
+                    calculate_binary_decimal_math::<Decimal64Type, Float64Type, Decimal64Type, _>(
                         &base,
                         exponent,
                         |b, e| pow_decimal_float(b, *scale, e),
-                    )?,
                     *precision,
                     *scale,
                 )?,
             (DataType::Decimal128(precision, scale), DataType::Int64) =>
-                rescale_decimal(
-                    calculate_binary_math::<Decimal128Type, Int64Type, Decimal128Type, _>(
+                    calculate_binary_decimal_math::<Decimal128Type, Int64Type, Decimal128Type, _>(
                         &base,
                         exponent,
                         |b, e| pow_decimal_int(b, *scale, e),
-                    )?,
                     *precision,
                     *scale,
                 )?,
-            (DataType::Decimal128(precision, scale), DataType::Float64) => rescale_decimal(
-                    calculate_binary_math::<
+            (DataType::Decimal128(precision, scale), DataType::Float64) =>
+                    calculate_binary_decimal_math::<
                         Decimal128Type,
                         Float64Type,
                         Decimal128Type,
                         _,
-                    >(&base, exponent, |b, e| {
-                        pow_decimal_float(b, *scale, e)
-                    })?,
+                    >(&base, exponent, |b, e|
+                        pow_decimal_float(b, *scale, e),
                     *precision,
                     *scale,
                 )?,
-            (DataType::Decimal256(precision, scale),DataType::Int64) => rescale_decimal(
-                    calculate_binary_math::<Decimal256Type, Int64Type, Decimal256Type, _>(
+            (DataType::Decimal256(precision, scale),DataType::Int64) =>
+                    calculate_binary_decimal_math::<Decimal256Type, Int64Type, Decimal256Type, _>(
                         &base,
                         exponent,
                         |b, e| pow_decimal_int(b, *scale, e),
-                    )?,
                     *precision,
                     *scale,
                 )?,
-                (DataType::Decimal256(precision, scale), DataType::Float64) => rescale_decimal(
-                    calculate_binary_math::<
+                (DataType::Decimal256(precision, scale), DataType::Float64) =>
+                    calculate_binary_decimal_math::<
                         Decimal256Type,
                         Float64Type,
                         Decimal256Type,
                         _,
-                    >(&base, exponent, |b, e| {
-                        pow_decimal_float(b, *scale, e)
-                    })?,
-                    *precision,
+                    >(&base, exponent, |b, e|
+                        pow_decimal_float(b, *scale, e) ,
+                      *precision,
                     *scale,
                 )?,
             (base_type, exp_type) => {
