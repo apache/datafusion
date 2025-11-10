@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`HashJoinExec`] Partitioned Hash Join Operator
-
-pub use exec::HashJoinExec;
+//! [`GraceHashJoinExec`] Partitioned Hash Join Operator
+pub use exec::GraceHashJoinExec;
 
 mod exec;
-pub(crate) mod shared_bounds;
 mod stream;

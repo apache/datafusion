@@ -26,7 +26,7 @@ use rand::{rng, Rng};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tempfile::{Builder, NamedTempFile, TempDir};
+use tempfile::{Builder, NamedTempFile, TempDir, TempPath};
 
 use crate::memory_pool::human_readable_size;
 
@@ -389,6 +389,18 @@ impl RefCountedTempFile {
 
     pub fn current_disk_usage(&self) -> u64 {
         self.current_file_disk_usage.load(Ordering::Relaxed)
+    }
+
+
+    pub fn clone_refcounted(&self) -> Result<Self> {
+        let reopened = std::fs::File::open(self.path())?;
+        let temp_path = TempPath::from_path(self.path());
+        Ok(Self {
+            parent_temp_dir: Arc::clone(&self.parent_temp_dir),
+            tempfile: Arc::new(NamedTempFile::from_parts(reopened, temp_path)),
+            current_file_disk_usage: Arc::clone(&self.current_file_disk_usage),
+            disk_manager: Arc::clone(&self.disk_manager),
+        })
     }
 }
 

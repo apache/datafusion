@@ -17,6 +17,7 @@
 
 //! Defines the spilling functions
 
+pub(crate) mod in_memory_spill_buffer;
 pub(crate) mod in_progress_spill_file;
 pub(crate) mod spill_manager;
 pub mod spill_pool;

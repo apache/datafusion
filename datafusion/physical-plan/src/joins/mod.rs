@@ -28,6 +28,7 @@ pub use piecewise_merge_join::PiecewiseMergeJoinExec;
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
 mod cross_join;
+mod grace_hash_join;
 mod hash_join;
 mod nested_loop_join;
 mod piecewise_merge_join;
