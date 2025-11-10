@@ -15,6 +15,109 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::{DataType, TimeUnit};
+use chrono::NaiveDate;
+use datafusion_common::{Result, ScalarValue, internal_err, tree_node::Transformed};
+use datafusion_expr::{BinaryExpr, Expr, Operator, expr::ScalarFunction, lit, simplify::SimplifyInfo};
+use datafusion_expr_common::casts::try_cast_literal_to_type;
+use datafusion_functions::datetime::{date_part, expr_fn};
+
+pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
+    info: &S,
+    cast_expr: Expr,
+    literal: Expr,
+    op: Operator,
+) -> Result<Transformed<Expr>> {
+    match (cast_expr, literal) {
+        (
+            Expr::ScalarFunction(ScalarFunction {
+                func,
+                args
+            }),
+            Expr::Literal(lit_value, _),
+        ) if func.name() == "date_part" => {
+            if let Some(value) = year_literal_to_type_with_op(&lit_value, &expr_type, op)
+            {
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                    left: expr,
+                    op,
+                    right: Box::new(lit(value)),
+                })));
+            };
+
+            // if the lit_value can be casted to the type of internal_left_expr
+            // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
+            let Some(value) = try_cast_literal_to_type(&lit_value, &expr_type) else {
+                return internal_err!(
+                    "Can't cast the literal expr {:?} to type {}",
+                    &lit_value,
+                    &expr_type
+                );
+            };
+            Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                left: expr,
+                op,
+                right: Box::new(lit(value)),
+            })))
+        }
+        _ => internal_err!("Expect date_part expr and literal"),
+    }
+}
+
+/// This is just to extract cast the year to the right datatype
+fn year_literal_to_type_with_op(
+    lit_value: &ScalarValue, 
+    target_type: &DataType,
+    op: Operator,
+) -> Option<ScalarValue> {
+    match (op, lit_value) {
+        (
+            Operator::Eq | Operator::NotEq,
+            ScalarValue::Int32(Some(year)),
+        ) => {
+            // Can only extract year from Date32/64 and Timestamp
+            use DataType::*;
+            if matches!(
+                target_type,
+                Date32 | Date64 | Timestamp(_,_)
+            ) {
+            let naive_date = NaiveDate::from_ymd_opt(*year, 1, 1).expect("Invalid year");
+
+            let casted = match target_type {
+                Date32 => {
+                    let days = naive_date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?).num_days() as i32;
+                    ScalarValue::Date32(Some(days))
+                },
+                Date64 => {
+                    let milis = naive_date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?).num_milliseconds();
+                    ScalarValue::Date64(Some(milis))
+                },
+                Timestamp(unit, tz) => {
+                    let days = naive_date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?).num_days();
+                    match unit {
+                        TimeUnit::Second => ScalarValue::TimestampSecond(Some(days * 86_400), tz.clone()),
+                        TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(days * 86_400_000), tz.clone()),
+                        TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(days * 86_400_000_000), tz.clone()),
+                        TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(days * 86_400_000_000_000), tz.clone()),
+                    }
+                },
+                _ => return None
+            };
+
+            return Some(casted)
+
+            }
+             else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+
+
+
 #[cfg(test)]
 mod tests {
     use crate::simplify_expressions::ExprSimplifier;
