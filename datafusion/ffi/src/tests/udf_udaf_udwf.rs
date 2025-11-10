@@ -28,6 +28,8 @@ use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::stddev::Stddev;
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_functions_table::generate_series::RangeFunc;
+use datafusion_functions_window::cume_dist::CumeDist;
+use datafusion_functions_window::ntile::Ntile;
 use datafusion_functions_window::rank::Rank;
 use std::sync::Arc;
 
@@ -77,6 +79,22 @@ pub(crate) extern "C" fn create_ffi_rank_func(
         )
         .into(),
     );
+
+    FFI_WindowUDF::new(udwf, task_ctx_accessor)
+}
+
+pub(crate) extern "C" fn create_ffi_ntile_func(
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_WindowUDF {
+    let udwf: Arc<WindowUDF> = Arc::new(Ntile::new().into());
+
+    FFI_WindowUDF::new(udwf, task_ctx_accessor)
+}
+
+pub(crate) extern "C" fn create_ffi_cumedist_func(
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_WindowUDF {
+    let udwf: Arc<WindowUDF> = Arc::new(CumeDist::new().into());
 
     FFI_WindowUDF::new(udwf, task_ctx_accessor)
 }

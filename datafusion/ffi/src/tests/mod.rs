@@ -35,6 +35,7 @@ use crate::udwf::FFI_WindowUDF;
 
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
 use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use crate::tests::udf_udaf_udwf::{create_ffi_cumedist_func, create_ffi_ntile_func};
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
@@ -82,7 +83,14 @@ pub struct ForeignLibraryModule {
     /// Create  grouping UDAF using stddev
     pub create_stddev_udaf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_AggregateUDF,
 
+    /// Rank will test `evaluate`
     pub create_rank_udwf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_WindowUDF,
+
+    /// NTile will test `evaluate_all`
+    pub create_ntile_udwf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_WindowUDF,
+
+    /// NTile will test `evaluate_all_with_rank`
+    pub create_cumedist_udwf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_WindowUDF,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -137,6 +145,8 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
         create_rank_udwf: create_ffi_rank_func,
+        create_ntile_udwf: create_ffi_ntile_func,
+        create_cumedist_udwf: create_ffi_cumedist_func,
         version: super::version,
     }
     .leak_into_prefix()

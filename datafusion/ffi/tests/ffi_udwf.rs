@@ -25,24 +25,22 @@ mod tests {
     use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF};
     use datafusion::prelude::SessionContext;
     use datafusion_execution::TaskContextAccessor;
-    use datafusion_expr::WindowUDFImpl;
+    use datafusion_expr::{lit, Expr, WindowUDFImpl};
+    use datafusion_ffi::session::task_ctx_accessor::FFI_TaskContextAccessor;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
+    use datafusion_ffi::udwf::FFI_WindowUDF;
     use std::sync::Arc;
 
-    #[tokio::test]
-    async fn test_rank_udwf() -> Result<()> {
-        let module = get_module()?;
+    async fn test_window_function(
+        function: extern "C" fn(FFI_TaskContextAccessor) -> FFI_WindowUDF,
+        arguments: Vec<Expr>,
+        expected: ArrayRef,
+    ) -> Result<()> {
         let ctx = Arc::new(SessionContext::default());
         let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
-        let ffi_rank_func =
-            module
-                .create_rank_udwf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_scalar_udf"
-                        .to_string(),
-                ))?(task_ctx_accessor.into());
+        let ffi_rank_func = function(task_ctx_accessor.into());
         let foreign_rank_func: Arc<dyn WindowUDFImpl> = (&ffi_rank_func).try_into()?;
 
         let udwf = WindowUDF::new_from_shared_impl(foreign_rank_func);
@@ -51,7 +49,7 @@ mod tests {
 
         let df = df.select(vec![
             col("a"),
-            udwf.call(vec![])
+            udwf.call(arguments)
                 .order_by(vec![Sort::new(col("a"), true, true)])
                 .build()
                 .unwrap()
@@ -61,11 +59,52 @@ mod tests {
         df.clone().show().await?;
 
         let result = df.collect().await?;
-        let expected = create_array!(UInt64, [1, 2, 3, 4, 5]) as ArrayRef;
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].column(1), &expected);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rank_udwf() -> Result<()> {
+        let module = get_module()?;
+        let expected = create_array!(UInt64, [1, 2, 3, 4, 5]) as ArrayRef;
+        let function =
+            module
+                .create_rank_udwf()
+                .ok_or(DataFusionError::NotImplemented(
+                    "External table provider failed to implement window function"
+                        .to_string(),
+                ))?;
+        test_window_function(function, vec![], expected).await
+    }
+
+    #[tokio::test]
+    async fn test_ntile_udwf() -> Result<()> {
+        let module = get_module()?;
+        let expected = create_array!(UInt64, [1, 1, 2, 2, 3]) as ArrayRef;
+        let function =
+            module
+                .create_ntile_udwf()
+                .ok_or(DataFusionError::NotImplemented(
+                    "External table provider failed to implement window function"
+                        .to_string(),
+                ))?;
+        test_window_function(function, vec![lit(3)], expected).await
+    }
+
+    #[tokio::test]
+    async fn test_cumedist_udwf() -> Result<()> {
+        let module = get_module()?;
+        let expected = create_array!(Float64, [0.2, 0.4, 0.6, 0.8, 1.0]) as ArrayRef;
+        let function =
+            module
+                .create_cumedist_udwf()
+                .ok_or(DataFusionError::NotImplemented(
+                    "External table provider failed to implement window function"
+                        .to_string(),
+                ))?;
+        test_window_function(function, vec![], expected).await
     }
 }
