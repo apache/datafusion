@@ -48,6 +48,28 @@ FROM employees;
 
 Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/`MAX` return `NULL`.
 
+## WITHIN GROUP / Ordered-set aggregates
+
+Some aggregate functions support the SQL `WITHIN GROUP (ORDER BY ...)` clause. This clause is used by
+ordered-set aggregate functions (for example, percentile and rank-like aggregations) to specify the ordering
+of inputs that the aggregate relies on. In DataFusion, only aggregate functions that explicitly opt into
+ordered-set semantics via their implementation will accept `WITHIN GROUP`; attempting to use `WITHIN GROUP`
+with a regular aggregate (for example `SUM(x) WITHIN GROUP (ORDER BY x)`) will fail during planning with an
+error. This matches Postgres semantics and ensures ordered-set behavior is opt-in for user-defined aggregates.
+
+Example (ordered-set aggregate):
+
+```sql
+percentile_cont(0.5) WITHIN GROUP (ORDER BY value)
+```
+
+Example (invalid usage — planner will error):
+
+```sql
+-- This will fail: SUM is not an ordered-set aggregate
+SELECT SUM(x) WITHIN GROUP (ORDER BY x) FROM t;
+```
+
 ## General Functions
 
 - [array_agg](#array_agg)
