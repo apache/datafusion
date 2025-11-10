@@ -97,7 +97,7 @@ impl DefaultParquetFileReaderFactory {
 pub struct ParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
-    partitioned_file: PartitionedFile,
+    pub partitioned_file: PartitionedFile,
 }
 
 impl AsyncFileReader for ParquetFileReader {
