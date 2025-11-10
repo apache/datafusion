@@ -1257,15 +1257,12 @@ mod tests {
                     assert_eq!(
                         result.data_type(),
                         &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
-                        "Failed for granularity: {}, timezone: {:?}",
-                        granularity,
-                        tz_opt
+                        "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
                     );
                     let left = as_primitive_array::<TimestampNanosecondType>(&result);
                     assert_eq!(
                         left, &right,
-                        "Failed for granularity: {}, timezone: {:?}",
-                        granularity, tz_opt
+                        "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
                     );
                 } else {
                     panic!("unexpected column type");
