@@ -150,7 +150,7 @@ let projection_exprs = config.projection_exprs;
 The `FileScanConfigBuilder::with_projection()` method has been deprecated in favor of `with_projection_indices()`:
 
 ```diff
-let config = FileScanConfigBuilder::new(url, schema, file_source)
+let config = FileScanConfigBuilder::new(url, file_source)
 -   .with_projection(Some(vec![0, 2, 3]))
 +   .with_projection_indices(Some(vec![0, 2, 3]))
     .build();
@@ -189,6 +189,91 @@ TIMEZONE = '+00:00';
 
 This change was made to better support using the default timezone in scalar UDF functions such as
 `now`, `current_date`, `current_time`, and `to_timestamp` among others.
+
+### Refactoring of `FileSource` constructors and `FileScanConfigBuilder` to accept schemas upfront
+
+The way schemas are passed to file sources and scan configurations has been significantly refactored. File sources now require the schema (including partition columns) to be provided at construction time, and `FileScanConfigBuilder` no longer takes a separate schema parameter.
+
+**Who is affected:**
+
+- Users who create `FileScanConfig` or file sources (`ParquetSource`, `CsvSource`, `JsonSource`, `AvroSource`) directly
+- Users who implement custom `FileFormat` implementations
+
+**Key changes:**
+
+1. **FileSource constructors now require TableSchema**: All built-in file sources now take the schema in their constructor:
+
+   ```diff
+   - let source = ParquetSource::default();
+   + let source = ParquetSource::new(table_schema);
+   ```
+
+2. **FileScanConfigBuilder no longer takes schema as a parameter**: The schema is now passed via the FileSource:
+
+   ```diff
+   - FileScanConfigBuilder::new(url, schema, source)
+   + FileScanConfigBuilder::new(url, source)
+   ```
+
+3. **Partition columns are now part of TableSchema**: The `with_table_partition_cols()` method has been removed from `FileScanConfigBuilder`. Partition columns are now passed as part of the `TableSchema` to the FileSource constructor:
+
+   ```diff
+   + let table_schema = TableSchema::new(
+   +     file_schema,
+   +     vec![Arc::new(Field::new("date", DataType::Utf8, false))],
+   + );
+   + let source = ParquetSource::new(table_schema);
+     let config = FileScanConfigBuilder::new(url, source)
+   -     .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
+         .with_file(partitioned_file)
+         .build();
+   ```
+
+4. **FileFormat::file_source() now takes TableSchema parameter**: Custom `FileFormat` implementations must be updated:
+   ```diff
+   impl FileFormat for MyFileFormat {
+   -   fn file_source(&self) -> Arc<dyn FileSource> {
+   +   fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+   -       Arc::new(MyFileSource::default())
+   +       Arc::new(MyFileSource::new(table_schema))
+       }
+   }
+   ```
+
+**Migration examples:**
+
+For Parquet files:
+
+```diff
+- let source = Arc::new(ParquetSource::default());
+- let config = FileScanConfigBuilder::new(url, schema, source)
++ let table_schema = TableSchema::new(schema, vec![]);
++ let source = Arc::new(ParquetSource::new(table_schema));
++ let config = FileScanConfigBuilder::new(url, source)
+      .with_file(partitioned_file)
+      .build();
+```
+
+For CSV files with partition columns:
+
+```diff
+- let source = Arc::new(CsvSource::new(true, b',', b'"'));
+- let config = FileScanConfigBuilder::new(url, file_schema, source)
+-     .with_table_partition_cols(vec![Field::new("year", DataType::Int32, false)])
++ let options = CsvOptions {
++     has_header: Some(true),
++     delimiter: b',',
++     quote: b'"',
++     ..Default::default()
++ };
++ let table_schema = TableSchema::new(
++     file_schema,
++     vec![Arc::new(Field::new("year", DataType::Int32, false))],
++ );
++ let source = Arc::new(CsvSource::new(table_schema).with_csv_options(options));
++ let config = FileScanConfigBuilder::new(url, source)
+      .build();
+```
 
 ### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
 
@@ -1137,7 +1222,7 @@ Pattern in DataFusion `47.0.0`:
 
 ```rust
 # /* comment to avoid running
-let config = FileScanConfigBuilder::new(url, schema, Arc::new(file_source))
+let config = FileScanConfigBuilder::new(url, Arc::new(file_source))
   .with_statistics(stats)
   ...
   .build();

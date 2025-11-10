@@ -1376,7 +1376,6 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                     }
                 }
                 Some((batch, _)) => {
-                    self.metrics.output_batches.add(1);
                     return self
                         .metrics
                         .baseline_metrics

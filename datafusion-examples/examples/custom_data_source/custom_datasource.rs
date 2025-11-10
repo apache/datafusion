@@ -42,8 +42,7 @@ use datafusion::catalog::Session;
 use tokio::time::timeout;
 
 /// This example demonstrates executing a simple query against a custom datasource
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn custom_datasource() -> Result<()> {
     // create our custom datasource and adding some users
     let db = CustomDataSource::default();
     db.populate_users();

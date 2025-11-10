@@ -79,7 +79,7 @@ repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
 rust-version = "1.88.0"
 # Define DataFusion version
-version = "50.3.0"
+version = "51.0.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -111,43 +111,43 @@ chrono = { version = "0.4.42", default-features = false }
 criterion = "0.7"
 ctor = "0.6.1"
 dashmap = "6.0.1"
-datafusion = { path = "datafusion/core", version = "50.3.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "50.3.0" }
-datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "50.3.0" }
-datafusion-common = { path = "datafusion/common", version = "50.3.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "50.3.0" }
-datafusion-datasource = { path = "datafusion/datasource", version = "50.3.0", default-features = false }
-datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "50.3.0", default-features = false }
-datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "50.3.0", default-features = false }
-datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "50.3.0", default-features = false }
-datafusion-datasource-json = { path = "datafusion/datasource-json", version = "50.3.0", default-features = false }
-datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "50.3.0", default-features = false }
-datafusion-doc = { path = "datafusion/doc", version = "50.3.0" }
-datafusion-execution = { path = "datafusion/execution", version = "50.3.0", default-features = false }
-datafusion-expr = { path = "datafusion/expr", version = "50.3.0", default-features = false }
-datafusion-expr-common = { path = "datafusion/expr-common", version = "50.3.0" }
-datafusion-ffi = { path = "datafusion/ffi", version = "50.3.0" }
-datafusion-functions = { path = "datafusion/functions", version = "50.3.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "50.3.0" }
-datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "50.3.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "50.3.0", default-features = false }
-datafusion-functions-table = { path = "datafusion/functions-table", version = "50.3.0" }
-datafusion-functions-window = { path = "datafusion/functions-window", version = "50.3.0" }
-datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "50.3.0" }
-datafusion-macros = { path = "datafusion/macros", version = "50.3.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "50.3.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "50.3.0", default-features = false }
-datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "50.3.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "50.3.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "50.3.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "50.3.0" }
-datafusion-proto = { path = "datafusion/proto", version = "50.3.0" }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "50.3.0" }
-datafusion-pruning = { path = "datafusion/pruning", version = "50.3.0" }
-datafusion-session = { path = "datafusion/session", version = "50.3.0" }
-datafusion-spark = { path = "datafusion/spark", version = "50.3.0" }
-datafusion-sql = { path = "datafusion/sql", version = "50.3.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "50.3.0" }
+datafusion = { path = "datafusion/core", version = "51.0.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "51.0.0" }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "51.0.0" }
+datafusion-common = { path = "datafusion/common", version = "51.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "51.0.0" }
+datafusion-datasource = { path = "datafusion/datasource", version = "51.0.0", default-features = false }
+datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "51.0.0", default-features = false }
+datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "51.0.0", default-features = false }
+datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "51.0.0", default-features = false }
+datafusion-datasource-json = { path = "datafusion/datasource-json", version = "51.0.0", default-features = false }
+datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "51.0.0", default-features = false }
+datafusion-doc = { path = "datafusion/doc", version = "51.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "51.0.0", default-features = false }
+datafusion-expr = { path = "datafusion/expr", version = "51.0.0", default-features = false }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "51.0.0" }
+datafusion-ffi = { path = "datafusion/ffi", version = "51.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "51.0.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "51.0.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "51.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "51.0.0", default-features = false }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "51.0.0" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "51.0.0" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "51.0.0" }
+datafusion-macros = { path = "datafusion/macros", version = "51.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "51.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "51.0.0", default-features = false }
+datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "51.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "51.0.0", default-features = false }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "51.0.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "51.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "51.0.0" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "51.0.0" }
+datafusion-pruning = { path = "datafusion/pruning", version = "51.0.0" }
+datafusion-session = { path = "datafusion/session", version = "51.0.0" }
+datafusion-spark = { path = "datafusion/spark", version = "51.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "51.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "51.0.0" }
 
 doc-comment = "0.3"
 env_logger = "0.11"

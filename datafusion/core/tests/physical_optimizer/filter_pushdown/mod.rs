@@ -859,20 +859,17 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
     ];
 
     // Create a source that supports all batches
-    let source = Arc::new(TestSource::new(true, batches));
+    let source = Arc::new(TestSource::new(schema(), true, batches));
 
-    let base_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test://").unwrap(),
-        Arc::clone(&schema()),
-        source,
-    )
-    .with_file_groups(vec![
-        // Partition 0
-        FileGroup::new(vec![PartitionedFile::new("test1.parquet", 123)]),
-        // Partition 1
-        FileGroup::new(vec![PartitionedFile::new("test2.parquet", 123)]),
-    ])
-    .build();
+    let base_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
+            .with_file_groups(vec![
+                // Partition 0
+                FileGroup::new(vec![PartitionedFile::new("test1.parquet", 123)]),
+                // Partition 1
+                FileGroup::new(vec![PartitionedFile::new("test2.parquet", 123)]),
+            ])
+            .build();
 
     let scan = DataSourceExec::from_data_source(base_config);
 

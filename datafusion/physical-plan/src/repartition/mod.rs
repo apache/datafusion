@@ -915,6 +915,7 @@ impl ExecutionPlan for RepartitionExec {
                             Arc::clone(&reservation),
                             spill_stream,
                             1, // Each receiver handles one input partition
+                            BaselineMetrics::new(&metrics, partition),
                         )) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
@@ -952,6 +953,7 @@ impl ExecutionPlan for RepartitionExec {
                     reservation,
                     spill_stream,
                     num_input_partitions,
+                    BaselineMetrics::new(&metrics, partition),
                 )) as SendableRecordBatchStream)
             }
         })
@@ -1402,6 +1404,9 @@ struct PerPartitionStream {
     /// In non-preserve-order mode, multiple input partitions send to the same channel,
     /// each sending None when complete. We must wait for all of them.
     remaining_partitions: usize,
+
+    /// Execution metrics
+    baseline_metrics: BaselineMetrics,
 }
 
 impl PerPartitionStream {
@@ -1412,6 +1417,7 @@ impl PerPartitionStream {
         reservation: SharedMemoryReservation,
         spill_stream: SendableRecordBatchStream,
         num_input_partitions: usize,
+        baseline_metrics: BaselineMetrics,
     ) -> Self {
         Self {
             schema,
@@ -1421,18 +1427,17 @@ impl PerPartitionStream {
             spill_stream,
             state: StreamState::ReadingMemory,
             remaining_partitions: num_input_partitions,
+            baseline_metrics,
         }
     }
-}
 
-impl Stream for PerPartitionStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
+    fn poll_next_inner(
+        self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         use futures::StreamExt;
+        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
+        let _timer = cloned_time.timer();
 
         loop {
             match self.state {
@@ -1505,6 +1510,18 @@ impl Stream for PerPartitionStream {
                 }
             }
         }
+    }
+}
+
+impl Stream for PerPartitionStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let poll = self.poll_next_inner(cx);
+        self.baseline_metrics.record_poll(poll)
     }
 }
 
