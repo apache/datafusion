@@ -207,8 +207,8 @@ macro_rules! regexp_is_match_flag {
 }
 
 pub(crate) fn regex_match_dyn(
-    left: ArrayRef,
-    right: ArrayRef,
+    left: &ArrayRef,
+    right: &ArrayRef,
     not_match: bool,
     flag: bool,
 ) -> Result<ArrayRef> {
@@ -259,7 +259,7 @@ macro_rules! regexp_is_match_flag_scalar {
 
 pub(crate) fn regex_match_dyn_scalar(
     left: &dyn Array,
-    right: ScalarValue,
+    right: &ScalarValue,
     not_match: bool,
     flag: bool,
 ) -> Option<Result<ArrayRef>> {

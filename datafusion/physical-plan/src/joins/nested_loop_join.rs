@@ -1483,10 +1483,6 @@ impl NestedLoopJoinStream {
     fn maybe_flush_ready_batch(&mut self) -> Option<Poll<Option<Result<RecordBatch>>>> {
         if self.output_buffer.has_completed_batch() {
             if let Some(batch) = self.output_buffer.next_completed_batch() {
-                // HACK: this is not part of `BaselineMetrics` yet, so update it
-                // manually
-                self.metrics.join_metrics.output_batches.add(1);
-
                 // Update output rows for selectivity metric
                 let output_rows = batch.num_rows();
                 self.metrics.selectivity.add_part(output_rows);

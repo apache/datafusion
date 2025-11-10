@@ -88,7 +88,7 @@
 //! use datafusion_spark::expr_fn::sha2;
 //! // Create the expression `sha2(my_data, 256)`
 //! let expr = sha2(col("my_data"), lit(256));
-//!```
+//! ```
 //!
 //![`Expr`]: datafusion_expr::Expr
 
