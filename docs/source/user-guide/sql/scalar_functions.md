@@ -2387,6 +2387,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [date_trunc](#date_trunc)
 - [datepart](#datepart)
 - [datetrunc](#datetrunc)
+- [extract](#extract)
 - [from_unixtime](#from_unixtime)
 - [make_date](#make_date)
 - [make_time](#make_time)
@@ -2545,6 +2546,7 @@ extract(field FROM source)
 #### Aliases
 
 - datepart
+- extract
 
 ### `date_trunc`
 
@@ -2592,6 +2594,10 @@ _Alias of [date_part](#date_part)._
 ### `datetrunc`
 
 _Alias of [date_trunc](#date_trunc)._
+
+### `extract`
+
+_Alias of [date_part](#date_part)._
 
 ### `from_unixtime`
 
