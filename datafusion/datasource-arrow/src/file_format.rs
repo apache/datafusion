@@ -155,12 +155,17 @@ impl FileFormat for ArrowFormat {
                 GetResultPayload::File(mut file, _) => {
                     match FileReader::try_new(&mut file, None) {
                         Ok(reader) => reader.schema(),
-                        Err(_) => {
+                        Err(file_error) => {
                             // not in the file format, but FileReader read some bytes
                             // while trying to parse the file and so we need to rewind
                             // it to the beginning of the file
                             file.seek(SeekFrom::Start(0))?;
-                            StreamReader::try_new(&mut file, None)?.schema()
+                            match StreamReader::try_new(&mut file, None) {
+                                Ok(reader) => reader.schema(),
+                                Err(stream_error) => {
+                                    return Err(internal_datafusion_err!("Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"));
+                                }
+                            }
                         }
                     }
                 }
