@@ -49,7 +49,6 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
@@ -58,6 +57,13 @@ use crate::simplify_expressions::unwrap_cast::{
     unwrap_cast_in_comparison_for_binary,
 };
 use crate::simplify_expressions::SimplifyInfo;
+use crate::{
+    analyzer::type_coercion::TypeCoercionRewriter,
+    simplify_expressions::unwrap_date_part::{
+        is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_binary,
+        unwrap_date_part_in_comparison_for_binary,
+    },
+};
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
 use regex::Regex;
@@ -1966,6 +1972,36 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     list: right_exprs,
                     negated,
                 }))
+            }
+
+            // =======================================
+            // unwrap_date_part_in_comparison
+            // =======================================
+            //
+            // For case:
+            // try_cast/cast(expr as data_type) op literal
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_binary(
+                    info, &left, op, &right,
+                ) && op.supports_propagation() =>
+            {
+                unwrap_date_part_in_comparison_for_binary(info, *left, *right, op)?
+            }
+            // literal op try_cast/cast(expr as data_type)
+            // -->
+            // try_cast/cast(expr as data_type) op_swap literal
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_binary(
+                    info, &right, op, &left,
+                ) && op.supports_propagation()
+                    && op.swap().is_some() =>
+            {
+                unwrap_date_part_in_comparison_for_binary(
+                    info,
+                    *right,
+                    *left,
+                    op.swap().unwrap(),
+                )?
             }
 
             // no additional rewrites possible

@@ -17,10 +17,11 @@
 
 use arrow::datatypes::{DataType, TimeUnit};
 use chrono::NaiveDate;
-use datafusion_common::{Result, ScalarValue, internal_err, tree_node::Transformed};
-use datafusion_expr::{BinaryExpr, Expr, Operator, expr::ScalarFunction, lit, simplify::SimplifyInfo};
-use datafusion_expr_common::casts::try_cast_literal_to_type;
-use datafusion_functions::datetime::{date_part, expr_fn};
+use datafusion_common::{internal_err, tree_node::Transformed, Result, ScalarValue};
+use datafusion_expr::{
+    expr::ScalarFunction, lit, simplify::SimplifyInfo, BinaryExpr, Expr, Operator,
+};
+use datafusion_expr_common::casts::{is_supported_type, try_cast_literal_to_type};
 
 pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
     info: &S,
@@ -28,14 +29,21 @@ pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
     literal: Expr,
     op: Operator,
 ) -> Result<Transformed<Expr>> {
+    dbg!(&cast_expr, &literal, op); // <-- log inputs
+
     match (cast_expr, literal) {
         (
-            Expr::ScalarFunction(ScalarFunction {
-                func,
-                args
-            }),
+            Expr::ScalarFunction(ScalarFunction { func, args }),
             Expr::Literal(lit_value, _),
         ) if func.name() == "date_part" => {
+            let expr = Box::new(args[1].clone());
+
+            let Ok(expr_type) = info.get_data_type(&expr) else {
+                return internal_err!("Can't get the data type of the expr {:?}", &expr);
+            };
+
+            dbg!(&expr_type, &lit_value); // <-- log types and literal
+
             if let Some(value) = year_literal_to_type_with_op(&lit_value, &expr_type, op)
             {
                 return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
@@ -64,59 +72,106 @@ pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
     }
 }
 
+pub(super) fn is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_binary<
+    S: SimplifyInfo,
+>(
+    info: &S,
+    expr: &Expr,
+    op: Operator,
+    literal: &Expr,
+) -> bool {
+    dbg!(expr, literal, op); // <-- log inputs
+
+    match (expr, literal) {
+        (
+            Expr::ScalarFunction(ScalarFunction { func, args }),
+            Expr::Literal(lit_val, _),
+        ) if func.name() == "date_part" => {
+            let left_expr = Box::new(args[1].clone());
+
+            let Ok(expr_type) = info.get_data_type(&left_expr) else {
+                return false;
+            };
+
+            let Ok(lit_type) = info.get_data_type(literal) else {
+                return false;
+            };
+
+            if year_literal_to_type_with_op(lit_val, &expr_type, op).is_some() {
+                return true;
+            }
+
+            dbg!(&expr_type, &lit_type); // <-- log types and result
+
+            try_cast_literal_to_type(lit_val, &expr_type).is_some()
+                && is_supported_type(&expr_type)
+                && is_supported_type(&lit_type)
+        }
+        _ => false,
+    }
+}
+
 /// This is just to extract cast the year to the right datatype
 fn year_literal_to_type_with_op(
-    lit_value: &ScalarValue, 
+    lit_value: &ScalarValue,
     target_type: &DataType,
     op: Operator,
 ) -> Option<ScalarValue> {
     match (op, lit_value) {
-        (
-            Operator::Eq | Operator::NotEq,
-            ScalarValue::Int32(Some(year)),
-        ) => {
+        (Operator::Eq | Operator::NotEq, ScalarValue::Int32(Some(year))) => {
             // Can only extract year from Date32/64 and Timestamp
             use DataType::*;
-            if matches!(
-                target_type,
-                Date32 | Date64 | Timestamp(_,_)
-            ) {
-            let naive_date = NaiveDate::from_ymd_opt(*year, 1, 1).expect("Invalid year");
+            if matches!(target_type, Date32 | Date64 | Timestamp(_, _)) {
+                let naive_date =
+                    NaiveDate::from_ymd_opt(*year, 1, 1).expect("Invalid year");
 
-            let casted = match target_type {
-                Date32 => {
-                    let days = naive_date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?).num_days() as i32;
-                    ScalarValue::Date32(Some(days))
-                },
-                Date64 => {
-                    let milis = naive_date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?).num_milliseconds();
-                    ScalarValue::Date64(Some(milis))
-                },
-                Timestamp(unit, tz) => {
-                    let days = naive_date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?).num_days();
-                    match unit {
-                        TimeUnit::Second => ScalarValue::TimestampSecond(Some(days * 86_400), tz.clone()),
-                        TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(days * 86_400_000), tz.clone()),
-                        TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(days * 86_400_000_000), tz.clone()),
-                        TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(days * 86_400_000_000_000), tz.clone()),
+                let casted = match target_type {
+                    Date32 => {
+                        let days = naive_date
+                            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
+                            .num_days() as i32;
+                        ScalarValue::Date32(Some(days))
                     }
-                },
-                _ => return None
-            };
+                    Date64 => {
+                        let milis = naive_date
+                            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
+                            .num_milliseconds();
+                        ScalarValue::Date64(Some(milis))
+                    }
+                    Timestamp(unit, tz) => {
+                        let days = naive_date
+                            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
+                            .num_days();
+                        match unit {
+                            TimeUnit::Second => ScalarValue::TimestampSecond(
+                                Some(days * 86_400),
+                                tz.clone(),
+                            ),
+                            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(
+                                Some(days * 86_400_000),
+                                tz.clone(),
+                            ),
+                            TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(
+                                Some(days * 86_400_000_000),
+                                tz.clone(),
+                            ),
+                            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(
+                                Some(days * 86_400_000_000_000),
+                                tz.clone(),
+                            ),
+                        }
+                    }
+                    _ => return None,
+                };
 
-            return Some(casted)
-
-            }
-             else {
+                Some(casted)
+            } else {
                 None
             }
         }
         _ => None,
     }
 }
-
-
-
 
 #[cfg(test)]
 mod tests {
