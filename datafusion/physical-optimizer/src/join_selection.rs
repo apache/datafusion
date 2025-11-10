@@ -492,7 +492,6 @@ fn hash_join_convert_symmetric_subrule(
 ///           | Data Source  |--------------| Repartition  |
 ///           |              |              |              |
 ///           +--------------+              +--------------+
-///
 /// ```
 pub fn hash_join_swap_subrule(
     mut input: Arc<dyn ExecutionPlan>,

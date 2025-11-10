@@ -430,22 +430,7 @@ impl From<DataType> for NativeType {
 impl NativeType {
     #[inline]
     pub fn is_numeric(&self) -> bool {
-        use NativeType::*;
-        matches!(
-            self,
-            UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Int8
-                | Int16
-                | Int32
-                | Int64
-                | Float16
-                | Float32
-                | Float64
-                | Decimal(_, _)
-        )
+        self.is_integer() || self.is_float() || self.is_decimal()
     }
 
     #[inline]
@@ -490,5 +475,15 @@ impl NativeType {
     #[inline]
     pub fn is_null(&self) -> bool {
         matches!(self, NativeType::Null)
+    }
+
+    #[inline]
+    pub fn is_decimal(&self) -> bool {
+        matches!(self, Self::Decimal(_, _))
+    }
+
+    #[inline]
+    pub fn is_float(&self) -> bool {
+        matches!(self, Self::Float16 | Self::Float32 | Self::Float64)
     }
 }

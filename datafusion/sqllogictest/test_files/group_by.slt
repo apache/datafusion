@@ -5556,7 +5556,7 @@ SELECT
     arrow_cast('2024-01-01T00:00:00Z'::timestamptz, 'Timestamp(Second, Some("+08:00"))') AS ts
 GROUP BY ts, text
 ----
-foo 2024-01-01T08:00:00+08:00
+foo 2024-01-01T00:00:00+08:00
 
 # Test multi group by int + Decimal128
 statement ok

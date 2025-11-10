@@ -155,7 +155,7 @@ SELECT MAKE_MAP('POST', 41, 'HEAD', 53, 'PATCH', 30);
 ----
 {POST: 41, HEAD: 53, PATCH: 30}
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'ab' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'ab' to value of Int64 type
 SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
 
 # Map keys can not be NULL
@@ -523,7 +523,7 @@ SELECT MAP { 'a': 1, 'b': 3 };
 ----
 {a: 1, b: 3}
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT MAP { 'a': 1, 2: 3 };
 
 # accessing map with non-string key
@@ -670,7 +670,7 @@ SELECT map_entries(MAP { 'a': 1, 'b': 3 });
 ----
 [{key: a, value: 1}, {key: b, value: 3}]
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT map_entries(MAP { 'a': 1, 2: 3 });
 
 query ?
@@ -721,7 +721,7 @@ SELECT map_keys(MAP { 'a': 1, 'b': 3 });
 ----
 [a, b]
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT map_keys(MAP { 'a': 1, 2: 3 });
 
 query ?
@@ -768,7 +768,7 @@ NULL
 
 # Tests for map_values
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT map_values(MAP { 'a': 1, 2: 3 });
 
 query ?

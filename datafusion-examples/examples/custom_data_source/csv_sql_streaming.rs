@@ -21,8 +21,7 @@ use datafusion::prelude::*;
 
 /// This example demonstrates executing a simple query against an Arrow data source (CSV) and
 /// fetching results with streaming aggregation and streaming window
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn csv_sql_streaming() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 

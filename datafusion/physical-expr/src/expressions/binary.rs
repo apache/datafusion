@@ -24,11 +24,8 @@ use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
-use arrow::compute::kernels::cmp::*;
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use arrow::compute::{
-    cast, filter_record_batch, ilike, like, nilike, nlike, SlicesIterator,
-};
+use arrow::compute::{cast, filter_record_batch, SlicesIterator};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
@@ -42,7 +39,7 @@ use datafusion_expr::statistics::{
     new_generic_from_binary_op, Distribution,
 };
 use datafusion_expr::{ColumnarValue, Operator};
-use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
+use datafusion_physical_expr_common::datum::{apply, apply_cmp};
 
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
@@ -251,13 +248,6 @@ impl PhysicalExpr for BinaryExpr {
         let schema = batch.schema();
         let input_schema = schema.as_ref();
 
-        if left_data_type.is_nested() {
-            if !left_data_type.equals_datatype(&right_data_type) {
-                return internal_err!("Cannot evaluate binary expression because of type mismatch: left {}, right {} ", left_data_type, right_data_type);
-            }
-            return apply_cmp_for_nested(self.op, &lhs, &rhs);
-        }
-
         match self.op {
             Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
@@ -267,18 +257,21 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
             Operator::Divide => return apply(&lhs, &rhs, div),
             Operator::Modulo => return apply(&lhs, &rhs, rem),
-            Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
-            Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
-            Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
-            Operator::Gt => return apply_cmp(&lhs, &rhs, gt),
-            Operator::LtEq => return apply_cmp(&lhs, &rhs, lt_eq),
-            Operator::GtEq => return apply_cmp(&lhs, &rhs, gt_eq),
-            Operator::IsDistinctFrom => return apply_cmp(&lhs, &rhs, distinct),
-            Operator::IsNotDistinctFrom => return apply_cmp(&lhs, &rhs, not_distinct),
-            Operator::LikeMatch => return apply_cmp(&lhs, &rhs, like),
-            Operator::ILikeMatch => return apply_cmp(&lhs, &rhs, ilike),
-            Operator::NotLikeMatch => return apply_cmp(&lhs, &rhs, nlike),
-            Operator::NotILikeMatch => return apply_cmp(&lhs, &rhs, nilike),
+
+            Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::Gt
+            | Operator::LtEq
+            | Operator::GtEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch => {
+                return apply_cmp(self.op, &lhs, &rhs);
+            }
             _ => {}
         }
 
@@ -580,10 +573,10 @@ impl BinaryExpr {
     ) -> Result<Option<Result<ArrayRef>>> {
         use Operator::*;
         let scalar_result = match &self.op {
-            RegexMatch => regex_match_dyn_scalar(array, scalar, false, false),
-            RegexIMatch => regex_match_dyn_scalar(array, scalar, false, true),
-            RegexNotMatch => regex_match_dyn_scalar(array, scalar, true, false),
-            RegexNotIMatch => regex_match_dyn_scalar(array, scalar, true, true),
+            RegexMatch => regex_match_dyn_scalar(array, &scalar, false, false),
+            RegexIMatch => regex_match_dyn_scalar(array, &scalar, false, true),
+            RegexNotMatch => regex_match_dyn_scalar(array, &scalar, true, false),
+            RegexNotIMatch => regex_match_dyn_scalar(array, &scalar, true, true),
             BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
             BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
             BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
@@ -632,16 +625,16 @@ impl BinaryExpr {
                     )
                 }
             }
-            RegexMatch => regex_match_dyn(left, right, false, false),
-            RegexIMatch => regex_match_dyn(left, right, false, true),
-            RegexNotMatch => regex_match_dyn(left, right, true, false),
-            RegexNotIMatch => regex_match_dyn(left, right, true, true),
+            RegexMatch => regex_match_dyn(&left, &right, false, false),
+            RegexIMatch => regex_match_dyn(&left, &right, false, true),
+            RegexNotMatch => regex_match_dyn(&left, &right, true, false),
+            RegexNotIMatch => regex_match_dyn(&left, &right, true, true),
             BitwiseAnd => bitwise_and_dyn(left, right),
             BitwiseOr => bitwise_or_dyn(left, right),
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => concat_elements(left, right),
+            StringConcat => concat_elements(&left, &right),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
             | IntegerDivide => {
@@ -861,7 +854,7 @@ fn pre_selection_scatter(
     Ok(ColumnarValue::Array(Arc::new(boolean_result)))
 }
 
-fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
+fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),

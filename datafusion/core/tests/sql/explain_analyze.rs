@@ -61,61 +61,87 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[]",
-        "metrics=[output_rows=3, elapsed_compute="
+        "metrics=[output_rows=3, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=3"
     );
+
     assert_metrics!(
         &formatted,
-        "AggregateExec: mode=Partial, gby=[]",
-        "output_bytes="
+        "AggregateExec: mode=Partial, gby=[c1@0 as c1]",
+        "reduction_factor=5.1% (5/99)"
     );
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "output_bytes="
-    );
+
+    {
+        let expected_batch_count_after_repartition =
+            if cfg!(not(feature = "force_hash_collisions")) {
+                "output_batches=3"
+            } else {
+                "output_batches=1"
+            };
+
+        assert_metrics!(
+            &formatted,
+            "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "RepartitionExec: partitioning=Hash([c1@0], 3), input_partitions=3",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "ProjectionExec: expr=[]",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "CoalesceBatchesExec: target_batch_size=4096",
+            "metrics=[output_rows=5, elapsed_compute",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+    }
+
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "metrics=[output_rows=99, elapsed_compute="
+        "metrics=[output_rows=99, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=1"
     );
+
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "output_bytes="
+        "selectivity=99% (99/100)"
     );
-    assert_metrics!(
-        &formatted,
-        "ProjectionExec: expr=[]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(&formatted, "ProjectionExec: expr=[]", "output_bytes=");
-    assert_metrics!(
-        &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "metrics=[output_rows=5, elapsed_compute"
-    );
-    assert_metrics!(
-        &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "output_bytes="
-    );
+
     assert_metrics!(
         &formatted,
         "UnionExec",
-        "metrics=[output_rows=3, elapsed_compute="
+        "metrics=[output_rows=3, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=3"
     );
-    assert_metrics!(&formatted, "UnionExec", "output_bytes=");
+
     assert_metrics!(
         &formatted,
         "WindowAggExec",
-        "metrics=[output_rows=1, elapsed_compute="
+        "metrics=[output_rows=1, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=1"
     );
-    assert_metrics!(&formatted, "WindowAggExec", "output_bytes=");
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
@@ -216,9 +242,13 @@ async fn explain_analyze_level() {
 
     for (level, needle, should_contain) in [
         (ExplainAnalyzeLevel::Summary, "spill_count", false),
+        (ExplainAnalyzeLevel::Summary, "output_batches", false),
         (ExplainAnalyzeLevel::Summary, "output_rows", true),
+        (ExplainAnalyzeLevel::Summary, "output_bytes", true),
         (ExplainAnalyzeLevel::Dev, "spill_count", true),
         (ExplainAnalyzeLevel::Dev, "output_rows", true),
+        (ExplainAnalyzeLevel::Dev, "output_bytes", true),
+        (ExplainAnalyzeLevel::Dev, "output_batches", true),
     ] {
         let plan = collect_plan(sql, level).await;
         assert_eq!(
@@ -860,6 +890,21 @@ async fn parquet_explain_analyze() {
         &formatted,
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
     );
+
+    // The order of metrics is expected to be the same as the actual pruning order
+    // (file-> row-group -> page)
+    let i_file = formatted.find("files_ranges_pruned_statistics").unwrap();
+    let i_rowgroup_stat = formatted.find("row_groups_pruned_statistics").unwrap();
+    let i_rowgroup_bloomfilter =
+        formatted.find("row_groups_pruned_bloom_filter").unwrap();
+    let i_page = formatted.find("page_index_rows_pruned").unwrap();
+
+    assert!(
+        (i_file < i_rowgroup_stat)
+            && (i_rowgroup_stat < i_rowgroup_bloomfilter)
+            && (i_rowgroup_bloomfilter < i_page),
+            "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
+    );
 }
 
 // This test reproduces the behavior described in
@@ -1082,4 +1127,34 @@ async fn csv_explain_analyze_with_statistics() {
         &formatted,
         ", statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]"
     );
+}
+
+#[tokio::test]
+async fn nested_loop_join_selectivity() {
+    for (join_type, expected_selectivity) in [
+        ("INNER", "1% (1/100)"),
+        ("LEFT", "10% (10/100)"),
+        ("RIGHT", "10% (10/100)"),
+        // 1 match + 9 left + 9 right = 19
+        ("FULL", "19% (19/100)"),
+    ] {
+        let ctx = SessionContext::new();
+        let sql = format!(
+            "EXPLAIN ANALYZE SELECT * \
+                FROM generate_series(1, 10) as t1(a) \
+                {join_type} JOIN generate_series(1, 10) as t2(b) \
+                ON (t1.a + t2.b) = 20"
+        );
+
+        let actual = execute_to_batches(&ctx, sql.as_str()).await;
+        let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+            .unwrap()
+            .to_string();
+
+        assert_metrics!(
+            &formatted,
+            "NestedLoopJoinExec",
+            &format!("selectivity={expected_selectivity}")
+        );
+    }
 }

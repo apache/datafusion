@@ -338,17 +338,13 @@ pub type FileOpenFuture =
     BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch>>>>;
 
 /// Describes the behavior of the `FileStream` if file opening or scanning fails
+#[derive(Default)]
 pub enum OnError {
     /// Fail the entire stream and return the underlying error
+    #[default]
     Fail,
     /// Continue scanning, ignoring the failed file
     Skip,
-}
-
-impl Default for OnError {
-    fn default() -> Self {
-        Self::Fail
-    }
 }
 
 /// Generic API for opening a file using an [`ObjectStore`] and resolving to a
@@ -643,10 +639,10 @@ mod tests {
 
             let on_error = self.on_error;
 
+            let table_schema = crate::table_schema::TableSchema::new(file_schema, vec![]);
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema,
-                Arc::new(MockSource::default()),
+                Arc::new(MockSource::new(table_schema)),
             )
             .with_file_group(file_group)
             .with_limit(self.limit)

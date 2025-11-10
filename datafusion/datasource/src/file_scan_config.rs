@@ -24,7 +24,7 @@ use crate::schema_adapter::SchemaAdapterFactory;
 use crate::{
     display::FileGroupsDisplay, file::FileSource,
     file_compression_type::FileCompressionType, file_stream::FileStream,
-    source::DataSource, statistics::MinMaxStatistics, PartitionedFile, TableSchema,
+    source::DataSource, statistics::MinMaxStatistics, PartitionedFile,
 };
 use arrow::datatypes::FieldRef;
 use arrow::{
@@ -33,7 +33,7 @@ use arrow::{
         RecordBatchOptions,
     },
     buffer::Buffer,
-    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
+    datatypes::{ArrowNativeType, DataType, Schema, SchemaRef, UInt16Type},
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -103,29 +103,30 @@ use log::{debug, warn};
 /// # // Note: crate mock ParquetSource, as ParquetSource is not in the datasource crate
 /// #[derive(Clone)]
 /// # struct ParquetSource {
+/// #    table_schema: TableSchema,
 /// #    projected_statistics: Option<Statistics>,
 /// #    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>
 /// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
+/// #  fn table_schema(&self) -> &TableSchema { &self.table_schema }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
-/// #  fn with_schema(&self, _: TableSchema) -> Arc<dyn FileSource> { Arc::new(self.clone()) as Arc<dyn FileSource> }
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
-/// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics), schema_adapter_factory: self.schema_adapter_factory.clone()} ) }
+/// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {table_schema: self.table_schema.clone(), projected_statistics: Some(statistics), schema_adapter_factory: self.schema_adapter_factory.clone()} ) }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
 /// #  fn statistics(&self) -> Result<Statistics> { Ok(self.projected_statistics.clone().expect("projected_statistics should be set")) }
 /// #  fn file_type(&self) -> &str { "parquet" }
-/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {projected_statistics: self.projected_statistics.clone(), schema_adapter_factory: Some(factory)} )) }
+/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {table_schema: self.table_schema.clone(), projected_statistics: self.projected_statistics.clone(), schema_adapter_factory: Some(factory)} )) }
 /// #  fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> { self.schema_adapter_factory.clone() }
 /// #  }
 /// # impl ParquetSource {
-/// #  fn new() -> Self { Self {projected_statistics: None, schema_adapter_factory: None} }
+/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into(), projected_statistics: None, schema_adapter_factory: None} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
-/// let file_source = Arc::new(ParquetSource::new());
-/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+/// let file_source = Arc::new(ParquetSource::new(file_schema.clone()));
+/// let config = FileScanConfigBuilder::new(object_store_url, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
 ///   .with_projection_indices(Some(vec![2, 3])) // project columns 2 and 3
 ///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
@@ -156,16 +157,6 @@ pub struct FileScanConfig {
     /// [`RuntimeEnv::register_object_store`]: datafusion_execution::runtime_env::RuntimeEnv::register_object_store
     /// [`RuntimeEnv::object_store`]: datafusion_execution::runtime_env::RuntimeEnv::object_store
     pub object_store_url: ObjectStoreUrl,
-    /// Schema information including the file schema, table partition columns,
-    /// and the combined table schema.
-    ///
-    /// The table schema (file schema + partition columns) is the schema exposed
-    /// upstream of [`FileScanConfig`] (e.g. in [`DataSourceExec`]).
-    ///
-    /// See [`TableSchema`] for more information.
-    ///
-    /// [`DataSourceExec`]: crate::source::DataSourceExec
-    pub table_schema: TableSchema,
     /// List of files to be processed, grouped into partitions
     ///
     /// Each file must have a schema of `file_schema` or a subset. If
@@ -214,6 +205,7 @@ pub struct FileScanConfig {
 /// # use datafusion_datasource::file_compression_type::FileCompressionType;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
+/// # use datafusion_datasource::table_schema::TableSchema;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_common::Statistics;
 /// # use datafusion_datasource::file::FileSource;
@@ -221,25 +213,28 @@ pub struct FileScanConfig {
 /// # fn main() {
 /// # fn with_source(file_source: Arc<dyn FileSource>) {
 ///     // Create a schema for our Parquet files
-///     let schema = Arc::new(Schema::new(vec![
+///     let file_schema = Arc::new(Schema::new(vec![
 ///         Field::new("id", DataType::Int32, false),
 ///         Field::new("value", DataType::Utf8, false),
 ///     ]));
 ///
+///     // Create partition columns
+///     let partition_cols = vec![
+///         Arc::new(Field::new("date", DataType::Utf8, false)),
+///     ];
+///
+///     // Create table schema with file schema and partition columns
+///     let table_schema = TableSchema::new(file_schema, partition_cols);
+///
 ///     // Create a builder for scanning Parquet files from a local filesystem
 ///     let config = FileScanConfigBuilder::new(
 ///         ObjectStoreUrl::local_filesystem(),
-///         schema,
 ///         file_source,
 ///     )
 ///     // Set a limit of 1000 rows
 ///     .with_limit(Some(1000))
 ///     // Project only the first column
 ///     .with_projection_indices(Some(vec![0]))
-///     // Add partition columns
-///     .with_table_partition_cols(vec![
-///         Field::new("date", DataType::Utf8, false),
-///     ])
 ///     // Add a file group with two files
 ///     .with_file_group(FileGroup::new(vec![
 ///         PartitionedFile::new("data/date=2024-01-01/file1.parquet", 1024),
@@ -255,16 +250,6 @@ pub struct FileScanConfig {
 #[derive(Clone)]
 pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
-    /// Schema information including the file schema, table partition columns,
-    /// and the combined table schema.
-    ///
-    /// This schema is used to read the files, but the file schema is **not** necessarily
-    /// the schema of the physical files. Rather this is the schema that the
-    /// physical file schema will be mapped onto, and the schema that the
-    /// [`DataSourceExec`] will return.
-    ///
-    /// [`DataSourceExec`]: crate::source::DataSourceExec
-    table_schema: TableSchema,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
     projection_indices: Option<Vec<usize>>,
@@ -283,16 +268,14 @@ impl FileScanConfigBuilder {
     ///
     /// # Parameters:
     /// * `object_store_url`: See [`FileScanConfig::object_store_url`]
-    /// * `file_schema`: See [`FileScanConfig::file_schema`]
-    /// * `file_source`: See [`FileScanConfig::file_source`]
+    /// * `file_source`: See [`FileScanConfig::file_source`]. The file source must have
+    ///   a schema set via its constructor.
     pub fn new(
         object_store_url: ObjectStoreUrl,
-        file_schema: SchemaRef,
         file_source: Arc<dyn FileSource>,
     ) -> Self {
         Self {
             object_store_url,
-            table_schema: TableSchema::from_file_schema(file_schema),
             file_source,
             file_groups: vec![],
             statistics: None,
@@ -324,7 +307,7 @@ impl FileScanConfigBuilder {
     }
 
     pub fn table_schema(&self) -> &SchemaRef {
-        self.table_schema.table_schema()
+        self.file_source.table_schema().table_schema()
     }
 
     /// Set the columns on which to project the data. Indexes that are higher than the
@@ -342,18 +325,6 @@ impl FileScanConfigBuilder {
     /// Indexes that are higher than the number of columns of `file_schema` refer to `table_partition_cols`.
     pub fn with_projection_indices(mut self, indices: Option<Vec<usize>>) -> Self {
         self.projection_indices = indices;
-        self
-    }
-
-    /// Set the partitioning columns
-    pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
-        let table_partition_cols: Vec<FieldRef> = table_partition_cols
-            .into_iter()
-            .map(|f| Arc::new(f) as FieldRef)
-            .collect();
-        self.table_schema = self
-            .table_schema
-            .with_table_partition_cols(table_partition_cols);
         self
     }
 
@@ -451,7 +422,6 @@ impl FileScanConfigBuilder {
     pub fn build(self) -> FileScanConfig {
         let Self {
             object_store_url,
-            table_schema,
             file_source,
             limit,
             projection_indices,
@@ -466,12 +436,11 @@ impl FileScanConfigBuilder {
         } = self;
 
         let constraints = constraints.unwrap_or_default();
-        let statistics = statistics
-            .unwrap_or_else(|| Statistics::new_unknown(table_schema.file_schema()));
+        let statistics = statistics.unwrap_or_else(|| {
+            Statistics::new_unknown(file_source.table_schema().file_schema())
+        });
 
-        let file_source = file_source
-            .with_statistics(statistics.clone())
-            .with_schema(table_schema.clone());
+        let file_source = file_source.with_statistics(statistics.clone());
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
@@ -479,12 +448,14 @@ impl FileScanConfigBuilder {
         // Convert projection indices to ProjectionExprs using the final table schema
         // (which now includes partition columns if they were added)
         let projection_exprs = projection_indices.map(|indices| {
-            ProjectionExprs::from_indices(&indices, table_schema.table_schema())
+            ProjectionExprs::from_indices(
+                &indices,
+                file_source.table_schema().table_schema(),
+            )
         });
 
         FileScanConfig {
             object_store_url,
-            table_schema,
             file_source,
             limit,
             projection_exprs,
@@ -503,7 +474,6 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
     fn from(config: FileScanConfig) -> Self {
         Self {
             object_store_url: config.object_store_url,
-            table_schema: config.table_schema,
             file_source: Arc::<dyn FileSource>::clone(&config.file_source),
             file_groups: config.file_groups,
             statistics: config.file_source.statistics().ok(),
@@ -748,12 +718,12 @@ impl DataSource for FileScanConfig {
 impl FileScanConfig {
     /// Get the file schema (schema of the files without partition columns)
     pub fn file_schema(&self) -> &SchemaRef {
-        self.table_schema.file_schema()
+        self.file_source.table_schema().file_schema()
     }
 
     /// Get the table partition columns
     pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
-        self.table_schema.table_partition_cols()
+        self.file_source.table_schema().table_partition_cols()
     }
 
     fn projection_indices(&self) -> Vec<usize> {
@@ -1509,12 +1479,14 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 mod tests {
     use super::*;
     use crate::test_util::col;
+    use crate::TableSchema;
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
         verify_sort_integrity,
     };
 
     use arrow::array::{Int32Array, RecordBatch};
+    use arrow::datatypes::Field;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_batches_eq, internal_err};
     use datafusion_expr::{Operator, SortExpr};
@@ -2178,14 +2150,16 @@ mod tests {
         statistics: Statistics,
         table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
+        let table_schema = TableSchema::new(
+            file_schema,
+            table_partition_cols.into_iter().map(Arc::new).collect(),
+        );
         FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema,
-            Arc::new(MockSource::default()),
+            Arc::new(MockSource::new(table_schema.clone())),
         )
         .with_projection_indices(projection)
         .with_statistics(statistics)
-        .with_table_partition_cols(table_partition_cols)
         .build()
     }
 
@@ -2224,12 +2198,22 @@ mod tests {
     fn test_file_scan_config_builder() {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
-        let file_source: Arc<dyn FileSource> = Arc::new(MockSource::default());
+
+        let table_schema = TableSchema::new(
+            Arc::clone(&file_schema),
+            vec![Arc::new(Field::new(
+                "date",
+                wrap_partition_type_in_dict(DataType::Utf8),
+                false,
+            ))],
+        );
+
+        let file_source: Arc<dyn FileSource> =
+            Arc::new(MockSource::new(table_schema.clone()));
 
         // Create a builder with required parameters
         let builder = FileScanConfigBuilder::new(
             object_store_url.clone(),
-            Arc::clone(&file_schema),
             Arc::clone(&file_source),
         );
 
@@ -2237,11 +2221,6 @@ mod tests {
         let config = builder
             .with_limit(Some(1000))
             .with_projection_indices(Some(vec![0, 1]))
-            .with_table_partition_cols(vec![Field::new(
-                "date",
-                wrap_partition_type_in_dict(DataType::Utf8),
-                false,
-            )])
             .with_statistics(Statistics::new_unknown(&file_schema))
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "test.parquet".to_string(),
@@ -2283,17 +2262,20 @@ mod tests {
     fn equivalence_properties_after_schema_change() {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
+
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+
         // Create a file source with a filter
-        let file_source: Arc<dyn FileSource> =
-            Arc::new(MockSource::default().with_filter(Arc::new(BinaryExpr::new(
+        let file_source: Arc<dyn FileSource> = Arc::new(
+            MockSource::new(table_schema.clone()).with_filter(Arc::new(BinaryExpr::new(
                 col("c2", &file_schema).unwrap(),
                 Operator::Eq,
                 Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
-            ))));
+            ))),
+        );
 
         let config = FileScanConfigBuilder::new(
             object_store_url.clone(),
-            Arc::clone(&file_schema),
             Arc::clone(&file_source),
         )
         .with_projection_indices(Some(vec![0, 1, 2]))
@@ -2331,12 +2313,15 @@ mod tests {
     fn test_file_scan_config_builder_defaults() {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
-        let file_source: Arc<dyn FileSource> = Arc::new(MockSource::default());
+
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+
+        let file_source: Arc<dyn FileSource> =
+            Arc::new(MockSource::new(table_schema.clone()));
 
         // Create a builder with only required parameters and build without any additional configurations
         let config = FileScanConfigBuilder::new(
             object_store_url.clone(),
-            Arc::clone(&file_schema),
             Arc::clone(&file_source),
         )
         .build();
@@ -2389,7 +2374,6 @@ mod tests {
     fn test_file_scan_config_builder_new_from() {
         let schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
-        let file_source: Arc<dyn FileSource> = Arc::new(MockSource::default());
         let partition_cols = vec![Field::new(
             "date",
             wrap_partition_type_in_dict(DataType::Utf8),
@@ -2397,15 +2381,21 @@ mod tests {
         )];
         let file = PartitionedFile::new("test_file.parquet", 100);
 
+        let table_schema = TableSchema::new(
+            Arc::clone(&schema),
+            partition_cols.iter().map(|f| Arc::new(f.clone())).collect(),
+        );
+
+        let file_source: Arc<dyn FileSource> =
+            Arc::new(MockSource::new(table_schema.clone()));
+
         // Create a config with non-default values
         let original_config = FileScanConfigBuilder::new(
             object_store_url.clone(),
-            Arc::clone(&schema),
             Arc::clone(&file_source),
         )
         .with_projection_indices(Some(vec![0, 2]))
         .with_limit(Some(10))
-        .with_table_partition_cols(partition_cols.clone())
         .with_file(file.clone())
         .with_constraints(Constraints::default())
         .with_newlines_in_values(true)
@@ -2640,11 +2630,12 @@ mod tests {
         let file_group = FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)])
             .with_statistics(Arc::new(file_group_stats));
 
+        let table_schema = TableSchema::new(Arc::clone(&schema), vec![]);
+
         // Create a FileScanConfig with projection: only keep columns 0 and 2
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
-            Arc::clone(&schema),
-            Arc::new(MockSource::default()),
+            Arc::new(MockSource::new(table_schema.clone())),
         )
         .with_projection_indices(Some(vec![0, 2])) // Only project columns 0 and 2
         .with_file_groups(vec![file_group])

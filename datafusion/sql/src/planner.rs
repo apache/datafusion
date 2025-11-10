@@ -251,7 +251,6 @@ impl IdentNormalizer {
 /// This helps resolve scoping issues of CTEs.
 /// By using cloning, a subquery can inherit CTEs from the outer query
 /// and can also define its own private CTEs without affecting the outer query.
-///
 #[derive(Debug, Clone)]
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
@@ -693,7 +692,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    Some(self.context_provider.options().execution.time_zone.clone())
+                    self.context_provider.options().execution.time_zone.clone()
                 } else {
                     // Timestamp Without Time zone
                     None
