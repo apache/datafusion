@@ -766,7 +766,7 @@ async fn test_physical_plan_display_indent() {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     SortPreservingMergeExec: [the_min@2 DESC], fetch=10
       SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]
         ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
@@ -774,11 +774,10 @@ async fn test_physical_plan_display_indent() {
             CoalesceBatchesExec: target_batch_size=4096
               RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
                 AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
-                  CoalesceBatchesExec: target_batch_size=4096
-                    FilterExec: c12@1 < 10
-                      RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
-                        DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true
-    "###
+                  FilterExec: c12@1 < 10
+                    RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
+                      DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true
+    "
     );
 }
 
@@ -1013,16 +1012,14 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
       RecursiveQueryExec: name=number_series, is_distinct=false
         CoalescePartitionsExec
           ProjectionExec: expr=[id@0 as id, 1 as level]
-            CoalesceBatchesExec: target_batch_size=8192
-              FilterExec: id@0 = 1
-                RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
+            FilterExec: id@0 = 1
+              RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
         CoalescePartitionsExec
           ProjectionExec: expr=[id@0 + 1 as ns.id + Int64(1), level@1 + 1 as ns.level + Int64(1)]
-            CoalesceBatchesExec: target_batch_size=8192
-              FilterExec: id@0 < 10
-                RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
-                  WorkTableExec: name=number_series
+            FilterExec: id@0 < 10
+              RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
+                WorkTableExec: name=number_series
     "
     );
 
