@@ -166,7 +166,7 @@ impl FilterExec {
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
         Ok(Self {
             predicate: Arc::clone(&self.predicate),
-            input: self.input.clone(),
+            input: Arc::clone(&self.input),
             metrics: self.metrics.clone(),
             default_selectivity: self.default_selectivity,
             cache: self.cache.clone(),
