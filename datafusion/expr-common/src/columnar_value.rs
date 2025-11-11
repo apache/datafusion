@@ -337,8 +337,7 @@ mod tests {
             err.to_string().starts_with(
                 "Internal error: Array length 3 does not match expected length 5"
             ),
-            "Found: {}",
-            err.to_string()
+            "Found: {err}"
         );
     }
 
