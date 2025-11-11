@@ -240,16 +240,39 @@ fn within_group_rejected_for_non_ordered_set_udaf() {
     // explicit `WITHIN GROUP` syntax for functions that do not
     // advertise `supports_within_group_clause()`.
     let sql = "SELECT min(c1) WITHIN GROUP (ORDER BY c1) FROM person";
-    let res = logical_plan(sql);
-    assert!(
-        res.is_err(),
-        "expected planning to fail for MIN WITHIN GROUP"
-    );
-    let err = format!("{:?}", res.err());
+    let err = logical_plan(sql)
+        .expect_err("expected planning to fail for MIN WITHIN GROUP")
+        .to_string();
     assert_contains!(
         err,
         "WITHIN GROUP is only supported for ordered-set aggregate functions"
     );
+}
+
+#[test]
+fn within_group_allowed_for_ordered_set_udaf() {
+    // percentile_cont is an ordered-set aggregate and advertises
+    // `supports_within_group_clause() = true`. The planner should accept
+    // the WITHIN GROUP syntax for this UDAF.
+    let sql = "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c1) FROM person";
+
+    // Build a planner that registers the ordered-set aggregate
+    use datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf;
+    use std::sync::Arc;
+
+    let dialect = &GenericDialect {};
+    let state =
+        MockSessionState::default().with_aggregate_function(percentile_cont_udaf());
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new(&context);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect)
+        .and_then(|mut ast| planner.statement_to_plan(ast.pop_front().unwrap()));
+
+    let plan =
+        result.expect("expected planning to succeed for percentile_cont WITHIN GROUP");
+    // Basic sanity check: the planned logical plan should mention the function name
+    let plan_str = format!("{:?}", plan);
+    assert!(plan_str.contains("percentile_cont"), "plan = {}", plan_str);
 }
 
 fn parse_ident_normalization_5() {
