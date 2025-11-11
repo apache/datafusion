@@ -710,15 +710,16 @@ impl Stream for FilterExecStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll;
+        let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
         loop {
             match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    // let timer = &self.metrics.baseline_metrics.elapsed_compute().timer();
+                    let timer = elapsed_compute.timer();
                     let _ = self.predicate.as_ref()
                         .evaluate(&batch)
                         .and_then(|v| v.into_array(batch.num_rows()))
                         .and_then(|array| {
-                            Ok(match (as_boolean_array(&array), self.projection.as_ref()) {
+                            Ok(match (as_boolean_array(&array), &self.projection) {
                                 // Apply filter array to record batch
                                 (Ok(filter_array), None) => {
                                     self.metrics.selectivity.add_part(filter_array.true_count());
@@ -727,7 +728,7 @@ impl Stream for FilterExecStream {
                                     self.batch_coalescer.push_batch_with_filter(batch.clone(), filter_array)?;
 
                                 }
-                                (Ok(filter_array), Some(ref projection)) => {
+                                (Ok(filter_array), Some(projection)) => {
                                     let projected_batch = batch.project(projection)?;
                                     self.metrics.selectivity.add_part(filter_array.true_count());
                                     self.metrics.selectivity.add_total(projected_batch.num_rows());
@@ -743,7 +744,7 @@ impl Stream for FilterExecStream {
                             })
                         });
 
-                    //timer.done();
+                    timer.done();
 
                     if self.batch_coalescer.has_completed_batch() {
                         poll = Poll::Ready(Some(Ok(self
