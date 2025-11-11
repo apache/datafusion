@@ -728,7 +728,6 @@ impl Stream for FilterExecStream {
                             })
                         }).and_then(|(array, batch)| {
                             match as_boolean_array(&array) {
-                                // Apply filter array to record batch
                                 Ok(filter_array) => {
                                     self.metrics.selectivity.add_part(filter_array.true_count());
                                     self.metrics.selectivity.add_total(batch.num_rows());
@@ -756,6 +755,7 @@ impl Stream for FilterExecStream {
                     continue;
                 }
                 None => {
+                    // Flush any remaining buffered batch
                     match self.batch_coalescer.finish_buffered_batch() {
                         Ok(()) => {
                             if let Some(batch) =
