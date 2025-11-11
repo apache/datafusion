@@ -758,13 +758,9 @@ impl Stream for FilterExecStream {
                     // Flush any remaining buffered batch
                     match self.batch_coalescer.finish_buffered_batch() {
                         Ok(()) => {
-                            if let Some(batch) =
-                                self.batch_coalescer.next_completed_batch()
-                            {
-                                poll = Poll::Ready(Some(Ok(batch)));
-                            } else {
-                                poll = Poll::Ready(None);
-                            }
+                            poll = Poll::Ready(
+                                self.batch_coalescer.next_completed_batch().map(Ok),
+                            );
                         }
                         Err(e) => {
                             poll = Poll::Ready(Some(Err(e.into())));
