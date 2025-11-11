@@ -1627,7 +1627,9 @@ async fn register_table() -> Result<()> {
     let df_impl = DataFrame::new(ctx.state(), df.logical_plan().clone());
 
     // register a dataframe as a table
-    ctx.register_table("test_table", df_impl.clone().into_view())?;
+    let table_provider = df_impl.clone().into_view();
+    assert_eq!(table_provider.table_type(), TableType::View);
+    ctx.register_table("test_table", table_provider)?;
 
     // pull the table out
     let table = ctx.table("test_table").await?;
