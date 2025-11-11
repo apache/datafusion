@@ -813,13 +813,17 @@ impl MetricValue {
                 name: name.clone(),
                 pruning_metrics: PruningMetrics::new(),
             },
-            Self::Ratio { name, ratio_metrics } => {
+            Self::Ratio {
+                name,
+                ratio_metrics,
+            } => {
                 let merge_strategy = ratio_metrics.merge_strategy.clone();
                 Self::Ratio {
                     name: name.clone(),
-                    ratio_metrics: RatioMetrics::new().with_merge_strategy(merge_strategy),
+                    ratio_metrics: RatioMetrics::new()
+                        .with_merge_strategy(merge_strategy),
                 }
-            },
+            }
             Self::Custom { name, value } => Self::Custom {
                 name: name.clone(),
                 value: value.new_empty(),
@@ -1193,12 +1197,14 @@ mod tests {
     #[test]
     fn test_ratio_merge_strategy() {
         // Test AddPartSetTotal strategy
-        let ratio_metrics1 = RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
+        let ratio_metrics1 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
 
         ratio_metrics1.set_part(10);
         ratio_metrics1.set_total(40);
         assert_eq!("25% (10/40)", ratio_metrics1.to_string());
-        let ratio_metrics2 = RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
+        let ratio_metrics2 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
         ratio_metrics2.set_part(20);
         ratio_metrics2.set_total(40);
         assert_eq!("50% (20/40)", ratio_metrics2.to_string());
@@ -1207,7 +1213,8 @@ mod tests {
         assert_eq!("75% (30/40)", ratio_metrics1.to_string());
 
         // Test SetPartAddTotal strategy
-        let ratio_metrics1 = RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::SetPartAddTotal);
+        let ratio_metrics1 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::SetPartAddTotal);
         ratio_metrics1.set_part(20);
         ratio_metrics1.set_total(50);
         let ratio_metrics2 = RatioMetrics::new();

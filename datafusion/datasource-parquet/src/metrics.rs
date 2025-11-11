@@ -120,7 +120,11 @@ impl ParquetFileMetrics {
         let scan_efficiency_ratio = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::SUMMARY)
-            .ratio_metrics_with_strategy("scan_efficiency_ratio", partition, RatioMergeStrategy::AddPartSetTotal);
+            .ratio_metrics_with_strategy(
+                "scan_efficiency_ratio",
+                partition,
+                RatioMergeStrategy::AddPartSetTotal,
+            );
 
         // -----------------------
         // 'dev' level metrics
