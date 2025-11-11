@@ -67,6 +67,7 @@ use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
+const FILTER_EXEC_DEFAULT_TARGET_BATCH_SIZE: usize = 8192;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
@@ -84,6 +85,8 @@ pub struct FilterExec {
     cache: PlanProperties,
     /// The projection indices of the columns in the output schema of join
     projection: Option<Vec<usize>>,
+    /// Target batch size for output batches
+    target_batch_size: usize,
 }
 
 impl FilterExec {
@@ -108,6 +111,7 @@ impl FilterExec {
                     default_selectivity,
                     cache,
                     projection: None,
+                    target_batch_size: FILTER_EXEC_DEFAULT_TARGET_BATCH_SIZE,
                 })
             }
             other => {
@@ -155,6 +159,19 @@ impl FilterExec {
             default_selectivity: self.default_selectivity,
             cache,
             projection,
+            target_batch_size: self.target_batch_size,
+        })
+    }
+
+    pub fn with_target_batch_size(&self, target_batch_size: usize) -> Result<Self> {
+        Ok(Self {
+            predicate: Arc::clone(&self.predicate),
+            input: self.input.clone(),
+            metrics: self.metrics.clone(),
+            default_selectivity: self.default_selectivity,
+            cache: self.cache.clone(),
+            projection: self.projection.clone(),
+            target_batch_size,
         })
     }
 
@@ -392,8 +409,8 @@ impl ExecutionPlan for FilterExec {
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
-            batch_coalescer: BatchCoalescer::new(self.schema(), 8192)
-                .with_biggest_coalesce_batch_size(Some(4096)),
+            batch_coalescer: BatchCoalescer::new(self.schema(), self.target_batch_size)
+                .with_biggest_coalesce_batch_size(Some(self.target_batch_size / 2)),
         }))
     }
 
@@ -551,6 +568,7 @@ impl ExecutionPlan for FilterExec {
                     self.projection.as_ref(),
                 )?,
                 projection: None,
+                target_batch_size: self.target_batch_size,
             };
             Some(Arc::new(new) as _)
         };
