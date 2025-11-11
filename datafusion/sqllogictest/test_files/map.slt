@@ -544,11 +544,19 @@ SELECT (CASE WHEN 1 > 0 THEN MAP {'x': 100} ELSE MAP {'y': 200} END)['x'];
 ----
 100
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
-# ----
-# 1
+# fix accessing map with nested key
+query I
+SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
+----
+1
+
+query I
+SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {2:'b', 1:'a'}];
+----
+NULL
+
+# TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with empty map as key
+# TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with null map as key
 
 # accessing map with non-string key
 query I
