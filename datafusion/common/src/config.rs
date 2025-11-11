@@ -606,6 +606,28 @@ config_namespace! {
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+
+        /// Whether to enable ANSI SQL mode.
+        ///
+        /// Currently only used in DataFusion Spark crate
+        ///
+        /// When `enable_ansi_mode` is set to `true`, the query engine enforces ANSI SQL
+        /// semantics for expressions, casting, and error handling. This includes:
+        /// - Strict type coercion rules: implicit casts between incompatible types are disallowed.
+        /// - Standard SQL arithmetic behavior: operations like division by zero or overflow
+        ///   result in runtime errors instead of returning `NULL` or silently truncating values.
+        /// - Reserved keyword enforcement and stricter identifier resolution rules.
+        /// - Behavior consistent with ANSI SQL for string concatenation, comparisons,
+        ///   and `NULL` handling.
+        ///
+        /// When set to `false` (the default), the engine uses a more permissive,
+        /// non-ANSI mode for better compatibility and convenience. This may allow
+        /// implicit type conversions, tolerate invalid inputs, or apply lenient
+        /// error handling.
+        ///
+        /// # Default
+        /// `false` — ANSI SQL mode is disabled by default.
+        pub enable_ansi_mode: bool, default = false
     }
 }
 
@@ -1124,6 +1146,15 @@ pub struct ConfigOptions {
 }
 
 impl ConfigField for ConfigOptions {
+    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+        self.catalog.visit(v, "datafusion.catalog", "");
+        self.execution.visit(v, "datafusion.execution", "");
+        self.optimizer.visit(v, "datafusion.optimizer", "");
+        self.explain.visit(v, "datafusion.explain", "");
+        self.sql_parser.visit(v, "datafusion.sql_parser", "");
+        self.format.visit(v, "datafusion.format", "");
+    }
+
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
@@ -1136,15 +1167,6 @@ impl ConfigField for ConfigOptions {
             "format" => self.format.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
-    }
-
-    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
-        self.catalog.visit(v, "datafusion.catalog", "");
-        self.execution.visit(v, "datafusion.execution", "");
-        self.optimizer.visit(v, "datafusion.optimizer", "");
-        self.explain.visit(v, "datafusion.explain", "");
-        self.sql_parser.visit(v, "datafusion.sql_parser", "");
-        self.format.visit(v, "datafusion.format", "");
     }
 }
 
