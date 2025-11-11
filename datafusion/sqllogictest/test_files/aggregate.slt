@@ -7861,17 +7861,15 @@ VALUES
 ----
 x 1
 
-query ?
+query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-----
-[a, a, c, d]
 
-query ?
+
+query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(DISTINCT a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-----
-[a, c, d]
+
 
 query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
 SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)
