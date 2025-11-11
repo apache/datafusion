@@ -308,13 +308,14 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
+        let schema = self.plan.schema();
+        for name in columns {
+            // validate at least one column will be returned
+            let _ = schema.qualified_field_with_unqualified_name(name)?;
+        }
         let fields = columns
             .iter()
-            .flat_map(|name| {
-                self.plan
-                    .schema()
-                    .qualified_fields_with_unqualified_name(name)
-            })
+            .flat_map(|name| schema.qualified_fields_with_unqualified_name(name))
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = fields
             .into_iter()
@@ -437,13 +438,14 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
+        let schema = self.plan.schema();
+        for name in columns {
+            // validate at least one column will be dropped
+            let _ = schema.qualified_field_with_unqualified_name(name)?;
+        }
         let fields_to_drop = columns
             .iter()
-            .flat_map(|name| {
-                self.plan
-                    .schema()
-                    .qualified_fields_with_unqualified_name(name)
-            })
+            .flat_map(|name| schema.qualified_fields_with_unqualified_name(name))
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = self
             .plan
