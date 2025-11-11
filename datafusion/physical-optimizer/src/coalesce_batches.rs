@@ -22,12 +22,12 @@ use crate::PhysicalOptimizerRule;
 
 use std::sync::Arc;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::{config::ConfigOptions, internal_err};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
-    coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
-    repartition::RepartitionExec, ExecutionPlan,
+    async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
+    joins::HashJoinExec, repartition::RepartitionExec, ExecutionPlan,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -72,11 +72,27 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                         )
                     })
                     .unwrap_or(false);
+
             if wrap_in_coalesce {
                 Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(
                     plan,
                     target_batch_size,
                 ))))
+            } else if let Some(async_exec) = plan_any.downcast_ref::<AsyncFuncExec>() {
+                // Coalesce inputs to async functions to reduce number of async function invocations
+                let children = async_exec.children();
+                if children.len() != 1 {
+                    return internal_err!(
+                        "Expected AsyncFuncExec to have exactly one child"
+                    );
+                }
+
+                let coalesce_exec = Arc::new(CoalesceBatchesExec::new(
+                    Arc::clone(children[0]),
+                    target_batch_size,
+                ));
+                let new_plan = plan.with_new_children(vec![coalesce_exec])?;
+                Ok(Transformed::yes(new_plan))
             } else {
                 Ok(Transformed::no(plan))
             }
