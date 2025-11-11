@@ -727,21 +727,21 @@ impl Stream for FilterExecStream {
                                 None => (array, batch)
                             })
                         }).and_then(|(array, batch)| {
-                            Ok(match as_boolean_array(&array) {
+                            match as_boolean_array(&array) {
                                 // Apply filter array to record batch
                                 Ok(filter_array) => {
                                     self.metrics.selectivity.add_part(filter_array.true_count());
                                     self.metrics.selectivity.add_total(batch.num_rows());
 
                                     self.batch_coalescer.push_batch_with_filter(batch.clone(), filter_array)?;
-
+                                    Ok(())
                                 }
                                 Err(_) => {
                                     internal_err!(
                                         "Cannot create filter_array from non-boolean predicates"
                                     )
                                 }
-                            })
+                            }
                         })?;
 
                     timer.done();
