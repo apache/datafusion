@@ -91,5 +91,5 @@ drop table test_nullable_decimal
 
 ## Original Query: SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);
 ## PySpark 3.5.5 Result: {"abs(INTERVAL '-1-1' YEAR TO MONTH)": 13, "typeof(abs(INTERVAL '-1-1' YEAR TO MONTH))": 'interval year to month', "typeof(INTERVAL '-1-1' YEAR TO MONTH)": 'interval year to month'}
-query error DataFusion error: This feature is not implemented: Unsupported SQL type INTERVAL YEAR TO MONTH
-SELECT abs(INTERVAL '-1-1' YEAR TO MONTH::interval year to month);
+#query
+#SELECT abs(INTERVAL '-1-1' YEAR TO MONTH::interval year to month);

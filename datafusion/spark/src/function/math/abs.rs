@@ -25,8 +25,7 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{
-    downcast_named_arg, make_abs_function,
-    make_wrapping_abs_function,
+    downcast_named_arg, make_abs_function, make_wrapping_abs_function,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -98,16 +97,14 @@ impl ScalarUDFImpl for SparkAbs {
             | DataType::Float32
             | DataType::Float64
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)
-            | DataType::Interval(IntervalUnit::YearMonth)
-            | DataType::Interval(IntervalUnit::DayTime) => Ok(vec![arg_types[0].clone()]),
+            | DataType::Decimal256(_, _) => Ok(vec![arg_types[0].clone()]),
             other => {
                 if other.is_numeric() {
                     Ok(vec![DataType::Float64])
                 } else {
                     Err(unsupported_data_type_exec_err(
                         "abs",
-                        "Numeric Type or ANSI Interval Type",
+                        "Numeric Type",
                         &arg_types[0],
                     ))
                 }
@@ -154,8 +151,8 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Int32 => {
-                    let abs_fun = make_wrapping_abs_function!(Int32Array);
-                    abs_fun(array).map(ColumnarValue::Array)
+                let abs_fun = make_wrapping_abs_function!(Int32Array);
+                abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Int64 => {
                 let abs_fun = make_wrapping_abs_function!(Int64Array);
@@ -177,19 +174,6 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 let abs_fun = make_wrapping_abs_function!(Decimal256Array);
                 abs_fun(array).map(ColumnarValue::Array)
             }
-            DataType::Interval(unit) => match unit {
-                IntervalUnit::YearMonth => {
-                    let abs_fun = make_wrapping_abs_function!(IntervalYearMonthArray);
-                    abs_fun(array).map(ColumnarValue::Array)
-                }
-                IntervalUnit::DayTime => {
-                    let abs_fun = make_wrapping_abs_function!(IntervalDayTimeArray);
-                    abs_fun(array).map(ColumnarValue::Array)
-                }
-                IntervalUnit::MonthDayNano => internal_err!(
-                    "MonthDayNano is not a supported Interval unit for Spark ABS"
-                ),
-            },
             dt => internal_err!("Not supported datatype for Spark ABS: {dt}"),
         },
         ColumnarValue::Scalar(sv) => match sv {
@@ -234,15 +218,6 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                     scalar_compute_op!(v, *precision, *scale, Decimal256)
                 }
             },
-            ScalarValue::IntervalYearMonth(a) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(v, IntervalYearMonth),
-            },
-            ScalarValue::IntervalDayTime(a) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(v, IntervalDayTime),
-            },
-
             dt => internal_err!("Not supported datatype for Spark ABS: {dt}"),
         },
     }
@@ -308,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_abs_scalar_legacy_mode() {
-        // NumericType, DayTimeIntervalType, and YearMonthIntervalType MIN
+        // NumericType MIN
         eval_legacy_mode!(UInt8, u8::MIN);
         eval_legacy_mode!(UInt16, u16::MIN);
         eval_legacy_mode!(UInt32, u32::MIN);
@@ -321,22 +296,14 @@ mod tests {
         eval_legacy_mode!(Float64, f64::MIN, f64::MAX);
         eval_legacy_mode!(Decimal128, i128::MIN, 18, 10);
         eval_legacy_mode!(Decimal256, i256::MIN, 10, 2);
-        eval_legacy_mode!(IntervalYearMonth, i32::MIN);
-        eval_legacy_mode!(IntervalDayTime, IntervalDayTime::MIN);
 
-        // NumericType, DayTimeIntervalType, and YearMonthIntervalType not MIN
+        // NumericType not MIN
         eval_legacy_mode!(Int8, -1i8, 1i8);
         eval_legacy_mode!(Int16, -1i16, 1i16);
         eval_legacy_mode!(Int32, -1i32, 1i32);
         eval_legacy_mode!(Int64, -1i64, 1i64);
         eval_legacy_mode!(Decimal128, -1i128, 18, 10, 1i128);
         eval_legacy_mode!(Decimal256, i256::from(-1i8), 10, 2, i256::from(1i8));
-        eval_legacy_mode!(IntervalYearMonth, -1i32, 1i32);
-        eval_legacy_mode!(
-            IntervalDayTime,
-            IntervalDayTime::new(-1i32, -1i32),
-            IntervalDayTime::new(1i32, 1i32)
-        );
 
         // Float32, Float64
         eval_legacy_mode!(Float32, f32::NEG_INFINITY, f32::INFINITY);
@@ -460,18 +427,6 @@ mod tests {
                 .with_precision_and_scale(5, 2)
                 .unwrap(),
             as_decimal256_array
-        );
-
-        eval_array_legacy_mode!(
-            IntervalYearMonthArray::from(vec![i32::MIN, -1]),
-            IntervalYearMonthArray::from(vec![i32::MIN, 1]),
-            as_interval_ym_array
-        );
-
-        eval_array_legacy_mode!(
-            IntervalDayTimeArray::from(vec![IntervalDayTime::new(i32::MIN, i32::MIN,)]),
-            IntervalDayTimeArray::from(vec![IntervalDayTime::new(i32::MIN, i32::MIN,)]),
-            as_interval_dt_array
         );
     }
 }
