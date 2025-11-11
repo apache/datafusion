@@ -234,6 +234,24 @@ fn parse_ident_normalization_4() {
 }
 
 #[test]
+fn within_group_rejected_for_non_ordered_set_udaf() {
+    // MIN is order-sensitive by nature but does not implement the
+    // ordered-set `WITHIN GROUP` opt-in. The planner must reject
+    // explicit `WITHIN GROUP` syntax for functions that do not
+    // advertise `supports_within_group_clause()`.
+    let sql = "SELECT min(c1) WITHIN GROUP (ORDER BY c1) FROM person";
+    let res = logical_plan(sql);
+    assert!(
+        res.is_err(),
+        "expected planning to fail for MIN WITHIN GROUP"
+    );
+    let err = format!("{:?}", res.err());
+    assert_contains!(
+        err,
+        "WITHIN GROUP is only supported for ordered-set aggregate functions"
+    );
+}
+
 fn parse_ident_normalization_5() {
     let sql = "SELECT AGE FROM PERSON";
     let parser_option = ident_normalization_parser_options_no_ident_normalization();

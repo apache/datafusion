@@ -490,24 +490,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let (mut args, mut arg_names) =
                     self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
-                // If the UDAF does not opt into WITHIN GROUP support, then normally the
-                // planner will treat a WITHIN GROUP clause as an aggregate ORDER BY and
-                // forward it to the aggregate implementation. However, this should only
-                // be allowed for aggregates that are order-sensitive (for example
-                // `ARRAY_AGG`), and not for order-insensitive aggregates like `SUM`.
-                //
-                // Reject the clause when the function is neither an ordered-set
-                // aggregate (supports_within_group_clause) nor order-sensitive.
-                if !within_group.is_empty()
-                    && !fm.supports_within_group_clause()
-                    && fm.order_sensitivity().is_insensitive()
-                {
+                // If the UDAF does not opt into WITHIN GROUP support, the SQL
+                // WITHIN GROUP(...) syntax MUST be rejected. Previously the
+                // planner forwarded WITHIN GROUP to the aggregate for any
+                // order-sensitive functions; that was too permissive. Enforce
+                // explicit opt-in via `supports_within_group_clause()`.
+                let supports_within_group = fm.supports_within_group_clause();
+
+                if !within_group.is_empty() && !supports_within_group {
                     return plan_err!(
                         "WITHIN GROUP is only supported for ordered-set aggregate functions"
                     );
                 }
 
-                let order_by = if fm.supports_within_group_clause() {
+                let order_by = if supports_within_group {
                     let within_group = self.order_by_to_sort_expr(
                         within_group,
                         schema,
