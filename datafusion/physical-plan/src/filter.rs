@@ -20,6 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
+use arrow::array;
 use itertools::Itertools;
 
 use super::{
@@ -719,24 +720,24 @@ impl Stream for FilterExecStream {
                         .evaluate(&batch)
                         .and_then(|v| v.into_array(batch.num_rows()))
                         .and_then(|array| {
-                            Ok(match (as_boolean_array(&array), &self.projection) {
+                            Ok(match self.projection {
+                                Some(ref projection) => {
+                                    let projected_batch = batch.project(projection)?;
+                                    (array, projected_batch)
+                                },
+                                None => (array, batch)
+                            })
+                        }).and_then(|(array, batch)| {
+                            Ok(match as_boolean_array(&array) {
                                 // Apply filter array to record batch
-                                (Ok(filter_array), None) => {
+                                Ok(filter_array) => {
                                     self.metrics.selectivity.add_part(filter_array.true_count());
                                     self.metrics.selectivity.add_total(batch.num_rows());
 
                                     self.batch_coalescer.push_batch_with_filter(batch.clone(), filter_array)?;
 
                                 }
-                                (Ok(filter_array), Some(projection)) => {
-                                    let projected_batch = batch.project(projection)?;
-                                    self.metrics.selectivity.add_part(filter_array.true_count());
-                                    self.metrics.selectivity.add_total(projected_batch.num_rows());
-
-                                    self.batch_coalescer.push_batch_with_filter(projected_batch, filter_array)?;
-
-                                }
-                                (Err(_), _) => {
+                                Err(_) => {
                                     internal_err!(
                                         "Cannot create filter_array from non-boolean predicates"
                                     )
