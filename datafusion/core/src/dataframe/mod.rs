@@ -52,8 +52,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
-    TableReference, UnnestOptions,
+    unqualified_field_not_found, Column, DFSchema, DataFusionError, ParamValues,
+    ScalarValue, SchemaError, TableReference, UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -308,14 +308,22 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
-        let schema = self.plan.schema();
-        for name in columns {
-            // validate at least one column will be returned
-            let _ = schema.qualified_field_with_unqualified_name(name)?;
-        }
         let fields = columns
             .iter()
-            .flat_map(|name| schema.qualified_fields_with_unqualified_name(name))
+            .map(|name| {
+                let fields = self
+                    .plan
+                    .schema()
+                    .qualified_fields_with_unqualified_name(name);
+                if fields.is_empty() {
+                    Err(unqualified_field_not_found(name, self.plan.schema()))
+                } else {
+                    Ok(fields)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = fields
             .into_iter()
@@ -438,14 +446,13 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
-        let schema = self.plan.schema();
-        for name in columns {
-            // validate at least one column will be dropped
-            let _ = schema.qualified_field_with_unqualified_name(name)?;
-        }
         let fields_to_drop = columns
             .iter()
-            .flat_map(|name| schema.qualified_fields_with_unqualified_name(name))
+            .flat_map(|name| {
+                self.plan
+                    .schema()
+                    .qualified_fields_with_unqualified_name(name)
+            })
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = self
             .plan
