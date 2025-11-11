@@ -1655,7 +1655,7 @@ impl DataFrame {
     pub fn into_view(self) -> Arc<dyn TableProvider> {
         Arc::new(DataFrameTableProvider {
             plan: self.plan,
-            table_type: TableType::Temporary,
+            table_type: TableType::View,
         })
     }
 
