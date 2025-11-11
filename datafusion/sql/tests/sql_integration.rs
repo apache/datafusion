@@ -23,11 +23,13 @@ use std::vec;
 
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
-use datafusion_common::{assert_contains, DataFusionError, Result};
+use datafusion_common::{
+    assert_contains, tree_node::TreeNodeRecursion, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, ColumnarValue,
-    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    CreateIndex, DdlStatement, Expr as DFExpr, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -38,10 +40,13 @@ use datafusion_sql::{
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
-    approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
-    min_max::min_udaf,
+    approx_median::approx_median_udaf,
+    average::avg_udaf,
+    count::count_udaf,
+    grouping::grouping_udaf,
+    min_max::{max_udaf, min_udaf},
+    percentile_cont::percentile_cont_udaf,
 };
-use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
@@ -258,7 +263,6 @@ fn within_group_allowed_for_ordered_set_udaf() {
         "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100";
 
     // Build a planner that registers the ordered-set aggregate
-    use datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf;
 
     let dialect = &GenericDialect {};
     let state =
@@ -273,10 +277,6 @@ fn within_group_allowed_for_ordered_set_udaf() {
 
     // Inspect the logical plan and ensure the Aggregate expression's
     // arguments have the WITHIN GROUP ordering expression prepended.
-    use datafusion_expr::Expr as DFExpr;
-
-    use datafusion_common::tree_node::TreeNodeRecursion;
-
     let mut found = false;
     plan.apply_with_subqueries(|p| {
         if let LogicalPlan::Aggregate(agg) = p {
@@ -323,8 +323,6 @@ fn within_group_named_argument_behavior() {
     // named arguments should still resolve correctly.
     let sql = "SELECT percentile_cont(percentile => 0.25) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100";
 
-    use datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf;
-
     let dialect = &GenericDialect {};
     let state =
         MockSessionState::default().with_aggregate_function(percentile_cont_udaf());
@@ -336,10 +334,6 @@ fn within_group_named_argument_behavior() {
     let plan = result.expect(
         "expected planning to succeed for percentile_cont WITHIN GROUP and named arg",
     );
-
-    use datafusion_common::tree_node::TreeNodeRecursion;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::Expr as DFExpr;
 
     let mut found = false;
     plan.apply_with_subqueries(|p| {
