@@ -39,6 +39,7 @@ To prepare for a new release series, we:
 - After the release is approved, publish to [crates.io], the ASF distribution servers, and GitHub tags.
 
 To add changes to the release branch, depending on the change we either:
+
 - Fix the issue on `main` and then backport the change to the release branch (e.g. [#18129])
 - Fix the issue on the release branch and then forward-port the change back to `main` (e.g.[#18057])
 
