@@ -332,10 +332,14 @@ mod tests {
         let arr = make_array(1, 3);
         let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
         let result = arr_columnar_value.into_array_of_size(5);
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .starts_with("Array length 3 does not match expected length 5"),);
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().starts_with(
+                "Internal error: Array length 3 does not match expected length 5"
+            ),
+            "Found: {}",
+            err.to_string()
+        );
     }
 
     #[test]
