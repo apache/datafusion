@@ -23,13 +23,17 @@ extern crate datafusion;
 mod data_utils;
 
 use crate::criterion::Criterion;
+use arrow::array::PrimitiveArray;
 use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::ArrowNativeTypeOp;
+use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{config::Dialect, ScalarValue};
 use datafusion_expr::col;
+use rand_distr::num_traits::NumCast;
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -155,18 +159,30 @@ fn benchmark_with_param_values_many_columns(
 /// 0,100...9900
 /// 0,200...19800
 /// 0,300...29700
-fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows: usize) {
-    // ("c0", [0, 0, ...])
-    // ("c1": [100, 200, ...])
-    // etc
-    let iter = (0..num_columns).map(|i| i as u64).map(|i| {
-        let array: ArrayRef = Arc::new(arrow::array::UInt64Array::from_iter_values(
-            (0..num_rows)
-                .map(|j| j as u64 * 100 + i)
-                .collect::<Vec<_>>(),
-        ));
+fn register_union_order_table_generic<T>(
+    ctx: &SessionContext,
+    num_columns: usize,
+    num_rows: usize,
+) where
+    T: ArrowPrimitiveType,
+    T::Native: ArrowNativeTypeOp + NumCast,
+{
+    let iter = (0..num_columns).map(|i| {
+        let array_data: Vec<T::Native> = (0..num_rows)
+            .map(|j| {
+                let value = (j as u64) * 100 + (i as u64);
+                <T::Native as NumCast>::from(value).unwrap_or_else(|| {
+                    panic!("Failed to cast numeric value to Native type")
+                })
+            })
+            .collect();
+
+        // Use PrimitiveArray which is generic over the ArrowPrimitiveType T
+        let array: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter_values(array_data));
+
         (format!("c{i}"), array)
     });
+
     let batch = RecordBatch::try_from_iter(iter).unwrap();
     let schema = batch.schema();
     let partitions = vec![vec![batch]];
@@ -183,7 +199,6 @@ fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows
 
     ctx.register_table("t", Arc::new(table)).unwrap();
 }
-
 /// return a query like
 /// ```sql
 /// select c1, 2 as c2, ... n as cn from t ORDER BY c1
@@ -403,13 +418,40 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // -- Sorted Queries --
     // 100, 200 && 300 is taking too long - https://github.com/apache/datafusion/issues/18366
+    // Logical Plan for datatype Int64 and UInt64 differs, UInt64 Logical Plan's Union are wrapped
+    // up in Projection, and EliminateNestedUnion OptimezerRule is not applied leading to significantly
+    // longer execution time.
+    // https://github.com/apache/datafusion/issues/17261
+
     for column_count in [10, 50 /* 100, 200, 300 */] {
-        register_union_order_table(&ctx, column_count, 1000);
+        register_union_order_table_generic::<arrow::datatypes::Int64Type>(
+            &ctx,
+            column_count,
+            1000,
+        );
 
         // this query has many expressions in its sort order so stresses
         // order equivalence validation
         c.bench_function(
-            &format!("physical_sorted_union_order_by_{column_count}"),
+            &format!("physical_sorted_union_order_by_{column_count}_int64"),
+            |b| {
+                // SELECT ... UNION ALL ...
+                let query = union_orderby_query(column_count);
+                b.iter(|| physical_plan(&ctx, &rt, &query))
+            },
+        );
+
+        let _ = ctx.deregister_table("t");
+    }
+
+    for column_count in [10, 50 /* 100, 200, 300 */] {
+        register_union_order_table_generic::<arrow::datatypes::UInt64Type>(
+            &ctx,
+            column_count,
+            1000,
+        );
+        c.bench_function(
+            &format!("physical_sorted_union_order_by_{column_count}_uint64"),
             |b| {
                 // SELECT ... UNION ALL ...
                 let query = union_orderby_query(column_count);
