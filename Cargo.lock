@@ -3046,7 +3046,6 @@ version = "0.1.0"
 dependencies = [
  "abi_stable",
  "datafusion",
- "datafusion-ffi",
  "ffi_module_interface",
  "tokio",
 ]
