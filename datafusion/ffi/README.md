@@ -104,7 +104,7 @@ the example in `FFI_TableProvider`.
 ## Task Context Accessor
 
 Many of the FFI structs in this crate contain a `FFI_TaskContextAccessor`. The
-purpose of this struct is to *weakly* hold a reference to a method to
+purpose of this struct is to _weakly_ hold a reference to a method to
 access the current `TaskContext`. The reason we need this accessor is because
 we use the `datafusion-proto` crate to serialize and deserialize data across
 the FFI boundary. In particular, we need to serialize and deserialize
@@ -128,7 +128,7 @@ implements `Session`.
 
 When reviewing the code, many of the structs in this crate contain a call to
 a `library_maker_id`. The purpose of this call is to determine if a library is
-accessing *local* code through the FFI structs. Consider this example: you have
+accessing _local_ code through the FFI structs. Consider this example: you have
 a `primary` program that exposes functions to create a schema provider. You
 have a `secondary` library that exposes a function to create a catalog provider
 and the `secondary` library uses the schema provider of the `primary` program.
