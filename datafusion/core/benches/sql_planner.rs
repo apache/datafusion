@@ -418,7 +418,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // -- Sorted Queries --
     // 100, 200 && 300 is taking too long - https://github.com/apache/datafusion/issues/18366
-    // Logical Plan for datatype Int64 and UInt64 differs, UInt64 Logical Plan's Union are wrapped 
+    // Logical Plan for datatype Int64 and UInt64 differs, UInt64 Logical Plan's Union are wrapped
     // up in Projection, and EliminateNestedUnion OptimezerRule is not applied leading to significantly
     // longer execution time.
     // https://github.com/apache/datafusion/issues/17261
