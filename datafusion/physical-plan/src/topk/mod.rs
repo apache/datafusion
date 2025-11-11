@@ -26,7 +26,9 @@ use datafusion_expr::{ColumnarValue, Operator};
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
-use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
+use super::metrics::{
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
+};
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
@@ -596,7 +598,7 @@ impl TopK {
         // break into record batches as needed
         let mut batches = vec![];
         if let Some(mut batch) = heap.emit()? {
-            metrics.baseline.output_rows().add(batch.num_rows());
+            (&batch).record_output(&metrics.baseline);
 
             loop {
                 if batch.num_rows() <= batch_size {
@@ -754,19 +756,18 @@ impl TopKHeap {
             return Ok((None, topk_rows));
         }
 
-        // Indices for each row within its respective RecordBatch
+        // Collect the batches into a vec and store the "batch_id -> array_pos" mapping, to then
+        // build the `indices` vec below. This is needed since the batch ids are not continuous.
+        let mut record_batches = Vec::new();
+        let mut batch_id_array_pos = HashMap::new();
+        for (array_pos, (batch_id, batch)) in self.store.batches.iter().enumerate() {
+            record_batches.push(&batch.batch);
+            batch_id_array_pos.insert(*batch_id, array_pos);
+        }
+
         let indices: Vec<_> = topk_rows
             .iter()
-            .enumerate()
-            .map(|(i, k)| (i, k.index))
-            .collect();
-
-        let record_batches: Vec<_> = topk_rows
-            .iter()
-            .map(|k| {
-                let entry = self.store.get(k.batch_id).expect("invalid stored batch id");
-                &entry.batch
-            })
+            .map(|k| (batch_id_array_pos[&k.batch_id], k.index))
             .collect();
 
         // At this point `indices` contains indexes within the

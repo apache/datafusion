@@ -321,7 +321,7 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
 
     // compute the distinct index
     let distinct_index: DistinctIndex =
-        DistinctIndex::new(values.iter().map(|s| s.to_string()));
+        DistinctIndex::new(values.iter().map(|s| (*s).to_string()));
 
     let file = File::create(path)?;
 
@@ -426,8 +426,10 @@ impl TableProvider for DistinctIndexTable {
 
         // Build ParquetSource to actually read the files
         let url = ObjectStoreUrl::parse("file://")?;
-        let source = Arc::new(ParquetSource::default().with_enable_page_index(true));
-        let mut builder = FileScanConfigBuilder::new(url, self.schema.clone(), source);
+        let source = Arc::new(
+            ParquetSource::new(self.schema.clone()).with_enable_page_index(true),
+        );
+        let mut builder = FileScanConfigBuilder::new(url, source);
         for file in files_to_scan {
             let path = self.dir.join(file);
             let len = std::fs::metadata(&path)?.len();

@@ -134,10 +134,15 @@ impl OptimizerContext {
         let mut options = ConfigOptions::default();
         options.optimizer.filter_null_join_keys = true;
 
+        Self::new_with_config_options(Arc::new(options))
+    }
+
+    /// Create a optimizer config with provided [ConfigOptions].
+    pub fn new_with_config_options(options: Arc<ConfigOptions>) -> Self {
         Self {
             query_execution_start_time: Utc::now(),
             alias_generator: Arc::new(AliasGenerator::new()),
-            options: Arc::new(options),
+            options,
         }
     }
 

@@ -238,7 +238,6 @@ impl JoinLeftData {
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
-///
 /// ```
 ///
 /// 2. the **probe phase** where the tuples of the probe side are streamed
@@ -273,7 +272,6 @@ impl JoinLeftData {
 ///     └────────────┘                                            └────────────┘
 ///
 ///        build side                                                probe side
-///
 /// ```
 ///
 /// # Example "Optimal" Plans
@@ -690,6 +688,8 @@ impl HashJoinExec {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) || self.projection.is_some()
         {
             Ok(Arc::new(new_join))
@@ -725,6 +725,12 @@ impl DisplayAs for HashJoinExec {
                 } else {
                     "".to_string()
                 };
+                let display_null_equality =
+                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                        ", NullsEqual: true"
+                    } else {
+                        ""
+                    };
                 let on = self
                     .on
                     .iter()
@@ -733,8 +739,13 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
-                    self.mode, self.join_type, on, display_filter, display_projections,
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
+                    self.mode,
+                    self.join_type,
+                    on,
+                    display_filter,
+                    display_projections,
+                    display_null_equality,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -752,6 +763,10 @@ impl DisplayAs for HashJoinExec {
                 }
 
                 writeln!(f, "on={on}")?;
+
+                if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                    writeln!(f, "NullsEqual: true")?;
+                }
 
                 if let Some(filter) = self.filter.as_ref() {
                     writeln!(f, "filter={filter}")?;
@@ -1020,6 +1035,7 @@ impl ExecutionPlan for HashJoinExec {
             vec![],
             self.right.output_ordering().is_some(),
             bounds_accumulator,
+            self.mode,
         )))
     }
 
@@ -1119,7 +1135,7 @@ impl ExecutionPlan for HashJoinExec {
 
         // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
-            && config.optimizer.enable_dynamic_filter_pushdown
+            && config.optimizer.enable_join_dynamic_filter_pushdown
         {
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
@@ -3436,11 +3452,7 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; left.num_rows()];
-        let hashes = create_hashes(
-            &[Arc::clone(&left.columns()[0])],
-            &random_state,
-            hashes_buff,
-        )?;
+        let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
         // Maps both values to both indices (1 and 2, representing input 0 and 1)
         // 0 -> (0, 1)
@@ -3469,11 +3481,7 @@ mod tests {
         let right_keys_values =
             key_column.evaluate(&right)?.into_array(right.num_rows())?;
         let mut hashes_buffer = vec![0; right.num_rows()];
-        create_hashes(
-            &[Arc::clone(&right_keys_values)],
-            &random_state,
-            &mut hashes_buffer,
-        )?;
+        create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
@@ -3507,11 +3515,7 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; left.num_rows()];
-        let hashes = create_hashes(
-            &[Arc::clone(&left.columns()[0])],
-            &random_state,
-            hashes_buff,
-        )?;
+        let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
         hashmap_left.insert_unique(hashes[0], (hashes[0], 1u32), |(h, _)| *h);
         hashmap_left.insert_unique(hashes[0], (hashes[0], 2u32), |(h, _)| *h);
@@ -3534,11 +3538,7 @@ mod tests {
         let right_keys_values =
             key_column.evaluate(&right)?.into_array(right.num_rows())?;
         let mut hashes_buffer = vec![0; right.num_rows()];
-        create_hashes(
-            &[Arc::clone(&right_keys_values)],
-            &random_state,
-            &mut hashes_buffer,
-        )?;
+        create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
@@ -4282,7 +4282,7 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput"
+                "Resources exhausted: Additional allocation failed for HashJoinInput with top memory consumers (across reservations) as:\n  HashJoinInput"
             );
 
             assert_contains!(
@@ -4363,7 +4363,7 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
 
             );
 

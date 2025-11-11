@@ -18,11 +18,11 @@
 [package]
 name = "datafusion-catalog-listing"
 description = "datafusion-catalog-listing"
+readme = "README.md"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
-readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -39,19 +39,26 @@ datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-datafusion-session = { workspace = true }
 futures = { workspace = true }
+itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
-tokio = { workspace = true }
 
 [dev-dependencies]
+datafusion-datasource-parquet = { workspace = true }
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_catalog_listing"
 path = "src/mod.rs"
+
+[package.metadata.cargo-machete]
+ignored = ["datafusion-datasource-parquet"]

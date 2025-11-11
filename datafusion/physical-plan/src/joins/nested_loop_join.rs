@@ -36,7 +36,9 @@ use crate::joins::utils::{
     OnceAsync, OnceFut,
 };
 use crate::joins::SharedBitmapBuilder;
-use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, MetricsSet, RatioMetrics,
+};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
@@ -48,7 +50,7 @@ use crate::{
 
 use arrow::array::{
     new_null_array, Array, BooleanArray, BooleanBufferBuilder, RecordBatchOptions,
-    UInt32Array,
+    UInt32Array, UInt64Array,
 };
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::{
@@ -56,6 +58,7 @@ use arrow::compute::{
 };
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
     arrow_err, internal_datafusion_err, internal_err, project_schema,
@@ -176,7 +179,8 @@ pub struct NestedLoopJoinExec {
     pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
     pub(crate) join_type: JoinType,
-    /// The schema once the join is applied
+    /// The full concatenated schema of left and right children should be distinct from
+    /// the output schema of the operator
     join_schema: SchemaRef,
     /// Future that consumes left input and buffers it in memory
     ///
@@ -381,6 +385,8 @@ impl NestedLoopJoinExec {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) || self.projection.is_some()
         {
             Arc::new(new_join)
@@ -492,7 +498,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             );
         }
 
-        let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+        let metrics = NestedLoopJoinMetrics::new(&self.metrics, partition);
 
         // Initialization reservation for load of inner table
         let load_reservation =
@@ -504,7 +510,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
             Ok(collect_left_input(
                 stream,
-                join_metrics.clone(),
+                metrics.join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
@@ -531,7 +537,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             probe_side_data,
             build_side_data,
             column_indices_after_projection,
-            join_metrics,
+            metrics,
             batch_size,
         )))
     }
@@ -553,7 +559,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             self.right.partition_statistics(None)?,
             vec![],
             &self.join_type,
-            &self.join_schema,
+            &self.schema(),
         )
     }
 
@@ -745,7 +751,7 @@ pub(crate) struct NestedLoopJoinStream {
     /// the join filter (e.g., `JOIN ON (b+c)>0`).
     pub(crate) column_indices: Vec<ColumnIndex>,
     /// Join execution metrics
-    pub(crate) join_metrics: BuildProbeJoinMetrics,
+    pub(crate) metrics: NestedLoopJoinMetrics,
 
     /// `batch_size` from configuration
     batch_size: usize,
@@ -788,6 +794,24 @@ pub(crate) struct NestedLoopJoinStream {
     // For right join, keep track of matched rows in `current_right_batch`
     // Constructed when fetching each new incoming right batch in `FetchingRight` state.
     current_right_batch_matched: Option<BooleanArray>,
+}
+
+pub(crate) struct NestedLoopJoinMetrics {
+    /// Join execution metrics
+    pub(crate) join_metrics: BuildProbeJoinMetrics,
+    /// Selectivity of the join: output_rows / (left_rows * right_rows)
+    pub(crate) selectivity: RatioMetrics,
+}
+
+impl NestedLoopJoinMetrics {
+    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self {
+            join_metrics: BuildProbeJoinMetrics::new(partition, metrics),
+            selectivity: MetricBuilder::new(metrics)
+                .with_type(MetricType::SUMMARY)
+                .ratio_metrics("selectivity", partition),
+        }
+    }
 }
 
 impl Stream for NestedLoopJoinStream {
@@ -840,7 +864,7 @@ impl Stream for NestedLoopJoinStream {
                     // -side batches), related metrics except build time will be
                     // updated.
                     // stop on drop
-                    let build_metric = self.join_metrics.build_time.clone();
+                    let build_metric = self.metrics.join_metrics.build_time.clone();
                     let _build_timer = build_metric.timer();
 
                     match self.handle_buffering_left(cx) {
@@ -874,7 +898,7 @@ impl Stream for NestedLoopJoinStream {
                 NLJState::FetchingRight => {
                     debug!("[NLJState] Entering: {:?}", self.state);
                     // stop on drop
-                    let join_metric = self.join_metrics.join_time.clone();
+                    let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
                     match self.handle_fetching_right(cx) {
@@ -901,13 +925,13 @@ impl Stream for NestedLoopJoinStream {
                     debug!("[NLJState] Entering: {:?}", self.state);
 
                     // stop on drop
-                    let join_metric = self.join_metrics.join_time.clone();
+                    let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
                     match self.handle_probe_right() {
                         ControlFlow::Continue(()) => continue,
                         ControlFlow::Break(poll) => {
-                            return self.join_metrics.baseline.record_poll(poll)
+                            return self.metrics.join_metrics.baseline.record_poll(poll)
                         }
                     }
                 }
@@ -922,13 +946,13 @@ impl Stream for NestedLoopJoinStream {
                     debug!("[NLJState] Entering: {:?}", self.state);
 
                     // stop on drop
-                    let join_metric = self.join_metrics.join_time.clone();
+                    let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_right_unmatched() {
                         ControlFlow::Continue(()) => continue,
                         ControlFlow::Break(poll) => {
-                            return self.join_metrics.baseline.record_poll(poll)
+                            return self.metrics.join_metrics.baseline.record_poll(poll)
                         }
                     }
                 }
@@ -952,13 +976,13 @@ impl Stream for NestedLoopJoinStream {
                     debug!("[NLJState] Entering: {:?}", self.state);
 
                     // stop on drop
-                    let join_metric = self.join_metrics.join_time.clone();
+                    let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_left_unmatched() {
                         ControlFlow::Continue(()) => continue,
                         ControlFlow::Break(poll) => {
-                            return self.join_metrics.baseline.record_poll(poll)
+                            return self.metrics.join_metrics.baseline.record_poll(poll)
                         }
                     }
                 }
@@ -968,13 +992,13 @@ impl Stream for NestedLoopJoinStream {
                     debug!("[NLJState] Entering: {:?}", self.state);
 
                     // stop on drop
-                    let join_metric = self.join_metrics.join_time.clone();
+                    let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
                     // counting it in join timer due to there might be some
                     // final resout batches to output in this state
 
                     let poll = self.handle_done();
-                    return self.join_metrics.baseline.record_poll(poll);
+                    return self.metrics.join_metrics.baseline.record_poll(poll);
                 }
             }
         }
@@ -996,7 +1020,7 @@ impl NestedLoopJoinStream {
         right_data: SendableRecordBatchStream,
         left_data: OnceFut<JoinLeftData>,
         column_indices: Vec<ColumnIndex>,
-        join_metrics: BuildProbeJoinMetrics,
+        metrics: NestedLoopJoinMetrics,
         batch_size: usize,
     ) -> Self {
         Self {
@@ -1006,7 +1030,7 @@ impl NestedLoopJoinStream {
             right_data,
             column_indices,
             left_data,
-            join_metrics,
+            metrics,
             buffered_left_data: None,
             output_buffer: Box::new(BatchCoalescer::new(schema, batch_size)),
             batch_size,
@@ -1053,8 +1077,8 @@ impl NestedLoopJoinStream {
                 Some(Ok(right_batch)) => {
                     // Update metrics
                     let right_batch_size = right_batch.num_rows();
-                    self.join_metrics.input_rows.add(right_batch_size);
-                    self.join_metrics.input_batches.add(1);
+                    self.metrics.join_metrics.input_rows.add(right_batch_size);
+                    self.metrics.join_metrics.input_batches.add(1);
 
                     // Skip the empty batch
                     if right_batch_size == 0 {
@@ -1104,6 +1128,17 @@ impl NestedLoopJoinStream {
             Ok(false) => {
                 // Left exhausted, transition to FetchingRight
                 self.left_probe_idx = 0;
+
+                // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
+                // If memory-limited execution is implemented, this logic must be updated accordingly.
+                if let (Ok(left_data), Some(right_batch)) =
+                    (self.get_left_data(), self.current_right_batch.as_ref())
+                {
+                    let left_rows = left_data.batch().num_rows();
+                    let right_rows = right_batch.num_rows();
+                    self.metrics.selectivity.add_total(left_rows * right_rows);
+                }
+
                 if self.should_track_unmatched_right {
                     debug_assert!(
                         self.current_right_batch_matched.is_some(),
@@ -1134,7 +1169,6 @@ impl NestedLoopJoinStream {
                 && self.current_right_batch.is_some(),
             "This state is yielding output for unmatched rows in the current right batch, so both the right batch and the bitmap must be present"
         );
-
         // Construct the result batch for unmatched right rows using a utility function
         match self.process_right_unmatched() {
             Ok(Some(batch)) => {
@@ -1201,7 +1235,7 @@ impl NestedLoopJoinStream {
         // should be with the expected schema for this operator
         if !self.handled_empty_output {
             let zero_count = Count::new();
-            if *self.join_metrics.baseline.output_rows() == zero_count {
+            if *self.metrics.join_metrics.baseline.output_rows() == zero_count {
                 let empty_batch = RecordBatch::new_empty(Arc::clone(&self.output_schema));
                 self.handled_empty_output = true;
                 return Poll::Ready(Some(Ok(empty_batch)));
@@ -1318,7 +1352,7 @@ impl NestedLoopJoinStream {
                 std::iter::repeat_n((l_start_index + i) as u32, right_rows)
             }));
         let right_indices: UInt32Array = UInt32Array::from_iter_values(
-            (0..l_row_count).flat_map(|_| (0..right_rows as u32)),
+            (0..l_row_count).flat_map(|_| 0..right_rows as u32),
         );
 
         debug_assert!(
@@ -1677,9 +1711,9 @@ impl NestedLoopJoinStream {
     fn maybe_flush_ready_batch(&mut self) -> Option<Poll<Option<Result<RecordBatch>>>> {
         if self.output_buffer.has_completed_batch() {
             if let Some(batch) = self.output_buffer.next_completed_batch() {
-                // HACK: this is not part of `BaselineMetrics` yet, so update it
-                // manually
-                self.join_metrics.output_batches.add(1);
+                // Update output rows for selectivity metric
+                let output_rows = batch.num_rows();
+                self.metrics.selectivity.add_part(output_rows);
 
                 return Some(Poll::Ready(Some(Ok(batch))));
             }
@@ -1893,11 +1927,30 @@ fn build_row_join_batch(
             // Broadcast the single build-side row to match the filtered
             // probe-side batch length
             let original_left_array = build_side_batch.column(column_index.index);
-            let scalar_value = ScalarValue::try_from_array(
-                original_left_array.as_ref(),
-                build_side_index,
-            )?;
-            scalar_value.to_array_of_size(filtered_probe_batch.num_rows())?
+            // Avoid using `ScalarValue::to_array_of_size()` for `List(Utf8View)` to avoid
+            // deep copies for buffers inside `Utf8View` array. See below for details.
+            // https://github.com/apache/datafusion/issues/18159
+            //
+            // In other cases, `to_array_of_size()` is faster.
+            match original_left_array.data_type() {
+                DataType::List(field) | DataType::LargeList(field)
+                    if field.data_type() == &DataType::Utf8View =>
+                {
+                    let indices_iter = std::iter::repeat_n(
+                        build_side_index as u64,
+                        filtered_probe_batch.num_rows(),
+                    );
+                    let indices_array = UInt64Array::from_iter_values(indices_iter);
+                    take(original_left_array.as_ref(), &indices_array, None)?
+                }
+                _ => {
+                    let scalar_value = ScalarValue::try_from_array(
+                        original_left_array.as_ref(),
+                        build_side_index,
+                    )?;
+                    scalar_value.to_array_of_size(filtered_probe_batch.num_rows())?
+                }
+            }
         } else {
             // Take the filtered probe-side column using compute::take
             Arc::clone(filtered_probe_batch.column(column_index.index))
@@ -2503,6 +2556,26 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn join_has_correct_stats() -> Result<()> {
+        let left = build_left_table();
+        let right = build_right_table();
+        let nested_loop_join = NestedLoopJoinExec::try_new(
+            left,
+            right,
+            None,
+            &JoinType::Left,
+            Some(vec![1, 2]),
+        )?;
+        let stats = nested_loop_join.partition_statistics(None)?;
+        assert_eq!(
+            nested_loop_join.schema().fields().len(),
+            stats.column_statistics.len(),
+        );
+        assert_eq!(2, stats.column_statistics.len());
+        Ok(())
+    }
+
     #[rstest]
     #[tokio::test]
     async fn join_right_semi_with_filter(
@@ -2687,7 +2760,7 @@ pub(crate) mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]"
+                "Resources exhausted: Additional allocation failed for NestedLoopJoinLoad[0] with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]"
             );
         }
 

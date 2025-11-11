@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Formatter;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow::array::Int32Array;
 use arrow::compute::SortOptions;
@@ -73,8 +73,7 @@ use datafusion_physical_plan::{
 pub fn parquet_exec(schema: SchemaRef) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema,
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .build();
@@ -89,8 +88,7 @@ pub(crate) fn parquet_exec_with_sort(
 ) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema,
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
@@ -127,8 +125,7 @@ pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
 
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema(),
-        Arc::new(ParquetSource::new(Default::default())),
+        Arc::new(ParquetSource::new(schema())),
     )
     .with_file(PartitionedFile::new("x".to_string(), file_size))
     .with_statistics(statistics)
@@ -142,37 +139,49 @@ pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
 }
 
 pub fn schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, true),
-        Field::new("b", DataType::Int64, true),
-        Field::new("c", DataType::Int64, true),
-        Field::new("d", DataType::Int32, true),
-        Field::new("e", DataType::Boolean, true),
-    ]))
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+            Field::new("d", DataType::Int32, true),
+            Field::new("e", DataType::Boolean, true),
+        ]))
+    });
+    Arc::clone(&SCHEMA)
 }
 
 pub fn create_test_schema() -> Result<SchemaRef> {
-    let nullable_column = Field::new("nullable_col", DataType::Int32, true);
-    let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
-    let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let nullable_column = Field::new("nullable_col", DataType::Int32, true);
+        let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
+        Arc::new(Schema::new(vec![nullable_column, non_nullable_column]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
 pub fn create_test_schema2() -> Result<SchemaRef> {
-    let col_a = Field::new("col_a", DataType::Int32, true);
-    let col_b = Field::new("col_b", DataType::Int32, true);
-    let schema = Arc::new(Schema::new(vec![col_a, col_b]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let col_a = Field::new("col_a", DataType::Int32, true);
+        let col_b = Field::new("col_b", DataType::Int32, true);
+        Arc::new(Schema::new(vec![col_a, col_b]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
 // Generate a schema which consists of 5 columns (a, b, c, d, e)
 pub fn create_test_schema3() -> Result<SchemaRef> {
-    let a = Field::new("a", DataType::Int32, true);
-    let b = Field::new("b", DataType::Int32, false);
-    let c = Field::new("c", DataType::Int32, true);
-    let d = Field::new("d", DataType::Int32, false);
-    let e = Field::new("e", DataType::Int32, false);
-    let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, false);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, false);
+        let e = Field::new("e", DataType::Int32, false);
+        Arc::new(Schema::new(vec![a, b, c, d, e]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
@@ -236,7 +245,7 @@ pub fn hash_join_exec(
         join_type,
         None,
         PartitionMode::Partitioned,
-        NullEquality::NullEqualsNull,
+        NullEquality::NullEqualsNothing,
     )?))
 }
 
@@ -263,7 +272,7 @@ pub fn bounded_window_exec_with_partition(
         partition_by,
         &sort_exprs,
         Arc::new(WindowFrame::new(Some(false))),
-        schema.as_ref(),
+        schema,
         false,
         false,
         None,
@@ -304,7 +313,7 @@ pub fn sort_preserving_merge_exec_with_fetch(
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(UnionExec::new(input))
+    UnionExec::try_new(input).unwrap()
 }
 
 pub fn local_limit_exec(

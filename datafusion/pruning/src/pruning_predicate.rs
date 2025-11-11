@@ -34,10 +34,10 @@ use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::error::Result;
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err,
+    internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
@@ -882,7 +882,7 @@ impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredColumns {
 /// ```text
 /// ("s1", Min, Field:s1_min)
 /// ("s2", Max, field:s2_max)
-///```
+/// ```
 ///
 /// And the input statistics had
 /// ```text
@@ -1094,8 +1094,8 @@ fn rewrite_expr_to_prunable(
         Ok((Arc::clone(column_expr), op, Arc::clone(scalar_expr)))
     } else if let Some(cast) = column_expr_any.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
-        let arrow_schema: SchemaRef = schema.clone().into();
-        let from_type = cast.expr().data_type(&arrow_schema)?;
+        let arrow_schema = schema.as_arrow();
+        let from_type = cast.expr().data_type(arrow_schema)?;
         verify_support_type_for_prune(&from_type, cast.cast_type())?;
         let (left, op, right) =
             rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, schema)?;
@@ -1109,8 +1109,8 @@ fn rewrite_expr_to_prunable(
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
     {
         // `try_cast(col) op lit()`
-        let arrow_schema: SchemaRef = schema.clone().into();
-        let from_type = try_cast.expr().data_type(&arrow_schema)?;
+        let arrow_schema = schema.as_arrow();
+        let from_type = try_cast.expr().data_type(arrow_schema)?;
         verify_support_type_for_prune(&from_type, try_cast.cast_type())?;
         let (left, op, right) =
             rewrite_expr_to_prunable(try_cast.expr(), op, scalar_expr, schema)?;
@@ -1218,9 +1218,9 @@ fn rewrite_column_expr(
 
 fn reverse_operator(op: Operator) -> Result<Operator> {
     op.swap().ok_or_else(|| {
-        DataFusionError::Internal(format!(
+        internal_datafusion_err!(
             "Could not reverse operator {op} while building pruning predicate"
-        ))
+        )
     })
 }
 
@@ -5108,7 +5108,6 @@ mod tests {
     ///
     /// `expected` is a vector of bools, where true means the row group should
     /// be kept, and false means it should be pruned.
-    ///
     // TODO refactor other tests to use this to reduce boiler plate
     fn prune_with_expr(
         expr: Expr,

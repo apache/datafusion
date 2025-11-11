@@ -20,30 +20,30 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+};
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_sink_config::FileSink;
+use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::{FileRange, PartitionedFile};
+use datafusion_datasource_csv::file_format::CsvSink;
+use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::datasource::physical_plan::FileSink;
-use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
-use datafusion::physical_expr::ScalarFunctionExpr;
-use datafusion::physical_expr_common::physical_expr::snapshot_physical_expr;
-use datafusion::physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion::physical_plan::expressions::{
+use datafusion_datasource_parquet::file_format::ParquetSink;
+use datafusion_expr::WindowFrame;
+use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
+use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_plan::expressions::LikeExpr;
+use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
-use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion::{
-    datasource::{
-        file_format::{csv::CsvSink, json::JsonSink},
-        listing::{FileRange, PartitionedFile},
-        physical_plan::{FileScanConfig, FileSinkConfig},
-    },
-    physical_plan::expressions::LikeExpr,
-};
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::WindowFrame;
+use datafusion_physical_plan::udaf::AggregateFunctionExpr;
+use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
+use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 
 use crate::protobuf::{
     self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
@@ -159,7 +159,7 @@ pub fn serialize_physical_window_expr(
     let window_frame: protobuf::WindowFrame = window_frame
         .as_ref()
         .try_into()
-        .map_err(|e| DataFusionError::Internal(format!("{e}")))?;
+        .map_err(|e| internal_datafusion_err!("{e}"))?;
 
     Ok(protobuf::PhysicalWindowExprNode {
         args,
@@ -515,28 +515,33 @@ pub fn serialize_file_scan_config(
     // Fields must be added to the schema so that they can persist in the protobuf,
     // and then they are to be removed from the schema in `parse_protobuf_file_scan_config`
     let mut fields = conf
-        .file_schema
+        .file_schema()
         .fields()
         .iter()
         .cloned()
         .collect::<Vec<_>>();
-    fields.extend(conf.table_partition_cols.iter().cloned());
-    let schema = Arc::new(arrow::datatypes::Schema::new(fields.clone()));
+    fields.extend(conf.table_partition_cols().iter().cloned());
+
+    let schema = Arc::new(
+        arrow::datatypes::Schema::new(fields.clone())
+            .with_metadata(conf.file_schema().metadata.clone()),
+    );
 
     Ok(protobuf::FileScanExecConf {
         file_groups,
         statistics: Some((&conf.file_source.statistics().unwrap()).into()),
         limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
         projection: conf
-            .projection
+            .projection_exprs
             .as_ref()
-            .unwrap_or(&(0..schema.fields().len()).collect::<Vec<_>>())
+            .map(|p| p.column_indices())
+            .unwrap_or((0..schema.fields().len()).collect::<Vec<_>>())
             .iter()
             .map(|n| *n as u32)
             .collect(),
         schema: Some(schema.as_ref().try_into()?),
         table_partition_cols: conf
-            .table_partition_cols
+            .table_partition_cols()
             .iter()
             .map(|x| x.name().clone())
             .collect::<Vec<_>>(),

@@ -26,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Diagnostic,
-    HashMap, Result, ScalarValue,
+    exec_datafusion_err, exec_err, internal_err, plan_err, Column, DFSchemaRef,
+    Diagnostic, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
@@ -273,9 +273,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let result = all_partition_keys
         .iter()
         .min_by_key(|s| s.len())
-        .ok_or_else(|| {
-            DataFusionError::Execution("No window expressions found".to_owned())
-        })?;
+        .ok_or_else(|| exec_datafusion_err!("No window expressions found"))?;
     Ok(result)
 }
 
@@ -533,7 +531,6 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///                          / /
     ///                       column2
     /// ```
-    ///
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
@@ -701,7 +698,7 @@ mod tests {
                 ),
             })
             .collect();
-        let l_formatted: Vec<String> = l.iter().map(|i| i.to_string()).collect();
+        let l_formatted: Vec<String> = l.iter().map(|i| (*i).to_string()).collect();
         assert_eq!(l_formatted, r_formatted);
     }
 

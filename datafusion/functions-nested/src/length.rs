@@ -29,11 +29,12 @@ use arrow::datatypes::{
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_generic_list_array, as_int64_array,
 };
-use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
-use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -79,7 +80,22 @@ impl Default for ArrayLength {
 impl ArrayLength {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: None,
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: None,
+                    }),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_length")],
         }
     }
@@ -97,13 +113,8 @@ impl ScalarUDFImpl for ArrayLength {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
-            _ => {
-                return plan_err!("The array_length function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(UInt64)
     }
 
     fn invoke_with_args(
@@ -149,7 +160,7 @@ pub fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         List(_) => general_array_length::<i32>(args),
         LargeList(_) => general_array_length::<i64>(args),
         FixedSizeList(_, _) => fixed_size_array_length(args),
-        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
+        array_type => exec_err!("array_length does not support type '{array_type}'"),
     }
 }
 

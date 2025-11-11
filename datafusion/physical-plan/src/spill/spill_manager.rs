@@ -72,6 +72,11 @@ impl SpillManager {
         self
     }
 
+    /// Returns the schema for batches managed by this SpillManager
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
     /// Creates a temporary file for in-progress operations, returning an error
     /// message if file creation fails. The file can be used to append batches
     /// incrementally and then finish the file when done.
@@ -174,10 +179,12 @@ impl SpillManager {
     pub fn read_spill_as_stream(
         &self,
         spill_file_path: RefCountedTempFile,
+        max_record_batch_memory: Option<usize>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = Box::pin(cooperative(SpillReaderStream::new(
             Arc::clone(&self.schema),
             spill_file_path,
+            max_record_batch_memory,
         )));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))

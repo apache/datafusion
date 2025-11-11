@@ -35,7 +35,9 @@ use arrow::array::{
     },
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
 };
-use arrow::datatypes::{DataType, Decimal128Type, Decimal256Type, DecimalType};
+use arrow::datatypes::{
+    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, DecimalType,
+};
 use arrow::util::display::array_value_to_string;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
@@ -68,9 +70,8 @@ use sqlparser::tokenizer::Span;
 /// use datafusion_expr::{col, lit};
 /// use datafusion_sql::unparser::expr_to_sql;
 /// let expr = col("a").gt(lit(4)); // form an expression `a > 4`
-/// let sql = expr_to_sql(&expr).unwrap(); // convert to ast::Expr
-/// // use the Display impl to convert to SQL text
-/// assert_eq!(sql.to_string(), "(a > 4)")
+/// let sql = expr_to_sql(&expr).unwrap(); // convert to ast::Expr, using
+/// assert_eq!(sql.to_string(), "(a > 4)"); // use Display impl for SQL text
 /// ```
 ///
 /// [`SqlToRel::sql_to_expr`]: crate::planner::SqlToRel::sql_to_expr
@@ -334,7 +335,7 @@ impl Unparser<'_> {
                     None => None,
                 };
                 let within_group: Vec<ast::OrderByExpr> =
-                    if agg.func.is_ordered_set_aggregate() {
+                    if agg.func.supports_within_group_clause() {
                         order_by
                             .iter()
                             .map(|sort_expr| self.sort_to_sql(sort_expr))
@@ -604,7 +605,7 @@ impl Unparser<'_> {
     }
 
     fn named_struct_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() % 2 != 0 {
+        if !args.len().is_multiple_of(2) {
             return internal_err!("named_struct must have an even number of arguments");
         }
 
@@ -1062,8 +1063,19 @@ impl Unparser<'_> {
     where
         i64: From<T::Native>,
     {
+        let time_unit = match T::DATA_TYPE {
+            DataType::Timestamp(unit, _) => unit,
+            _ => {
+                return Err(internal_datafusion_err!(
+                    "Expected Timestamp, got {:?}",
+                    T::DATA_TYPE
+                ))
+            }
+        };
+
         let ts = if let Some(tz) = tz {
-            v.to_array()?
+            let dt = v
+                .to_array()?
                 .as_any()
                 .downcast_ref::<PrimitiveArray<T>>()
                 .ok_or(internal_datafusion_err!(
@@ -1072,8 +1084,8 @@ impl Unparser<'_> {
                 .value_as_datetime_with_tz(0, tz.parse()?)
                 .ok_or(internal_datafusion_err!(
                     "Unable to convert {v:?} to DateTime"
-                ))?
-                .to_string()
+                ))?;
+            self.dialect.timestamp_with_tz_to_string(dt, time_unit)
         } else {
             v.to_array()?
                 .as_any()
@@ -1086,16 +1098,6 @@ impl Unparser<'_> {
                     "Unable to convert {v:?} to DateTime"
                 ))?
                 .to_string()
-        };
-
-        let time_unit = match T::DATA_TYPE {
-            DataType::Timestamp(unit, _) => unit,
-            _ => {
-                return Err(internal_datafusion_err!(
-                    "Expected Timestamp, got {:?}",
-                    T::DATA_TYPE
-                ))
-            }
         };
 
         Ok(ast::Expr::Cast {
@@ -1182,6 +1184,20 @@ impl Unparser<'_> {
                 Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float64(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Decimal32(Some(value), precision, scale) => {
+                Ok(ast::Expr::value(ast::Value::Number(
+                    Decimal32Type::format_decimal(*value, *precision, *scale),
+                    false,
+                )))
+            }
+            ScalarValue::Decimal32(None, ..) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Decimal64(Some(value), precision, scale) => {
+                Ok(ast::Expr::value(ast::Value::Number(
+                    Decimal64Type::format_decimal(*value, *precision, *scale),
+                    false,
+                )))
+            }
+            ScalarValue::Decimal64(None, ..) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Decimal128(Some(value), precision, scale) => {
                 Ok(ast::Expr::value(ast::Value::Number(
                     Decimal128Type::format_decimal(*value, *precision, *scale),
@@ -1658,7 +1674,7 @@ impl Unparser<'_> {
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
         match data_type {
             DataType::Null => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Boolean => Ok(ast::DataType::Bool),
             DataType::Int8 => Ok(ast::DataType::TinyInt(None)),
@@ -1670,9 +1686,9 @@ impl Unparser<'_> {
             DataType::UInt32 => Ok(ast::DataType::IntegerUnsigned(None)),
             DataType::UInt64 => Ok(ast::DataType::BigIntUnsigned(None)),
             DataType::Float16 => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
-            DataType::Float32 => Ok(ast::DataType::Float(None)),
+            DataType::Float32 => Ok(ast::DataType::Float(ast::ExactNumberInfo::None)),
             DataType::Float64 => Ok(self.dialect.float64_ast_dtype()),
             DataType::Timestamp(time_unit, tz) => {
                 Ok(self.dialect.timestamp_cast_dtype(time_unit, tz))
@@ -1680,59 +1696,58 @@ impl Unparser<'_> {
             DataType::Date32 => Ok(self.dialect.date32_cast_dtype()),
             DataType::Date64 => Ok(self.ast_type_for_date64_in_cast()),
             DataType::Time32(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Time64(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Duration(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
-            DataType::Interval(_) => Ok(ast::DataType::Interval),
+            DataType::Interval(_) => Ok(ast::DataType::Interval {
+                fields: None,
+                precision: None,
+            }),
             DataType::Binary => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::FixedSizeBinary(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::LargeBinary => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::BinaryView => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
             DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
             DataType::Utf8View => Ok(self.dialect.utf8_cast_dtype()),
             DataType::List(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::FixedSizeList(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::LargeList(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::ListView(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::LargeListView(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Struct(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Union(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
-            DataType::Decimal32(_precision, _scale) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::Decimal64(_precision, _scale) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::Decimal128(precision, scale)
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
             | DataType::Decimal256(precision, scale) => {
                 let mut new_precision = *precision as u64;
                 let mut new_scale = *scale as u64;
@@ -1742,14 +1757,17 @@ impl Unparser<'_> {
                 }
 
                 Ok(ast::DataType::Decimal(
-                    ast::ExactNumberInfo::PrecisionAndScale(new_precision, new_scale),
+                    ast::ExactNumberInfo::PrecisionAndScale(
+                        new_precision,
+                        new_scale as i64,
+                    ),
                 ))
             }
             DataType::Map(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::RunEndEncoded(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
         }
     }
@@ -2179,6 +2197,20 @@ mod tests {
             (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
             (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
             // See test_interval_scalar_to_expr for interval literals
+            (
+                (col("a") + col("b")).gt(Expr::Literal(
+                    ScalarValue::Decimal32(Some(1123), 4, 3),
+                    None,
+                )),
+                r#"((a + b) > 1.123)"#,
+            ),
+            (
+                (col("a") + col("b")).gt(Expr::Literal(
+                    ScalarValue::Decimal64(Some(1123), 4, 3),
+                    None,
+                )),
+                r#"((a + b) > 1.123)"#,
+            ),
             (
                 (col("a") + col("b")).gt(Expr::Literal(
                     ScalarValue::Decimal128(Some(100123), 28, 3),
@@ -3191,6 +3223,83 @@ mod tests {
 
         assert_eq!(actual, expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_with_tz_format() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> =
+            Arc::new(CustomDialectBuilder::new().build());
+
+        let duckdb_dialect: Arc<dyn Dialect> = Arc::new(DuckDBDialect::new());
+
+        for (dialect, scalar, expected) in [
+            (
+                Arc::clone(&default_dialect),
+                ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
+                "CAST('2025-09-15 11:00:00 +00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                ScalarValue::TimestampMillisecond(
+                    Some(1757934000123),
+                    Some("+01:00".into()),
+                ),
+                "CAST('2025-09-15 12:00:00.123 +01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                ScalarValue::TimestampMicrosecond(
+                    Some(1757934000123456),
+                    Some("-01:00".into()),
+                ),
+                "CAST('2025-09-15 10:00:00.123456 -01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                ScalarValue::TimestampNanosecond(
+                    Some(1757934000123456789),
+                    Some("+00:00".into()),
+                ),
+                "CAST('2025-09-15 11:00:00.123456789 +00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&duckdb_dialect),
+                ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
+                "CAST('2025-09-15 11:00:00+00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&duckdb_dialect),
+                ScalarValue::TimestampMillisecond(
+                    Some(1757934000123),
+                    Some("+01:00".into()),
+                ),
+                "CAST('2025-09-15 12:00:00.123+01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&duckdb_dialect),
+                ScalarValue::TimestampMicrosecond(
+                    Some(1757934000123456),
+                    Some("-01:00".into()),
+                ),
+                "CAST('2025-09-15 10:00:00.123456-01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&duckdb_dialect),
+                ScalarValue::TimestampNanosecond(
+                    Some(1757934000123456789),
+                    Some("+00:00".into()),
+                ),
+                "CAST('2025-09-15 11:00:00.123456789+00:00' AS TIMESTAMP)",
+            ),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+
+            let expr = Expr::Literal(scalar, None);
+
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
         Ok(())
     }
 }

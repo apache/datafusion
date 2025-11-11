@@ -25,7 +25,9 @@ use std::sync::{Arc, Mutex};
 use crate::{SchemaProvider, TableProvider, TableProviderFactory};
 
 use crate::Session;
-use datafusion_common::{DFSchema, DataFusionError, HashMap, TableReference};
+use datafusion_common::{
+    internal_datafusion_err, DFSchema, DataFusionError, HashMap, TableReference,
+};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -109,17 +111,13 @@ impl ListingSchemaProvider {
             let file_name = table
                 .path
                 .file_name()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("Cannot parse file name!".to_string())
-                })?
+                .ok_or_else(|| internal_datafusion_err!("Cannot parse file name!"))?
                 .to_str()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("Cannot parse file name!".to_string())
-                })?;
+                .ok_or_else(|| internal_datafusion_err!("Cannot parse file name!"))?;
             let table_name = file_name.split('.').collect_vec()[0];
-            let table_path = table.to_string().ok_or_else(|| {
-                DataFusionError::Internal("Cannot parse file name!".to_string())
-            })?;
+            let table_path = table
+                .to_string()
+                .ok_or_else(|| internal_datafusion_err!("Cannot parse file name!"))?;
 
             if !self.table_exist(table_name) {
                 let table_url = format!("{}/{}", self.authority, table_path);
@@ -136,6 +134,7 @@ impl ListingSchemaProvider {
                             file_type: self.format.clone(),
                             table_partition_cols: vec![],
                             if_not_exists: false,
+                            or_replace: false,
                             temporary: false,
                             definition: None,
                             order_exprs: vec![],

@@ -208,6 +208,7 @@ impl ParquetOptions {
             binary_as_string: _, // not used for writer props
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
+            max_predicate_cache_size: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -400,19 +401,17 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
 #[cfg(feature = "parquet")]
 #[cfg(test)]
 mod tests {
-    use parquet::{
-        basic::Compression,
-        file::properties::{
-            BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
-            DEFAULT_BLOOM_FILTER_NDV,
-        },
+    use super::*;
+    use crate::config::{
+        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
+        ParquetOptions,
+    };
+    use parquet::basic::Compression;
+    use parquet::file::properties::{
+        BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
+        DEFAULT_BLOOM_FILTER_NDV,
     };
     use std::collections::HashMap;
-
-    use super::*;
-    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
-    #[cfg(feature = "parquet_encryption")]
-    use crate::encryption::map_encryption_to_config_encryption;
 
     const COL_NAME: &str = "configured";
 
@@ -475,6 +474,7 @@ mod tests {
             binary_as_string: defaults.binary_as_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
+            max_predicate_cache_size: defaults.max_predicate_cache_size,
         }
     }
 
@@ -538,7 +538,10 @@ mod tests {
         };
 
         #[cfg(feature = "parquet_encryption")]
-        let fep = map_encryption_to_config_encryption(props.file_encryption_properties());
+        let fep = props
+            .file_encryption_properties()
+            .map(ConfigFileEncryptionProperties::from);
+
         #[cfg(not(feature = "parquet_encryption"))]
         let fep = None;
 
@@ -581,6 +584,8 @@ mod tests {
                 maximum_buffered_record_batches_per_stream: global_options_defaults
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
+                max_predicate_cache_size: global_options_defaults
+                    .max_predicate_cache_size,
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,

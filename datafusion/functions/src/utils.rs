@@ -140,38 +140,25 @@ where
     F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
     R::Native: TryFrom<ScalarValue>,
 {
-    Ok(match right {
+    let left = left.as_primitive::<L>();
+    let right = right.cast_to(&R::DATA_TYPE, None)?;
+    let result = match right {
         ColumnarValue::Scalar(scalar) => {
-            let right_value: R::Native =
-                R::Native::try_from(scalar.clone()).map_err(|_| {
-                    DataFusionError::NotImplemented(format!(
-                        "Cannot convert scalar value {} to {}",
-                        &scalar,
-                        R::DATA_TYPE
-                    ))
-                })?;
-            let left_array = left.as_primitive::<L>();
-            // Bind right value
-            let result =
-                left_array.try_unary::<_, O, _>(|lvalue| fun(lvalue, right_value))?;
-            Arc::new(result) as _
+            let right = R::Native::try_from(scalar.clone()).map_err(|_| {
+                DataFusionError::NotImplemented(format!(
+                    "Cannot convert scalar value {} to {}",
+                    &scalar,
+                    R::DATA_TYPE
+                ))
+            })?;
+            left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
         }
         ColumnarValue::Array(right) => {
-            let right_casted = arrow::compute::cast(&right, &R::DATA_TYPE)?;
-            let right_array = right_casted.as_primitive::<R>();
-
-            // Types are compatible even they are decimals with different scale or precision
-            let result = if PrimitiveArray::<L>::is_compatible(&L::DATA_TYPE) {
-                let left_array = left.as_primitive::<L>();
-                try_binary::<_, _, _, O>(left_array, right_array, &fun)?
-            } else {
-                let left_casted = arrow::compute::cast(left, &L::DATA_TYPE)?;
-                let left_array = left_casted.as_primitive::<L>();
-                try_binary::<_, _, _, O>(left_array, right_array, &fun)?
-            };
-            Arc::new(result) as _
+            let right = right.as_primitive::<R>();
+            try_binary::<_, _, _, O>(left, right, &fun)?
         }
-    })
+    };
+    Ok(Arc::new(result) as _)
 }
 
 /// Converts Decimal128 components (value and scale) to an unscaled i128

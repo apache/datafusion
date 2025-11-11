@@ -25,9 +25,9 @@ use datafusion::assert_batches_eq;
 use datafusion::common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion::common::{assert_contains, Result};
+use datafusion::common::{assert_contains, exec_datafusion_err, Result};
 use datafusion::datasource::listing::{
-    ListingTable, ListingTableConfig, ListingTableUrl,
+    ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
         .await?;
     let plan = format!("{}", arrow::util::pretty::pretty_format_batches(&batches)?);
     println!("{plan}");
-    assert_contains!(&plan, "row_groups_pruned_statistics=1");
+    assert_contains!(&plan, "row_groups_pruned_statistics=2 total → 1 matched");
     assert_contains!(&plan, "pushdown_rows_pruned=1");
 
     Ok(())
@@ -230,8 +230,8 @@ impl ScalarUDFImpl for JsonGetStr {
         let key = match &args.args[0] {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) => key,
             _ => {
-                return Err(datafusion::error::DataFusionError::Execution(
-                    "json_get_str first argument must be a string".to_string(),
+                return Err(exec_datafusion_err!(
+                    "json_get_str first argument must be a string"
                 ))
             }
         };
@@ -241,13 +241,13 @@ impl ScalarUDFImpl for JsonGetStr {
                 .as_any()
                 .downcast_ref::<StringArray>()
                 .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "json_get_str second argument must be a string array".to_string(),
+                exec_datafusion_err!(
+                    "json_get_str second argument must be a string array"
                 )
             })?,
             _ => {
-                return Err(datafusion::error::DataFusionError::Execution(
-                    "json_get_str second argument must be a string array".to_string(),
+                return Err(exec_datafusion_err!(
+                    "json_get_str second argument must be a string array"
                 ))
             }
         };

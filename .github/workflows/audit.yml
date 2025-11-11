@@ -42,8 +42,8 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532  # v2.62.49
+        with:
+          tool: cargo-audit
       - name: Run audit check
-        # Ignored until https://github.com/apache/datafusion/issues/15571
-        # ignored py03 warning until arrow 55 upgrade
-        run: cargo audit --ignore RUSTSEC-2024-0370 --ignore RUSTSEC-2025-0020
+        run: cargo audit

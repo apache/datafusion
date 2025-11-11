@@ -58,7 +58,7 @@ fn project_orderings_random() -> Result<()> {
             Operator::Plus,
             col("b", &test_schema)?,
         )) as Arc<dyn PhysicalExpr>;
-        let proj_exprs = vec![
+        let proj_exprs = [
             (col("a", &test_schema)?, "a_new"),
             (col("b", &test_schema)?, "b_new"),
             (col("c", &test_schema)?, "c_new"),
@@ -73,7 +73,7 @@ fn project_orderings_random() -> Result<()> {
             for proj_exprs in proj_exprs.iter().combinations(n_req) {
                 let proj_exprs = proj_exprs
                     .into_iter()
-                    .map(|(expr, name)| (Arc::clone(expr), name.to_string()))
+                    .map(|(expr, name)| (Arc::clone(expr), (*name).to_string()))
                     .collect::<Vec<_>>();
                 let (projected_batch, projected_eq) = apply_projection(
                     proj_exprs.clone(),
@@ -132,7 +132,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             Operator::Plus,
             col("b", &test_schema)?,
         )) as Arc<dyn PhysicalExpr>;
-        let proj_exprs = vec![
+        let proj_exprs = [
             (col("a", &test_schema)?, "a_new"),
             (col("b", &test_schema)?, "b_new"),
             (col("c", &test_schema)?, "c_new"),
@@ -147,7 +147,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             for proj_exprs in proj_exprs.iter().combinations(n_req) {
                 let proj_exprs = proj_exprs
                     .into_iter()
-                    .map(|(expr, name)| (Arc::clone(expr), name.to_string()));
+                    .map(|(expr, name)| (Arc::clone(expr), (*name).to_string()));
                 let (projected_batch, projected_eq) = apply_projection(
                     proj_exprs.clone(),
                     &table_data_with_properties,

@@ -35,13 +35,14 @@ use std::sync::Arc;
 
 use crate::cast::{
     as_binary_array, as_binary_view_array, as_boolean_array, as_date32_array,
-    as_date64_array, as_decimal128_array, as_decimal256_array, as_dictionary_array,
-    as_duration_microsecond_array, as_duration_millisecond_array,
-    as_duration_nanosecond_array, as_duration_second_array, as_fixed_size_binary_array,
-    as_fixed_size_list_array, as_float16_array, as_float32_array, as_float64_array,
-    as_int16_array, as_int32_array, as_int64_array, as_int8_array, as_interval_dt_array,
-    as_interval_mdn_array, as_interval_ym_array, as_large_binary_array,
-    as_large_list_array, as_large_string_array, as_string_array, as_string_view_array,
+    as_date64_array, as_decimal128_array, as_decimal256_array, as_decimal32_array,
+    as_decimal64_array, as_dictionary_array, as_duration_microsecond_array,
+    as_duration_millisecond_array, as_duration_nanosecond_array,
+    as_duration_second_array, as_fixed_size_binary_array, as_fixed_size_list_array,
+    as_float16_array, as_float32_array, as_float64_array, as_int16_array, as_int32_array,
+    as_int64_array, as_int8_array, as_interval_dt_array, as_interval_mdn_array,
+    as_interval_ym_array, as_large_binary_array, as_large_list_array,
+    as_large_string_array, as_string_array, as_string_view_array,
     as_time32_millisecond_array, as_time32_second_array, as_time64_microsecond_array,
     as_time64_nanosecond_array, as_timestamp_microsecond_array,
     as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
@@ -56,31 +57,33 @@ use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
     new_empty_array, new_null_array, Array, ArrayData, ArrayRef, ArrowNativeTypeOp,
     ArrowPrimitiveType, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, Decimal256Array, DictionaryArray,
-    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-    DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array,
-    Float32Array, Float64Array, GenericListArray, Int16Array, Int32Array, Int64Array,
-    Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
-    MutableArrayData, PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
+    Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
+    DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
+    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
+    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
+    PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
     Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
     Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
     UInt64Array, UInt8Array, UnionArray,
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{cast_with_options, CastOptions};
 use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
 };
 use arrow::datatypes::{
     i256, validate_decimal_precision_and_scale, ArrowDictionaryKeyType, ArrowNativeType,
-    ArrowTimestampType, DataType, Date32Type, Decimal128Type, Decimal256Type, Field,
-    Float32Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTime,
-    IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
+    ArrowTimestampType, DataType, Date32Type, Decimal128Type, Decimal256Type,
+    Decimal32Type, Decimal64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, UnionFields,
+    UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
@@ -168,9 +171,9 @@ pub use struct_builder::ScalarStructBuilder;
 /// let field_b = Field::new("b", DataType::Utf8, false);
 ///
 /// let s1 = ScalarStructBuilder::new()
-///    .with_scalar(field_a, ScalarValue::from(1i32))
-///    .with_scalar(field_b, ScalarValue::from("foo"))
-///    .build();
+///     .with_scalar(field_a, ScalarValue::from(1i32))
+///     .with_scalar(field_b, ScalarValue::from("foo"))
+///     .build();
 /// ```
 ///
 /// ## Example: Creating a null [`ScalarValue::Struct`] using [`ScalarStructBuilder`]
@@ -196,13 +199,13 @@ pub use struct_builder::ScalarStructBuilder;
 /// // Build a struct like: {a: 1, b: "foo"}
 /// // Field description
 /// let fields = Fields::from(vec![
-///   Field::new("a", DataType::Int32, false),
-///   Field::new("b", DataType::Utf8, false),
+///     Field::new("a", DataType::Int32, false),
+///     Field::new("b", DataType::Utf8, false),
 /// ]);
 /// // one row arrays for each field
 /// let arrays: Vec<ArrayRef> = vec![
-///   Arc::new(Int32Array::from(vec![1])),
-///   Arc::new(StringArray::from(vec!["foo"])),
+///     Arc::new(Int32Array::from(vec![1])),
+///     Arc::new(StringArray::from(vec!["foo"])),
 /// ];
 /// // no nulls for this array
 /// let nulls = None;
@@ -231,6 +234,10 @@ pub enum ScalarValue {
     Float32(Option<f32>),
     /// 64bit float
     Float64(Option<f64>),
+    /// 32bit decimal, using the i32 to represent the decimal, precision scale
+    Decimal32(Option<i32>, u8, i8),
+    /// 64bit decimal, using the i64 to represent the decimal, precision scale
+    Decimal64(Option<i64>, u8, i8),
     /// 128bit decimal, using the i128 to represent the decimal, precision scale
     Decimal128(Option<i128>, u8, i8),
     /// 256bit decimal, using the i256 to represent the decimal, precision scale
@@ -340,6 +347,14 @@ impl PartialEq for ScalarValue {
         // any newly added enum variant will require editing this list
         // or else face a compile error
         match (self, other) {
+            (Decimal32(v1, p1, s1), Decimal32(v2, p2, s2)) => {
+                v1.eq(v2) && p1.eq(p2) && s1.eq(s2)
+            }
+            (Decimal32(_, _, _), _) => false,
+            (Decimal64(v1, p1, s1), Decimal64(v2, p2, s2)) => {
+                v1.eq(v2) && p1.eq(p2) && s1.eq(s2)
+            }
+            (Decimal64(_, _, _), _) => false,
             (Decimal128(v1, p1, s1), Decimal128(v2, p2, s2)) => {
                 v1.eq(v2) && p1.eq(p2) && s1.eq(s2)
             }
@@ -459,6 +474,24 @@ impl PartialOrd for ScalarValue {
         // any newly added enum variant will require editing this list
         // or else face a compile error
         match (self, other) {
+            (Decimal32(v1, p1, s1), Decimal32(v2, p2, s2)) => {
+                if p1.eq(p2) && s1.eq(s2) {
+                    v1.partial_cmp(v2)
+                } else {
+                    // Two decimal values can be compared if they have the same precision and scale.
+                    None
+                }
+            }
+            (Decimal32(_, _, _), _) => None,
+            (Decimal64(v1, p1, s1), Decimal64(v2, p2, s2)) => {
+                if p1.eq(p2) && s1.eq(s2) {
+                    v1.partial_cmp(v2)
+                } else {
+                    // Two decimal values can be compared if they have the same precision and scale.
+                    None
+                }
+            }
+            (Decimal64(_, _, _), _) => None,
             (Decimal128(v1, p1, s1), Decimal128(v2, p2, s2)) => {
                 if p1.eq(p2) && s1.eq(s2) {
                     v1.partial_cmp(v2)
@@ -760,6 +793,16 @@ impl Hash for ScalarValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         use ScalarValue::*;
         match self {
+            Decimal32(v, p, s) => {
+                v.hash(state);
+                p.hash(state);
+                s.hash(state)
+            }
+            Decimal64(v, p, s) => {
+                v.hash(state);
+                p.hash(state);
+                s.hash(state)
+            }
             Decimal128(v, p, s) => {
                 v.hash(state);
                 p.hash(state);
@@ -834,10 +877,11 @@ impl Hash for ScalarValue {
 }
 
 fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
-    let arrays = vec![arr.to_owned()];
-    let hashes_buffer = &mut vec![0; arr.len()];
+    let len = arr.len();
+    let hashes_buffer = &mut vec![0; len];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-    let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+    let hashes = create_hashes(&[arr], &random_state, hashes_buffer)
+        .expect("hash_nested_array: failed to create row hashes");
     // Hash back to std::hash::Hasher
     hashes.hash(state);
 }
@@ -1024,8 +1068,8 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::datatypes::DataType;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalar = ScalarValue::try_new_null(&DataType::Int32).unwrap();
     /// assert_eq!(scalar.is_null(), true);
@@ -1045,6 +1089,12 @@ impl ScalarValue {
             DataType::UInt16 => ScalarValue::UInt16(None),
             DataType::UInt32 => ScalarValue::UInt32(None),
             DataType::UInt64 => ScalarValue::UInt64(None),
+            DataType::Decimal32(precision, scale) => {
+                ScalarValue::Decimal32(None, *precision, *scale)
+            }
+            DataType::Decimal64(precision, scale) => {
+                ScalarValue::Decimal64(None, *precision, *scale)
+            }
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::Decimal128(None, *precision, *scale)
             }
@@ -1137,7 +1187,7 @@ impl ScalarValue {
             DataType::Null => ScalarValue::Null,
             _ => {
                 return _not_impl_err!(
-                    "Can't create a null scalar from data_type \"{data_type:?}\""
+                    "Can't create a null scalar from data_type \"{data_type}\""
                 );
             }
         })
@@ -1193,7 +1243,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::PI)),
-            _ => _internal_err!("PI is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("PI is not supported for data type: {}", datatype),
         }
     }
 
@@ -1203,7 +1253,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
             _ => {
-                _internal_err!("PI_UPPER is not supported for data type: {:?}", datatype)
+                _internal_err!("PI_UPPER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1214,7 +1264,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F64)),
             _ => {
-                _internal_err!("-PI_LOWER is not supported for data type: {:?}", datatype)
+                _internal_err!("-PI_LOWER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1225,10 +1275,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F64)),
             _ => {
-                _internal_err!(
-                    "PI_UPPER/2 is not supported for data type: {:?}",
-                    datatype
-                )
+                _internal_err!("PI_UPPER/2 is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1243,10 +1290,7 @@ impl ScalarValue {
                 Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F64))
             }
             _ => {
-                _internal_err!(
-                    "-PI/2_LOWER is not supported for data type: {:?}",
-                    datatype
-                )
+                _internal_err!("-PI/2_LOWER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1256,7 +1300,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::PI)),
-            _ => _internal_err!("-PI is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("-PI is not supported for data type: {}", datatype),
         }
     }
 
@@ -1265,7 +1309,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::FRAC_PI_2)),
             DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::FRAC_PI_2)),
-            _ => _internal_err!("PI/2 is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("PI/2 is not supported for data type: {}", datatype),
         }
     }
 
@@ -1274,7 +1318,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::FRAC_PI_2)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::FRAC_PI_2)),
-            _ => _internal_err!("-PI/2 is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("-PI/2 is not supported for data type: {}", datatype),
         }
     }
 
@@ -1284,7 +1328,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(f32::INFINITY)),
             DataType::Float64 => Ok(ScalarValue::from(f64::INFINITY)),
             _ => {
-                _internal_err!("Infinity is not supported for data type: {:?}", datatype)
+                _internal_err!("Infinity is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1296,7 +1340,7 @@ impl ScalarValue {
             DataType::Float64 => Ok(ScalarValue::from(f64::NEG_INFINITY)),
             _ => {
                 _internal_err!(
-                    "Negative Infinity is not supported for data type: {:?}",
+                    "Negative Infinity is not supported for data type: {}",
                     datatype
                 )
             }
@@ -1318,6 +1362,12 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(0.0))),
             DataType::Float32 => ScalarValue::Float32(Some(0.0)),
             DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            DataType::Decimal32(precision, scale) => {
+                ScalarValue::Decimal32(Some(0), *precision, *scale)
+            }
+            DataType::Decimal64(precision, scale) => {
+                ScalarValue::Decimal64(Some(0), *precision, *scale)
+            }
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::Decimal128(Some(0), *precision, *scale)
             }
@@ -1369,7 +1419,7 @@ impl ScalarValue {
             DataType::Date64 => ScalarValue::Date64(Some(0)),
             _ => {
                 return _not_impl_err!(
-                    "Can't create a zero scalar from data_type \"{datatype:?}\""
+                    "Can't create a zero scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1507,7 +1557,7 @@ impl ScalarValue {
             // Unsupported types for now
             _ => {
                 _not_impl_err!(
-                    "Default value for data_type \"{datatype:?}\" is not implemented yet"
+                    "Default value for data_type \"{datatype}\" is not implemented yet"
                 )
             }
         }
@@ -1527,6 +1577,34 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(1.0))),
             DataType::Float32 => ScalarValue::Float32(Some(1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(1.0)),
+            DataType::Decimal32(precision, scale) => {
+                validate_decimal_precision_and_scale::<Decimal32Type>(
+                    *precision, *scale,
+                )?;
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match 10_i32.checked_pow(*scale as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal32(Some(value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
+            }
+            DataType::Decimal64(precision, scale) => {
+                validate_decimal_precision_and_scale::<Decimal64Type>(
+                    *precision, *scale,
+                )?;
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i64::from(10).checked_pow(*scale as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal64(Some(value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
+            }
             DataType::Decimal128(precision, scale) => {
                 validate_decimal_precision_and_scale::<Decimal128Type>(
                     *precision, *scale,
@@ -1557,7 +1635,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create an one scalar from data_type \"{datatype:?}\""
+                    "Can't create an one scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1573,6 +1651,34 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(-1.0))),
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
+            DataType::Decimal32(precision, scale) => {
+                validate_decimal_precision_and_scale::<Decimal32Type>(
+                    *precision, *scale,
+                )?;
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match 10_i32.checked_pow(*scale as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal32(Some(-value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
+            }
+            DataType::Decimal64(precision, scale) => {
+                validate_decimal_precision_and_scale::<Decimal64Type>(
+                    *precision, *scale,
+                )?;
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i64::from(10).checked_pow(*scale as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal64(Some(-value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
+            }
             DataType::Decimal128(precision, scale) => {
                 validate_decimal_precision_and_scale::<Decimal128Type>(
                     *precision, *scale,
@@ -1603,7 +1709,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                    "Can't create a negative one scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1622,6 +1728,38 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(10.0))),
             DataType::Float32 => ScalarValue::Float32(Some(10.0)),
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
+            DataType::Decimal32(precision, scale) => {
+                if let Err(err) = validate_decimal_precision_and_scale::<Decimal32Type>(
+                    *precision, *scale,
+                ) {
+                    return _internal_err!("Invalid precision and scale {err}");
+                }
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match 10_i32.checked_pow((*scale + 1) as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal32(Some(value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
+            }
+            DataType::Decimal64(precision, scale) => {
+                if let Err(err) = validate_decimal_precision_and_scale::<Decimal64Type>(
+                    *precision, *scale,
+                ) {
+                    return _internal_err!("Invalid precision and scale {err}");
+                }
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i64::from(10).checked_pow((*scale + 1) as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal64(Some(value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
+            }
             DataType::Decimal128(precision, scale) => {
                 if let Err(err) = validate_decimal_precision_and_scale::<Decimal128Type>(
                     *precision, *scale,
@@ -1656,7 +1794,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create a ten scalar from data_type \"{datatype:?}\""
+                    "Can't create a ten scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1674,6 +1812,12 @@ impl ScalarValue {
             ScalarValue::Int16(_) => DataType::Int16,
             ScalarValue::Int32(_) => DataType::Int32,
             ScalarValue::Int64(_) => DataType::Int64,
+            ScalarValue::Decimal32(_, precision, scale) => {
+                DataType::Decimal32(*precision, *scale)
+            }
+            ScalarValue::Decimal64(_, precision, scale) => {
+                DataType::Decimal64(*precision, *scale)
+            }
             ScalarValue::Decimal128(_, precision, scale) => {
                 DataType::Decimal128(*precision, *scale)
             }
@@ -1795,6 +1939,24 @@ impl ScalarValue {
                     })?,
                 );
                 Ok(ScalarValue::IntervalMonthDayNano(Some(val)))
+            }
+            ScalarValue::Decimal32(Some(v), precision, scale) => {
+                Ok(ScalarValue::Decimal32(
+                    Some(neg_checked_with_ctx(*v, || {
+                        format!("In negation of Decimal32({v}, {precision}, {scale})")
+                    })?),
+                    *precision,
+                    *scale,
+                ))
+            }
+            ScalarValue::Decimal64(Some(v), precision, scale) => {
+                Ok(ScalarValue::Decimal64(
+                    Some(neg_checked_with_ctx(*v, || {
+                        format!("In negation of Decimal64({v}, {precision}, {scale})")
+                    })?),
+                    *precision,
+                    *scale,
+                ))
             }
             ScalarValue::Decimal128(Some(v), precision, scale) => {
                 Ok(ScalarValue::Decimal128(
@@ -1947,6 +2109,8 @@ impl ScalarValue {
             ScalarValue::Float16(v) => v.is_none(),
             ScalarValue::Float32(v) => v.is_none(),
             ScalarValue::Float64(v) => v.is_none(),
+            ScalarValue::Decimal32(v, _, _) => v.is_none(),
+            ScalarValue::Decimal64(v, _, _) => v.is_none(),
             ScalarValue::Decimal128(v, _, _) => v.is_none(),
             ScalarValue::Decimal256(v, _, _) => v.is_none(),
             ScalarValue::Int8(v) => v.is_none(),
@@ -2067,23 +2231,16 @@ impl ScalarValue {
     ///
     /// # Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::{BooleanArray, Int32Array};
+    /// use datafusion_common::ScalarValue;
     ///
     /// let arr = Int32Array::from(vec![Some(1), None, Some(10)]);
     /// let five = ScalarValue::Int32(Some(5));
     ///
-    /// let result = arrow::compute::kernels::cmp::lt(
-    ///   &arr,
-    ///   &five.to_scalar().unwrap(),
-    /// ).unwrap();
+    /// let result =
+    ///     arrow::compute::kernels::cmp::lt(&arr, &five.to_scalar().unwrap()).unwrap();
     ///
-    /// let expected = BooleanArray::from(vec![
-    ///     Some(true),
-    ///     None,
-    ///     Some(false)
-    ///   ]
-    /// );
+    /// let expected = BooleanArray::from(vec![Some(true), None, Some(false)]);
     ///
     /// assert_eq!(&result, &expected);
     /// ```
@@ -2101,26 +2258,20 @@ impl ScalarValue {
     ///
     /// # Example
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::{ArrayRef, BooleanArray};
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///   ScalarValue::Boolean(Some(true)),
-    ///   ScalarValue::Boolean(None),
-    ///   ScalarValue::Boolean(Some(false)),
+    ///     ScalarValue::Boolean(Some(true)),
+    ///     ScalarValue::Boolean(None),
+    ///     ScalarValue::Boolean(Some(false)),
     /// ];
     ///
     /// // Build an Array from the list of ScalarValues
-    /// let array = ScalarValue::iter_to_array(scalars.into_iter())
-    ///   .unwrap();
+    /// let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
     ///
-    /// let expected: ArrayRef = std::sync::Arc::new(
-    ///   BooleanArray::from(vec![
-    ///     Some(true),
-    ///     None,
-    ///     Some(false)
-    ///   ]
-    /// ));
+    /// let expected: ArrayRef =
+    ///     std::sync::Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)]));
     ///
     /// assert_eq!(&array, &expected);
     /// ```
@@ -2202,19 +2353,19 @@ impl ScalarValue {
         }
 
         let array: ArrayRef = match &data_type {
-            DataType::Decimal32(_precision, _scale) => {
-                return _not_impl_err!(
-                    "Decimal32 not supported in ScalarValue::iter_to_array"
-                );
+            DataType::Decimal32(precision, scale) => {
+                let decimal_array =
+                    ScalarValue::iter_to_decimal32_array(scalars, *precision, *scale)?;
+                Arc::new(decimal_array)
             }
-            DataType::Decimal64(_precision, _scale) => {
-                return _not_impl_err!(
-                    "Decimal64 not supported in ScalarValue::iter_to_array"
-                );
+            DataType::Decimal64(precision, scale) => {
+                let decimal_array =
+                    ScalarValue::iter_to_decimal64_array(scalars, *precision, *scale)?;
+                Arc::new(decimal_array)
             }
             DataType::Decimal128(precision, scale) => {
                 let decimal_array =
-                    ScalarValue::iter_to_decimal_array(scalars, *precision, *scale)?;
+                    ScalarValue::iter_to_decimal128_array(scalars, *precision, *scale)?;
                 Arc::new(decimal_array)
             }
             DataType::Decimal256(precision, scale) => {
@@ -2364,7 +2515,7 @@ impl ScalarValue {
                     DataType::UInt16 => dict_from_values::<UInt16Type>(values)?,
                     DataType::UInt32 => dict_from_values::<UInt32Type>(values)?,
                     DataType::UInt64 => dict_from_values::<UInt64Type>(values)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 }
             }
             DataType::FixedSizeBinary(size) => {
@@ -2375,7 +2526,7 @@ impl ScalarValue {
                         } else {
                             _exec_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected {data_type:?}, got {sv:?}"
+                                Expected {data_type}, got {sv:?}"
                             )
                         }
                     })
@@ -2387,7 +2538,7 @@ impl ScalarValue {
                 Arc::new(array)
             }
             // explicitly enumerate unsupported types so newly added
-            // types must be aknowledged, Time32 and Time64 types are
+            // types must be acknowledged, Time32 and Time64 types are
             // not supported if the TimeUnit is not valid (Time32 can
             // only be used with Second and Millisecond, Time64 only
             // with Microsecond and Nanosecond)
@@ -2423,7 +2574,43 @@ impl ScalarValue {
         Ok(new_null_array(&DataType::Null, length))
     }
 
-    fn iter_to_decimal_array(
+    fn iter_to_decimal32_array(
+        scalars: impl IntoIterator<Item = ScalarValue>,
+        precision: u8,
+        scale: i8,
+    ) -> Result<Decimal32Array> {
+        let array = scalars
+            .into_iter()
+            .map(|element: ScalarValue| match element {
+                ScalarValue::Decimal32(v1, _, _) => Ok(v1),
+                s => {
+                    _internal_err!("Expected ScalarValue::Null element. Received {s:?}")
+                }
+            })
+            .collect::<Result<Decimal32Array>>()?
+            .with_precision_and_scale(precision, scale)?;
+        Ok(array)
+    }
+
+    fn iter_to_decimal64_array(
+        scalars: impl IntoIterator<Item = ScalarValue>,
+        precision: u8,
+        scale: i8,
+    ) -> Result<Decimal64Array> {
+        let array = scalars
+            .into_iter()
+            .map(|element: ScalarValue| match element {
+                ScalarValue::Decimal64(v1, _, _) => Ok(v1),
+                s => {
+                    _internal_err!("Expected ScalarValue::Null element. Received {s:?}")
+                }
+            })
+            .collect::<Result<Decimal64Array>>()?
+            .with_precision_and_scale(precision, scale)?;
+        Ok(array)
+    }
+
+    fn iter_to_decimal128_array(
         scalars: impl IntoIterator<Item = ScalarValue>,
         precision: u8,
         scale: i8,
@@ -2461,7 +2648,43 @@ impl ScalarValue {
         Ok(array)
     }
 
-    fn build_decimal_array(
+    fn build_decimal32_array(
+        value: Option<i32>,
+        precision: u8,
+        scale: i8,
+        size: usize,
+    ) -> Result<Decimal32Array> {
+        Ok(match value {
+            Some(val) => Decimal32Array::from(vec![val; size])
+                .with_precision_and_scale(precision, scale)?,
+            None => {
+                let mut builder = Decimal32Array::builder(size)
+                    .with_precision_and_scale(precision, scale)?;
+                builder.append_nulls(size);
+                builder.finish()
+            }
+        })
+    }
+
+    fn build_decimal64_array(
+        value: Option<i64>,
+        precision: u8,
+        scale: i8,
+        size: usize,
+    ) -> Result<Decimal64Array> {
+        Ok(match value {
+            Some(val) => Decimal64Array::from(vec![val; size])
+                .with_precision_and_scale(precision, scale)?,
+            None => {
+                let mut builder = Decimal64Array::builder(size)
+                    .with_precision_and_scale(precision, scale)?;
+                builder.append_nulls(size);
+                builder.finish()
+            }
+        })
+    }
+
+    fn build_decimal128_array(
         value: Option<i128>,
         precision: u8,
         scale: i8,
@@ -2495,23 +2718,24 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::array::{Int32Array, ListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
     /// let result = ScalarValue::new_list(&scalars, &DataType::Int32, true);
     ///
-    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     None,
+    ///     Some(2),
+    /// ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -2555,23 +2779,25 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::array::{Int32Array, ListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
-    /// let result = ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32, true);
+    /// let result =
+    ///     ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32, true);
     ///
-    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     None,
+    ///     Some(2),
+    /// ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -2597,23 +2823,25 @@ impl ScalarValue {
     ///
     /// Example
     /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{LargeListArray, Int32Array};
+    /// use arrow::array::{Int32Array, LargeListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_large_list_array;
+    /// use datafusion_common::ScalarValue;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(None),
+    ///     ScalarValue::Int32(Some(2)),
     /// ];
     ///
     /// let result = ScalarValue::new_large_list(&scalars, &DataType::Int32);
     ///
-    /// let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(
-    ///     vec![
-    ///        Some(vec![Some(1), None, Some(2)])
-    ///     ]);
+    /// let expected =
+    ///     LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///         Some(1),
+    ///         None,
+    ///         Some(2),
+    ///     ])]);
     ///
     /// assert_eq!(*result, expected);
     /// ```
@@ -2640,15 +2868,29 @@ impl ScalarValue {
     /// - a `Dictionary` that fails be converted to a dictionary array of size
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
         Ok(match self {
+            ScalarValue::Decimal32(e, precision, scale) => Arc::new(
+                ScalarValue::build_decimal32_array(*e, *precision, *scale, size)?,
+            ),
+            ScalarValue::Decimal64(e, precision, scale) => Arc::new(
+                ScalarValue::build_decimal64_array(*e, *precision, *scale, size)?,
+            ),
             ScalarValue::Decimal128(e, precision, scale) => Arc::new(
-                ScalarValue::build_decimal_array(*e, *precision, *scale, size)?,
+                ScalarValue::build_decimal128_array(*e, *precision, *scale, size)?,
             ),
             ScalarValue::Decimal256(e, precision, scale) => Arc::new(
                 ScalarValue::build_decimal256_array(*e, *precision, *scale, size)?,
             ),
-            ScalarValue::Boolean(e) => {
-                Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
-            }
+            ScalarValue::Boolean(e) => match e {
+                None => new_null_array(&DataType::Boolean, size),
+                Some(true) => {
+                    Arc::new(BooleanArray::new(BooleanBuffer::new_set(size), None))
+                        as ArrayRef
+                }
+                Some(false) => {
+                    Arc::new(BooleanArray::new(BooleanBuffer::new_unset(size), None))
+                        as ArrayRef
+                }
+            },
             ScalarValue::Float64(e) => {
                 build_array_from_option!(Float64, Float64Array, e, size)
             }
@@ -2731,15 +2973,13 @@ impl ScalarValue {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<BinaryArray>(),
                 ),
-                None => Arc::new(repeat_n(None::<&str>, size).collect::<BinaryArray>()),
+                None => new_null_array(&DataType::Binary, size),
             },
             ScalarValue::BinaryView(e) => match e {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<BinaryViewArray>(),
                 ),
-                None => {
-                    Arc::new(repeat_n(None::<&str>, size).collect::<BinaryViewArray>())
-                }
+                None => new_null_array(&DataType::BinaryView, size),
             },
             ScalarValue::FixedSizeBinary(s, e) => match e {
                 Some(value) => Arc::new(
@@ -2749,21 +2989,13 @@ impl ScalarValue {
                     )
                     .unwrap(),
                 ),
-                None => Arc::new(
-                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                        repeat_n(None::<&[u8]>, size),
-                        *s,
-                    )
-                    .unwrap(),
-                ),
+                None => Arc::new(FixedSizeBinaryArray::new_null(*s, size)),
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<LargeBinaryArray>(),
                 ),
-                None => {
-                    Arc::new(repeat_n(None::<&str>, size).collect::<LargeBinaryArray>())
-                }
+                None => new_null_array(&DataType::LargeBinary, size),
             },
             ScalarValue::List(arr) => {
                 if size == 1 {
@@ -2937,7 +3169,7 @@ impl ScalarValue {
                     DataType::UInt16 => dict_from_scalar::<UInt16Type>(v, size)?,
                     DataType::UInt32 => dict_from_scalar::<UInt32Type>(v, size)?,
                     DataType::UInt64 => dict_from_scalar::<UInt64Type>(v, size)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 }
             }
             ScalarValue::Null => get_or_create_cached_null_array(size),
@@ -2951,6 +3183,24 @@ impl ScalarValue {
         scale: i8,
     ) -> Result<ScalarValue> {
         match array.data_type() {
+            DataType::Decimal32(_, _) => {
+                let array = as_decimal32_array(array)?;
+                if array.is_null(index) {
+                    Ok(ScalarValue::Decimal32(None, precision, scale))
+                } else {
+                    let value = array.value(index);
+                    Ok(ScalarValue::Decimal32(Some(value), precision, scale))
+                }
+            }
+            DataType::Decimal64(_, _) => {
+                let array = as_decimal64_array(array)?;
+                if array.is_null(index) {
+                    Ok(ScalarValue::Decimal64(None, precision, scale))
+                } else {
+                    let value = array.value(index);
+                    Ok(ScalarValue::Decimal64(Some(value), precision, scale))
+                }
+            }
             DataType::Decimal128(_, _) => {
                 let array = as_decimal128_array(array)?;
                 if array.is_null(index) {
@@ -2969,7 +3219,9 @@ impl ScalarValue {
                     Ok(ScalarValue::Decimal256(Some(value), precision, scale))
                 }
             }
-            _ => _internal_err!("Unsupported decimal type"),
+            other => {
+                unreachable!("Invalid type isn't decimal: {other:?}")
+            }
         }
     }
 
@@ -2984,31 +3236,33 @@ impl ScalarValue {
 
     /// Retrieve ScalarValue for each row in `array`
     ///
+    /// Elements in `array` may be NULL, in which case the corresponding element in the returned vector is None.
+    ///
     /// Example 1: Array (ScalarValue::Int32)
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::ScalarValue;
     ///
     /// // Equivalent to [[1,2,3], [4,5]]
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    Some(vec![Some(4), Some(5)])
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
     /// // Convert the array into Scalar Values for each row
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
     /// let expected = vec![
-    /// vec![
-    ///     ScalarValue::Int32(Some(1)),
-    ///     ScalarValue::Int32(Some(2)),
-    ///     ScalarValue::Int32(Some(3)),
-    /// ],
-    /// vec![
-    ///    ScalarValue::Int32(Some(4)),
-    ///    ScalarValue::Int32(Some(5)),
-    /// ],
+    ///     Some(vec![
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(2)),
+    ///         ScalarValue::Int32(Some(3)),
+    ///     ]),
+    ///     Some(vec![
+    ///         ScalarValue::Int32(Some(4)),
+    ///         ScalarValue::Int32(Some(5)),
+    ///     ]),
     /// ];
     ///
     /// assert_eq!(scalar_vec, expected);
@@ -3016,15 +3270,15 @@ impl ScalarValue {
     ///
     /// Example 2: Nested array (ScalarValue::List)
     /// ```
-    /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::utils::SingleRowListArrayBuilder;
+    /// use datafusion_common::ScalarValue;
     /// use std::sync::Arc;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    Some(vec![Some(4), Some(5)])
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
     /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
@@ -3033,34 +3287,82 @@ impl ScalarValue {
     /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
-    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(1),
+    ///     Some(2),
+    ///     Some(3),
+    /// ])]);
+    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+    ///     Some(4),
+    ///     Some(5),
+    /// ])]);
+    ///
+    /// let expected = vec![Some(vec![
+    ///     ScalarValue::List(Arc::new(l1)),
+    ///     ScalarValue::List(Arc::new(l2)),
+    /// ])];
+    ///
+    /// assert_eq!(scalar_vec, expected);
+    /// ```
+    ///
+    /// Example 3: Nullable array
+    /// ```
+    /// use arrow::array::ListArray;
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::ScalarValue;
+    ///
+    /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
     ///     Some(vec![Some(1), Some(2), Some(3)]),
-    /// ]);
-    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///     None,
     ///     Some(vec![Some(4), Some(5)]),
     /// ]);
     ///
+    /// // Convert the array into Scalar Values for each row
+    /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
+    ///
     /// let expected = vec![
-    ///   vec![
-    ///     ScalarValue::List(Arc::new(l1)),
-    ///     ScalarValue::List(Arc::new(l2)),
-    ///   ],
+    ///     Some(vec![
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(2)),
+    ///         ScalarValue::Int32(Some(3)),
+    ///     ]),
+    ///     None,
+    ///     Some(vec![
+    ///         ScalarValue::Int32(Some(4)),
+    ///         ScalarValue::Int32(Some(5)),
+    ///     ]),
     /// ];
     ///
     /// assert_eq!(scalar_vec, expected);
     /// ```
-    pub fn convert_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
-        let mut scalars = Vec::with_capacity(array.len());
-
-        for index in 0..array.len() {
-            let nested_array = array.as_list::<i32>().value(index);
-            let scalar_values = (0..nested_array.len())
-                .map(|i| ScalarValue::try_from_array(&nested_array, i))
-                .collect::<Result<Vec<_>>>()?;
-            scalars.push(scalar_values);
+    pub fn convert_array_to_scalar_vec(
+        array: &dyn Array,
+    ) -> Result<Vec<Option<Vec<Self>>>> {
+        fn generic_collect<OffsetSize: OffsetSizeTrait>(
+            array: &dyn Array,
+        ) -> Result<Vec<Option<Vec<ScalarValue>>>> {
+            array
+                .as_list::<OffsetSize>()
+                .iter()
+                .map(|nested_array| {
+                    nested_array
+                        .map(|array| {
+                            (0..array.len())
+                                .map(|i| ScalarValue::try_from_array(&array, i))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()
+                })
+                .collect()
         }
 
-        Ok(scalars)
+        match array.data_type() {
+            DataType::List(_) => generic_collect::<i32>(array),
+            DataType::LargeList(_) => generic_collect::<i64>(array),
+            _ => _internal_err!(
+                "ScalarValue::convert_array_to_scalar_vec input must be a List/LargeList type"
+            ),
+        }
     }
 
     #[deprecated(
@@ -3083,6 +3385,16 @@ impl ScalarValue {
 
         Ok(match array.data_type() {
             DataType::Null => ScalarValue::Null,
+            DataType::Decimal32(precision, scale) => {
+                ScalarValue::get_decimal_value_from_array(
+                    array, index, *precision, *scale,
+                )?
+            }
+            DataType::Decimal64(precision, scale) => {
+                ScalarValue::get_decimal_value_from_array(
+                    array, index, *precision, *scale,
+                )?
+            }
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::get_decimal_value_from_array(
                     array, index, *precision, *scale,
@@ -3197,7 +3509,7 @@ impl ScalarValue {
                     DataType::UInt16 => get_dict_value::<UInt16Type>(array, index)?,
                     DataType::UInt32 => get_dict_value::<UInt32Type>(array, index)?,
                     DataType::UInt64 => get_dict_value::<UInt64Type>(array, index)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 };
                 // look up the index in the values dictionary
                 let value = match values_index {
@@ -3343,6 +3655,44 @@ impl ScalarValue {
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
+    fn eq_array_decimal32(
+        array: &ArrayRef,
+        index: usize,
+        value: Option<&i32>,
+        precision: u8,
+        scale: i8,
+    ) -> Result<bool> {
+        let array = as_decimal32_array(array)?;
+        if array.precision() != precision || array.scale() != scale {
+            return Ok(false);
+        }
+        let is_null = array.is_null(index);
+        if let Some(v) = value {
+            Ok(!array.is_null(index) && array.value(index) == *v)
+        } else {
+            Ok(is_null)
+        }
+    }
+
+    fn eq_array_decimal64(
+        array: &ArrayRef,
+        index: usize,
+        value: Option<&i64>,
+        precision: u8,
+        scale: i8,
+    ) -> Result<bool> {
+        let array = as_decimal64_array(array)?;
+        if array.precision() != precision || array.scale() != scale {
+            return Ok(false);
+        }
+        let is_null = array.is_null(index);
+        if let Some(v) = value {
+            Ok(!array.is_null(index) && array.value(index) == *v)
+        } else {
+            Ok(is_null)
+        }
+    }
+
     fn eq_array_decimal(
         array: &ArrayRef,
         index: usize,
@@ -3410,6 +3760,24 @@ impl ScalarValue {
     #[inline]
     pub fn eq_array(&self, array: &ArrayRef, index: usize) -> Result<bool> {
         Ok(match self {
+            ScalarValue::Decimal32(v, precision, scale) => {
+                ScalarValue::eq_array_decimal32(
+                    array,
+                    index,
+                    v.as_ref(),
+                    *precision,
+                    *scale,
+                )?
+            }
+            ScalarValue::Decimal64(v, precision, scale) => {
+                ScalarValue::eq_array_decimal64(
+                    array,
+                    index,
+                    v.as_ref(),
+                    *precision,
+                    *scale,
+                )?
+            }
             ScalarValue::Decimal128(v, precision, scale) => {
                 ScalarValue::eq_array_decimal(
                     array,
@@ -3571,7 +3939,7 @@ impl ScalarValue {
                     DataType::UInt16 => get_dict_value::<UInt16Type>(array, index)?,
                     DataType::UInt32 => get_dict_value::<UInt32Type>(array, index)?,
                     DataType::UInt64 => get_dict_value::<UInt64Type>(array, index)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 };
                 // was the value in the array non null?
                 match values_index {
@@ -3608,6 +3976,8 @@ impl ScalarValue {
                 | ScalarValue::Float16(_)
                 | ScalarValue::Float32(_)
                 | ScalarValue::Float64(_)
+                | ScalarValue::Decimal32(_, _, _)
+                | ScalarValue::Decimal64(_, _, _)
                 | ScalarValue::Decimal128(_, _, _)
                 | ScalarValue::Decimal256(_, _, _)
                 | ScalarValue::Int8(_)
@@ -3717,6 +4087,8 @@ impl ScalarValue {
             | ScalarValue::Float16(_)
             | ScalarValue::Float32(_)
             | ScalarValue::Float64(_)
+            | ScalarValue::Decimal32(_, _, _)
+            | ScalarValue::Decimal64(_, _, _)
             | ScalarValue::Decimal128(_, _, _)
             | ScalarValue::Decimal256(_, _, _)
             | ScalarValue::Int8(_)
@@ -4035,6 +4407,7 @@ macro_rules! impl_scalar {
 
 impl_scalar!(f64, Float64);
 impl_scalar!(f32, Float32);
+impl_scalar!(f16, Float16);
 impl_scalar!(i8, Int8);
 impl_scalar!(i16, Int16);
 impl_scalar!(i32, Int32);
@@ -4191,6 +4564,7 @@ impl_try_from!(UInt8, u8);
 impl_try_from!(UInt16, u16);
 impl_try_from!(UInt32, u32);
 impl_try_from!(UInt64, u64);
+impl_try_from!(Float16, f16);
 impl_try_from!(Float32, f32);
 impl_try_from!(Float64, f64);
 impl_try_from!(Boolean, bool);
@@ -4230,6 +4604,12 @@ macro_rules! format_option {
 impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            ScalarValue::Decimal32(v, p, s) => {
+                write!(f, "{v:?},{p:?},{s:?}")?;
+            }
+            ScalarValue::Decimal64(v, p, s) => {
+                write!(f, "{v:?},{p:?},{s:?}")?;
+            }
             ScalarValue::Decimal128(v, p, s) => {
                 write!(f, "{v:?},{p:?},{s:?}")?;
             }
@@ -4270,9 +4650,9 @@ impl fmt::Display for ScalarValue {
                 }
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            ScalarValue::List(arr) => fmt_list(arr.as_ref(), f)?,
+            ScalarValue::LargeList(arr) => fmt_list(arr.as_ref(), f)?,
+            ScalarValue::FixedSizeList(arr) => fmt_list(arr.as_ref(), f)?,
             ScalarValue::Date32(e) => format_option!(
                 f,
                 e.map(|v| {
@@ -4394,12 +4774,11 @@ impl fmt::Display for ScalarValue {
     }
 }
 
-fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
+fn fmt_list(arr: &dyn Array, f: &mut fmt::Formatter) -> fmt::Result {
     // ScalarValue List, LargeList, FixedSizeList should always have a single element
     assert_eq!(arr.len(), 1);
     let options = FormatOptions::default().with_display_error(true);
-    let formatter =
-        ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+    let formatter = ArrayFormatter::try_new(arr, &options).unwrap();
     let value_formatter = formatter.value(0);
     write!(f, "{value_formatter}")
 }
@@ -4419,6 +4798,8 @@ fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
 impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            ScalarValue::Decimal32(_, _, _) => write!(f, "Decimal32({self})"),
+            ScalarValue::Decimal64(_, _, _) => write!(f, "Decimal64({self})"),
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
             ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
             ScalarValue::Boolean(_) => write!(f, "Boolean({self})"),
@@ -4614,6 +4995,8 @@ impl ScalarType<i32> for Date32Type {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::cast::{as_list_array, as_map_array, as_struct_array};
     use crate::test_util::batches_to_string;
@@ -4622,7 +5005,7 @@ mod tests {
         NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveBuilder, RecordBatch,
         StringBuilder, StringDictionaryBuilder, StructBuilder, UnionBuilder,
     };
-    use arrow::buffer::{Buffer, OffsetBuffer};
+    use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{
         ArrowNumericType, Fields, Float64Type, DECIMAL256_MAX_PRECISION,
@@ -8311,7 +8694,7 @@ mod tests {
             ])),
             true,
         ));
-        let scalars = vec![
+        let scalars = [
             ScalarValue::try_new_null(&DataType::List(Arc::clone(&field_ref))).unwrap(),
             ScalarValue::try_new_null(&DataType::LargeList(Arc::clone(&field_ref)))
                 .unwrap(),
@@ -8662,5 +9045,127 @@ mod tests {
             }
             _ => panic!("Expected TimestampMillisecond with timezone"),
         }
+    }
+
+    #[test]
+    fn test_convert_array_to_scalar_vec() {
+        // 1: Regular ListArray
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(4)]),
+        ]);
+        let converted = ScalarValue::convert_array_to_scalar_vec(&list).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(None),
+                    ScalarValue::Int64(Some(4))
+                ]),
+            ]
+        );
+
+        // 2: Regular LargeListArray
+        let large_list = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(4)]),
+        ]);
+        let converted = ScalarValue::convert_array_to_scalar_vec(&large_list).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(None),
+                    ScalarValue::Int64(Some(4))
+                ]),
+            ]
+        );
+
+        // 3: Funky (null slot has non-zero list offsets)
+        // Offsets + Values looks like this: [[1, 2], [3, 4], [5]]
+        // But with NullBuffer it's like this: [[1, 2], NULL, [5]]
+        let funky = ListArray::new(
+            Field::new_list_field(DataType::Int64, true).into(),
+            OffsetBuffer::new(vec![0, 2, 4, 5].into()),
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let converted = ScalarValue::convert_array_to_scalar_vec(&funky).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![ScalarValue::Int64(Some(5))]),
+            ]
+        );
+
+        // 4: Offsets + Values looks like this: [[1, 2], [], [5]]
+        // But with NullBuffer it's like this: [[1, 2], NULL, [5]]
+        // The converted result is: [[1, 2], None, [5]]
+        let array4 = ListArray::new(
+            Field::new_list_field(DataType::Int64, true).into(),
+            OffsetBuffer::new(vec![0, 2, 2, 5].into()),
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let converted = ScalarValue::convert_array_to_scalar_vec(&array4).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(Some(4)),
+                    ScalarValue::Int64(Some(5)),
+                ]),
+            ]
+        );
+
+        // 5: Offsets + Values looks like this: [[1, 2], [], [5]]
+        // Same as 4, but the middle array is not null, so after conversion it's empty.
+        let array5 = ListArray::new(
+            Field::new_list_field(DataType::Int64, true).into(),
+            OffsetBuffer::new(vec![0, 2, 2, 5].into()),
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Some(NullBuffer::from(vec![true, true, true])),
+        );
+        let converted = ScalarValue::convert_array_to_scalar_vec(&array5).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                Some(vec![]),
+                Some(vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(Some(4)),
+                    ScalarValue::Int64(Some(5)),
+                ]),
+            ]
+        );
     }
 }

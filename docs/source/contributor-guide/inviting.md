@@ -175,8 +175,8 @@ Of course, you can decline and instead remain as a contributor,
 participating as you do now.
 
 A. This personal invitation is a chance for you to accept or decline
-in private. Either way, please let us know in reply to the
-private@datafusion.apache.org address only.
+in private. Either way, please let us know in reply to this email, make sure to reply-all (it should send a copy to
+private@datafusion.apache.org) for record keeping / log of the project.
 
 B. If you accept, the next step is to register an ICLA:
 
@@ -232,8 +232,8 @@ Of course, you can decline and instead remain as a contributor,
 participating as you do now.
 
 This personal invitation is a chance for you to accept or decline
-in private. Either way, please let us know in reply to the
-private@datafusion.apache.org address only. We will have to request an
+in private. Either way, please let us know in reply to this email, make sure to reply-all (it should send a copy to
+private@datafusion.apache.org) for record keeping / log of the project. We will have to request an
 Apache account be created for you, so please let us know what user id
 you would prefer.
 
@@ -275,7 +275,8 @@ probably find that you spend more time here.
 Of course, you can decline and instead remain as a contributor,
 participating as you do now.
 
-If you accept, please let us know by replying to private@datafusion.apache.org.
+If you accept, please let us know in reply to this email, make sure to reply-all (it should send a copy to
+private@datafusion.apache.org) for record keeping / log of the project.
 ```
 
 ## New PMC Members

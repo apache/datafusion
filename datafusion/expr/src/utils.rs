@@ -38,7 +38,10 @@ use datafusion_common::{
     Result, TableReference,
 };
 
+#[cfg(not(feature = "sql"))]
+use crate::expr::{ExceptSelectItem, ExcludeSelectItem};
 use indexmap::IndexSet;
+#[cfg(feature = "sql")]
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -351,7 +354,7 @@ fn get_excluded_columns(
 /// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
 fn get_exprs_except_skipped(
     schema: &DFSchema,
-    columns_to_skip: HashSet<Column>,
+    columns_to_skip: &HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema.iter().map(Expr::from).collect::<Vec<Expr>>()
@@ -416,7 +419,7 @@ pub fn expand_wildcard(
     };
     // Add each excluded `Column` to columns_to_skip
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(schema, columns_to_skip))
+    Ok(get_exprs_except_skipped(schema, &columns_to_skip))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
@@ -461,7 +464,7 @@ pub fn expand_qualified_wildcard(
     columns_to_skip.extend(excluded_columns);
     Ok(get_exprs_except_skipped(
         &qualified_dfschema,
-        columns_to_skip,
+        &columns_to_skip,
     ))
 }
 
@@ -887,7 +890,6 @@ pub fn check_all_columns_from_schema(
 ///    all referenced column of the right side is from the right schema.
 /// 2. Or opposite. All referenced column of the left side is from the right schema,
 ///    and the right side is from the left schema.
-///
 pub fn find_valid_equijoin_key_pair(
     left_key: &Expr,
     right_key: &Expr,
@@ -926,6 +928,7 @@ pub fn find_valid_equijoin_key_pair(
 ///     round(Float64)
 ///     round(Float32)
 /// ```
+#[allow(clippy::needless_pass_by_value)]
 pub fn generate_signature_error_msg(
     func_name: &str,
     func_signature: Signature,
@@ -933,7 +936,7 @@ pub fn generate_signature_error_msg(
 ) -> String {
     let candidate_signatures = func_signature
         .type_signature
-        .to_string_repr()
+        .to_string_repr_with_names(func_signature.parameter_names.as_deref())
         .iter()
         .map(|args_str| format!("\t{func_name}({args_str})"))
         .collect::<Vec<String>>()
@@ -1031,10 +1034,7 @@ pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
 /// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use split_conjunction_owned to split them
 /// assert_eq!(split_conjunction_owned(expr), split);
@@ -1057,10 +1057,7 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
 /// let expr = col("a").eq(lit(1)).add(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use split_binary_owned to split them
 /// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
@@ -1128,10 +1125,7 @@ fn split_binary_impl<'a>(
 /// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use conjunction to join them together with `AND`
 /// assert_eq!(conjunction(split), Some(expr));
@@ -1154,10 +1148,7 @@ pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
 /// let expr = col("a").eq(lit(1)).or(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use disjunction to join them together with `OR`
 /// assert_eq!(disjunction(split), Some(expr));
@@ -1292,6 +1283,7 @@ mod tests {
         Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
+    use datafusion_expr_common::signature::{TypeSignature, Volatility};
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -1710,5 +1702,53 @@ mod tests {
         let list_union_type =
             DataType::List(Arc::new(Field::new("my_union", union_type, true)));
         assert!(!can_hash(&list_union_type));
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_with_parameter_names() {
+        let sig = Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Int64,
+                ]),
+            ],
+            Volatility::Immutable,
+        )
+        .with_parameter_names(vec![
+            "str".to_string(),
+            "start_pos".to_string(),
+            "length".to_string(),
+        ])
+        .expect("valid parameter names");
+
+        // Generate error message with only 1 argument provided
+        let error_msg = generate_signature_error_msg("substr", sig, &[DataType::Utf8]);
+
+        assert!(
+            error_msg.contains("str: Utf8, start_pos: Int64"),
+            "Expected 'str: Utf8, start_pos: Int64' in error message, got: {error_msg}"
+        );
+        assert!(
+            error_msg.contains("str: Utf8, start_pos: Int64, length: Int64"),
+            "Expected 'str: Utf8, start_pos: Int64, length: Int64' in error message, got: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_without_parameter_names() {
+        let sig = Signature::one_of(
+            vec![TypeSignature::Any(2), TypeSignature::Any(3)],
+            Volatility::Immutable,
+        );
+
+        let error_msg = generate_signature_error_msg("my_func", sig, &[DataType::Int32]);
+
+        assert!(
+            error_msg.contains("Any, Any"),
+            "Expected 'Any, Any' without parameter names, got: {error_msg}"
+        );
     }
 }

@@ -30,7 +30,7 @@ use datafusion::common::{
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    FileMeta, FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
+    FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -121,7 +121,6 @@ use url::Url;
 ///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
 ///         └───────────────────────┘      the ParquetSource does not re-read /
 ///          Parquet File                  decode the thrift footer
-///
 /// ```
 ///
 /// Within a Row Group, Column Chunks store data in DataPages. This example also
@@ -492,19 +491,18 @@ impl TableProvider for IndexTableProvider {
                 .with_file(indexed_file);
 
         let file_source = Arc::new(
-            ParquetSource::default()
+            ParquetSource::new(schema.clone())
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
                 .with_predicate(predicate)
                 // provide the factory to create parquet reader without re-reading metadata
                 .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
-        let file_scan_config =
-            FileScanConfigBuilder::new(object_store_url, schema, file_source)
-                .with_limit(limit)
-                .with_projection(projection.cloned())
-                .with_file(partitioned_file)
-                .build();
+        let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
+            .with_limit(limit)
+            .with_projection_indices(projection.cloned())
+            .with_file(partitioned_file)
+            .build();
 
         // Finally, put it all together into a DataSourceExec
         Ok(DataSourceExec::from_data_source(file_scan_config))
@@ -555,15 +553,16 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
     fn create_reader(
         &self,
         _partition_index: usize,
-        file_meta: FileMeta,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
         // for this example we ignore the partition index and metrics
         // but in a real system you would likely use them to report details on
         // the performance of the reader.
-        let filename = file_meta
-            .location()
+        let filename = partitioned_file
+            .object_meta
+            .location
             .parts()
             .last()
             .expect("No path in location")
@@ -572,8 +571,8 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 
         let object_store = Arc::clone(&self.object_store);
         let mut inner =
-            ParquetObjectReader::new(object_store, file_meta.object_meta.location)
-                .with_file_size(file_meta.object_meta.size);
+            ParquetObjectReader::new(object_store, partitioned_file.object_meta.location)
+                .with_file_size(partitioned_file.object_meta.size);
 
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)

@@ -144,8 +144,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
 
     // create a logical query plan
+    let config = ConfigOptions::default();
     let context_provider = MyContextProvider::default()
-        .with_udf(datetime::now())
+        .with_udf(datetime::now(&config))
         .with_udf(datafusion_functions::core::arrow_cast())
         .with_udf(datafusion_functions::string::concat())
         .with_udf(datafusion_functions::string::concat_ws());
@@ -286,7 +287,7 @@ fn test_nested_schema_nullability() {
 
 #[test]
 fn test_inequalities_non_null_bounded() {
-    let guarantees = vec![
+    let guarantees = [
         // x ∈ [1, 3] (not null)
         (
             col("x"),

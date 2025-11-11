@@ -35,6 +35,7 @@ use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
+#[cfg(feature = "sql")]
 use sqlparser::parser::ParserError;
 use tokio::task::JoinError;
 
@@ -68,6 +69,7 @@ pub enum DataFusionError {
     /// Error when SQL is syntactically incorrect.
     ///
     /// 2nd argument is for optional backtrace
+    #[cfg(feature = "sql")]
     SQL(Box<ParserError>, Option<String>),
     /// Error when a feature is not yet implemented.
     ///
@@ -329,6 +331,7 @@ impl From<object_store::path::Error> for DataFusionError {
     }
 }
 
+#[cfg(feature = "sql")]
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
         DataFusionError::SQL(Box::new(e), None)
@@ -369,6 +372,7 @@ impl Error for DataFusionError {
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(e) => Some(e.as_ref()),
             DataFusionError::IoError(e) => Some(e),
+            #[cfg(feature = "sql")]
             DataFusionError::SQL(e, _) => Some(e.as_ref()),
             DataFusionError::NotImplemented(_) => None,
             DataFusionError::Internal(_) => None,
@@ -451,12 +455,13 @@ impl DataFusionError {
     /// If backtrace enabled then error has a format "message" [`Self::BACK_TRACE_SEP`] "backtrace"
     /// The method strips the backtrace and outputs "message"
     pub fn strip_backtrace(&self) -> String {
-        self.to_string()
+        (*self
+            .to_string()
             .split(Self::BACK_TRACE_SEP)
             .collect::<Vec<&str>>()
             .first()
-            .unwrap_or(&"")
-            .to_string()
+            .unwrap_or(&""))
+        .to_string()
     }
 
     /// To enable optional rust backtrace in DataFusion:
@@ -497,6 +502,7 @@ impl DataFusionError {
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(_) => "Object Store error: ",
             DataFusionError::IoError(_) => "IO error: ",
+            #[cfg(feature = "sql")]
             DataFusionError::SQL(_, _) => "SQL error: ",
             DataFusionError::NotImplemented(_) => {
                 "This feature is not implemented: "
@@ -534,6 +540,7 @@ impl DataFusionError {
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
+            #[cfg(feature = "sql")]
             DataFusionError::SQL(ref desc, ref backtrace) => {
                 let backtrace: String =
                     backtrace.clone().unwrap_or_else(|| "".to_owned());
@@ -677,7 +684,10 @@ impl DataFusionError {
 /// let mut builder = DataFusionError::builder();
 /// builder.add_error(DataFusionError::Internal("foo".to_owned()));
 /// // ok_or returns the value if no errors have been added
-/// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+/// assert_contains!(
+///     builder.error_or(42).unwrap_err().to_string(),
+///     "Internal error: foo"
+/// );
 /// ```
 #[derive(Debug, Default)]
 pub struct DataFusionErrorBuilder(Vec<DataFusionError>);
@@ -695,7 +705,10 @@ impl DataFusionErrorBuilder {
     /// # use datafusion_common::{assert_contains, DataFusionError};
     /// let mut builder = DataFusionError::builder();
     /// builder.add_error(DataFusionError::Internal("foo".to_owned()));
-    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    /// assert_contains!(
+    ///     builder.error_or(42).unwrap_err().to_string(),
+    ///     "Internal error: foo"
+    /// );
     /// ```
     pub fn add_error(&mut self, error: DataFusionError) {
         self.0.push(error);
@@ -707,8 +720,11 @@ impl DataFusionErrorBuilder {
     /// ```
     /// # use datafusion_common::{assert_contains, DataFusionError};
     /// let builder = DataFusionError::builder()
-    ///   .with_error(DataFusionError::Internal("foo".to_owned()));
-    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    ///     .with_error(DataFusionError::Internal("foo".to_owned()));
+    /// assert_contains!(
+    ///     builder.error_or(42).unwrap_err().to_string(),
+    ///     "Internal error: foo"
+    /// );
     /// ```
     pub fn with_error(mut self, error: DataFusionError) -> Self {
         self.0.push(error);
@@ -740,6 +756,116 @@ macro_rules! unwrap_or_internal_err {
             ))
         })?
     };
+}
+
+/// Assert a condition, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_or_internal_err!(predicate);
+/// assert_or_internal_err!(predicate, "human readable message");
+/// assert_or_internal_err!(predicate, format!("details: {}", value));
+/// ```
+#[macro_export]
+macro_rules! assert_or_internal_err {
+    ($cond:expr) => {
+        if !$cond {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {}",
+                stringify!($cond)
+            )));
+        }
+    };
+    ($cond:expr, $($arg:tt)+) => {
+        if !$cond {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {}: {}",
+                stringify!($cond),
+                format!($($arg)+)
+            )));
+        }
+    };
+}
+
+/// Assert equality, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_eq_or_internal_err!(actual, expected);
+/// assert_eq_or_internal_err!(left_expr, right_expr, "values must match");
+/// assert_eq_or_internal_err!(lhs, rhs, "metadata: {}", extra);
+/// ```
+#[macro_export]
+macro_rules! assert_eq_or_internal_err {
+    ($left:expr, $right:expr $(,)?) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val != right_val {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {} == {} (left: {:?}, right: {:?})",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val
+            )));
+        }
+    }};
+    ($left:expr, $right:expr, $($arg:tt)+) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val != right_val {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {} == {} (left: {:?}, right: {:?}): {}",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val,
+                format!($($arg)+)
+            )));
+        }
+    }};
+}
+
+/// Assert inequality, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_ne_or_internal_err!(left, right);
+/// assert_ne_or_internal_err!(lhs_expr, rhs_expr, "values must differ");
+/// assert_ne_or_internal_err!(a, b, "context {}", info);
+/// ```
+#[macro_export]
+macro_rules! assert_ne_or_internal_err {
+    ($left:expr, $right:expr $(,)?) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val == right_val {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {} != {} (left: {:?}, right: {:?})",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val
+            )));
+        }
+    }};
+    ($left:expr, $right:expr, $($arg:tt)+) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val == right_val {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {} != {} (left: {:?}, right: {:?}): {}",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val,
+                format!($($arg)+)
+            )));
+        }
+    }};
 }
 
 /// Add a macros for concise  DataFusionError::* errors declaration
@@ -958,6 +1084,115 @@ mod test {
     use std::sync::Arc;
 
     use arrow::error::ArrowError;
+    use insta::assert_snapshot;
+
+    fn ok_result() -> Result<()> {
+        Ok(())
+    }
+
+    #[test]
+    fn test_assert_eq_or_internal_err_passes() -> Result<()> {
+        assert_eq_or_internal_err!(1, 1);
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_eq_or_internal_err_fails() {
+        fn check() -> Result<()> {
+            assert_eq_or_internal_err!(1, 2, "expected equality");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_ne_or_internal_err_passes() -> Result<()> {
+        assert_ne_or_internal_err!(1, 2);
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_ne_or_internal_err_fails() {
+        fn check() -> Result<()> {
+            assert_ne_or_internal_err!(3, 3, "values must differ");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_passes() -> Result<()> {
+        assert_or_internal_err!(true);
+        assert_or_internal_err!(true, "message");
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_fails_default() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false);
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_fails_with_message() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false, "custom message");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false: custom message.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_with_format_arguments() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false, "custom {}", 42);
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false: custom 42.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
 
     #[test]
     fn test_error_size() {

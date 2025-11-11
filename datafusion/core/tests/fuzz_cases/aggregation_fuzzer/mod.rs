@@ -77,8 +77,8 @@ pub(crate) fn check_equality_of_batches(
         if lhs_row != rhs_row {
             return Err(InconsistentResult {
                 row_idx,
-                lhs_row: lhs_row.to_string(),
-                rhs_row: rhs_row.to_string(),
+                lhs_row: (*lhs_row).to_string(),
+                rhs_row: (*rhs_row).to_string(),
             });
         }
     }

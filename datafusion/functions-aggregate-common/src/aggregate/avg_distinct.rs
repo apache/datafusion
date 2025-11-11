@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod decimal;
 mod numeric;
 
+pub use decimal::DecimalDistinctAvgAccumulator;
 pub use numeric::Float64DistinctAvgAccumulator;

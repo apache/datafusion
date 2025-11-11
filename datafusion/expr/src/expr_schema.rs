@@ -17,8 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, FieldMetadata,
-    InList, InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
 use crate::type_coercion::functions::{
@@ -28,6 +28,7 @@ use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
     Result, Spans, TableReference,
@@ -81,15 +82,17 @@ impl ExprSchemable for Expr {
     /// # use std::collections::HashMap;
     ///
     /// fn main() {
-    ///   let expr = col("c1") + col("c2");
-    ///   let schema = DFSchema::from_unqualified_fields(
-    ///     vec![
-    ///       Field::new("c1", DataType::Int32, true),
-    ///       Field::new("c2", DataType::Float32, true),
-    ///       ].into(),
-    ///       HashMap::new(),
-    ///   ).unwrap();
-    ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
+    ///     let expr = col("c1") + col("c2");
+    ///     let schema = DFSchema::from_unqualified_fields(
+    ///         vec![
+    ///             Field::new("c1", DataType::Int32, true),
+    ///             Field::new("c2", DataType::Float32, true),
+    ///         ]
+    ///         .into(),
+    ///         HashMap::new(),
+    ///     )
+    ///     .unwrap();
+    ///     assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
     /// }
     /// ```
     ///
@@ -104,15 +107,15 @@ impl ExprSchemable for Expr {
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
+                Expr::Placeholder(Placeholder { field, .. }) => match &field {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
-                    Some(dt) => Ok(dt.clone()),
+                    Some(field) => Ok(field.data_type().clone()),
                 },
                 _ => expr.get_type(schema),
             },
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
+            Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
@@ -211,9 +214,9 @@ impl ExprSchemable for Expr {
             )
             .get_result_type(),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
-            Expr::Placeholder(Placeholder { data_type, .. }) => {
-                if let Some(dtype) = data_type {
-                    Ok(dtype.clone())
+            Expr::Placeholder(Placeholder { field, .. }) => {
+                if let Some(field) = field {
+                    Ok(field.data_type().clone())
                 } else {
                     // If the placeholder's type hasn't been specified, treat it as
                     // null (unspecified placeholders generate an error during planning)
@@ -276,7 +279,7 @@ impl ExprSchemable for Expr {
                 || high.nullable(input_schema)?),
 
             Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(_, _) => Ok(true),
+            Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // This expression is nullable if any of the input expressions are nullable
@@ -309,10 +312,12 @@ impl ExprSchemable for Expr {
                     window_function,
                 )
                 .map(|(_, nullable)| nullable),
-            Expr::ScalarVariable(_, _)
-            | Expr::TryCast { .. }
-            | Expr::Unnest(_)
-            | Expr::Placeholder(_) => Ok(true),
+            Expr::Placeholder(Placeholder { id: _, field }) => {
+                Ok(field.as_ref().map(|f| f.is_nullable()).unwrap_or(true))
+            }
+            Expr::ScalarVariable(_, _) | Expr::TryCast { .. } | Expr::Unnest(_) => {
+                Ok(true)
+            }
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -428,25 +433,11 @@ impl ExprSchemable for Expr {
         let field = match self {
             Expr::Alias(Alias {
                 expr,
-                name,
+                name: _,
                 metadata,
                 ..
             }) => {
-                let field = match &**expr {
-                    Expr::Placeholder(Placeholder { data_type, .. }) => {
-                        match &data_type {
-                            None => schema
-                                .data_type_and_nullable(&Column::from_name(name))
-                                .map(|(d, n)| Field::new(&schema_name, d.clone(), n)),
-                            Some(dt) => Ok(Field::new(
-                                &schema_name,
-                                dt.clone(),
-                                expr.nullable(schema)?,
-                            )),
-                        }
-                    }
-                    _ => expr.to_field(schema).map(|(_, f)| f.as_ref().clone()),
-                }?;
+                let field = expr.to_field(schema).map(|(_, f)| f.as_ref().clone())?;
 
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
@@ -457,8 +448,8 @@ impl ExprSchemable for Expr {
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
-            Expr::OuterReferenceColumn(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
+            Expr::OuterReferenceColumn(field, _) => {
+                Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
             }
             Expr::ScalarVariable(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
@@ -482,7 +473,7 @@ impl ExprSchemable for Expr {
                 Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
             }
             Expr::ScalarSubquery(subquery) => {
-                Ok(Arc::new(subquery.subquery.schema().field(0).clone()))
+                Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
             }
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
@@ -594,6 +585,10 @@ impl ExprSchemable for Expr {
                 .to_field(schema)
                 .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone()))
                 .map(Arc::new),
+            Expr::Placeholder(Placeholder {
+                id: _,
+                field: Some(field),
+            }) => Ok(field.as_ref().clone().with_name(&schema_name).into()),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -642,7 +637,7 @@ impl ExprSchemable for Expr {
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
-            plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
+            plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
         }
     }
 }
@@ -741,7 +736,6 @@ impl Expr {
 ///    new projection with the casted expression.
 /// 2. **Non-projection plan**: If the subquery isn't a projection, it adds a projection to the plan
 ///    with the casted first column.
-///
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
         return Ok(subquery);
@@ -776,10 +770,12 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{col, lit};
+    use std::collections::HashMap;
 
-    use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
+    use super::*;
+    use crate::{col, lit, out_ref_col_with_metadata};
+
+    use datafusion_common::{internal_err, DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -905,12 +901,66 @@ mod tests {
 
         let schema = DFSchema::from_unqualified_fields(
             vec![meta.add_to_field(Field::new("foo", DataType::Int32, true))].into(),
-            std::collections::HashMap::new(),
+            HashMap::new(),
         )
         .unwrap();
 
         // verify to_field method populates metadata
         assert_eq!(meta, expr.metadata(&schema).unwrap());
+
+        // outer ref constructed by `out_ref_col_with_metadata` should be metadata-preserving
+        let outer_ref = out_ref_col_with_metadata(
+            DataType::Int32,
+            meta.to_hashmap(),
+            Column::from_name("foo"),
+        );
+        assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_expr_placeholder() {
+        let schema = MockExprSchema::new();
+
+        let mut placeholder_meta = HashMap::new();
+        placeholder_meta.insert("bar".to_string(), "buzz".to_string());
+        let placeholder_meta = FieldMetadata::from(placeholder_meta);
+
+        let expr = Expr::Placeholder(Placeholder::new_with_field(
+            "".to_string(),
+            Some(
+                Field::new("", DataType::Utf8, true)
+                    .with_metadata(placeholder_meta.to_hashmap())
+                    .into(),
+            ),
+        ));
+
+        assert_eq!(
+            expr.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, true)
+        );
+        assert_eq!(placeholder_meta, expr.metadata(&schema).unwrap());
+
+        let expr_alias = expr.alias("a placeholder by any other name");
+        assert_eq!(
+            expr_alias.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, true)
+        );
+        assert_eq!(placeholder_meta, expr_alias.metadata(&schema).unwrap());
+
+        // Non-nullable placeholder field should remain non-nullable
+        let expr = Expr::Placeholder(Placeholder::new_with_field(
+            "".to_string(),
+            Some(Field::new("", DataType::Utf8, false).into()),
+        ));
+        assert_eq!(
+            expr.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, false)
+        );
+        let expr_alias = expr.alias("a placeholder by any other name");
+        assert_eq!(
+            expr_alias.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, false)
+        );
     }
 
     #[derive(Debug)]

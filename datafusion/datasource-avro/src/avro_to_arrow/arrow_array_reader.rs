@@ -153,7 +153,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             .map(|value| match value {
                 Ok(Value::Record(v)) => Ok(v),
                 Err(e) => Err(ArrowError::ParseError(format!(
-                    "Failed to parse avro value: {e:?}"
+                    "Failed to parse avro value: {e}"
                 ))),
                 other => Err(ArrowError::ParseError(format!(
                     "Row needs to be of type object, got: {other:?}"
@@ -281,7 +281,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 self.list_array_string_array_builder::<UInt64Type>(&dtype, col_name, rows)
             }
             ref e => Err(SchemaError(format!(
-                "Data type is currently not supported for dictionaries in list : {e:?}"
+                "Data type is currently not supported for dictionaries in list : {e}"
             ))),
         }
     }
@@ -308,7 +308,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             e => {
                 return Err(SchemaError(format!(
-                    "Nested list data builder type is not supported: {e:?}"
+                    "Nested list data builder type is not supported: {e}"
                 )))
             }
         };
@@ -373,7 +373,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     }
                     e => {
                         return Err(SchemaError(format!(
-                            "Nested list data builder type is not supported: {e:?}"
+                            "Nested list data builder type is not supported: {e}"
                         )))
                     }
                 }
@@ -610,7 +610,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             datatype => {
                 return Err(SchemaError(format!(
-                    "Nested list of {datatype:?} not supported"
+                    "Nested list of {datatype} not supported"
                 )));
             }
         };
@@ -831,7 +831,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     }
                     _ => {
                         return Err(SchemaError(format!(
-                            "type {:?} not supported",
+                            "type {} not supported",
                             field.data_type()
                         )))
                     }
@@ -936,7 +936,7 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
         Value::Null => Ok(None),
         other => Err(AvroError::new(AvroErrorDetails::GetString(other.clone()))),
     }
-    .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))
+    .map_err(|e| SchemaError(format!("expected resolvable string : {e}")))
 }
 
 fn resolve_u8(v: &Value) -> Option<u8> {

@@ -22,22 +22,22 @@ use std::sync::Arc;
 
 use crate::avro_to_arrow::Reader as AvroReader;
 
-use arrow::datatypes::SchemaRef;
 use datafusion_common::error::Result;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource::TableSchema;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use object_store::ObjectStore;
 
 /// AvroSource holds the extra configuration that is necessary for opening avro files
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AvroSource {
-    schema: Option<SchemaRef>,
+    table_schema: TableSchema,
     batch_size: Option<usize>,
     projection: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
@@ -46,15 +46,22 @@ pub struct AvroSource {
 }
 
 impl AvroSource {
-    /// Initialize an AvroSource with default values
-    pub fn new() -> Self {
-        Self::default()
+    /// Initialize an AvroSource with the provided schema
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        Self {
+            table_schema: table_schema.into(),
+            batch_size: None,
+            projection: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projected_statistics: None,
+            schema_adapter_factory: None,
+        }
     }
 
     fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
         AvroReader::try_new(
             reader,
-            Arc::clone(self.schema.as_ref().expect("Schema must set before open")),
+            Arc::clone(self.table_schema.file_schema()),
             self.batch_size.expect("Batch size must set before open"),
             self.projection.clone(),
         )
@@ -78,17 +85,16 @@ impl FileSource for AvroSource {
         self
     }
 
+    fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.schema = Some(schema);
-        Arc::new(conf)
-    }
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projected_statistics = Some(statistics);
@@ -145,9 +151,7 @@ mod private {
     use super::*;
 
     use bytes::Buf;
-    use datafusion_datasource::{
-        file_meta::FileMeta, file_stream::FileOpenFuture, PartitionedFile,
-    };
+    use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
 
@@ -157,15 +161,13 @@ mod private {
     }
 
     impl FileOpener for AvroOpener {
-        fn open(
-            &self,
-            file_meta: FileMeta,
-            _file: PartitionedFile,
-        ) -> Result<FileOpenFuture> {
+        fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let config = Arc::clone(&self.config);
             let object_store = Arc::clone(&self.object_store);
             Ok(Box::pin(async move {
-                let r = object_store.get(file_meta.location()).await?;
+                let r = object_store
+                    .get(&partitioned_file.object_meta.location)
+                    .await?;
                 match r.payload {
                     GetResultPayload::File(file, _) => {
                         let reader = config.open(file)?;

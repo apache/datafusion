@@ -354,12 +354,15 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///     fn execute(
     ///         &self,
     ///         partition: usize,
-    ///         context: Arc<TaskContext>
+    ///         context: Arc<TaskContext>,
     ///     ) -> Result<SendableRecordBatchStream> {
     ///         // use functions from futures crate convert the batch into a stream
     ///         let fut = futures::future::ready(Ok(self.batch.clone()));
     ///         let stream = futures::stream::once(fut);
-    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.batch.schema(), stream)))
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(
+    ///             self.batch.schema(),
+    ///             stream,
+    ///         )))
     ///     }
     /// }
     /// ```
@@ -389,11 +392,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///     fn execute(
     ///         &self,
     ///         partition: usize,
-    ///         context: Arc<TaskContext>
+    ///         context: Arc<TaskContext>,
     ///     ) -> Result<SendableRecordBatchStream> {
     ///         let fut = get_batch();
     ///         let stream = futures::stream::once(fut);
-    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(
+    ///             self.schema.clone(),
+    ///             stream,
+    ///         )))
     ///     }
     /// }
     /// ```
@@ -425,13 +431,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///     fn execute(
     ///         &self,
     ///         partition: usize,
-    ///         context: Arc<TaskContext>
+    ///         context: Arc<TaskContext>,
     ///     ) -> Result<SendableRecordBatchStream> {
     ///         // A future that yields a stream
     ///         let fut = get_batch_stream();
     ///         // Use TryStreamExt::try_flatten to flatten the stream of streams
     ///         let stream = futures::stream::once(fut).try_flatten();
-    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(
+    ///             self.schema.clone(),
+    ///             stream,
+    ///         )))
     ///     }
     /// }
     /// ```
@@ -788,7 +797,7 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
 /// For unbounded streams, it also tracks whether the operator requires finite memory
 /// to process the stream or if memory usage could grow unbounded.
 ///
-/// Boundedness of the output stream is based on the the boundedness of the input stream and the nature of
+/// Boundedness of the output stream is based on the boundedness of the input stream and the nature of
 /// the operator. For example, limit or topk with fetch operator can convert an unbounded stream to a bounded stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Boundedness {
@@ -1335,7 +1344,7 @@ pub fn check_not_null_constraints(
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
-    actual.iter().map(|elem| elem.to_string()).collect()
+    actual.iter().map(|elem| (*elem).to_string()).collect()
 }
 
 /// Indicates the effect an execution plan operator will have on the cardinality
