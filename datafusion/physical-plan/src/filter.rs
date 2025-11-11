@@ -756,11 +756,19 @@ impl Stream for FilterExecStream {
                     continue;
                 }
                 None => {
-                    self.batch_coalescer.finish_buffered_batch().unwrap();
-                    if let Some(batch) = self.batch_coalescer.next_completed_batch() {
-                        poll = Poll::Ready(Some(Ok(batch)));
-                    } else {
-                        poll = Poll::Ready(None);
+                    match self.batch_coalescer.finish_buffered_batch() {
+                        Ok(()) => {
+                            if let Some(batch) =
+                                self.batch_coalescer.next_completed_batch()
+                            {
+                                poll = Poll::Ready(Some(Ok(batch)));
+                            } else {
+                                poll = Poll::Ready(None);
+                            }
+                        }
+                        Err(e) => {
+                            poll = Poll::Ready(Some(Err(e.into())));
+                        }
                     }
                     break;
                 }
