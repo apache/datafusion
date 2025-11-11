@@ -296,13 +296,11 @@ fn within_group_allowed_for_ordered_set_udaf() {
                         let second = af.params.args[1].to_string();
                         assert!(
                             first.contains("c3"),
-                            "first arg not ordering expr: {}",
-                            first
+                            "first arg not ordering expr: {first}"
                         );
                         assert!(
                             second.contains("0.5") || second.contains("0.50"),
-                            "second arg not percentile literal: {}",
-                            second
+                            "second arg not percentile literal: {second}"
                         );
                         return Ok(TreeNodeRecursion::Stop);
                     }
@@ -352,10 +350,9 @@ fn within_group_named_argument_behavior() {
                         // First arg structural check: Column c3
                         match &af.params.args[0] {
                             DFExpr::Column(c) => assert_eq!(c.name(), "c3"),
-                            other => panic!(
-                                "expected first arg to be Column, got: {:?}",
-                                other
-                            ),
+                            other => {
+                                panic!("expected first arg to be Column, got: {other:?}")
+                            }
                         }
                         // Second arg structural check: Literal Float64(0.25)
                         match &af.params.args[1] {
@@ -363,8 +360,7 @@ fn within_group_named_argument_behavior() {
                                 assert_eq!(sv, &ScalarValue::Float64(Some(0.25)))
                             }
                             other => panic!(
-                                "expected second arg to be Literal, got: {:?}",
-                                other
+                                "expected second arg to be Literal, got: {other:?}"
                             ),
                         }
                         return Ok(TreeNodeRecursion::Stop);
@@ -425,6 +421,7 @@ fn within_group_and_over_rejected() {
     assert_contains!(err, "OVER and WITHIN GROUP clause cannot be used together");
 }
 
+#[test]
 fn parse_ident_normalization_5() {
     let sql = "SELECT AGE FROM PERSON";
     let parser_option = ident_normalization_parser_options_no_ident_normalization();
