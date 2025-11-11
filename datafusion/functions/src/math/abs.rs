@@ -50,7 +50,6 @@ macro_rules! make_abs_function {
     }};
 }
 
-#[macro_export]
 macro_rules! make_try_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |input: &ArrayRef| {

@@ -20,14 +20,12 @@ use crate::function::error_utils::{
 };
 use arrow::array::*;
 use arrow::datatypes::DataType;
-use arrow::datatypes::*;
-use arrow::error::ArrowError;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{
-    downcast_named_arg, make_abs_function, make_try_abs_function,
+    downcast_named_arg, make_abs_function,
     make_wrapping_abs_function,
 };
 use std::any::Any;
@@ -39,7 +37,7 @@ use std::sync::Arc;
 /// Returns the absolute value of input
 /// Returns NULL if input is NULL, returns NaN if input is NaN.
 ///
-/// Differences with DataFusion abs:
+/// TODOs:
 ///  - Spark's ANSI-compliant dialect, when off (i.e. `spark.sql.ansi.enabled=false`), taking absolute value on the minimal value of a signed integer returns the value as is. DataFusion's abs throws "DataFusion error: Arrow error: Compute error" on arithmetic overflow
 ///  - Spark's abs also supports ANSI interval types: YearMonthIntervalType and DayTimeIntervalType. DataFusion's abs doesn't.
 ///
@@ -84,8 +82,8 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() || arg_types.len() > 2 {
-            return Err(invalid_arg_count_exec_err("abs", (1, 2), arg_types.len()));
+        if arg_types.len() != 1 {
+            return Err(invalid_arg_count_exec_err("abs", (1, 1), arg_types.len()));
         }
         match &arg_types[0] {
             DataType::Null
@@ -119,34 +117,14 @@ impl ScalarUDFImpl for SparkAbs {
 }
 
 macro_rules! scalar_compute_op {
-    ($FLAG:expr, $INPUT:ident, $SCALAR_TYPE:ident) => {{
-        let result = if !$FLAG {
-            $INPUT.wrapping_abs()
-        } else {
-            $INPUT.checked_abs().ok_or_else(|| {
-                ArrowError::ComputeError(format!(
-                    "{} overflow on abs({:?})",
-                    stringify!($SCALAR_TYPE),
-                    $INPUT
-                ))
-            })?
-        };
+    ($INPUT:ident, $SCALAR_TYPE:ident) => {{
+        let result = $INPUT.wrapping_abs();
         Ok(ColumnarValue::Scalar(ScalarValue::$SCALAR_TYPE(Some(
             result,
         ))))
     }};
-    ($FLAG:expr, $INPUT:ident, $PRECISION:expr, $SCALE:expr, $SCALAR_TYPE:ident) => {{
-        let result = if !$FLAG {
-            $INPUT.wrapping_abs()
-        } else {
-            $INPUT.checked_abs().ok_or_else(|| {
-                ArrowError::ComputeError(format!(
-                    "{} overflow on abs({:?})",
-                    stringify!($SCALAR_TYPE),
-                    $INPUT
-                ))
-            })?
-        };
+    ($INPUT:ident, $PRECISION:expr, $SCALE:expr, $SCALAR_TYPE:ident) => {{
+        let result = $INPUT.wrapping_abs();
         Ok(ColumnarValue::Scalar(ScalarValue::$SCALAR_TYPE(
             Some(result),
             $PRECISION,
@@ -156,25 +134,9 @@ macro_rules! scalar_compute_op {
 }
 
 pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    if args.is_empty() || args.len() > 2 {
-        return internal_err!("abs takes at most 2 arguments, but got: {}", args.len());
+    if args.len() != 1 {
+        return internal_err!("abs takes exactly 1 argument, but got: {}", args.len());
     }
-
-    let fail_on_error = if args.len() == 2 {
-        match &args[1] {
-            ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error))) => {
-                *fail_on_error
-            }
-            _ => {
-                return internal_err!(
-                    "The second argument must be boolean scalar, but got: {:?}",
-                    args[1]
-                );
-            }
-        }
-    } else {
-        false
-    };
 
     match &args[0] {
         ColumnarValue::Array(array) => match array.data_type() {
@@ -184,40 +146,20 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             | DataType::UInt32
             | DataType::UInt64 => Ok(args[0].clone()),
             DataType::Int8 => {
-                if !fail_on_error {
-                    let abs_fun = make_wrapping_abs_function!(Int8Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                } else {
-                    let abs_fun = make_try_abs_function!(Int8Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                }
+                let abs_fun = make_wrapping_abs_function!(Int8Array);
+                abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Int16 => {
-                if !fail_on_error {
-                    let abs_fun = make_wrapping_abs_function!(Int16Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                } else {
-                    let abs_fun = make_try_abs_function!(Int16Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                }
+                let abs_fun = make_wrapping_abs_function!(Int16Array);
+                abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Int32 => {
-                if !fail_on_error {
                     let abs_fun = make_wrapping_abs_function!(Int32Array);
                     abs_fun(array).map(ColumnarValue::Array)
-                } else {
-                    let abs_fun = make_try_abs_function!(Int32Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                }
             }
             DataType::Int64 => {
-                if !fail_on_error {
-                    let abs_fun = make_wrapping_abs_function!(Int64Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                } else {
-                    let abs_fun = make_try_abs_function!(Int64Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                }
+                let abs_fun = make_wrapping_abs_function!(Int64Array);
+                abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Float32 => {
                 let abs_fun = make_abs_function!(Float32Array);
@@ -228,41 +170,21 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                 abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Decimal128(_, _) => {
-                if !fail_on_error {
-                    let abs_fun = make_wrapping_abs_function!(Decimal128Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                } else {
-                    let abs_fun = make_try_abs_function!(Decimal128Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                }
+                let abs_fun = make_wrapping_abs_function!(Decimal128Array);
+                abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Decimal256(_, _) => {
-                if !fail_on_error {
-                    let abs_fun = make_wrapping_abs_function!(Decimal256Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                } else {
-                    let abs_fun = make_try_abs_function!(Decimal256Array);
-                    abs_fun(array).map(ColumnarValue::Array)
-                }
+                let abs_fun = make_wrapping_abs_function!(Decimal256Array);
+                abs_fun(array).map(ColumnarValue::Array)
             }
             DataType::Interval(unit) => match unit {
                 IntervalUnit::YearMonth => {
-                    if !fail_on_error {
-                        let abs_fun = make_wrapping_abs_function!(IntervalYearMonthArray);
-                        abs_fun(array).map(ColumnarValue::Array)
-                    } else {
-                        let abs_fun = make_try_abs_function!(IntervalYearMonthArray);
-                        abs_fun(array).map(ColumnarValue::Array)
-                    }
+                    let abs_fun = make_wrapping_abs_function!(IntervalYearMonthArray);
+                    abs_fun(array).map(ColumnarValue::Array)
                 }
                 IntervalUnit::DayTime => {
-                    if !fail_on_error {
-                        let abs_fun = make_wrapping_abs_function!(IntervalDayTimeArray);
-                        abs_fun(array).map(ColumnarValue::Array)
-                    } else {
-                        let abs_fun = make_try_abs_function!(IntervalDayTimeArray);
-                        abs_fun(array).map(ColumnarValue::Array)
-                    }
+                    let abs_fun = make_wrapping_abs_function!(IntervalDayTimeArray);
+                    abs_fun(array).map(ColumnarValue::Array)
                 }
                 IntervalUnit::MonthDayNano => internal_err!(
                     "MonthDayNano is not a supported Interval unit for Spark ABS"
@@ -278,19 +200,19 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             | ScalarValue::UInt64(_) => Ok(args[0].clone()),
             ScalarValue::Int8(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(fail_on_error, v, Int8),
+                Some(v) => scalar_compute_op!(v, Int8),
             },
             ScalarValue::Int16(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(fail_on_error, v, Int16),
+                Some(v) => scalar_compute_op!(v, Int16),
             },
             ScalarValue::Int32(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(fail_on_error, v, Int32),
+                Some(v) => scalar_compute_op!(v, Int32),
             },
             ScalarValue::Int64(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(fail_on_error, v, Int64),
+                Some(v) => scalar_compute_op!(v, Int64),
             },
             ScalarValue::Float32(a) => match a {
                 None => Ok(args[0].clone()),
@@ -303,22 +225,22 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             ScalarValue::Decimal128(a, precision, scale) => match a {
                 None => Ok(args[0].clone()),
                 Some(v) => {
-                    scalar_compute_op!(fail_on_error, v, *precision, *scale, Decimal128)
+                    scalar_compute_op!(v, *precision, *scale, Decimal128)
                 }
             },
             ScalarValue::Decimal256(a, precision, scale) => match a {
                 None => Ok(args[0].clone()),
                 Some(v) => {
-                    scalar_compute_op!(fail_on_error, v, *precision, *scale, Decimal256)
+                    scalar_compute_op!(v, *precision, *scale, Decimal256)
                 }
             },
             ScalarValue::IntervalYearMonth(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(fail_on_error, v, IntervalYearMonth),
+                Some(v) => scalar_compute_op!(v, IntervalYearMonth),
             },
             ScalarValue::IntervalDayTime(a) => match a {
                 None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(fail_on_error, v, IntervalDayTime),
+                Some(v) => scalar_compute_op!(v, IntervalDayTime),
             },
 
             dt => internal_err!("Not supported datatype for Spark ABS: {dt}"),
@@ -329,17 +251,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_abs_incorrect_arg() {
-        let arg = ColumnarValue::Scalar(ScalarValue::UInt8(Some(u8::MAX)));
-        // zero arg
-        assert!(spark_abs(&[]).is_err());
-        // more than 2 args
-        assert!(spark_abs(&[arg.clone(), arg.clone(), arg.clone()]).is_err());
-        // incorrect 2nd arg type
-        assert!(spark_abs(&[arg.clone(), arg.clone()]).is_err());
-    }
+    use arrow::datatypes::i256;
 
     macro_rules! eval_legacy_mode {
         ($TYPE:ident, $VAL:expr) => {{
@@ -437,113 +349,12 @@ mod tests {
         eval_legacy_mode!(Float64, -0.0f64, 0.0f64);
     }
 
-    macro_rules! eval_ansi_mode {
-        ($TYPE:ident, $VAL:expr) => {{
-            let args = ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL)));
-            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
-            match spark_abs(&[args, fail_on_error]) {
-                Err(e) => {
-                    assert!(
-                        e.to_string().contains("overflow on abs"),
-                        "Error message did not match. Actual message: {e}"
-                    );
-                }
-                _ => unreachable!(),
-            }
-        }};
-        ($TYPE:ident, $VAL:expr, $RESULT:expr) => {{
-            let args = ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL)));
-            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
-            match spark_abs(&[args, fail_on_error]) {
-                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(Some(result)))) => {
-                    assert_eq!(result, $RESULT);
-                }
-                _ => unreachable!(),
-            }
-        }};
-        ($TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr) => {{
-            let args =
-                ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL), $PRECISION, $SCALE));
-            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
-            match spark_abs(&[args, fail_on_error]) {
-                Err(e) => {
-                    assert!(
-                        e.to_string().contains("overflow on abs"),
-                        "Error message did not match. Actual message: {e}"
-                    );
-                }
-                _ => unreachable!(),
-            }
-        }};
-        ($TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr, $RESULT:expr) => {{
-            let args =
-                ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL), $PRECISION, $SCALE));
-            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
-            match spark_abs(&[args, fail_on_error]) {
-                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(
-                    Some(result),
-                    precision,
-                    scale,
-                ))) => {
-                    assert_eq!(result, $RESULT);
-                    assert_eq!(precision, $PRECISION);
-                    assert_eq!(scale, $SCALE);
-                }
-                _ => unreachable!(),
-            }
-        }};
-    }
-
-    #[test]
-    fn test_abs_scalar_ansi_mode() {
-        eval_ansi_mode!(Int8, i8::MIN);
-        eval_ansi_mode!(Int16, i16::MIN);
-        eval_ansi_mode!(Int32, i32::MIN);
-        eval_ansi_mode!(Int64, i64::MIN);
-        eval_ansi_mode!(Decimal128, i128::MIN, 18, 10);
-        eval_ansi_mode!(Decimal256, i256::MIN, 10, 2);
-        eval_ansi_mode!(IntervalYearMonth, i32::MIN);
-        eval_ansi_mode!(IntervalDayTime, IntervalDayTime::MIN);
-
-        eval_ansi_mode!(UInt8, u8::MIN, u8::MIN);
-        eval_ansi_mode!(UInt16, u16::MIN, u16::MIN);
-        eval_ansi_mode!(UInt32, u32::MIN, u32::MIN);
-        eval_ansi_mode!(UInt64, u64::MIN, u64::MIN);
-        eval_ansi_mode!(Float32, f32::MIN, f32::MAX);
-        eval_ansi_mode!(Float64, f64::MIN, f64::MAX);
-
-        // NumericType, DayTimeIntervalType, and YearMonthIntervalType not MIN
-        eval_ansi_mode!(Int8, -1i8, 1i8);
-        eval_ansi_mode!(Int16, -1i16, 1i16);
-        eval_ansi_mode!(Int32, -1i32, 1i32);
-        eval_ansi_mode!(Int64, -1i64, 1i64);
-        eval_ansi_mode!(Decimal128, -1i128, 18, 10, 1i128);
-        eval_ansi_mode!(Decimal256, i256::from(-1i8), 10, 2, i256::from(1i8));
-        eval_ansi_mode!(IntervalYearMonth, -1i32, 1i32);
-        eval_ansi_mode!(
-            IntervalDayTime,
-            IntervalDayTime::new(-1i32, -1i32),
-            IntervalDayTime::new(1i32, 1i32)
-        );
-
-        // Float32, Float64
-        eval_ansi_mode!(Float32, f32::NEG_INFINITY, f32::INFINITY);
-        eval_ansi_mode!(Float32, f32::INFINITY, f32::INFINITY);
-        eval_ansi_mode!(Float32, 0.0f32, 0.0f32);
-        eval_ansi_mode!(Float32, -0.0f32, 0.0f32);
-        eval_ansi_mode!(Float64, f64::NEG_INFINITY, f64::INFINITY);
-        eval_ansi_mode!(Float64, f64::INFINITY, f64::INFINITY);
-        eval_ansi_mode!(Float64, 0.0f64, 0.0f64);
-        eval_ansi_mode!(Float64, -0.0f64, 0.0f64);
-    }
-
     macro_rules! eval_array_legacy_mode {
         ($INPUT:expr, $OUTPUT:expr, $FUNC:ident) => {{
             let input = $INPUT;
             let args = ColumnarValue::Array(Arc::new(input));
-            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
             let expected = $OUTPUT;
-            match spark_abs(&[args, fail_on_error]) {
+            match spark_abs(&[args]) {
                 Ok(ColumnarValue::Array(result)) => {
                     let actual = datafusion_common::cast::$FUNC(&result).unwrap();
                     assert_eq!(actual, &expected);
@@ -662,131 +473,5 @@ mod tests {
             IntervalDayTimeArray::from(vec![IntervalDayTime::new(i32::MIN, i32::MIN,)]),
             as_interval_dt_array
         );
-    }
-
-    macro_rules! eval_array_ansi_mode {
-        ($INPUT:expr) => {{
-            let input = $INPUT;
-            let args = ColumnarValue::Array(Arc::new(input));
-            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
-            match spark_abs(&[args, fail_on_error]) {
-                Err(e) => {
-                    assert!(
-                        e.to_string().contains("overflow on abs"),
-                        "Error message did not match. Actual message: {e}"
-                    );
-                }
-                _ => unreachable!(),
-            }
-        }};
-        ($INPUT:expr, $OUTPUT:expr, $FUNC:ident) => {{
-            let input = $INPUT;
-            let args = ColumnarValue::Array(Arc::new(input));
-            let fail_on_error = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
-            let expected = $OUTPUT;
-            match spark_abs(&[args, fail_on_error]) {
-                Ok(ColumnarValue::Array(result)) => {
-                    let actual = datafusion_common::cast::$FUNC(&result).unwrap();
-                    assert_eq!(actual, &expected);
-                }
-                _ => unreachable!(),
-            }
-        }};
-    }
-    #[test]
-    fn test_abs_array_ansi_mode() {
-        eval_array_ansi_mode!(
-            UInt64Array::from(vec![Some(u64::MIN), Some(u64::MAX), None]),
-            UInt64Array::from(vec![Some(u64::MIN), Some(u64::MAX), None]),
-            as_uint64_array
-        );
-
-        eval_array_ansi_mode!(Int8Array::from(vec![
-            Some(-1),
-            Some(i8::MIN),
-            Some(i8::MAX),
-            None
-        ]));
-        eval_array_ansi_mode!(Int16Array::from(vec![
-            Some(-1),
-            Some(i16::MIN),
-            Some(i16::MAX),
-            None
-        ]));
-        eval_array_ansi_mode!(Int32Array::from(vec![
-            Some(-1),
-            Some(i32::MIN),
-            Some(i32::MAX),
-            None
-        ]));
-        eval_array_ansi_mode!(Int64Array::from(vec![
-            Some(-1),
-            Some(i64::MIN),
-            Some(i64::MAX),
-            None
-        ]));
-        eval_array_ansi_mode!(
-            Float32Array::from(vec![
-                Some(-1f32),
-                Some(f32::MIN),
-                Some(f32::MAX),
-                None,
-                Some(f32::NAN),
-                Some(f32::INFINITY),
-                Some(f32::NEG_INFINITY),
-                Some(0.0),
-                Some(-0.0),
-            ]),
-            Float32Array::from(vec![
-                Some(1f32),
-                Some(f32::MAX),
-                Some(f32::MAX),
-                None,
-                Some(f32::NAN),
-                Some(f32::INFINITY),
-                Some(f32::INFINITY),
-                Some(0.0),
-                Some(0.0),
-            ]),
-            as_float32_array
-        );
-
-        eval_array_ansi_mode!(
-            Float64Array::from(vec![
-                Some(-1f64),
-                Some(f64::MIN),
-                Some(f64::MAX),
-                None,
-                Some(f64::NAN),
-                Some(f64::INFINITY),
-                Some(f64::NEG_INFINITY),
-                Some(0.0),
-                Some(-0.0),
-            ]),
-            Float64Array::from(vec![
-                Some(1f64),
-                Some(f64::MAX),
-                Some(f64::MAX),
-                None,
-                Some(f64::NAN),
-                Some(f64::INFINITY),
-                Some(f64::INFINITY),
-                Some(0.0),
-                Some(0.0),
-            ]),
-            as_float64_array
-        );
-
-        eval_array_ansi_mode!(Decimal128Array::from(vec![Some(i128::MIN), None])
-            .with_precision_and_scale(38, 37)
-            .unwrap());
-        eval_array_ansi_mode!(Decimal256Array::from(vec![Some(i256::MIN), None])
-            .with_precision_and_scale(5, 2)
-            .unwrap());
-        eval_array_ansi_mode!(IntervalYearMonthArray::from(vec![i32::MIN, -1]));
-        eval_array_ansi_mode!(IntervalDayTimeArray::from(vec![IntervalDayTime::new(
-            i32::MIN,
-            i32::MIN,
-        )]));
     }
 }
