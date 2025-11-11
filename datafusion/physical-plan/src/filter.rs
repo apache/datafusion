@@ -20,7 +20,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use arrow::array;
 use itertools::Itertools;
 
 use super::{
