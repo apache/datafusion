@@ -61,12 +61,9 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[]",
-        "metrics=[output_rows=3, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=Partial, gby=[]",
-        "output_bytes="
+        "metrics=[output_rows=3, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=3"
     );
 
     assert_metrics!(
@@ -75,59 +72,76 @@ async fn explain_analyze_baseline_metrics() {
         "reduction_factor=5.1% (5/99)"
     );
 
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "output_bytes="
-    );
+    {
+        let expected_batch_count_after_repartition =
+            if cfg!(not(feature = "force_hash_collisions")) {
+                "output_batches=3"
+            } else {
+                "output_batches=1"
+            };
+
+        assert_metrics!(
+            &formatted,
+            "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "RepartitionExec: partitioning=Hash([c1@0], 3), input_partitions=3",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "ProjectionExec: expr=[]",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "CoalesceBatchesExec: target_batch_size=4096",
+            "metrics=[output_rows=5, elapsed_compute",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+    }
+
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "metrics=[output_rows=99, elapsed_compute="
+        "metrics=[output_rows=99, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=1"
     );
-    assert_metrics!(
-        &formatted,
-        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "output_bytes="
-    );
+
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
         "selectivity=99% (99/100)"
     );
-    assert_metrics!(
-        &formatted,
-        "ProjectionExec: expr=[]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(&formatted, "ProjectionExec: expr=[]", "output_bytes=");
-    assert_metrics!(
-        &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "metrics=[output_rows=5, elapsed_compute"
-    );
-    assert_metrics!(
-        &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "output_bytes="
-    );
+
     assert_metrics!(
         &formatted,
         "UnionExec",
-        "metrics=[output_rows=3, elapsed_compute="
+        "metrics=[output_rows=3, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=3"
     );
-    assert_metrics!(&formatted, "UnionExec", "output_bytes=");
+
     assert_metrics!(
         &formatted,
         "WindowAggExec",
-        "metrics=[output_rows=1, elapsed_compute="
+        "metrics=[output_rows=1, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=1"
     );
-    assert_metrics!(&formatted, "WindowAggExec", "output_bytes=");
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
@@ -228,9 +242,13 @@ async fn explain_analyze_level() {
 
     for (level, needle, should_contain) in [
         (ExplainAnalyzeLevel::Summary, "spill_count", false),
+        (ExplainAnalyzeLevel::Summary, "output_batches", false),
         (ExplainAnalyzeLevel::Summary, "output_rows", true),
+        (ExplainAnalyzeLevel::Summary, "output_bytes", true),
         (ExplainAnalyzeLevel::Dev, "spill_count", true),
         (ExplainAnalyzeLevel::Dev, "output_rows", true),
+        (ExplainAnalyzeLevel::Dev, "output_bytes", true),
+        (ExplainAnalyzeLevel::Dev, "output_batches", true),
     ] {
         let plan = collect_plan(sql, level).await;
         assert_eq!(
@@ -798,14 +816,12 @@ async fn test_physical_plan_display_indent_multi_children() {
     CoalesceBatchesExec: target_batch_size=4096
       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]
         CoalesceBatchesExec: target_batch_size=4096
-          RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
-            RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+          RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
         CoalesceBatchesExec: target_batch_size=4096
-          RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000
-            RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
-              ProjectionExec: expr=[c1@0 as c2]
-                DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+          RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=1
+            ProjectionExec: expr=[c1@0 as c2]
+              DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
     "###
     );
 }
