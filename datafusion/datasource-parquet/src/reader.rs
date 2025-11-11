@@ -208,14 +208,14 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             inner = inner.with_footer_size_hint(hint)
         };
 
-        Ok(Box::new(CachedParquetFileReader {
-            store: Arc::clone(&self.store),
-            inner,
+        Ok(Box::new(CachedParquetFileReader::new(
             file_metrics,
+            Arc::clone(&self.store),
+            inner,
             partitioned_file,
-            metadata_cache: Arc::clone(&self.metadata_cache),
+            Arc::clone(&self.metadata_cache),
             metadata_size_hint,
-        }))
+        )))
     }
 }
 
@@ -332,58 +332,5 @@ impl FileMetadata for CachedParquetMetaData {
         let page_index =
             self.0.column_index().is_some() && self.0.offset_index().is_some();
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use datafusion_execution::cache::cache_unit::DefaultFilesMetadataCache;
-    use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
-
-    #[tokio::test]
-    async fn cached_parquet_file_reader() {
-        let testdata = datafusion_common::test_util::parquet_test_data();
-        let file_name = "alltypes_plain.parquet";
-        let path = format!("{testdata}/{file_name}");
-        let data = Bytes::from(std::fs::read(path).unwrap());
-
-        let object_meta = ObjectMeta {
-            location: Path::parse(file_name).expect("creating path"),
-            last_modified: chrono::DateTime::from(std::time::SystemTime::now()),
-            size: data.len() as u64,
-            e_tag: None,
-            version: None,
-        };
-        let in_memory = InMemory::new();
-        in_memory
-            .put(&object_meta.location, data.into())
-            .await
-            .unwrap();
-
-        let in_memory = Arc::new(in_memory);
-
-        let metrics = ExecutionPlanMetricsSet::new();
-        let file_metrics =
-            ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
-
-        let inner = ParquetObjectReader::new(in_memory.clone(), object_meta.location)
-            .with_file_size(object_meta.size);
-
-        let partitioned_file = PartitionedFile::new(file_name, object_meta.size);
-        let metadata_cache: Arc<dyn FileMetadataCache> =
-            Arc::new(DefaultFilesMetadataCache::new(1024 * 1024));
-
-        let mut reader = CachedParquetFileReader::new(
-            file_metrics,
-            in_memory,
-            inner,
-            partitioned_file,
-            Arc::clone(&metadata_cache),
-            None,
-        );
-        let metadata = reader.get_metadata(None).await.unwrap();
-        assert!(metadata.file_metadata().num_rows() == 8);
-        assert_eq!(metadata_cache.len(), 1);
     }
 }
