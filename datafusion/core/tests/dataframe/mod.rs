@@ -293,7 +293,7 @@ async fn select_columns() -> Result<()> {
     // build plan using Table API
 
     let t = test_table().await?;
-    let t2 = t.select_columns(&["c1", "c2", "c11"])?;
+    let t2 = t.clone().select_columns(&["c1", "c2", "c11"])?;
     let plan = t2.logical_plan().clone();
 
     // build query using SQL
@@ -301,6 +301,8 @@ async fn select_columns() -> Result<()> {
 
     // the two plans should be identical
     assert_same_plan(&plan, &sql_plan);
+
+    assert!(t.select_columns(&["non_existent_column"]).is_err());
 
     Ok(())
 }
@@ -458,7 +460,7 @@ async fn select_columns_duplicated_names_from_different_qualifiers() -> Result<(
 async fn drop_columns() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
-    let t2 = t.drop_columns(&["c2", "c11"])?;
+    let t2 = t.clone().drop_columns(&["c2", "c11"])?;
     let plan = t2.logical_plan().clone();
 
     // build query using SQL
@@ -468,6 +470,8 @@ async fn drop_columns() -> Result<()> {
 
     // the two plans should be identical
     assert_same_plan(&plan, &sql_plan);
+
+    assert!(t.drop_columns(&["non_existent_column"]).is_err());
 
     Ok(())
 }
