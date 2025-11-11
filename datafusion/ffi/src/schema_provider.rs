@@ -23,18 +23,15 @@ use abi_stable::{
 };
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{SchemaProvider, TableProvider},
-    error::DataFusionError,
-};
+use datafusion_catalog::{SchemaProvider, TableProvider};
+use datafusion_common::error::{DataFusionError, Result};
 use tokio::runtime::Handle;
 
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::{
     df_result, rresult_return,
     table_provider::{FFI_TableProvider, ForeignTableProvider},
 };
-
-use datafusion::error::Result;
 
 /// A stable struct for sharing [`SchemaProvider`] across FFI boundaries.
 #[repr(C)]
@@ -67,6 +64,10 @@ pub struct FFI_SchemaProvider {
 
     pub table_exist: unsafe extern "C" fn(provider: &Self, name: RString) -> bool,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    pub task_ctx_accessor: FFI_TaskContextAccessor,
+
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
@@ -80,6 +81,10 @@ pub struct FFI_SchemaProvider {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignSchemaProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_SchemaProvider {}
@@ -91,9 +96,9 @@ struct ProviderPrivateData {
 }
 
 impl FFI_SchemaProvider {
-    unsafe fn inner(&self) -> &Arc<dyn SchemaProvider + Send> {
+    fn inner(&self) -> &Arc<dyn SchemaProvider + Send> {
         let private_data = self.private_data as *const ProviderPrivateData;
-        &(*private_data).provider
+        unsafe { &(*private_data).provider }
     }
 
     unsafe fn runtime(&self) -> Option<Handle> {
@@ -115,12 +120,13 @@ unsafe extern "C" fn table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
 ) -> FfiFuture<RResult<ROption<FFI_TableProvider>, RString>> {
+    let task_ctx_accessor = provider.task_ctx_accessor.clone();
     let runtime = provider.runtime();
     let provider = Arc::clone(provider.inner());
 
     async move {
         let table = rresult_return!(provider.table(name.as_str()).await)
-            .map(|t| FFI_TableProvider::new(t, true, runtime))
+            .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_accessor))
             .into();
 
         RResult::ROk(table)
@@ -134,12 +140,13 @@ unsafe extern "C" fn register_table_fn_wrapper(
     table: FFI_TableProvider,
 ) -> RResult<ROption<FFI_TableProvider>, RString> {
     let runtime = provider.runtime();
+    let task_ctx_accessor = provider.task_ctx_accessor.clone();
     let provider = provider.inner();
 
     let table = Arc::new(ForeignTableProvider(table));
 
     let returned_table = rresult_return!(provider.register_table(name.into(), table))
-        .map(|t| FFI_TableProvider::new(t, true, runtime));
+        .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_accessor));
 
     RResult::ROk(returned_table.into())
 }
@@ -148,11 +155,12 @@ unsafe extern "C" fn deregister_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
 ) -> RResult<ROption<FFI_TableProvider>, RString> {
+    let task_ctx_accessor = provider.task_ctx_accessor.clone();
     let runtime = provider.runtime();
     let provider = provider.inner();
 
     let returned_table = rresult_return!(provider.deregister_table(name.as_str()))
-        .map(|t| FFI_TableProvider::new(t, true, runtime));
+        .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_accessor));
 
     RResult::ROk(returned_table.into())
 }
@@ -191,6 +199,8 @@ unsafe extern "C" fn clone_fn_wrapper(
         register_table: register_table_fn_wrapper,
         deregister_table: deregister_table_fn_wrapper,
         table_exist: table_exist_fn_wrapper,
+        task_ctx_accessor: provider.task_ctx_accessor.clone(),
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -205,6 +215,7 @@ impl FFI_SchemaProvider {
     pub fn new(
         provider: Arc<dyn SchemaProvider + Send>,
         runtime: Option<Handle>,
+        task_ctx_accessor: FFI_TaskContextAccessor,
     ) -> Self {
         let owner_name = provider.owner_name().map(|s| s.into()).into();
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
@@ -220,6 +231,8 @@ impl FFI_SchemaProvider {
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
+            task_ctx_accessor,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -234,9 +247,13 @@ pub struct ForeignSchemaProvider(pub FFI_SchemaProvider);
 unsafe impl Send for ForeignSchemaProvider {}
 unsafe impl Sync for ForeignSchemaProvider {}
 
-impl From<&FFI_SchemaProvider> for ForeignSchemaProvider {
+impl From<&FFI_SchemaProvider> for Arc<dyn SchemaProvider + Send> {
     fn from(provider: &FFI_SchemaProvider) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(provider.inner());
+        }
+
+        Arc::new(ForeignSchemaProvider(provider.clone()))
     }
 }
 
@@ -274,9 +291,7 @@ impl SchemaProvider for ForeignSchemaProvider {
             let table: Option<FFI_TableProvider> =
                 df_result!((self.0.table)(&self.0, name.into()).await)?.into();
 
-            let table = table.as_ref().map(|t| {
-                Arc::new(ForeignTableProvider::from(t)) as Arc<dyn TableProvider>
-            });
+            let table = table.as_ref().map(<Arc<dyn TableProvider>>::from);
 
             Ok(table)
         }
@@ -290,7 +305,12 @@ impl SchemaProvider for ForeignSchemaProvider {
         unsafe {
             let ffi_table = match table.as_any().downcast_ref::<ForeignTableProvider>() {
                 Some(t) => t.0.clone(),
-                None => FFI_TableProvider::new(table, true, None),
+                None => FFI_TableProvider::new(
+                    table,
+                    true,
+                    None,
+                    self.0.task_ctx_accessor.clone(),
+                ),
             };
 
             let returned_provider: Option<FFI_TableProvider> =
@@ -319,10 +339,11 @@ impl SchemaProvider for ForeignSchemaProvider {
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::Schema;
-    use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
-
     use super::*;
+    use arrow::datatypes::Schema;
+    use datafusion::prelude::SessionContext;
+    use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
+    use datafusion_execution::TaskContextAccessor;
 
     fn empty_table() -> Arc<dyn TableProvider> {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
@@ -336,10 +357,14 @@ mod tests {
             .register_table("prior_table".to_string(), empty_table())
             .unwrap()
             .is_none());
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
-        let ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
+        let mut ffi_schema_provider =
+            FFI_SchemaProvider::new(schema_provider, None, task_ctx_accessor.into());
+        ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_schema_provider: ForeignSchemaProvider =
+        let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =
             (&ffi_schema_provider).into();
 
         let prior_table_names = foreign_schema_provider.table_names();

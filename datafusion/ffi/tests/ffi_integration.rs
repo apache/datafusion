@@ -21,8 +21,8 @@
 mod tests {
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
-    use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
-    use datafusion_ffi::table_provider::ForeignTableProvider;
+    use datafusion_catalog::{CatalogProvider, TableProvider};
+    use datafusion_execution::TaskContextAccessor;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
@@ -33,22 +33,23 @@ mod tests {
     async fn test_table_provider(synchronous: bool) -> Result<()> {
         let table_provider_module = get_module()?;
 
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
+
         // By calling the code below, the table provided will be created within
         // the module's code.
         let ffi_table_provider = table_provider_module.create_table().ok_or(
             DataFusionError::NotImplemented(
                 "External table provider failed to implement create_table".to_string(),
             ),
-        )?(synchronous);
+        )?(synchronous, task_ctx_accessor.into());
 
         // In order to access the table provider within this executable, we need to
         // turn it into a `ForeignTableProvider`.
-        let foreign_table_provider: ForeignTableProvider = (&ffi_table_provider).into();
-
-        let ctx = SessionContext::new();
+        let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_table_provider).into();
 
         // Display the data to show the full cycle works.
-        ctx.register_table("external_table", Arc::new(foreign_table_provider))?;
+        ctx.register_table("external_table", foreign_table_provider)?;
         let df = ctx.table("external_table").await?;
         let results = df.collect().await?;
 
@@ -73,6 +74,8 @@ mod tests {
     #[tokio::test]
     async fn test_catalog() -> Result<()> {
         let module = get_module()?;
+        let ctx = Arc::new(SessionContext::default());
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
         let ffi_catalog =
             module
@@ -80,11 +83,10 @@ mod tests {
                 .ok_or(DataFusionError::NotImplemented(
                     "External catalog provider failed to implement create_catalog"
                         .to_string(),
-                ))?();
-        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
+                ))?(task_ctx_accessor.into());
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 
-        let ctx = SessionContext::default();
-        let _ = ctx.register_catalog("fruit", Arc::new(foreign_catalog));
+        let _ = ctx.register_catalog("fruit", foreign_catalog);
 
         let df = ctx.table("fruit.apple.purchases").await?;
 

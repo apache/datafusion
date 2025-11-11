@@ -32,7 +32,7 @@ use std::{collections::HashMap, sync::Arc};
 /// information.
 ///
 /// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskContext {
     /// Session Id
     session_id: String,
@@ -209,6 +209,10 @@ impl FunctionRegistry for TaskContext {
     fn udwfs(&self) -> HashSet<String> {
         self.window_functions.keys().cloned().collect()
     }
+}
+
+pub trait TaskContextAccessor {
+    fn get_task_context(&self) -> Arc<TaskContext>;
 }
 
 #[cfg(test)]

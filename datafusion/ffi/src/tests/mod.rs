@@ -34,12 +34,12 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udwf::FFI_WindowUDF;
 
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use crate::tests::udf_udaf_udwf::{create_ffi_cumedist_func, create_ffi_ntile_func};
 use arrow::array::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
-use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema},
-    common::record_batch,
-};
+use datafusion_common::record_batch;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
@@ -60,25 +60,37 @@ pub mod utils;
 /// module.
 pub struct ForeignLibraryModule {
     /// Construct an opinionated catalog provider
-    pub create_catalog: extern "C" fn() -> FFI_CatalogProvider,
+    pub create_catalog:
+        extern "C" fn(task_ctx_accessor: FFI_TaskContextAccessor) -> FFI_CatalogProvider,
 
     /// Constructs the table provider
-    pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,
+    pub create_table: extern "C" fn(
+        synchronous: bool,
+        task_ctx_accessor: FFI_TaskContextAccessor,
+    ) -> FFI_TableProvider,
 
     /// Create a scalar UDF
     pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
-    pub create_table_function: extern "C" fn() -> FFI_TableFunction,
+    pub create_table_function:
+        extern "C" fn(task_ctx_accessor: FFI_TaskContextAccessor) -> FFI_TableFunction,
 
     /// Create an aggregate UDAF using sum
-    pub create_sum_udaf: extern "C" fn() -> FFI_AggregateUDF,
+    pub create_sum_udaf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_AggregateUDF,
 
     /// Create  grouping UDAF using stddev
-    pub create_stddev_udaf: extern "C" fn() -> FFI_AggregateUDF,
+    pub create_stddev_udaf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_AggregateUDF,
 
-    pub create_rank_udwf: extern "C" fn() -> FFI_WindowUDF,
+    /// Rank will test `evaluate`
+    pub create_rank_udwf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_WindowUDF,
+
+    /// NTile will test `evaluate_all`
+    pub create_ntile_udwf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_WindowUDF,
+
+    /// NTile will test `evaluate_all_with_rank`
+    pub create_cumedist_udwf: extern "C" fn(FFI_TaskContextAccessor) -> FFI_WindowUDF,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -111,10 +123,13 @@ pub fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
 
 /// Here we only wish to create a simple table provider as an example.
 /// We create an in-memory table and convert it to it's FFI counterpart.
-extern "C" fn construct_table_provider(synchronous: bool) -> FFI_TableProvider {
+extern "C" fn construct_table_provider(
+    synchronous: bool,
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_TableProvider {
     match synchronous {
-        true => create_sync_table_provider(),
-        false => create_async_table_provider(),
+        true => create_sync_table_provider(task_ctx_accessor),
+        false => create_async_table_provider(task_ctx_accessor),
     }
 }
 
@@ -130,6 +145,8 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
         create_rank_udwf: create_ffi_rank_func,
+        create_ntile_udwf: create_ffi_ntile_func,
+        create_cumedist_udwf: create_ffi_cumedist_func,
         version: super::version,
     }
     .leak_into_prefix()

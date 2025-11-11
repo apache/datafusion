@@ -17,34 +17,28 @@
 
 use std::{ffi::c_void, sync::Arc};
 
-use abi_stable::{
-    std_types::{
-        RResult::{self, ROk},
-        RString, RVec,
-    },
-    StableAbi,
-};
+use crate::arrow_wrappers::WrappedSchema;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use crate::{df_result, rresult_return};
+use abi_stable::std_types::{RResult, RString, RVec};
+use abi_stable::StableAbi;
 use arrow::datatypes::SchemaRef;
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_expr::EquivalenceProperties,
-    physical_plan::{
-        execution_plan::{Boundedness, EmissionType},
-        PlanProperties,
-    },
-    prelude::SessionContext,
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::{
+    execution_plan::{Boundedness, EmissionType},
+    PlanProperties,
 };
-use datafusion_proto::{
-    physical_plan::{
-        from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
-        to_proto::{serialize_partitioning, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
-    },
-    protobuf::{Partitioning, PhysicalSortExprNodeCollection},
+use datafusion_proto::physical_plan::from_proto::{
+    parse_physical_sort_exprs, parse_protobuf_partitioning,
 };
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_partitioning, serialize_physical_sort_exprs,
+};
+use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+use datafusion_proto::protobuf::{Partitioning, PhysicalSortExprNodeCollection};
 use prost::Message;
-
-use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
@@ -62,12 +56,15 @@ pub struct FFI_PlanProperties {
     /// Indicate boundedness of the plan and its memory requirements.
     pub boundedness: unsafe extern "C" fn(plan: &Self) -> FFI_Boundedness,
 
-    /// The output ordering is a [`PhysicalSortExprNodeCollection`] protobuf message
-    /// serialized into bytes to pass across the FFI boundary.
+    /// The output ordering of the plan.
     pub output_ordering: unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RString>,
 
     /// Return the schema of the plan.
     pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
+
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
@@ -75,10 +72,21 @@ pub struct FFI_PlanProperties {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// The foreign library should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 struct PlanPropertiesPrivateData {
     props: PlanProperties,
+}
+
+impl FFI_PlanProperties {
+    fn inner(&self) -> &PlanProperties {
+        let private_data = self.private_data as *const PlanPropertiesPrivateData;
+        unsafe { &(*private_data).props }
+    }
 }
 
 unsafe extern "C" fn output_partitioning_fn_wrapper(
@@ -92,23 +100,19 @@ unsafe extern "C" fn output_partitioning_fn_wrapper(
         rresult_return!(serialize_partitioning(props.output_partitioning(), &codec));
     let output_partitioning = partitioning_data.encode_to_vec();
 
-    ROk(output_partitioning.into())
+    RResult::ROk(output_partitioning.into())
 }
 
 unsafe extern "C" fn emission_type_fn_wrapper(
     properties: &FFI_PlanProperties,
 ) -> FFI_EmissionType {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-    props.emission_type.into()
+    (&properties.inner().emission_type).into()
 }
 
 unsafe extern "C" fn boundedness_fn_wrapper(
     properties: &FFI_PlanProperties,
 ) -> FFI_Boundedness {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-    props.boundedness.into()
+    (&properties.inner().boundedness).into()
 }
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
@@ -131,14 +135,11 @@ unsafe extern "C" fn output_ordering_fn_wrapper(
         }
         None => Vec::default(),
     };
-    ROk(output_ordering.into())
+    RResult::ROk(output_ordering.into())
 }
 
 unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-
-    let schema: SchemaRef = Arc::clone(props.eq_properties.schema());
+    let schema: SchemaRef = Arc::clone(properties.inner().eq_properties.schema());
     schema.into()
 }
 
@@ -154,8 +155,11 @@ impl Drop for FFI_PlanProperties {
     }
 }
 
-impl From<&PlanProperties> for FFI_PlanProperties {
-    fn from(props: &PlanProperties) -> Self {
+impl FFI_PlanProperties {
+    pub fn new(
+        props: &PlanProperties,
+        task_ctx_accessor: FFI_TaskContextAccessor,
+    ) -> Self {
         let private_data = Box::new(PlanPropertiesPrivateData {
             props: props.clone(),
         });
@@ -166,8 +170,10 @@ impl From<&PlanProperties> for FFI_PlanProperties {
             boundedness: boundedness_fn_wrapper,
             output_ordering: output_ordering_fn_wrapper,
             schema: schema_fn_wrapper,
+            task_ctx_accessor,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -176,12 +182,14 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
     type Error = DataFusionError;
 
     fn try_from(ffi_props: FFI_PlanProperties) -> Result<Self, Self::Error> {
+        if (ffi_props.library_marker_id)() == crate::get_library_marker_id() {
+            return Ok(ffi_props.inner().clone());
+        }
+
         let ffi_schema = unsafe { (ffi_props.schema)(&ffi_props) };
         let schema = (&ffi_schema.0).try_into()?;
 
-        // TODO Extend FFI to get the registry and codex
-        let default_ctx = SessionContext::new();
-        let task_context = default_ctx.task_ctx();
+        let task_ctx: Arc<TaskContext> = (&ffi_props.task_ctx_accessor).try_into()?;
         let codex = DefaultPhysicalExtensionCodec {};
 
         let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
@@ -191,7 +199,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let sort_exprs = parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
-            &task_context,
+            &task_ctx,
             &schema,
             &codex,
         )?;
@@ -203,7 +211,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let partitioning = parse_protobuf_partitioning(
             Some(&proto_output_partitioning),
-            &task_context,
+            &task_ctx,
             &schema,
             &codex,
         )?
@@ -242,14 +250,14 @@ pub enum FFI_Boundedness {
     Unbounded { requires_infinite_memory: bool },
 }
 
-impl From<Boundedness> for FFI_Boundedness {
-    fn from(value: Boundedness) -> Self {
+impl From<&Boundedness> for FFI_Boundedness {
+    fn from(value: &Boundedness) -> Self {
         match value {
             Boundedness::Bounded => FFI_Boundedness::Bounded,
             Boundedness::Unbounded {
                 requires_infinite_memory,
             } => FFI_Boundedness::Unbounded {
-                requires_infinite_memory,
+                requires_infinite_memory: *requires_infinite_memory,
             },
         }
     }
@@ -278,8 +286,8 @@ pub enum FFI_EmissionType {
     Both,
 }
 
-impl From<EmissionType> for FFI_EmissionType {
-    fn from(value: EmissionType) -> Self {
+impl From<&EmissionType> for FFI_EmissionType {
+    fn from(value: &EmissionType) -> Self {
         match value {
             EmissionType::Incremental => FFI_EmissionType::Incremental,
             EmissionType::Final => FFI_EmissionType::Final,
@@ -300,9 +308,10 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
-
     use super::*;
+    use datafusion::prelude::SessionContext;
+    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
+    use datafusion_execution::TaskContextAccessor;
 
     #[test]
     fn test_round_trip_ffi_plan_properties() -> Result<()> {
@@ -320,8 +329,10 @@ mod tests {
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
+        let ctx = Arc::new(SessionContext::default()) as Arc<dyn TaskContextAccessor>;
 
-        let local_props_ptr = FFI_PlanProperties::from(&original_props);
+        let mut local_props_ptr = FFI_PlanProperties::new(&original_props, (&ctx).into());
+        local_props_ptr.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_props: PlanProperties = local_props_ptr.try_into()?;
 

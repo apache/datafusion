@@ -101,6 +101,101 @@ In this crate we have a variety of structs which closely mimic the behavior of
 their internal counterparts. To see detailed notes about how to use them, see
 the example in `FFI_TableProvider`.
 
+## Task Context Accessor
+
+Many of the FFI structs in this crate contain a `FFI_TaskContextAccessor`. The
+purpose of this struct is to _weakly_ hold a reference to a method to
+access the current `TaskContext`. The reason we need this accessor is because
+we use the `datafusion-proto` crate to serialize and deserialize data across
+the FFI boundary. In particular, we need to serialize and deserialize
+functions using a `TaskContext`.
+
+This becomes difficult because we may need to register multiple user defined
+functions, table or catalog providers, etc with a `Session`, and each of these
+will need the `TaskContext` to perform the processing. For this reason we
+cannot simply include the `TaskContext` at the time of registration because
+it would not have knowledge of anything registered afterward.
+
+The `FFI_TaskContextAccessor` is built up from a trait that provides a method
+to get the current `TaskContext`. It only holds a `Weak` reference to the
+`TaskContextAccessor`, because otherwise we could create a circular dependency
+at runtime. It is imperative that if you use these methods that your accessor
+remains valid for the lifetime of the calls. The `TaskContextAccessor` is
+implemented on `SessionContext` and it is easy to implement on an struct that
+implements `Session`.
+
+## Library Marker ID
+
+When reviewing the code, many of the structs in this crate contain a call to
+a `library_maker_id`. The purpose of this call is to determine if a library is
+accessing _local_ code through the FFI structs. Consider this example: you have
+a `primary` program that exposes functions to create a schema provider. You
+have a `secondary` library that exposes a function to create a catalog provider
+and the `secondary` library uses the schema provider of the `primary` program.
+From the point of view of the `secondary` library, the schema provider is
+foreign code.
+
+Now when we register the `secondary` library with the `primary` program as a
+catalog provider and we make calls to get a schema, the `secondary` library
+will return a FFI wrapped schema provider back to the `primary` program. In
+this case that schema provider is actually local code to the `primary` program
+except that it is wrapped in the FFI code!
+
+We work around this by the `library_marker_id` calls. What this does is it
+creates a global variable within each library and returns a `u64` address
+of that library. This is guaranteed to be unique for every library that contains
+FFI code. By comparing these `u64` addresses we can determine if a FFI struct
+is local or foreign.
+
+In our example of the schema provider, if you were to make a call in your
+primary program to get the schema provider, it would reach out to the foreign
+catalog provider and send back a `FFI_SchemaProvider` object. By then
+comparing the `library_marker_id` of this object to the `primary` program, we
+determine it is local code. This means it is safe to access the underlying
+private data.
+
+## Testing Coverage
+
+Since this library contains a large amount of `unsafe` code, it is important
+to ensure proper test coverage. To generate a coverage report, you can use
+[tarpaulin] as follows. It is necessary to use the `integration-tests` feature
+in order to properly generate coverage.
+
+```shell
+cargo tarpaulin --package datafusion-ffi --tests --features integration-tests --out Html
+```
+
+While it is not normally required to check Rust code for memory leaks, this
+crate does manual memory management due to the FFI boundary. You can test for
+leaks using the generated unit tests. How you run these checks differs depending
+on your OS.
+
+### Linux
+
+On Linux, you can install `cargo-valgrind`
+
+```shell
+cargo valgrind test --features integration-tests -p datafusion-ffi
+```
+
+### MacOS
+
+You can find the generated binaries for your unit tests by running `cargo test`.
+
+```shell
+cargo test --features integration-tests -p datafusion-ffi --no-run
+```
+
+This should generate output that shows the path to the test binaries. Then
+you can run commands such as the following. The specific paths of the tests
+will vary.
+
+```shell
+leaks --atExit -- target/debug/deps/datafusion_ffi-e77a2604a85a8afe
+leaks --atExit -- target/debug/deps/ffi_integration-e91b7127a59b71a7
+# ...
+```
+
 [apache datafusion]: https://datafusion.apache.org/
 [api docs]: http://docs.rs/datafusion-ffi/latest
 [rust abi]: https://doc.rust-lang.org/reference/abi.html
@@ -110,3 +205,4 @@ the example in `FFI_TableProvider`.
 [bindgen]: https://crates.io/crates/bindgen
 [`datafusion-python`]: https://datafusion.apache.org/python/
 [datafusion-contrib]: https://github.com/datafusion-contrib
+[tarpaulin]: https://crates.io/crates/cargo-tarpaulin

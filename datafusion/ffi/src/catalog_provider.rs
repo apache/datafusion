@@ -21,7 +21,7 @@ use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
     StableAbi,
 };
-use datafusion::catalog::{CatalogProvider, SchemaProvider};
+use datafusion_catalog::{CatalogProvider, SchemaProvider};
 use tokio::runtime::Handle;
 
 use crate::{
@@ -29,7 +29,8 @@ use crate::{
     schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider},
 };
 
-use datafusion::error::Result;
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use datafusion_common::error::Result;
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
 #[repr(C)]
@@ -57,6 +58,10 @@ pub struct FFI_CatalogProvider {
             cascade: bool,
         ) -> RResult<ROption<FFI_SchemaProvider>, RString>,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    task_ctx_accessor: FFI_TaskContextAccessor,
+
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
@@ -70,6 +75,10 @@ pub struct FFI_CatalogProvider {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignCatalogProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_CatalogProvider {}
@@ -81,9 +90,9 @@ struct ProviderPrivateData {
 }
 
 impl FFI_CatalogProvider {
-    unsafe fn inner(&self) -> &Arc<dyn CatalogProvider + Send> {
+    fn inner(&self) -> &Arc<dyn CatalogProvider + Send> {
         let private_data = self.private_data as *const ProviderPrivateData;
-        &(*private_data).provider
+        unsafe { &(*private_data).provider }
     }
 
     unsafe fn runtime(&self) -> Option<Handle> {
@@ -105,7 +114,13 @@ unsafe extern "C" fn schema_fn_wrapper(
 ) -> ROption<FFI_SchemaProvider> {
     let maybe_schema = provider.inner().schema(name.as_str());
     maybe_schema
-        .map(|schema| FFI_SchemaProvider::new(schema, provider.runtime()))
+        .map(|schema| {
+            FFI_SchemaProvider::new(
+                schema,
+                provider.runtime(),
+                provider.task_ctx_accessor.clone(),
+            )
+        })
         .into()
 }
 
@@ -115,13 +130,15 @@ unsafe extern "C" fn register_schema_fn_wrapper(
     schema: &FFI_SchemaProvider,
 ) -> RResult<ROption<FFI_SchemaProvider>, RString> {
     let runtime = provider.runtime();
-    let provider = provider.inner();
-    let schema = Arc::new(ForeignSchemaProvider::from(schema));
+    let schema = <Arc<dyn SchemaProvider + Send>>::from(schema);
 
-    let returned_schema =
-        rresult_return!(provider.register_schema(name.as_str(), schema))
-            .map(|schema| FFI_SchemaProvider::new(schema, runtime))
-            .into();
+    let returned_schema = rresult_return!(provider
+        .inner()
+        .register_schema(name.as_str(), schema))
+    .map(|schema| {
+        FFI_SchemaProvider::new(schema, runtime, provider.task_ctx_accessor.clone())
+    })
+    .into();
 
     RResult::ROk(returned_schema)
 }
@@ -132,14 +149,19 @@ unsafe extern "C" fn deregister_schema_fn_wrapper(
     cascade: bool,
 ) -> RResult<ROption<FFI_SchemaProvider>, RString> {
     let runtime = provider.runtime();
-    let provider = provider.inner();
 
     let maybe_schema =
-        rresult_return!(provider.deregister_schema(name.as_str(), cascade));
+        rresult_return!(provider.inner().deregister_schema(name.as_str(), cascade));
 
     RResult::ROk(
         maybe_schema
-            .map(|schema| FFI_SchemaProvider::new(schema, runtime))
+            .map(|schema| {
+                FFI_SchemaProvider::new(
+                    schema,
+                    runtime,
+                    provider.task_ctx_accessor.clone(),
+                )
+            })
             .into(),
     )
 }
@@ -165,10 +187,12 @@ unsafe extern "C" fn clone_fn_wrapper(
         schema: schema_fn_wrapper,
         register_schema: register_schema_fn_wrapper,
         deregister_schema: deregister_schema_fn_wrapper,
+        task_ctx_accessor: provider.task_ctx_accessor.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
         private_data,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -183,6 +207,7 @@ impl FFI_CatalogProvider {
     pub fn new(
         provider: Arc<dyn CatalogProvider + Send>,
         runtime: Option<Handle>,
+        task_ctx_accessor: FFI_TaskContextAccessor,
     ) -> Self {
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
@@ -191,10 +216,12 @@ impl FFI_CatalogProvider {
             schema: schema_fn_wrapper,
             register_schema: register_schema_fn_wrapper,
             deregister_schema: deregister_schema_fn_wrapper,
+            task_ctx_accessor,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -209,9 +236,14 @@ pub struct ForeignCatalogProvider(FFI_CatalogProvider);
 unsafe impl Send for ForeignCatalogProvider {}
 unsafe impl Sync for ForeignCatalogProvider {}
 
-impl From<&FFI_CatalogProvider> for ForeignCatalogProvider {
+impl From<&FFI_CatalogProvider> for Arc<dyn CatalogProvider + Send> {
     fn from(provider: &FFI_CatalogProvider) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(provider.inner());
+        }
+
+        Arc::new(ForeignCatalogProvider(provider.clone()))
+            as Arc<dyn CatalogProvider + Send>
     }
 }
 
@@ -241,7 +273,8 @@ impl CatalogProvider for ForeignCatalogProvider {
                 (self.0.schema)(&self.0, name.into()).into();
 
             maybe_provider.map(|provider| {
-                Arc::new(ForeignSchemaProvider(provider)) as Arc<dyn SchemaProvider>
+                <Arc<dyn SchemaProvider + Send>>::from(&provider)
+                    as Arc<dyn SchemaProvider>
             })
         }
     }
@@ -254,14 +287,19 @@ impl CatalogProvider for ForeignCatalogProvider {
         unsafe {
             let schema = match schema.as_any().downcast_ref::<ForeignSchemaProvider>() {
                 Some(s) => &s.0,
-                None => &FFI_SchemaProvider::new(schema, None),
+                None => &FFI_SchemaProvider::new(
+                    schema,
+                    None,
+                    self.0.task_ctx_accessor.clone(),
+                ),
             };
             let returned_schema: Option<FFI_SchemaProvider> =
                 df_result!((self.0.register_schema)(&self.0, name.into(), schema))?
                     .into();
 
-            Ok(returned_schema
-                .map(|s| Arc::new(ForeignSchemaProvider(s)) as Arc<dyn SchemaProvider>))
+            Ok(returned_schema.map(|s| {
+                <Arc<dyn SchemaProvider + Send>>::from(&s) as Arc<dyn SchemaProvider>
+            }))
         }
     }
 
@@ -275,17 +313,19 @@ impl CatalogProvider for ForeignCatalogProvider {
                 df_result!((self.0.deregister_schema)(&self.0, name.into(), cascade))?
                     .into();
 
-            Ok(returned_schema
-                .map(|s| Arc::new(ForeignSchemaProvider(s)) as Arc<dyn SchemaProvider>))
+            Ok(returned_schema.map(|s| {
+                <Arc<dyn SchemaProvider + Send>>::from(&s) as Arc<dyn SchemaProvider>
+            }))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
-
     use super::*;
+    use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
+    use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextAccessor;
 
     #[test]
     fn test_round_trip_ffi_catalog_provider() {
@@ -298,9 +338,14 @@ mod tests {
             .unwrap()
             .is_none());
 
-        let ffi_catalog = FFI_CatalogProvider::new(catalog, None);
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
 
-        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
+        let mut ffi_catalog =
+            FFI_CatalogProvider::new(catalog, None, task_ctx_accessor.into());
+        ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 
         let prior_schema_names = foreign_catalog.schema_names();
         assert_eq!(prior_schema_names.len(), 1);

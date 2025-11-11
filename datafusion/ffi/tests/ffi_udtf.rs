@@ -25,9 +25,9 @@ mod tests {
     use arrow::array::{create_array, ArrayRef};
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
-
+    use datafusion_catalog::TableFunctionImpl;
+    use datafusion_execution::TaskContextAccessor;
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_ffi::udtf::ForeignTableFunction;
 
     /// This test validates that we can load an external module and use a scalar
     /// udf defined in it via the foreign function interface. In this case we are
@@ -36,18 +36,18 @@ mod tests {
     async fn test_user_defined_table_function() -> Result<()> {
         let module = get_module()?;
 
+        let ctx = Arc::new(SessionContext::default());
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
+
         let ffi_table_func = module
             .create_table_function()
             .ok_or(DataFusionError::NotImplemented(
             "External table function provider failed to implement create_table_function"
                 .to_string(),
-        ))?();
-        let foreign_table_func: ForeignTableFunction = ffi_table_func.into();
+        ))?(task_ctx_accessor.into());
+        let foreign_table_func: Arc<dyn TableFunctionImpl> = ffi_table_func.into();
 
-        let udtf = Arc::new(foreign_table_func);
-
-        let ctx = SessionContext::default();
-        ctx.register_udtf("my_range", udtf);
+        ctx.register_udtf("my_range", foreign_table_func);
 
         let result = ctx
             .sql("SELECT * FROM my_range(5)")

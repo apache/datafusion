@@ -25,21 +25,15 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
 };
 use arrow_schema::{Field, FieldRef};
-use datafusion::logical_expr::LimitEffect;
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::{
-    error::DataFusionError,
-    logical_expr::{
-        function::WindowUDFFieldArgs, type_coercion::functions::fields_with_window_udf,
-        PartitionEvaluator,
-    },
-};
-use datafusion::{
-    error::Result,
-    logical_expr::{Signature, WindowUDF, WindowUDFImpl},
-};
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::exec_err;
-use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
+use datafusion_expr::function::WindowUDFFieldArgs;
+use datafusion_expr::type_coercion::functions::fields_with_window_udf;
+use datafusion_expr::{
+    LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
+};
+use datafusion_physical_expr::PhysicalExpr;
+use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
@@ -50,6 +44,7 @@ mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 use crate::{
     arrow_wrappers::WrappedSchema,
@@ -95,6 +90,10 @@ pub struct FFI_WindowUDF {
 
     pub sort_options: ROption<FFI_SortOptions>,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    task_ctx_accessor: FFI_TaskContextAccessor,
+
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
     pub clone: unsafe extern "C" fn(udf: &Self) -> Self,
@@ -105,6 +104,10 @@ pub struct FFI_WindowUDF {
     /// Internal data. This is only to be accessed by the provider of the udf.
     /// A [`ForeignWindowUDF`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_WindowUDF {}
@@ -115,9 +118,9 @@ pub struct WindowUDFPrivateData {
 }
 
 impl FFI_WindowUDF {
-    unsafe fn inner(&self) -> &Arc<WindowUDF> {
+    fn inner(&self) -> &Arc<WindowUDF> {
         let private_data = self.private_data as *const WindowUDFPrivateData;
-        &(*private_data).udf
+        unsafe { &(*private_data).udf }
     }
 }
 
@@ -199,8 +202,10 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         coerce_types: coerce_types_fn_wrapper,
         field: field_fn_wrapper,
         clone: clone_fn_wrapper,
+        task_ctx_accessor: udwf.task_ctx_accessor.clone(),
         release: release_fn_wrapper,
         private_data: Box::into_raw(private_data) as *mut c_void,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -210,8 +215,8 @@ impl Clone for FFI_WindowUDF {
     }
 }
 
-impl From<Arc<WindowUDF>> for FFI_WindowUDF {
-    fn from(udf: Arc<WindowUDF>) -> Self {
+impl FFI_WindowUDF {
+    pub fn new(udf: Arc<WindowUDF>, task_ctx_accessor: FFI_TaskContextAccessor) -> Self {
         let name = udf.name().into();
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
@@ -228,8 +233,10 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             coerce_types: coerce_types_fn_wrapper,
             field: field_fn_wrapper,
             clone: clone_fn_wrapper,
+            task_ctx_accessor,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -270,21 +277,25 @@ impl Hash for ForeignWindowUDF {
     }
 }
 
-impl TryFrom<&FFI_WindowUDF> for ForeignWindowUDF {
+impl TryFrom<&FFI_WindowUDF> for Arc<dyn WindowUDFImpl> {
     type Error = DataFusionError;
 
     fn try_from(udf: &FFI_WindowUDF) -> Result<Self, Self::Error> {
-        let name = udf.name.to_owned().into();
-        let signature = Signature::user_defined((&udf.volatility).into());
+        if (udf.library_marker_id)() == crate::get_library_marker_id() {
+            Ok(Arc::clone(udf.inner().inner()))
+        } else {
+            let name = udf.name.to_owned().into();
+            let signature = Signature::user_defined((&udf.volatility).into());
 
-        let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
+            let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
 
-        Ok(Self {
-            name,
-            udf: udf.clone(),
-            aliases,
-            signature,
-        })
+            Ok(Arc::new(ForeignWindowUDF {
+                name,
+                udf: udf.clone(),
+                aliases,
+                signature,
+            }))
+        }
     }
 }
 
@@ -315,17 +326,17 @@ impl WindowUDFImpl for ForeignWindowUDF {
 
     fn partition_evaluator(
         &self,
-        args: datafusion::logical_expr::function::PartitionEvaluatorArgs,
+        args: datafusion_expr::function::PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let evaluator = unsafe {
-            let args = FFI_PartitionEvaluatorArgs::try_from(args)?;
+            let args = FFI_PartitionEvaluatorArgs::try_new(
+                args,
+                self.udf.task_ctx_accessor.clone(),
+            )?;
             (self.udf.partition_evaluator)(&self.udf, args)
         };
 
-        df_result!(evaluator).map(|evaluator| {
-            Box::new(ForeignPartitionEvaluator::from(evaluator))
-                as Box<dyn PartitionEvaluator>
-        })
+        df_result!(evaluator).map(<Box<dyn PartitionEvaluator>>::from)
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
@@ -387,36 +398,43 @@ impl From<&FFI_SortOptions> for SortOptions {
 #[cfg(feature = "integration-tests")]
 mod tests {
     use crate::tests::create_record_batch;
-    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+    use crate::udwf::FFI_WindowUDF;
     use arrow::array::{create_array, ArrayRef};
     use datafusion::functions_window::lead_lag::{lag_udwf, WindowShift};
     use datafusion::logical_expr::expr::Sort;
     use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
     use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextAccessor;
     use std::sync::Arc;
 
     fn create_test_foreign_udwf(
         original_udwf: impl WindowUDFImpl + 'static,
+        ctx: Arc<dyn TaskContextAccessor>,
     ) -> datafusion::common::Result<WindowUDF> {
         let original_udwf = Arc::new(WindowUDF::from(original_udwf));
 
-        let local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        let mut local_udwf = FFI_WindowUDF::new(Arc::clone(&original_udwf), ctx.into());
+        local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udwf: ForeignWindowUDF = (&local_udwf).try_into()?;
-        Ok(foreign_udwf.into())
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;
+        Ok(WindowUDF::new_from_shared_impl(foreign_udwf))
     }
 
     #[test]
     fn test_round_trip_udwf() -> datafusion::common::Result<()> {
         let original_udwf = lag_udwf();
         let original_name = original_udwf.name().to_owned();
+        let task_ctx_accessor =
+            Arc::new(SessionContext::default()) as Arc<dyn TaskContextAccessor>;
 
         // Convert to FFI format
-        let local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        let mut local_udwf =
+            FFI_WindowUDF::new(Arc::clone(&original_udwf), task_ctx_accessor.into());
+        local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
-        let foreign_udwf: ForeignWindowUDF = (&local_udwf).try_into()?;
-        let foreign_udwf: WindowUDF = foreign_udwf.into();
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;
+        let foreign_udwf = WindowUDF::new_from_shared_impl(foreign_udwf);
 
         assert_eq!(original_name, foreign_udwf.name());
         Ok(())
@@ -424,9 +442,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_lag_udwf() -> datafusion::common::Result<()> {
-        let udwf = create_test_foreign_udwf(WindowShift::lag())?;
+        let ctx = Arc::new(SessionContext::default());
+        let udwf = create_test_foreign_udwf(
+            WindowShift::lag(),
+            Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>,
+        )?;
 
-        let ctx = SessionContext::default();
         let df = ctx.read_batch(create_record_batch(-5, 5))?;
 
         let df = df.select(vec![

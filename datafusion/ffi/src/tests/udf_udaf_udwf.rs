@@ -19,15 +19,18 @@ use crate::{
     udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF, udtf::FFI_TableFunction,
     udwf::FFI_WindowUDF,
 };
-use datafusion::{
-    catalog::TableFunctionImpl,
-    functions::math::{abs::AbsFunc, random::RandomFunc},
-    functions_aggregate::{stddev::Stddev, sum::Sum},
-    functions_table::generate_series::RangeFunc,
-    functions_window::rank::Rank,
-    logical_expr::{AggregateUDF, ScalarUDF, WindowUDF},
-};
 
+use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
+use datafusion_catalog::TableFunctionImpl;
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_functions::math::abs::AbsFunc;
+use datafusion_functions::math::random::RandomFunc;
+use datafusion_functions_aggregate::stddev::Stddev;
+use datafusion_functions_aggregate::sum::Sum;
+use datafusion_functions_table::generate_series::RangeFunc;
+use datafusion_functions_window::cume_dist::CumeDist;
+use datafusion_functions_window::ntile::Ntile;
+use datafusion_functions_window::rank::Rank;
 use std::sync::Arc;
 
 pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
@@ -42,32 +45,56 @@ pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
     udf.into()
 }
 
-pub(crate) extern "C" fn create_ffi_table_func() -> FFI_TableFunction {
+pub(crate) extern "C" fn create_ffi_table_func(
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_TableFunction {
     let udtf: Arc<dyn TableFunctionImpl> = Arc::new(RangeFunc {});
 
-    FFI_TableFunction::new(udtf, None)
+    FFI_TableFunction::new(udtf, None, task_ctx_accessor)
 }
 
-pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
+pub(crate) extern "C" fn create_ffi_sum_func(
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
 
-    udaf.into()
+    FFI_AggregateUDF::new(udaf, task_ctx_accessor)
 }
 
-pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
+pub(crate) extern "C" fn create_ffi_stddev_func(
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Stddev::new().into());
 
-    udaf.into()
+    FFI_AggregateUDF::new(udaf, task_ctx_accessor)
 }
 
-pub(crate) extern "C" fn create_ffi_rank_func() -> FFI_WindowUDF {
+pub(crate) extern "C" fn create_ffi_rank_func(
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_WindowUDF {
     let udwf: Arc<WindowUDF> = Arc::new(
         Rank::new(
             "rank_demo".to_string(),
-            datafusion::functions_window::rank::RankType::Basic,
+            datafusion_functions_window::rank::RankType::Basic,
         )
         .into(),
     );
 
-    udwf.into()
+    FFI_WindowUDF::new(udwf, task_ctx_accessor)
+}
+
+pub(crate) extern "C" fn create_ffi_ntile_func(
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_WindowUDF {
+    let udwf: Arc<WindowUDF> = Arc::new(Ntile::new().into());
+
+    FFI_WindowUDF::new(udwf, task_ctx_accessor)
+}
+
+pub(crate) extern "C" fn create_ffi_cumedist_func(
+    task_ctx_accessor: FFI_TaskContextAccessor,
+) -> FFI_WindowUDF {
+    let udwf: Arc<WindowUDF> = Arc::new(CumeDist::new().into());
+
+    FFI_WindowUDF::new(udwf, task_ctx_accessor)
 }

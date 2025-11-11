@@ -19,16 +19,14 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-
     use arrow::datatypes::DataType;
-    use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::ScalarUDF;
     use datafusion::prelude::{col, SessionContext};
-
+    use datafusion_expr::{lit, ScalarUDFImpl};
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_ffi::udf::ForeignScalarUDF;
+    use std::sync::Arc;
 
     /// This test validates that we can load an external module and use a scalar
     /// udf defined in it via the foreign function interface. In this case we are
@@ -44,28 +42,37 @@ mod tests {
                     "External table provider failed to implement create_scalar_udf"
                         .to_string(),
                 ))?();
-        let foreign_abs_func: ForeignScalarUDF = (&ffi_abs_func).try_into()?;
+        let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).try_into()?;
 
-        let udf: ScalarUDF = foreign_abs_func.into();
+        let udf = ScalarUDF::new_from_shared_impl(foreign_abs_func);
 
         let ctx = SessionContext::default();
         let df = ctx.read_batch(create_record_batch(-5, 5))?;
 
         let df = df
             .with_column("abs_a", udf.call(vec![col("a")]))?
-            .with_column("abs_b", udf.call(vec![col("b")]))?;
+            .with_column("abs_b", udf.call(vec![col("b")]))?
+            .with_column("abs_lit", udf.call(vec![lit(-1)]))?;
 
         let result = df.collect().await?;
+        assert!(result.len() == 1);
 
-        let expected = record_batch!(
-            ("a", Int32, vec![-5, -4, -3, -2, -1]),
-            ("b", Float64, vec![-5., -4., -3., -2., -1.]),
-            ("abs_a", Int32, vec![5, 4, 3, 2, 1]),
-            ("abs_b", Float64, vec![5., 4., 3., 2., 1.])
+        let expected = arrow::array::record_batch!(
+            ("a", Int32, [-5, -4, -3, -2, -1]),
+            ("b", Float64, [-5., -4., -3., -2., -1.]),
+            ("abs_a", Int32, [5, 4, 3, 2, 1]),
+            ("abs_b", Float64, [5., 4., 3., 2., 1.]),
+            ("abs_lit", Int32, [1, 1, 1, 1, 1])
         )?;
 
-        assert!(result.len() == 1);
-        assert!(result[0] == expected);
+        // Literal value will create a non-null schema, so project before comparison
+        let result = result
+            .into_iter()
+            .next()
+            .unwrap()
+            .with_schema(expected.schema())?;
+
+        assert!(result == expected);
 
         Ok(())
     }
@@ -82,9 +89,9 @@ mod tests {
                     "External table provider failed to implement create_scalar_udf"
                         .to_string(),
                 ))?();
-        let foreign_abs_func: ForeignScalarUDF = (&ffi_abs_func).try_into()?;
+        let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).try_into()?;
 
-        let udf: ScalarUDF = foreign_abs_func.into();
+        let udf = ScalarUDF::new_from_shared_impl(foreign_abs_func);
 
         let ctx = SessionContext::default();
         let df = ctx.read_batch(create_record_batch(-5, 5))?;
