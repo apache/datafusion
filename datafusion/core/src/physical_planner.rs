@@ -853,6 +853,7 @@ impl DefaultPhysicalPlanner {
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
                         FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
+                            .with_batch_size(session_state.config().batch_size())?
                     }
                     PlanAsyncExpr::Async(
                         async_map,
@@ -871,6 +872,7 @@ impl DefaultPhysicalPlanner {
                         .with_projection(Some(
                             (0..input.schema().fields().len()).collect(),
                         ))?
+                        .with_batch_size(session_state.config().batch_size())?
                     }
                     _ => {
                         return internal_err!(
