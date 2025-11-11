@@ -437,6 +437,15 @@ impl PruningMetrics {
 pub struct RatioMetrics {
     part: Arc<AtomicUsize>,
     total: Arc<AtomicUsize>,
+    merge_strategy: RatioMergeStrategy,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum RatioMergeStrategy {
+    #[default]
+    AddPartAddTotal,
+    AddPartSetTotal,
+    SetPartAddTotal,
 }
 
 impl RatioMetrics {
@@ -445,7 +454,13 @@ impl RatioMetrics {
         Self {
             part: Arc::new(AtomicUsize::new(0)),
             total: Arc::new(AtomicUsize::new(0)),
+            merge_strategy: RatioMergeStrategy::AddPartAddTotal,
         }
+    }
+
+    pub fn with_merge_strategy(mut self, merge_strategy: RatioMergeStrategy) -> Self {
+        self.merge_strategy = merge_strategy;
+        self
     }
 
     /// Add `n` to the numerator (`part`) value
@@ -458,10 +473,32 @@ impl RatioMetrics {
         self.total.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Set the numerator (`part`) value to `n`, overwriting any existing value
+    pub fn set_part(&self, n: usize) {
+        self.part.store(n, Ordering::Relaxed);
+    }
+
+    /// Set the denominator (`total`) value to `n`, overwriting any existing value
+    pub fn set_total(&self, n: usize) {
+        self.total.store(n, Ordering::Relaxed);
+    }
+
     /// Merge the value from `other` into `self`
     pub fn merge(&self, other: &Self) {
-        self.add_part(other.part());
-        self.add_total(other.total());
+        match self.merge_strategy {
+            RatioMergeStrategy::AddPartAddTotal => {
+                self.add_part(other.part());
+                self.add_total(other.total());
+            }
+            RatioMergeStrategy::AddPartSetTotal => {
+                self.add_part(other.part());
+                self.set_total(other.total());
+            }
+            RatioMergeStrategy::SetPartAddTotal => {
+                self.set_part(other.part());
+                self.add_total(other.total());
+            }
+        }
     }
 
     /// Return the numerator (`part`) value
@@ -776,9 +813,12 @@ impl MetricValue {
                 name: name.clone(),
                 pruning_metrics: PruningMetrics::new(),
             },
-            Self::Ratio { name, .. } => Self::Ratio {
-                name: name.clone(),
-                ratio_metrics: RatioMetrics::new(),
+            Self::Ratio { name, ratio_metrics } => {
+                let merge_strategy = ratio_metrics.merge_strategy.clone();
+                Self::Ratio {
+                    name: name.clone(),
+                    ratio_metrics: RatioMetrics::new().with_merge_strategy(merge_strategy),
+                }
             },
             Self::Custom { name, value } => Self::Custom {
                 name: name.clone(),

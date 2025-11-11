@@ -17,7 +17,7 @@
 
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, PruningMetrics,
-    RatioMetrics, Time,
+    RatioMergeStrategy, RatioMetrics, Time,
 };
 
 /// Stores metrics about the parquet execution for a particular parquet file.
@@ -120,7 +120,7 @@ impl ParquetFileMetrics {
         let scan_efficiency_ratio = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::SUMMARY)
-            .ratio_metrics("scan_efficiency_ratio", partition);
+            .ratio_metrics_with_strategy("scan_efficiency_ratio", partition, RatioMergeStrategy::AddPartSetTotal);
 
         // -----------------------
         // 'dev' level metrics

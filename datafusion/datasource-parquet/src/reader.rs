@@ -135,9 +135,10 @@ impl Drop for ParquetFileReader {
         self.file_metrics
             .scan_efficiency_ratio
             .add_part(self.file_metrics.bytes_scanned.value());
+        // Multiple ParquetFileReaders may run, so we set_total to avoid adding the total multiple times
         self.file_metrics
             .scan_efficiency_ratio
-            .add_total(self.partitioned_file.object_meta.size as usize);
+            .set_total(self.partitioned_file.object_meta.size as usize);
     }
 }
 
@@ -304,9 +305,10 @@ impl Drop for CachedParquetFileReader {
         self.file_metrics
             .scan_efficiency_ratio
             .add_part(self.file_metrics.bytes_scanned.value());
+        // Multiple ParquetFileReaders may run, so we set_total to avoid adding the total multiple times
         self.file_metrics
             .scan_efficiency_ratio
-            .add_total(self.partitioned_file.object_meta.size as usize);
+            .set_total(self.partitioned_file.object_meta.size as usize);
     }
 }
 
