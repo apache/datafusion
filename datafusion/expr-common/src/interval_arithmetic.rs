@@ -2533,47 +2533,70 @@ mod tests {
         Ok(())
     }
 
+    // Tests that there's no such thing as a 'null' boolean interval.
+    // An interval with two `Boolean(None)` boundaries is normalised to `Interval::UNCERTAIN`.
     #[test]
-    fn test_and_null_boolean_intervals() -> Result<()> {
+    fn test_null_boolean_interval() {
         let null_interval =
-            Interval::try_new(ScalarValue::Boolean(None), ScalarValue::Boolean(None))?;
+            Interval::try_new(ScalarValue::Boolean(None), ScalarValue::Boolean(None))
+                .unwrap();
 
-        let and_result = null_interval.and(&Interval::CERTAINLY_FALSE)?;
+        assert_eq!(null_interval, Interval::UNCERTAIN);
+    }
+
+    // Asserts that `Interval::UNCERTAIN` represents a set that contains `true`, `false`, and does
+    // not contain `null`.
+    #[test]
+    fn test_uncertain_boolean_interval() {
+        assert!(Interval::UNCERTAIN
+            .contains_value(ScalarValue::Boolean(Some(true)))
+            .unwrap());
+        assert!(Interval::UNCERTAIN
+            .contains_value(ScalarValue::Boolean(Some(false)))
+            .unwrap());
+        assert!(!Interval::UNCERTAIN
+            .contains_value(ScalarValue::Boolean(None))
+            .unwrap());
+        assert!(!Interval::UNCERTAIN
+            .contains_value(ScalarValue::Null)
+            .unwrap());
+    }
+
+    #[test]
+    fn test_and_uncertain_boolean_intervals() -> Result<()> {
+        let and_result = Interval::UNCERTAIN.and(&Interval::CERTAINLY_FALSE)?;
         assert_eq!(and_result, Interval::CERTAINLY_FALSE);
 
-        let and_result = Interval::CERTAINLY_FALSE.and(&null_interval)?;
+        let and_result = Interval::CERTAINLY_FALSE.and(&Interval::UNCERTAIN)?;
         assert_eq!(and_result, Interval::CERTAINLY_FALSE);
 
-        let and_result = null_interval.and(&Interval::CERTAINLY_TRUE)?;
+        let and_result = Interval::UNCERTAIN.and(&Interval::CERTAINLY_TRUE)?;
         assert_eq!(and_result, Interval::UNCERTAIN);
 
-        let and_result = Interval::CERTAINLY_TRUE.and(&null_interval)?;
+        let and_result = Interval::CERTAINLY_TRUE.and(&Interval::UNCERTAIN)?;
         assert_eq!(and_result, Interval::UNCERTAIN);
 
-        let and_result = null_interval.and(&null_interval)?;
+        let and_result = Interval::UNCERTAIN.and(&Interval::UNCERTAIN)?;
         assert_eq!(and_result, Interval::UNCERTAIN);
 
         Ok(())
     }
 
     #[test]
-    fn test_or_null_boolean_intervals() -> Result<()> {
-        let null_interval =
-            Interval::try_new(ScalarValue::Boolean(None), ScalarValue::Boolean(None))?;
-
-        let or_result = null_interval.or(&Interval::CERTAINLY_FALSE)?;
+    fn test_or_uncertain_boolean_intervals() -> Result<()> {
+        let or_result = Interval::UNCERTAIN.or(&Interval::CERTAINLY_FALSE)?;
         assert_eq!(or_result, Interval::UNCERTAIN);
 
-        let or_result = Interval::CERTAINLY_FALSE.or(&null_interval)?;
+        let or_result = Interval::CERTAINLY_FALSE.or(&Interval::UNCERTAIN)?;
         assert_eq!(or_result, Interval::UNCERTAIN);
 
-        let or_result = null_interval.or(&Interval::CERTAINLY_TRUE)?;
+        let or_result = Interval::UNCERTAIN.or(&Interval::CERTAINLY_TRUE)?;
         assert_eq!(or_result, Interval::CERTAINLY_TRUE);
 
-        let or_result = Interval::CERTAINLY_TRUE.or(&null_interval)?;
+        let or_result = Interval::CERTAINLY_TRUE.or(&Interval::UNCERTAIN)?;
         assert_eq!(or_result, Interval::CERTAINLY_TRUE);
 
-        let or_result = null_interval.or(&null_interval)?;
+        let or_result = Interval::UNCERTAIN.or(&Interval::UNCERTAIN)?;
         assert_eq!(or_result, Interval::UNCERTAIN);
 
         Ok(())
