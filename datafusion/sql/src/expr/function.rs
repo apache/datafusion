@@ -213,6 +213,11 @@ impl FunctionArgs {
     }
 }
 
+// Type alias to simplify very complex tuple return types used by helper
+// functions in this module. Using a named alias reduces the type complexity
+// shown in compiler errors and improves readability.
+type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<String>>);
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -819,7 +824,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         arg_names: Vec<Option<String>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Vec<SortExpr>, Vec<Expr>, Vec<Option<String>>)> {
+    ) -> Result<WithinGroupExtraction> {
         let mut args = args;
         let mut arg_names = arg_names;
 
