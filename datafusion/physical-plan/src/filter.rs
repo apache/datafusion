@@ -715,7 +715,7 @@ impl Stream for FilterExecStream {
             match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
-                    let _ = self.predicate.as_ref()
+                    self.predicate.as_ref()
                         .evaluate(&batch)
                         .and_then(|v| v.into_array(batch.num_rows()))
                         .and_then(|array| {
@@ -737,12 +737,12 @@ impl Stream for FilterExecStream {
 
                                 }
                                 (Err(_), _) => {
-                                    return internal_err!(
+                                    internal_err!(
                                         "Cannot create filter_array from non-boolean predicates"
-                                    );
+                                    )
                                 }
                             })
-                        });
+                        })?;
 
                     timer.done();
 
