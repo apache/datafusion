@@ -311,16 +311,15 @@ physical_plan
 03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[sum(t2.t2_int)@0, t1_id@2]
 04)------CoalescePartitionsExec
 05)--------ProjectionExec: expr=[sum(t2.t2_int)@1 as sum(t2.t2_int), t2_id@0 as t2_id]
-06)----------CoalesceBatchesExec: target_batch_size=2
-07)------------FilterExec: sum(t2.t2_int)@1 < 3
-08)--------------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-09)----------------CoalesceBatchesExec: target_batch_size=2
-10)------------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
-11)--------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------------------DataSourceExec: partitions=1, partition_sizes=[2]
-14)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-15)--------DataSourceExec: partitions=1, partition_sizes=[2]
+06)----------FilterExec: sum(t2.t2_int)@1 < 3
+07)------------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
+08)--------------CoalesceBatchesExec: target_batch_size=2
+09)----------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
+10)------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[2]
+13)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id having sum(t2_int) < 3) as t2_sum from t1
@@ -1189,13 +1188,12 @@ logical_plan
 05)------SubqueryAlias: __correlated_sq_1
 06)--------TableScan: t2 projection=[t2_id]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=2
-02)--FilterExec: t1_id@0 > 40 OR NOT mark@3, projection=[t1_id@0, t1_name@1, t1_int@2]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(t2_id@0, t1_id@0)]
-05)--------DataSourceExec: partitions=1, partition_sizes=[2]
-06)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)----------DataSourceExec: partitions=1, partition_sizes=[2]
+01)FilterExec: t1_id@0 > 40 OR NOT mark@3, projection=[t1_id@0, t1_name@1, t1_int@2]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(t2_id@0, t1_id@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[2]
+05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)--------DataSourceExec: partitions=1, partition_sizes=[2]
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
