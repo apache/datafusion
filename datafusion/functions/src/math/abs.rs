@@ -57,7 +57,7 @@ macro_rules! make_try_abs_function {
             let res: $ARRAY_TYPE = array.try_unary(|x| {
                 x.checked_abs().ok_or_else(|| {
                     ArrowError::ComputeError(format!(
-                        "{} overflow on abs({:?})",
+                        "{} overflow on abs({})",
                         stringify!($ARRAY_TYPE),
                         x
                     ))
