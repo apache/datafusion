@@ -379,6 +379,52 @@ fn within_group_named_argument_behavior() {
     assert!(found, "percentile_cont aggregate not found in plan");
 }
 
+#[test]
+fn within_group_multiple_ordering_exprs_rejected() {
+    // Only a single ordering expression is permitted in a WITHIN GROUP clause;
+    // ensure multiple ORDER BY items are rejected early.
+    let sql = "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c1, c2) FROM aggregate_test_100";
+
+    let dialect = &GenericDialect {};
+    let state =
+        MockSessionState::default().with_aggregate_function(percentile_cont_udaf());
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new(&context);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect)
+        .and_then(|mut ast| planner.statement_to_plan(ast.pop_front().unwrap()));
+
+    let err = result
+        .expect_err(
+            "expected planning to fail for multiple ORDER BY expressions in WITHIN GROUP",
+        )
+        .to_string();
+
+    assert_contains!(
+        err,
+        "Only a single ordering expression is permitted in a WITHIN GROUP clause"
+    );
+}
+
+#[test]
+fn within_group_and_over_rejected() {
+    // WITHIN GROUP and OVER are semantically incompatible; ensure planner rejects it.
+    let sql = "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c1) OVER (PARTITION BY c2) FROM aggregate_test_100";
+
+    let dialect = &GenericDialect {};
+    let state =
+        MockSessionState::default().with_aggregate_function(percentile_cont_udaf());
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new(&context);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect)
+        .and_then(|mut ast| planner.statement_to_plan(ast.pop_front().unwrap()));
+
+    let err = result
+        .expect_err("expected planning to fail for WITHIN GROUP combined with OVER")
+        .to_string();
+
+    assert_contains!(err, "OVER and WITHIN GROUP clause cannot be used together");
+}
+
 fn parse_ident_normalization_5() {
     let sql = "SELECT AGE FROM PERSON";
     let parser_option = ident_normalization_parser_options_no_ident_normalization();
