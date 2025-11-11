@@ -567,3 +567,64 @@ impl Session for ForeignSession {
         unsafe { Arc::new((self.session.task_ctx)(&self.session).into()) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::DataFusionError;
+    use datafusion_execution::TaskContextAccessor;
+    use datafusion_expr::col;
+    use datafusion_expr::registry::FunctionRegistry;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_ffi_session() -> Result<(), DataFusionError> {
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextAccessor>;
+        let state = ctx.state();
+
+        let local_session = FFI_Session::new(&state, task_ctx_accessor.into(), None);
+        let foreign_session = ForeignSession::try_from(&local_session)?;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let df_schema = schema.try_into()?;
+        let physical_expr = foreign_session.create_physical_expr(col("a"), &df_schema)?;
+        assert_eq!(
+            format!("{physical_expr:?}"),
+            "Column { name: \"a\", index: 0 }"
+        );
+
+        assert_eq!(foreign_session.session_id(), state.session_id());
+
+        let logical_plan = LogicalPlan::default();
+        let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
+        assert_eq!(format!("{physical_plan:?}"), "EmptyExec { schema: Schema { fields: [], metadata: {} }, partitions: 1, cache: PlanProperties { eq_properties: EquivalenceProperties { eq_group: EquivalenceGroup { map: {}, classes: [] }, oeq_class: OrderingEquivalenceClass { orderings: [] }, oeq_cache: OrderingEquivalenceCache { normal_cls: OrderingEquivalenceClass { orderings: [] }, leading_map: {} }, constraints: Constraints { inner: [] }, schema: Schema { fields: [], metadata: {} } }, partitioning: UnknownPartitioning(1), emission_type: Incremental, boundedness: Bounded, evaluation_type: Lazy, scheduling_type: Cooperative, output_ordering: None } }");
+
+        assert_eq!(
+            format!("{:?}", foreign_session.default_table_options()),
+            format!("{:?}", state.default_table_options())
+        );
+
+        assert_eq!(
+            format!("{:?}", foreign_session.table_options()),
+            format!("{:?}", state.table_options())
+        );
+
+        let local_udfs = state.udfs();
+        for udf in foreign_session.scalar_functions().keys() {
+            assert!(local_udfs.contains(udf));
+        }
+        let local_udafs = state.udafs();
+        for udaf in foreign_session.aggregate_functions().keys() {
+            assert!(local_udafs.contains(udaf));
+        }
+        let local_udwfs = state.udwfs();
+        for udwf in foreign_session.window_functions().keys() {
+            assert!(local_udwfs.contains(udwf));
+        }
+
+        Ok(())
+    }
+}

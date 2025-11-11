@@ -34,6 +34,7 @@ use arrow::{
 use arrow_schema::FieldRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::not_impl_err;
 use datafusion_expr::{
     type_coercion::functions::data_types_with_scalar_udf, ColumnarValue, ReturnFieldArgs,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
@@ -59,13 +60,6 @@ pub struct FFI_ScalarUDF {
 
     /// FFI equivalent to the `volatility` of a [`ScalarUDF`]
     pub volatility: FFI_Volatility,
-
-    /// Determines the return type of the underlying [`ScalarUDF`] based on the
-    /// argument types.
-    pub return_type: unsafe extern "C" fn(
-        udf: &Self,
-        arg_types: RVec<WrappedSchema>,
-    ) -> RResult<WrappedSchema, RString>,
 
     /// Determines the return info of the underlying [`ScalarUDF`]. Either this
     /// or return_type may be implemented on a UDF.
@@ -126,22 +120,6 @@ impl FFI_ScalarUDF {
         let private_data = self.private_data as *const ScalarUDFPrivateData;
         unsafe { &(*private_data).udf }
     }
-}
-
-unsafe extern "C" fn return_type_fn_wrapper(
-    udf: &FFI_ScalarUDF,
-    arg_types: RVec<WrappedSchema>,
-) -> RResult<WrappedSchema, RString> {
-    let udf = udf.inner();
-
-    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
-
-    let return_type = udf
-        .return_type(&arg_types)
-        .and_then(|v| FFI_ArrowSchema::try_from(v).map_err(DataFusionError::from))
-        .map(WrappedSchema);
-
-    rresult!(return_type)
 }
 
 unsafe extern "C" fn return_field_from_args_fn_wrapper(
@@ -263,7 +241,6 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             volatility,
             short_circuits,
             invoke_with_args: invoke_with_args_fn_wrapper,
-            return_type: return_type_fn_wrapper,
             return_field_from_args: return_field_from_args_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -363,14 +340,8 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
-
-        let result = unsafe { (self.udf.return_type)(&self.udf, arg_types) };
-
-        let result = df_result!(result);
-
-        result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        not_impl_err!("return_type is not implemented since return_field_from_args is.")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
