@@ -176,7 +176,7 @@ impl From<FFI_TaskContext> for TaskContext {
             }
 
             let task_id = (ffi_ctx.task_id)(&ffi_ctx).map(|s| s.to_string()).into();
-            let sesion_id = (ffi_ctx.session_id)(&ffi_ctx).into();
+            let session_id = (ffi_ctx.session_id)(&ffi_ctx).into();
             let session_config = (ffi_ctx.session_config)(&ffi_ctx);
             let session_config =
                 SessionConfig::try_from(&session_config).unwrap_or_default();
@@ -237,7 +237,7 @@ impl From<FFI_TaskContext> for TaskContext {
 
             TaskContext::new(
                 task_id,
-                sesion_id,
+                session_id,
                 session_config,
                 scalar_functions,
                 aggregate_functions,
