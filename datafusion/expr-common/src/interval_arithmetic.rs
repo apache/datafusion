@@ -2486,19 +2486,122 @@ mod tests {
     #[test]
     fn and_test() -> Result<()> {
         let cases = vec![
-            (false, true, false, false, false, false),
-            (false, false, false, true, false, false),
-            (false, true, false, true, false, true),
-            (false, true, true, true, false, true),
-            (false, false, false, false, false, false),
-            (true, true, true, true, true, true),
+            (
+                Interval::UNCERTAIN,
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_FALSE,
+            ),
+            (
+                Interval::UNCERTAIN,
+                Interval::UNCERTAIN,
+                Interval::UNCERTAIN,
+            ),
+            (
+                Interval::UNCERTAIN,
+                Interval::CERTAINLY_TRUE,
+                Interval::UNCERTAIN,
+            ),
+            (
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_FALSE,
+            ),
+            (
+                Interval::CERTAINLY_FALSE,
+                Interval::UNCERTAIN,
+                Interval::CERTAINLY_FALSE,
+            ),
+            (
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_FALSE,
+            ),
+            (
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_FALSE,
+            ),
+            (
+                Interval::CERTAINLY_TRUE,
+                Interval::UNCERTAIN,
+                Interval::UNCERTAIN,
+            ),
+            (
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_TRUE,
+            ),
         ];
 
         for case in cases {
             assert_eq!(
-                Interval::make(Some(case.0), Some(case.1))?
-                    .and(Interval::make(Some(case.2), Some(case.3))?)?,
-                Interval::make(Some(case.4), Some(case.5))?
+                case.0.and(&case.1)?,
+                case.2,
+                "Failed for {} AND {}",
+                case.0,
+                case.1
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn or_test() -> Result<()> {
+        let cases = vec![
+            (
+                Interval::UNCERTAIN,
+                Interval::CERTAINLY_FALSE,
+                Interval::UNCERTAIN,
+            ),
+            (
+                Interval::UNCERTAIN,
+                Interval::UNCERTAIN,
+                Interval::UNCERTAIN,
+            ),
+            (
+                Interval::UNCERTAIN,
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_TRUE,
+            ),
+            (
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_FALSE,
+            ),
+            (
+                Interval::CERTAINLY_FALSE,
+                Interval::UNCERTAIN,
+                Interval::UNCERTAIN,
+            ),
+            (
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_TRUE,
+            ),
+            (
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_FALSE,
+                Interval::CERTAINLY_TRUE,
+            ),
+            (
+                Interval::CERTAINLY_TRUE,
+                Interval::UNCERTAIN,
+                Interval::CERTAINLY_TRUE,
+            ),
+            (
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_TRUE,
+                Interval::CERTAINLY_TRUE,
+            ),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                case.0.or(&case.1)?,
+                case.2,
+                "Failed for {} OR {}",
+                case.0,
+                case.1
             );
         }
         Ok(())
@@ -2507,16 +2610,13 @@ mod tests {
     #[test]
     fn not_test() -> Result<()> {
         let cases = vec![
-            (false, true, false, true),
-            (false, false, true, true),
-            (true, true, false, false),
+            (Interval::UNCERTAIN, Interval::UNCERTAIN),
+            (Interval::CERTAINLY_FALSE, Interval::CERTAINLY_TRUE),
+            (Interval::CERTAINLY_TRUE, Interval::CERTAINLY_FALSE),
         ];
 
         for case in cases {
-            assert_eq!(
-                Interval::make(Some(case.0), Some(case.1))?.not()?,
-                Interval::make(Some(case.2), Some(case.3))?
-            );
+            assert_eq!(case.0.not()?, case.1, "Failed for NOT {}", case.0);
         }
         Ok(())
     }
