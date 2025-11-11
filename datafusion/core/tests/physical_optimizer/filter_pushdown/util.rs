@@ -24,7 +24,6 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
-    TableSchema,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -53,7 +52,7 @@ use std::{
 pub struct TestOpener {
     batches: Vec<RecordBatch>,
     batch_size: Option<usize>,
-    schema: Option<SchemaRef>,
+    schema: SchemaRef,
     projection: Option<Vec<usize>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
 }
@@ -71,23 +70,23 @@ impl FileOpener for TestOpener {
             }
             batches = new_batches.into_iter().collect();
         }
-        if let Some(schema) = &self.schema {
-            let factory = DefaultSchemaAdapterFactory::from_schema(Arc::clone(schema));
-            let (mapper, projection) = factory.map_schema(&batches[0].schema()).unwrap();
-            let mut new_batches = Vec::new();
-            for batch in batches {
-                let batch = if let Some(predicate) = &self.predicate {
-                    batch_filter(&batch, predicate)?
-                } else {
-                    batch
-                };
 
-                let batch = batch.project(&projection).unwrap();
-                let batch = mapper.map_batch(batch).unwrap();
-                new_batches.push(batch);
-            }
-            batches = new_batches;
+        let factory = DefaultSchemaAdapterFactory::from_schema(Arc::clone(&self.schema));
+        let (mapper, projection) = factory.map_schema(&batches[0].schema()).unwrap();
+        let mut new_batches = Vec::new();
+        for batch in batches {
+            let batch = if let Some(predicate) = &self.predicate {
+                batch_filter(&batch, predicate)?
+            } else {
+                batch
+            };
+
+            let batch = batch.project(&projection).unwrap();
+            let batch = mapper.map_batch(batch).unwrap();
+            new_batches.push(batch);
         }
+        batches = new_batches;
+
         if let Some(projection) = &self.projection {
             batches = batches
                 .into_iter()
@@ -102,26 +101,35 @@ impl FileOpener for TestOpener {
 }
 
 /// A placeholder data source that accepts filter pushdown
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TestSource {
     support: bool,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     statistics: Option<Statistics>,
     batch_size: Option<usize>,
     batches: Vec<RecordBatch>,
-    schema: Option<SchemaRef>,
+    schema: SchemaRef,
     metrics: ExecutionPlanMetricsSet,
     projection: Option<Vec<usize>>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    table_schema: datafusion_datasource::TableSchema,
 }
 
 impl TestSource {
-    pub fn new(support: bool, batches: Vec<RecordBatch>) -> Self {
+    pub fn new(schema: SchemaRef, support: bool, batches: Vec<RecordBatch>) -> Self {
+        let table_schema =
+            datafusion_datasource::TableSchema::new(Arc::clone(&schema), vec![]);
         Self {
+            schema,
             support,
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
-            ..Default::default()
+            predicate: None,
+            statistics: None,
+            batch_size: None,
+            projection: None,
+            schema_adapter_factory: None,
+            table_schema,
         }
     }
 }
@@ -136,7 +144,7 @@ impl FileSource for TestSource {
         Arc::new(TestOpener {
             batches: self.batches.clone(),
             batch_size: self.batch_size,
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
         })
@@ -153,17 +161,6 @@ impl FileSource for TestSource {
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(TestSource {
             batch_size: Some(batch_size),
-            ..self.clone()
-        })
-    }
-
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
-        assert!(
-            schema.table_partition_cols().is_empty(),
-            "TestSource does not support partition columns"
-        );
-        Arc::new(TestSource {
-            schema: Some(schema.file_schema().clone()),
             ..self.clone()
         })
     }
@@ -260,6 +257,10 @@ impl FileSource for TestSource {
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
     }
+
+    fn table_schema(&self) -> &datafusion_datasource::TableSchema {
+        &self.table_schema
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -289,14 +290,15 @@ impl TestScanBuilder {
     }
 
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
-        let source = Arc::new(TestSource::new(self.support, self.batches));
-        let base_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test://").unwrap(),
+        let source = Arc::new(TestSource::new(
             Arc::clone(&self.schema),
-            source,
-        )
-        .with_file(PartitionedFile::new("test.parquet", 123))
-        .build();
+            self.support,
+            self.batches,
+        ));
+        let base_config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
+                .with_file(PartitionedFile::new("test.parquet", 123))
+                .build();
         DataSourceExec::from_data_source(base_config)
     }
 }

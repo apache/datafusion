@@ -650,7 +650,6 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                         self.left_index += 1;
                     }
 
-                    self.join_metrics.output_batches.add(1);
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }

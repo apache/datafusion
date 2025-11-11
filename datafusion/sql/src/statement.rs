@@ -1037,7 +1037,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if limit.is_some() {
                     return not_impl_err!("Update-limit clause not supported")?;
                 }
-                self.update_to_plan(table, assignments, update_from, selection)
+                self.update_to_plan(table, &assignments, update_from, selection)
             }
 
             Statement::Delete(Delete {
@@ -1070,7 +1070,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 let table_name = self.get_delete_target(from)?;
-                self.delete_to_plan(table_name, selection)
+                self.delete_to_plan(&table_name, selection)
             }
 
             Statement::StartTransaction {
@@ -1100,7 +1100,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if has_end_keyword {
                     return not_impl_err!("Transaction with END keyword not supported");
                 }
-                self.validate_transaction_kind(transaction)?;
+                self.validate_transaction_kind(transaction.as_ref())?;
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &TransactionMode| match m {
@@ -1903,7 +1903,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn delete_to_plan(
         &self,
-        table_name: ObjectName,
+        table_name: &ObjectName,
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
@@ -1947,7 +1947,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn update_to_plan(
         &self,
         table: TableWithJoins,
-        assignments: Vec<Assignment>,
+        assignments: &[Assignment],
         from: Option<TableWithJoins>,
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
@@ -2353,7 +2353,7 @@ ON p.function_name = r.routine_name
 
     fn validate_transaction_kind(
         &self,
-        kind: Option<BeginTransactionKind>,
+        kind: Option<&BeginTransactionKind>,
     ) -> Result<()> {
         match kind {
             // BEGIN

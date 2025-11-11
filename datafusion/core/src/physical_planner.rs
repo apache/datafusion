@@ -64,7 +64,9 @@ use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::TableReference;
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, TableReference,
+};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
@@ -347,11 +349,11 @@ impl DefaultPhysicalPlanner {
             .flatten()
             .collect::<Vec<_>>();
         // Ideally this never happens if we have a valid LogicalPlan tree
-        if outputs.len() != 1 {
-            return internal_err!(
-                "Failed to convert LogicalPlan to ExecutionPlan: More than one root detected"
-            );
-        }
+        assert_eq_or_internal_err!(
+            outputs.len(),
+            1,
+            "Failed to convert LogicalPlan to ExecutionPlan: More than one root detected"
+        );
         let plan = outputs.pop().unwrap();
         Ok(plan)
     }
@@ -588,9 +590,10 @@ impl DefaultPhysicalPlanner {
                 }
             }
             LogicalPlan::Window(Window { window_expr, .. }) => {
-                if window_expr.is_empty() {
-                    return internal_err!("Impossibly got empty window expression");
-                }
+                assert_or_internal_err!(
+                    !window_expr.is_empty(),
+                    "Impossibly got empty window expression"
+                );
 
                 let input_exec = children.one()?;
 
@@ -1764,14 +1767,12 @@ fn qualify_join_schema_sides(
         .zip(left_fields.iter().chain(right_fields.iter()))
         .enumerate()
     {
-        if field.name() != expected.name() {
-            return internal_err!(
-                "Field name mismatch at index {}: expected '{}', found '{}'",
-                i,
-                expected.name(),
-                field.name()
-            );
-        }
+        assert_eq_or_internal_err!(
+            field.name(),
+            expected.name(),
+            "Field name mismatch at index {}",
+            i
+        );
     }
 
     // qualify sides

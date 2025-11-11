@@ -25,12 +25,11 @@ use datafusion_common::internal_err;
 use datafusion_common::{HashMap, Result, ScalarValue};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::PartitionedFile;
-use datafusion_expr::{BinaryExpr, Operator};
+use datafusion_expr::{lit, utils, BinaryExpr, Operator};
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, StringBuilder},
-    compute::{and, cast, prep_null_mask_filter},
-    datatypes::{DataType, Field, Fields, Schema},
+    array::AsArray,
+    datatypes::{DataType, Field},
     record_batch::RecordBatch,
 };
 use datafusion_expr::execution_props::ExecutionProps;
@@ -39,7 +38,7 @@ use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use log::{debug, trace};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DataFusionError};
+use datafusion_common::{Column, DFSchema};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
@@ -239,105 +238,6 @@ pub async fn list_partitions(
     Ok(out)
 }
 
-async fn prune_partitions(
-    table_path: &ListingTableUrl,
-    partitions: Vec<Partition>,
-    filters: &[Expr],
-    partition_cols: &[(String, DataType)],
-) -> Result<Vec<Partition>> {
-    if filters.is_empty() {
-        // prune partitions which don't contain the partition columns
-        return Ok(partitions
-            .into_iter()
-            .filter(|p| {
-                let cols = partition_cols.iter().map(|x| x.0.as_str());
-                !parse_partitions_for_path(table_path, &p.path, cols)
-                    .unwrap_or_default()
-                    .is_empty()
-            })
-            .collect());
-    }
-
-    let mut builders: Vec<_> = (0..partition_cols.len())
-        .map(|_| StringBuilder::with_capacity(partitions.len(), partitions.len() * 10))
-        .collect();
-
-    for partition in &partitions {
-        let cols = partition_cols.iter().map(|x| x.0.as_str());
-        let parsed = parse_partitions_for_path(table_path, &partition.path, cols)
-            .unwrap_or_default();
-
-        let mut builders = builders.iter_mut();
-        for (p, b) in parsed.iter().zip(&mut builders) {
-            b.append_value(p);
-        }
-        builders.for_each(|b| b.append_null());
-    }
-
-    let arrays = partition_cols
-        .iter()
-        .zip(builders)
-        .map(|((_, d), mut builder)| {
-            let array = builder.finish();
-            cast(&array, d)
-        })
-        .collect::<Result<_, _>>()?;
-
-    let fields: Fields = partition_cols
-        .iter()
-        .map(|(n, d)| Field::new(n, d.clone(), true))
-        .collect();
-    let schema = Arc::new(Schema::new(fields));
-
-    let df_schema = DFSchema::from_unqualified_fields(
-        partition_cols
-            .iter()
-            .map(|(n, d)| Field::new(n, d.clone(), true))
-            .collect(),
-        Default::default(),
-    )?;
-
-    let batch = RecordBatch::try_new(schema, arrays)?;
-
-    // TODO: Plumb this down
-    let props = ExecutionProps::new();
-
-    // Applies `filter` to `batch` returning `None` on error
-    let do_filter = |filter| -> Result<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &props)?;
-        expr.evaluate(&batch)?.into_array(partitions.len())
-    };
-
-    //.Compute the conjunction of the filters
-    let mask = filters
-        .iter()
-        .map(|f| do_filter(f).map(|a| a.as_boolean().clone()))
-        .reduce(|a, b| Ok(and(&a?, &b?)?));
-
-    let mask = match mask {
-        Some(Ok(mask)) => mask,
-        Some(Err(err)) => return Err(err),
-        None => return Ok(partitions),
-    };
-
-    // Don't retain partitions that evaluated to null
-    let prepared = match mask.null_count() {
-        0 => mask,
-        _ => prep_null_mask_filter(&mask),
-    };
-
-    // Sanity check
-    assert_eq!(prepared.len(), partitions.len());
-
-    let filtered = partitions
-        .into_iter()
-        .zip(prepared.values())
-        .filter_map(|(p, f)| f.then_some(p))
-        .collect();
-
-    Ok(filtered)
-}
-
 #[derive(Debug)]
 enum PartitionValue {
     Single(String),
@@ -412,6 +312,62 @@ pub fn evaluate_partition_prefix<'a>(
     }
 }
 
+fn filter_partitions(
+    pf: PartitionedFile,
+    filters: &[Expr],
+    df_schema: &DFSchema,
+) -> Result<Option<PartitionedFile>> {
+    if pf.partition_values.is_empty() && !filters.is_empty() {
+        return Ok(None);
+    } else if filters.is_empty() {
+        return Ok(Some(pf));
+    }
+
+    let arrays = pf
+        .partition_values
+        .iter()
+        .map(|v| v.to_array())
+        .collect::<Result<_, _>>()?;
+
+    let batch = RecordBatch::try_new(Arc::clone(df_schema.inner()), arrays)?;
+
+    let filter = utils::conjunction(filters.iter().cloned()).unwrap_or_else(|| lit(true));
+    let props = ExecutionProps::new();
+    let expr = create_physical_expr(&filter, df_schema, &props)?;
+
+    // Since we're only operating on a single file, our batch and resulting "array" holds only one
+    // value indicating if the input file matches the provided filters
+    let matches = expr.evaluate(&batch)?.into_array(1)?;
+    if matches.as_boolean().value(0) {
+        return Ok(Some(pf));
+    }
+
+    Ok(None)
+}
+
+fn try_into_partitioned_file(
+    object_meta: ObjectMeta,
+    partition_cols: &[(String, DataType)],
+    table_path: &ListingTableUrl,
+) -> Result<PartitionedFile> {
+    let cols = partition_cols.iter().map(|(name, _)| name.as_str());
+    let parsed = parse_partitions_for_path(table_path, &object_meta.location, cols);
+
+    let partition_values = parsed
+        .into_iter()
+        .flatten()
+        .zip(partition_cols)
+        .map(|(parsed, (_, datatype))| {
+            ScalarValue::try_from_string(parsed.to_string(), datatype)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut pf: PartitionedFile = object_meta.into();
+    pf.partition_values = partition_values;
+
+    Ok(pf)
+}
+
 /// Discover the partitions on the given path and prune out files
 /// that belong to irrelevant partitions using `filters` expressions.
 /// `filters` should only contain expressions that can be evaluated
@@ -424,7 +380,11 @@ pub async fn pruned_partition_list<'a>(
     file_extension: &'a str,
     partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
-    // if no partition col => simply list all the files
+    let objects = table_path
+        .list_all_files(ctx, store, file_extension)
+        .await?
+        .try_filter(|object_meta| futures::future::ready(object_meta.size > 0));
+
     if partition_cols.is_empty() {
         if !filters.is_empty() {
             return internal_err!(
@@ -432,72 +392,29 @@ pub async fn pruned_partition_list<'a>(
                 table_path
             );
         }
-        return Ok(Box::pin(
-            table_path
-                .list_all_files(ctx, store, file_extension)
-                .await?
-                .try_filter(|object_meta| futures::future::ready(object_meta.size > 0))
-                .map_ok(|object_meta| object_meta.into()),
-        ));
+
+        // if no partition col => simply list all the files
+        Ok(objects.map_ok(|object_meta| object_meta.into()).boxed())
+    } else {
+        let df_schema = DFSchema::from_unqualified_fields(
+            partition_cols
+                .iter()
+                .map(|(n, d)| Field::new(n, d.clone(), true))
+                .collect(),
+            Default::default(),
+        )?;
+
+        Ok(objects
+            .map_ok(|object_meta| {
+                try_into_partitioned_file(object_meta, partition_cols, table_path)
+            })
+            .try_filter_map(move |pf| {
+                futures::future::ready(
+                    pf.and_then(|pf| filter_partitions(pf, filters, &df_schema)),
+                )
+            })
+            .boxed())
     }
-
-    let partition_prefix = evaluate_partition_prefix(partition_cols, filters);
-
-    let partitions =
-        list_partitions(store, table_path, partition_cols.len(), partition_prefix)
-            .await?;
-    debug!("Listed {} partitions", partitions.len());
-
-    let pruned =
-        prune_partitions(table_path, partitions, filters, partition_cols).await?;
-
-    debug!("Pruning yielded {} partitions", pruned.len());
-
-    let stream = futures::stream::iter(pruned)
-        .map(move |partition: Partition| async move {
-            let cols = partition_cols.iter().map(|x| x.0.as_str());
-            let parsed = parse_partitions_for_path(table_path, &partition.path, cols);
-
-            let partition_values = parsed
-                .into_iter()
-                .flatten()
-                .zip(partition_cols)
-                .map(|(parsed, (_, datatype))| {
-                    ScalarValue::try_from_string(parsed.to_string(), datatype)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            let files = match partition.files {
-                Some(files) => files,
-                None => {
-                    trace!("Recursively listing partition {}", partition.path);
-                    store.list(Some(&partition.path)).try_collect().await?
-                }
-            };
-            let files = files.into_iter().filter(move |o| {
-                let extension_match = o.location.as_ref().ends_with(file_extension);
-                // here need to scan subdirectories(`listing_table_ignore_subdirectory` = false)
-                let glob_match = table_path.contains(&o.location, false);
-                extension_match && glob_match
-            });
-
-            let stream = futures::stream::iter(files.map(move |object_meta| {
-                Ok(PartitionedFile {
-                    object_meta,
-                    partition_values: partition_values.clone(),
-                    range: None,
-                    statistics: None,
-                    extensions: None,
-                    metadata_size_hint: None,
-                })
-            }));
-
-            Ok::<_, DataFusionError>(stream)
-        })
-        .buffer_unordered(CONCURRENCY_LIMIT)
-        .try_flatten()
-        .boxed();
-    Ok(stream)
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
@@ -541,22 +458,11 @@ pub fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use datafusion_common::config::TableOptions;
     use datafusion_datasource::file_groups::FileGroup;
-    use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeEnv;
-    use futures::FutureExt;
-    use object_store::memory::InMemory;
-    use std::any::Any;
     use std::ops::Not;
 
     use super::*;
-    use datafusion_expr::{
-        case, col, lit, AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF,
-    };
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_expr::{case, col, lit, Expr};
 
     #[test]
     fn test_split_files() {
@@ -597,209 +503,6 @@ mod tests {
         let empty_group = FileGroup::default();
         let chunks = empty_group.split_files(2);
         assert_eq!(0, chunks.len());
-    }
-
-    #[tokio::test]
-    async fn test_pruned_partition_list_empty() {
-        let (store, state) = make_test_store_and_state(&[
-            ("tablepath/mypartition=val1/notparquetfile", 100),
-            ("tablepath/mypartition=val1/ignoresemptyfile.parquet", 0),
-            ("tablepath/file.parquet", 100),
-            ("tablepath/notapartition/file.parquet", 100),
-            ("tablepath/notmypartition=val1/file.parquet", 100),
-        ]);
-        let filter = Expr::eq(col("mypartition"), lit("val1"));
-        let pruned = pruned_partition_list(
-            state.as_ref(),
-            store.as_ref(),
-            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-            &[filter],
-            ".parquet",
-            &[(String::from("mypartition"), DataType::Utf8)],
-        )
-        .await
-        .expect("partition pruning failed")
-        .collect::<Vec<_>>()
-        .await;
-
-        assert_eq!(pruned.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_pruned_partition_list() {
-        let (store, state) = make_test_store_and_state(&[
-            ("tablepath/mypartition=val1/file.parquet", 100),
-            ("tablepath/mypartition=val2/file.parquet", 100),
-            ("tablepath/mypartition=val1/ignoresemptyfile.parquet", 0),
-            ("tablepath/mypartition=val1/other=val3/file.parquet", 100),
-            ("tablepath/notapartition/file.parquet", 100),
-            ("tablepath/notmypartition=val1/file.parquet", 100),
-        ]);
-        let filter = Expr::eq(col("mypartition"), lit("val1"));
-        let pruned = pruned_partition_list(
-            state.as_ref(),
-            store.as_ref(),
-            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-            &[filter],
-            ".parquet",
-            &[(String::from("mypartition"), DataType::Utf8)],
-        )
-        .await
-        .expect("partition pruning failed")
-        .try_collect::<Vec<_>>()
-        .await
-        .unwrap();
-
-        assert_eq!(pruned.len(), 2);
-        let f1 = &pruned[0];
-        assert_eq!(
-            f1.object_meta.location.as_ref(),
-            "tablepath/mypartition=val1/file.parquet"
-        );
-        assert_eq!(&f1.partition_values, &[ScalarValue::from("val1")]);
-        let f2 = &pruned[1];
-        assert_eq!(
-            f2.object_meta.location.as_ref(),
-            "tablepath/mypartition=val1/other=val3/file.parquet"
-        );
-        assert_eq!(f2.partition_values, &[ScalarValue::from("val1"),]);
-    }
-
-    #[tokio::test]
-    async fn test_pruned_partition_list_multi() {
-        let (store, state) = make_test_store_and_state(&[
-            ("tablepath/part1=p1v1/file.parquet", 100),
-            ("tablepath/part1=p1v2/part2=p2v1/file1.parquet", 100),
-            ("tablepath/part1=p1v2/part2=p2v1/file2.parquet", 100),
-            ("tablepath/part1=p1v3/part2=p2v1/file2.parquet", 100),
-            ("tablepath/part1=p1v2/part2=p2v2/file2.parquet", 100),
-        ]);
-        let filter1 = Expr::eq(col("part1"), lit("p1v2"));
-        let filter2 = Expr::eq(col("part2"), lit("p2v1"));
-        let pruned = pruned_partition_list(
-            state.as_ref(),
-            store.as_ref(),
-            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-            &[filter1, filter2],
-            ".parquet",
-            &[
-                (String::from("part1"), DataType::Utf8),
-                (String::from("part2"), DataType::Utf8),
-            ],
-        )
-        .await
-        .expect("partition pruning failed")
-        .try_collect::<Vec<_>>()
-        .await
-        .unwrap();
-
-        assert_eq!(pruned.len(), 2);
-        let f1 = &pruned[0];
-        assert_eq!(
-            f1.object_meta.location.as_ref(),
-            "tablepath/part1=p1v2/part2=p2v1/file1.parquet"
-        );
-        assert_eq!(
-            &f1.partition_values,
-            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1"),]
-        );
-        let f2 = &pruned[1];
-        assert_eq!(
-            f2.object_meta.location.as_ref(),
-            "tablepath/part1=p1v2/part2=p2v1/file2.parquet"
-        );
-        assert_eq!(
-            &f2.partition_values,
-            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1")]
-        );
-    }
-
-    #[tokio::test]
-    async fn test_list_partition() {
-        let (store, _) = make_test_store_and_state(&[
-            ("tablepath/part1=p1v1/file.parquet", 100),
-            ("tablepath/part1=p1v2/part2=p2v1/file1.parquet", 100),
-            ("tablepath/part1=p1v2/part2=p2v1/file2.parquet", 100),
-            ("tablepath/part1=p1v3/part2=p2v1/file3.parquet", 100),
-            ("tablepath/part1=p1v2/part2=p2v2/file4.parquet", 100),
-            ("tablepath/part1=p1v2/part2=p2v2/empty.parquet", 0),
-        ]);
-
-        let partitions = list_partitions(
-            store.as_ref(),
-            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-            0,
-            None,
-        )
-        .await
-        .expect("listing partitions failed");
-
-        assert_eq!(
-            &partitions
-                .iter()
-                .map(describe_partition)
-                .collect::<Vec<_>>(),
-            &vec![
-                ("tablepath", 0, vec![]),
-                ("tablepath/part1=p1v1", 1, vec![]),
-                ("tablepath/part1=p1v2", 1, vec![]),
-                ("tablepath/part1=p1v3", 1, vec![]),
-            ]
-        );
-
-        let partitions = list_partitions(
-            store.as_ref(),
-            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-            1,
-            None,
-        )
-        .await
-        .expect("listing partitions failed");
-
-        assert_eq!(
-            &partitions
-                .iter()
-                .map(describe_partition)
-                .collect::<Vec<_>>(),
-            &vec![
-                ("tablepath", 0, vec![]),
-                ("tablepath/part1=p1v1", 1, vec!["file.parquet"]),
-                ("tablepath/part1=p1v2", 1, vec![]),
-                ("tablepath/part1=p1v2/part2=p2v1", 2, vec![]),
-                ("tablepath/part1=p1v2/part2=p2v2", 2, vec![]),
-                ("tablepath/part1=p1v3", 1, vec![]),
-                ("tablepath/part1=p1v3/part2=p2v1", 2, vec![]),
-            ]
-        );
-
-        let partitions = list_partitions(
-            store.as_ref(),
-            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-            2,
-            None,
-        )
-        .await
-        .expect("listing partitions failed");
-
-        assert_eq!(
-            &partitions
-                .iter()
-                .map(describe_partition)
-                .collect::<Vec<_>>(),
-            &vec![
-                ("tablepath", 0, vec![]),
-                ("tablepath/part1=p1v1", 1, vec!["file.parquet"]),
-                ("tablepath/part1=p1v2", 1, vec![]),
-                ("tablepath/part1=p1v3", 1, vec![]),
-                (
-                    "tablepath/part1=p1v2/part2=p2v1",
-                    2,
-                    vec!["file1.parquet", "file2.parquet"]
-                ),
-                ("tablepath/part1=p1v2/part2=p2v2", 2, vec!["file4.parquet"]),
-                ("tablepath/part1=p1v3/part2=p2v1", 2, vec!["file3.parquet"]),
-            ]
-        );
     }
 
     #[test]
@@ -1015,87 +718,5 @@ mod tests {
             ),
             Some(Path::from("a=1970-01-05")),
         );
-    }
-
-    pub fn make_test_store_and_state(
-        files: &[(&str, u64)],
-    ) -> (Arc<InMemory>, Arc<dyn Session>) {
-        let memory = InMemory::new();
-
-        for (name, size) in files {
-            memory
-                .put(&Path::from(*name), vec![0; *size as usize].into())
-                .now_or_never()
-                .unwrap()
-                .unwrap();
-        }
-
-        (Arc::new(memory), Arc::new(MockSession {}))
-    }
-
-    struct MockSession {}
-
-    #[async_trait]
-    impl Session for MockSession {
-        fn session_id(&self) -> &str {
-            unimplemented!()
-        }
-
-        fn config(&self) -> &SessionConfig {
-            unimplemented!()
-        }
-
-        async fn create_physical_plan(
-            &self,
-            _logical_plan: &LogicalPlan,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
-        }
-
-        fn create_physical_expr(
-            &self,
-            _expr: Expr,
-            _df_schema: &DFSchema,
-        ) -> Result<Arc<dyn PhysicalExpr>> {
-            unimplemented!()
-        }
-
-        fn scalar_functions(&self) -> &std::collections::HashMap<String, Arc<ScalarUDF>> {
-            unimplemented!()
-        }
-
-        fn aggregate_functions(
-            &self,
-        ) -> &std::collections::HashMap<String, Arc<AggregateUDF>> {
-            unimplemented!()
-        }
-
-        fn window_functions(&self) -> &std::collections::HashMap<String, Arc<WindowUDF>> {
-            unimplemented!()
-        }
-
-        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
-            unimplemented!()
-        }
-
-        fn execution_props(&self) -> &ExecutionProps {
-            unimplemented!()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!()
-        }
-
-        fn table_options(&self) -> &TableOptions {
-            unimplemented!()
-        }
-
-        fn table_options_mut(&mut self) -> &mut TableOptions {
-            unimplemented!()
-        }
-
-        fn task_ctx(&self) -> Arc<datafusion_execution::TaskContext> {
-            unimplemented!()
-        }
     }
 }

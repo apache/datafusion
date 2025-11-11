@@ -19,6 +19,11 @@
 //!
 //! These examples demonstrate Arrow Flight usage.
 //!
+//! ## Usage
+//! ```bash
+//! cargo run --example flight -- [client|server|sql_server]
+//! ```
+//!
 //! Each subcommand runs a corresponding example:
 //! - `client` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
 //! - `server` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol

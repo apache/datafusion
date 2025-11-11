@@ -1405,33 +1405,24 @@ physical_plan
 34)│      RepartitionExec      ││      RepartitionExec      │
 35)│    --------------------   ││    --------------------   │
 36)│ partition_count(in->out): ││ partition_count(in->out): │
-37)│           4 -> 4          ││           4 -> 4          │
+37)│           1 -> 4          ││           1 -> 4          │
 38)│                           ││                           │
 39)│    partitioning_scheme:   ││    partitioning_scheme:   │
 40)│     Hash([name@0], 4)     ││     Hash([name@0], 4)     │
 41)└─────────────┬─────────────┘└─────────────┬─────────────┘
 42)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-43)│      RepartitionExec      ││      RepartitionExec      │
+43)│       AggregateExec       ││       AggregateExec       │
 44)│    --------------------   ││    --------------------   │
-45)│ partition_count(in->out): ││ partition_count(in->out): │
-46)│           1 -> 4          ││           1 -> 4          │
-47)│                           ││                           │
-48)│    partitioning_scheme:   ││    partitioning_scheme:   │
-49)│     RoundRobinBatch(4)    ││     RoundRobinBatch(4)    │
-50)└─────────────┬─────────────┘└─────────────┬─────────────┘
-51)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-52)│       AggregateExec       ││       AggregateExec       │
-53)│    --------------------   ││    --------------------   │
-54)│       group_by: name      ││       group_by: name      │
-55)│       mode: Partial       ││       mode: Partial       │
-56)└─────────────┬─────────────┘└─────────────┬─────────────┘
-57)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-58)│       DataSourceExec      ││       DataSourceExec      │
-59)│    --------------------   ││    --------------------   │
-60)│         bytes: 296        ││         bytes: 288        │
-61)│       format: memory      ││       format: memory      │
-62)│          rows: 1          ││          rows: 1          │
-63)└───────────────────────────┘└───────────────────────────┘
+45)│       group_by: name      ││       group_by: name      │
+46)│       mode: Partial       ││       mode: Partial       │
+47)└─────────────┬─────────────┘└─────────────┬─────────────┘
+48)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+49)│       DataSourceExec      ││       DataSourceExec      │
+50)│    --------------------   ││    --------------------   │
+51)│         bytes: 296        ││         bytes: 288        │
+52)│       format: memory      ││       format: memory      │
+53)│          rows: 1          ││          rows: 1          │
+54)└───────────────────────────┘└───────────────────────────┘
 
 # Test explain tree for UnionExec
 query TT
