@@ -254,7 +254,8 @@ fn within_group_allowed_for_ordered_set_udaf() {
     // percentile_cont is an ordered-set aggregate and advertises
     // `supports_within_group_clause() = true`. The planner should accept
     // the WITHIN GROUP syntax for this UDAF.
-    let sql = "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c1) FROM person";
+    let sql =
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100";
 
     // Build a planner that registers the ordered-set aggregate
     use datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf;
@@ -270,9 +271,50 @@ fn within_group_allowed_for_ordered_set_udaf() {
 
     let plan =
         result.expect("expected planning to succeed for percentile_cont WITHIN GROUP");
-    // Basic sanity check: the planned logical plan should mention the function name
-    let plan_str = format!("{:?}", plan);
-    assert!(plan_str.contains("percentile_cont"), "plan = {}", plan_str);
+
+    // Inspect the logical plan and ensure the Aggregate expression's
+    // arguments have the WITHIN GROUP ordering expression prepended.
+    use datafusion_expr::Expr as DFExpr;
+
+    use datafusion_common::tree_node::TreeNodeRecursion;
+
+    let mut found = false;
+    plan.apply_with_subqueries(|p| {
+        if let LogicalPlan::Aggregate(agg) = p {
+            for expr in &agg.aggr_expr {
+                if let DFExpr::AggregateFunction(af) = expr {
+                    if af.func.name() == "percentile_cont" {
+                        found = true;
+                        // Expect two args: first the WITHIN GROUP ordering expr (c3),
+                        // then the percentile literal (0.5)
+                        assert_eq!(
+                            af.params.args.len(),
+                            2,
+                            "unexpected arg len: {:?}",
+                            af.params.args
+                        );
+                        let first = af.params.args[0].to_string();
+                        let second = af.params.args[1].to_string();
+                        assert!(
+                            first.contains("c3"),
+                            "first arg not ordering expr: {}",
+                            first
+                        );
+                        assert!(
+                            second.contains("0.5") || second.contains("0.50"),
+                            "second arg not percentile literal: {}",
+                            second
+                        );
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                }
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .unwrap();
+
+    assert!(found, "percentile_cont aggregate not found in plan");
 }
 
 fn parse_ident_normalization_5() {
