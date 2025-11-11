@@ -1738,6 +1738,34 @@ impl From<ScalarValue> for NullableInterval {
 }
 
 impl NullableInterval {
+    pub const FALSE: Self = NullableInterval::NotNull {
+        values: Interval::CERTAINLY_FALSE
+    };
+
+    pub const TRUE: Self = NullableInterval::NotNull {
+        values: Interval::CERTAINLY_TRUE
+    };
+
+    pub const UNKNOWN: Self = NullableInterval::Null {
+        datatype: DataType::Boolean
+    };
+
+    pub const TRUE_OR_FALSE: Self = NullableInterval::NotNull {
+        values: Interval::UNCERTAIN
+    };
+
+    pub const TRUE_OR_UNKNOWN: Self = NullableInterval::MaybeNull {
+        values: Interval::CERTAINLY_TRUE
+    };
+
+    pub const FALSE_OR_UNKNOWN: Self = NullableInterval::MaybeNull {
+        values: Interval::CERTAINLY_FALSE
+    };
+
+    pub const UNCERTAIN: Self = NullableInterval::MaybeNull {
+        values: Interval::UNCERTAIN
+    };
+
     /// Get the values interval, or None if this interval is definitely null.
     pub fn values(&self) -> Option<&Interval> {
         match self {
@@ -1756,29 +1784,17 @@ impl NullableInterval {
 
     /// Return true if the value is definitely true (and not null).
     pub fn is_certainly_true(&self) -> bool {
-        match self {
-            Self::Null { .. } | Self::MaybeNull { .. } => false,
-            Self::NotNull { values } => values == &Interval::CERTAINLY_TRUE,
-        }
+        self == &Self::TRUE
     }
 
     /// Return true if the value is definitely not true (either null or false).
     pub fn is_certainly_not_true(&self) -> bool {
-        match self {
-            Self::Null { .. } => true,
-            Self::MaybeNull { values } | Self::NotNull { values } => {
-                values == &Interval::CERTAINLY_FALSE
-            }
-        }
+        self == &Self::FALSE_OR_UNKNOWN
     }
 
     /// Return true if the value is definitely false (and not null).
     pub fn is_certainly_false(&self) -> bool {
-        match self {
-            Self::Null { .. } => false,
-            Self::MaybeNull { .. } => false,
-            Self::NotNull { values } => values == &Interval::CERTAINLY_FALSE,
-        }
+        self == &Self::FALSE
     }
 
     /// Perform logical negation on a boolean nullable interval.
