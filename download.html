@@ -403,12 +403,19 @@
 -->
 <section id="download">
 <h1>Download<a class="headerlink" href="#download" title="Link to this heading">#</a></h1>
-<p>While DataFusion is also distributed via the Rust <a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a> package manager as a convenience, the
+<p>Most users use DataFusion as a library in their Rust projects by adding it as a dependency
+in their <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file and downloading it from the Rust <a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a> package registry.</p>
+<p>For example:</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[dependencies]</span>
+<span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;41.0.0&quot;</span>
+</pre></div>
+</div>
+<p>While DataFusion is distributed via <a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a> as a convenience, the
 official Apache DataFusion releases are provided as source artifacts.</p>
 <section id="releases">
 <h2>Releases<a class="headerlink" href="#releases" title="Link to this heading">#</a></h2>
-<p>The latest source release is <a class="reference external" href="https://www.apache.org/dyn/closer.lua/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz?action=download">41.0.0</a> (<a class="reference external" href="https://downloads.apache.org/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz.asc">asc</a>,
-<a class="reference external" href="https://downloads.apache.org/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz.sha512">sha512</a>).</p>
+<p>You can find the latest releases, signatures and checksums on
+the <a class="reference external" href="https://dist.apache.org/repos/dist/release/datafusion">ASF Release Page</a></p>
 <p>For previous releases, please check the <a class="reference external" href="https://archive.apache.org/dist/datafusion/">archive</a>.</p>
 <p>For releases earlier than 37.0.0, please check <a class="reference external" href="https://archive.apache.org/dist/arrow/">Arrow’s archive</a>.</p>
 </section>
@@ -416,8 +423,8 @@ official Apache DataFusion releases are provided as source artifacts.</p>
 <h2>Notes<a class="headerlink" href="#notes" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p>When downloading a release, please verify the OpenPGP compatible signature (or failing that, check the SHA-512); these should be fetched from the main Apache site.</p></li>
-<li><p>The KEYS file contains the public keys used for signing release. It is recommended that (when possible) a web of trust is used to confirm the identity of these keys.</p></li>
-<li><p>Please download the <a class="reference external" href="https://downloads.apache.org/datafusion/KEYS">KEYS</a> as well as the .asc signature files.</p></li>
+<li><p>The <a class="reference external" href="https://downloads.apache.org/datafusion/KEYS">KEYS</a> file contains the public keys used for signing release. It is recommended that (when possible) a web of trust is used to confirm the identity of these keys.</p></li>
+<li><p>Please download the <a class="reference external" href="https://downloads.apache.org/datafusion/KEYS">KEYS</a> file as well as the .asc signature files.</p></li>
 </ul>
 <section id="to-verify-the-signature-of-the-release-artifact">
 <h3>To verify the signature of the release artifact<a class="headerlink" href="#to-verify-the-signature-of-the-release-artifact" title="Link to this heading">#</a></h3>
