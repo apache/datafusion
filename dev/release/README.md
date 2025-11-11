@@ -30,16 +30,21 @@ Releases are made from branches, e.g. `branch-37` for the `37.x.y` release serie
 
 To prepare for a new release series, we:
 
-- Create a new release branch from `main`, such as `branch-37` in the Apache repository (not in a fork)
+- Create a new branch from `main`, such as `branch-37` in the Apache repository (not in a fork)
 - Continue merging new features changes to `main` branch
 - Prepare the release branch for release:
   - Update version numbers in `Cargo.toml` files and create `CHANGELOG.md`
-  - Backport any needed changes from `main` to the release branch
-- When the code is ready, we create GitHub tags and create release candidate (rc) artifacts from the release branch.
-- After the release is approved, we publish to crates.io, the ASF distribution servers, and GitHub tags.
+  - Add additional changes to the release branch as needed
+- When the code is ready, create GitHub tags release candidate (rc) artifacts from the release branch.
+- After the release is approved, publish to [crates.io], the ASF distribution servers, and GitHub tags.
 
-For patch releases, we backport changes from `main` to the release branch as
-needed and repeat the release process as needed.
+To add changes to the release branch, depending on the change we either:
+- Fix the issue on `main` and then backport the change to the release branch (e.g. [#18129])
+- Fix the issue on the release branch and then forward-port the change back to `main` (e.g.[#18057])
+
+[crates.io]: https://crates.io/crates/datafusion
+[#18129]: https://github.com/apache/datafusion/pull/18129
+[#18057]: https://github.com/apache/datafusion/pull/18057
 
 ## Backporting (add changes) to `branch-*` branch
 
