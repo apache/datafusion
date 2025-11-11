@@ -19,7 +19,6 @@ use crate::arrow_wrappers::WrappedSchema;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::session::config::FFI_SessionConfig;
 use crate::session::task_context::FFI_TaskContext;
-use crate::session::task_ctx_accessor::FFI_TaskContextAccessor;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
@@ -47,12 +46,13 @@ use datafusion_expr::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
-use datafusion_proto::logical_plan::from_proto::parse_expr;
-use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
-use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+use datafusion_proto::logical_plan::{
+    from_proto::parse_expr, to_proto::serialize_expr, DefaultLogicalExtensionCodec,
+};
+use datafusion_proto::physical_plan::{
+    from_proto::parse_physical_expr, to_proto::serialize_physical_expr,
+    DefaultPhysicalExtensionCodec,
+};
 use datafusion_proto::protobuf::{LogicalExprNode, PhysicalExprNode};
 use prost::Message;
 use std::any::Any;
@@ -63,6 +63,7 @@ use tokio::runtime::Handle;
 pub mod config;
 pub mod task_context;
 pub mod task_ctx_accessor;
+pub use task_ctx_accessor::FFI_TaskContextAccessor;
 
 /// A stable struct for sharing [`Session`] across FFI boundaries.
 #[repr(C)]
