@@ -58,6 +58,8 @@ pub struct FFI_CatalogProvider {
             cascade: bool,
         ) -> RResult<ROption<FFI_SchemaProvider>, RString>,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
     task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the execution plan. This should

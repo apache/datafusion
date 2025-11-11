@@ -53,6 +53,8 @@ pub struct FFI_ExecutionPlan {
         partition: usize,
     ) -> RResult<FFI_RecordBatchStream, RString>,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
     pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the execution plan. This should

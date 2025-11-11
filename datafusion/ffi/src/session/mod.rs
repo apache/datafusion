@@ -103,6 +103,8 @@ pub struct FFI_Session {
 
     pub task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
     pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the registry. This should

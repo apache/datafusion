@@ -49,6 +49,8 @@ pub struct FFI_TaskContext {
 
     pub window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
     pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Release the memory of the private data when it is no longer being used.

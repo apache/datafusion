@@ -49,6 +49,9 @@ pub struct FFI_PartitionEvaluatorArgs {
     is_reversed: bool,
     ignore_nulls: bool,
     schema: WrappedSchema,
+
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
     task_ctx_accessor: FFI_TaskContextAccessor,
 }
 

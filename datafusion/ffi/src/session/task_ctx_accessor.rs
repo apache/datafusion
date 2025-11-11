@@ -24,6 +24,11 @@ use datafusion_execution::{TaskContext, TaskContextAccessor};
 use std::sync::Weak;
 use std::{ffi::c_void, sync::Arc};
 
+/// Struct for accessing the [`TaskContext`]. This method contains a weak
+/// reference, so there are no guarantees that the [`TaskContext`] remains
+/// valid. This is used primarily for protobuf encoding and decoding of
+/// data passed across the FFI boundary. See the crate README for
+/// additional information.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]

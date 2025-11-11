@@ -54,6 +54,9 @@ pub struct FFI_AccumulatorArgs {
     is_reversed: bool,
     name: RString,
     physical_expr_def: RVec<u8>,
+
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
     task_ctx_accessor: FFI_TaskContextAccessor,
 }
 

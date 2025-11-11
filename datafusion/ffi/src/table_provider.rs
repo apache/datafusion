@@ -138,6 +138,8 @@ pub struct FFI_TableProvider {
             insert_op: FFI_InsertOp,
         ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
     pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Used to create a clone on the provider of the execution plan. This should

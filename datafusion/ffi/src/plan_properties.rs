@@ -62,6 +62,8 @@ pub struct FFI_PlanProperties {
     /// Return the schema of the plan.
     pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
 
+    /// Accessor for TaskContext to be used during protobuf serialization
+    /// and deserialization.
     pub task_ctx_accessor: FFI_TaskContextAccessor,
 
     /// Release the memory of the private data when it is no longer being used.

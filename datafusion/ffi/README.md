@@ -101,6 +101,29 @@ In this crate we have a variety of structs which closely mimic the behavior of
 their internal counterparts. To see detailed notes about how to use them, see
 the example in `FFI_TableProvider`.
 
+## Task Context Accessor
+
+Many of the FFI structs in this crate contain a `FFI_TaskContextAccessor`. The
+purpose of this struct is to *weakly* hold a reference to a method to
+access the current `TaskContext`. The reason we need this accessor is because
+we use the `datafusion-proto` crate to serialize and deserialize data across
+the FFI boundary. In particular, we need to serialize and deserialize
+functions using a `TaskContext`.
+
+This becomes difficult because we may need to register multiple user defined
+functions, table or catalog providers, etc with a `Session`, and each of these
+will need the `TaskContext` to perform the processing. For this reason we
+cannot simply include the `TaskContext` at the time of registration because
+it would not have knowledge of anything registered afterward.
+
+The `FFI_TaskContextAccessor` is built up from a trait that provides a method
+to get the current `TaskContext`. It only holds a `Weak` reference to the
+`TaskContextAccessor`, because otherwise we could create a circular dependency
+at runtime. It is imperative that if you use these methods that your accessor
+remains valid for the lifetime of the calls. The `TaskContextAccessor` is
+implemented on `SessionContext` and it is easy to implement on an struct that
+implements `Session`.
+
 ## Library Marker ID
 
 When reviewing the code, many of the structs in this crate contain a call to
