@@ -1170,6 +1170,64 @@ mod tests {
     }
 
     #[test]
+    fn test_ratio_set_methods() {
+        let ratio_metrics = RatioMetrics::new();
+
+        // Ensure set methods don't increment
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_total(40);
+        ratio_metrics.set_total(40);
+        assert_eq!("25% (10/40)", ratio_metrics.to_string());
+
+        let ratio_metrics = RatioMetrics::new();
+
+        // Calling set should change the value
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_part(30);
+        ratio_metrics.set_total(40);
+        ratio_metrics.set_total(50);
+        assert_eq!("60% (30/50)", ratio_metrics.to_string());
+    }
+
+    #[test]
+    fn test_ratio_merge_strategy() {
+        // Test AddPartSetTotal strategy
+        let ratio_metrics1 = RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
+
+        ratio_metrics1.set_part(10);
+        ratio_metrics1.set_total(40);
+        assert_eq!("25% (10/40)", ratio_metrics1.to_string());
+        let ratio_metrics2 = RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(40);
+        assert_eq!("50% (20/40)", ratio_metrics2.to_string());
+
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("75% (30/40)", ratio_metrics1.to_string());
+
+        // Test SetPartAddTotal strategy
+        let ratio_metrics1 = RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::SetPartAddTotal);
+        ratio_metrics1.set_part(20);
+        ratio_metrics1.set_total(50);
+        let ratio_metrics2 = RatioMetrics::new();
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(50);
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("20% (20/100)", ratio_metrics1.to_string());
+
+        // Test AddPartAddTotal strategy (default)
+        let ratio_metrics1 = RatioMetrics::new();
+        ratio_metrics1.set_part(20);
+        ratio_metrics1.set_total(50);
+        let ratio_metrics2 = RatioMetrics::new();
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(50);
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("40% (40/100)", ratio_metrics1.to_string());
+    }
+
+    #[test]
     fn test_display_timestamp() {
         let timestamp = Timestamp::new();
         let values = vec![
