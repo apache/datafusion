@@ -592,8 +592,7 @@ mod tests {
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("cannot be null"),
-            "Error should mention null keys, got: {}",
-            err_msg
+            "Error should mention null keys, got: {err_msg}"
         );
     }
 }
