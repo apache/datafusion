@@ -60,7 +60,7 @@ and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
 unable to make progress you should unassign the issue by commenting a single
-work `untake`.
+word `untake`.
 
 # Developer's guide
 
