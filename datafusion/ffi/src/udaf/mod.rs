@@ -39,7 +39,7 @@ use datafusion::{
 };
 use datafusion_common::exec_datafusion_err;
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
-use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
+use groups_accumulator::FFI_GroupsAccumulator;
 use std::hash::{Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
@@ -516,12 +516,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         let args = FFI_AccumulatorArgs::try_from(args)?;
 
         unsafe {
-            df_result!((self.udaf.create_groups_accumulator)(&self.udaf, args)).map(
-                |accum| {
-                    Box::new(ForeignGroupsAccumulator::from(accum))
-                        as Box<dyn GroupsAccumulator>
-                },
-            )
+            df_result!((self.udaf.create_groups_accumulator)(&self.udaf, args))
+                .map(<Box<dyn GroupsAccumulator>>::from)
         }
     }
 
