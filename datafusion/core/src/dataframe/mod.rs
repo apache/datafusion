@@ -2377,9 +2377,9 @@ impl DataFrame {
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
     /// // Fill nulls in only columns "a" and "c":
-    /// let df = df.fill_null(ScalarValue::from(0), vec!["a".to_owned(), "c".to_owned()])?;
+    /// let df = df.fill_null(&ScalarValue::from(0), &["a".to_owned(), "c".to_owned()])?;
     /// // Fill nulls across all columns:
-    /// let df = df.fill_null(ScalarValue::from(0), vec![])?;
+    /// let df = df.fill_null(&ScalarValue::from(0), &[])?;
     /// # Ok(())
     /// # }
     /// ```
