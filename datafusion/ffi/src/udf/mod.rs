@@ -114,6 +114,10 @@ pub struct FFI_ScalarUDF {
     /// Internal data. This is only to be accessed by the provider of the udf.
     /// A [`ForeignScalarUDF`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_ScalarUDF {}
@@ -123,16 +127,21 @@ pub struct ScalarUDFPrivateData {
     pub udf: Arc<ScalarUDF>,
 }
 
+impl FFI_ScalarUDF {
+    fn inner(&self) -> &Arc<ScalarUDF> {
+        let private_data = self.private_data as *const ScalarUDFPrivateData;
+        unsafe { &(*private_data).udf }
+    }
+}
+
 unsafe extern "C" fn return_type_fn_wrapper(
     udf: &FFI_ScalarUDF,
     arg_types: RVec<WrappedSchema>,
 ) -> RResult<WrappedSchema, RString> {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-
     let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
     let return_type = udf
+        .inner()
         .return_type(&arg_types)
         .and_then(|v| FFI_ArrowSchema::try_from(v).map_err(DataFusionError::from))
         .map(WrappedSchema);
@@ -144,13 +153,11 @@ unsafe extern "C" fn return_field_from_args_fn_wrapper(
     udf: &FFI_ScalarUDF,
     args: FFI_ReturnFieldArgs,
 ) -> RResult<WrappedSchema, RString> {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-
     let args: ForeignReturnFieldArgsOwned = rresult_return!((&args).try_into());
     let args_ref: ForeignReturnFieldArgs = (&args).into();
 
     let return_type = udf
+        .inner()
         .return_field_from_args((&args_ref).into())
         .and_then(|f| FFI_ArrowSchema::try_from(&f).map_err(DataFusionError::from))
         .map(WrappedSchema);
@@ -162,12 +169,10 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
     udf: &FFI_ScalarUDF,
     arg_types: RVec<WrappedSchema>,
 ) -> RResult<RVec<WrappedSchema>, RString> {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-
     let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
-    let return_types = rresult_return!(data_types_with_scalar_udf(&arg_types, udf));
+    let return_types =
+        rresult_return!(data_types_with_scalar_udf(&arg_types, udf.inner()));
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
 }
@@ -179,9 +184,6 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
     number_rows: usize,
     return_field: WrappedSchema,
 ) -> RResult<WrappedArray, RString> {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-
     let args = args
         .into_iter()
         .map(|arr| {
@@ -213,6 +215,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
     };
 
     let result = rresult_return!(udf
+        .inner()
         .invoke_with_args(args)
         .and_then(|r| r.to_array(number_rows)));
 
@@ -263,6 +266,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -321,21 +325,25 @@ impl Hash for ForeignScalarUDF {
     }
 }
 
-impl TryFrom<&FFI_ScalarUDF> for ForeignScalarUDF {
+impl TryFrom<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
     type Error = DataFusionError;
 
     fn try_from(udf: &FFI_ScalarUDF) -> Result<Self, Self::Error> {
-        let name = udf.name.to_owned().into();
-        let signature = Signature::user_defined((&udf.volatility).into());
+        if (udf.library_marker_id)() == crate::get_library_marker_id() {
+            Ok(Arc::clone(udf.inner().inner()))
+        } else {
+            let name = udf.name.to_owned().into();
+            let signature = Signature::user_defined((&udf.volatility).into());
 
-        let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
+            let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
 
-        Ok(Self {
-            name,
-            udf: udf.clone(),
-            aliases,
-            signature,
-        })
+            Ok(Arc::new(ForeignScalarUDF {
+                name,
+                udf: udf.clone(),
+                aliases,
+                signature,
+            }))
+        }
     }
 }
 
@@ -455,9 +463,10 @@ mod tests {
         let original_udf = datafusion::functions::math::abs::AbsFunc::new();
         let original_udf = Arc::new(ScalarUDF::from(original_udf));
 
-        let local_udf: FFI_ScalarUDF = Arc::clone(&original_udf).into();
+        let mut local_udf: FFI_ScalarUDF = Arc::clone(&original_udf).into();
+        local_udf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udf: ForeignScalarUDF = (&local_udf).try_into()?;
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&local_udf).try_into()?;
 
         assert_eq!(original_udf.name(), foreign_udf.name());
 
