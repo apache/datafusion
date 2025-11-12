@@ -236,7 +236,7 @@ impl TableProvider for DefaultValueTableProvider {
         )?;
 
         let parquet_source = ParquetSource::new(schema.clone())
-            .with_predicate(filter)
+            .with_predicate(&filter)
             .with_pushdown_filters(true);
 
         let object_store_url = ObjectStoreUrl::parse("memory://")?;

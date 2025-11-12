@@ -82,7 +82,7 @@ async fn get_parquet_exec(
 
     let source = Arc::new(
         ParquetSource::new(schema.clone())
-            .with_predicate(predicate)
+            .with_predicate(&predicate)
             .with_enable_page_index(true)
             .with_pushdown_filters(pushdown_filters),
     );

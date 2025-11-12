@@ -685,7 +685,7 @@ pub(crate) fn build_page_pruning_predicate(
 ) -> Arc<PagePruningAccessPlanFilter> {
     Arc::new(PagePruningAccessPlanFilter::new(
         predicate,
-        Arc::clone(file_schema),
+        &Arc::clone(file_schema),
     ))
 }
 
