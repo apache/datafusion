@@ -491,10 +491,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let (mut args, mut arg_names) =
                     self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
-                // Enforce explicit opt-in for WITHIN GROUP: UDAFs must advertise
-                // `supports_within_group_clause()` to accept WITHIN GROUP syntax.
-                // Previously the planner forwarded WITHIN GROUP to any
-                // order-sensitive aggregate; that was too permissive.
+                // UDAFs must opt-in via `supports_within_group_clause()` to
+                // accept a WITHIN GROUP clause.
                 let supports_within_group = fm.supports_within_group_clause();
 
                 if !within_group.is_empty() && !supports_within_group {
@@ -503,11 +501,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     );
                 }
 
-                // If the UDAF opted into WITHIN GROUP handling, convert the
-                // WITHIN GROUP ordering into sort expressions and prepend the
-                // ordering expressions to the function argument list (as unnamed
-                // args). This helper centralizes the argument-prepending protocol
-                // so it's easier to maintain and reason about.
+                // If the UDAF supports WITHIN GROUP, convert the ordering into
+                // sort expressions and prepend them as unnamed function args.
                 let order_by = if supports_within_group {
                     let (within_group_sorts, new_args, new_arg_names) = self
                         .extract_and_prepend_within_group_args(
