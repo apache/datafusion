@@ -412,23 +412,8 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     let (flattened_keys, flattened_values) = if key_array_vec.is_empty() {
         // All maps are NULL - create empty arrays
         // We need to infer the data type from the original keys/values arrays
-        let key_type = match &keys_data_type {
-            DataType::List(field) | DataType::LargeList(field) => {
-                field.data_type().clone()
-            }
-            DataType::FixedSizeList(field, _) => field.data_type().clone(),
-            _ => return exec_err!("Expected List, LargeList or FixedSizeList for keys"),
-        };
-
-        let value_type = match &values_data_type {
-            DataType::List(field) | DataType::LargeList(field) => {
-                field.data_type().clone()
-            }
-            DataType::FixedSizeList(field, _) => field.data_type().clone(),
-            _ => {
-                return exec_err!("Expected List, LargeList or FixedSizeList for values")
-            }
-        };
+        let key_type = get_element_type(&keys_data_type)?;
+        let value_type = get_element_type(&values_data_type)?;
 
         (
             arrow::array::new_empty_array(&key_type),
