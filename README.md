@@ -138,6 +138,8 @@ Optional features:
 
 ## DataFusion API Evolution and Deprecation Guidelines
 
+
+
 Public methods in Apache DataFusion evolve over time: while we try to maintain a
 stable API, we also improve the API over time. As a result, we typically
 deprecate methods before removing them, according to the [deprecation guidelines].
