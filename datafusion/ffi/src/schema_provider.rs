@@ -80,6 +80,10 @@ pub struct FFI_SchemaProvider {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignSchemaProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_SchemaProvider {}
@@ -191,6 +195,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         register_table: register_table_fn_wrapper,
         deregister_table: deregister_table_fn_wrapper,
         table_exist: table_exist_fn_wrapper,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -220,6 +225,7 @@ impl FFI_SchemaProvider {
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -234,9 +240,14 @@ pub struct ForeignSchemaProvider(pub FFI_SchemaProvider);
 unsafe impl Send for ForeignSchemaProvider {}
 unsafe impl Sync for ForeignSchemaProvider {}
 
-impl From<&FFI_SchemaProvider> for ForeignSchemaProvider {
+impl From<&FFI_SchemaProvider> for Arc<dyn SchemaProvider + Send> {
     fn from(provider: &FFI_SchemaProvider) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(unsafe { provider.inner() });
+        }
+
+        Arc::new(ForeignSchemaProvider(provider.clone()))
+            as Arc<dyn SchemaProvider + Send>
     }
 }
 
@@ -337,9 +348,10 @@ mod tests {
             .unwrap()
             .is_none());
 
-        let ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
+        let mut ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
+        ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_schema_provider: ForeignSchemaProvider =
+        let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =
             (&ffi_schema_provider).into();
 
         let prior_table_names = foreign_schema_provider.table_names();
