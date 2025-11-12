@@ -63,63 +63,63 @@ github:
     branch-51:
       required_pull_request_reviews:
         required_approving_review_count: 1
-    branch-52:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-53:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-54:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-55:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-56:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-57:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-58:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-59:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-60:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-61:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-62:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-63:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-64:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-65:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-66:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-67:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-68:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-69:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-70:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
+#    branch-52:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-53:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-54:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-55:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-56:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-57:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-58:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-59:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-60:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-61:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-62:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-63:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-64:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-65:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-66:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-67:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-68:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-69:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
+#    branch-70:
+#      required_pull_request_reviews:
+#        required_approving_review_count: 1
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true
