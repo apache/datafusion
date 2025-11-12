@@ -2258,7 +2258,7 @@ async fn test_aggregate_dynamic_filter_parquet_e2e() {
     let formatted = pretty_format_batches(&result).unwrap();
     let explain_analyze = format!("{formatted}");
 
-    // Cpature "2" from "files_ranges_pruned_statistics=4 total → 2 matched"
+    // Capture "2" from "files_ranges_pruned_statistics=4 total → 2 matched"
     let re = Regex::new(
         r"files_ranges_pruned_statistics\s*=\s*(\d+)\s*total\s*[→>\-]\s*(\d+)\s*matched",
     )

@@ -412,7 +412,7 @@ impl From<StreamType> for SendableRecordBatchStream {
 /// value on `val` column is less than 0, the minimal `val` value in the 1st file.
 ///
 /// We can skip scanning the remaining file by implementing dynamic filter, the
-/// intuition is we keep a shared data structure for current min in both `AggregateExec
+/// intuition is we keep a shared data structure for current min in both `AggregateExec`
 /// and `DataSourceExec`, and let it update during execution, so the scanner can
 /// know during execution if it's possible to skip scanning certain files. See
 /// physical optimizer rule `FilterPushdown` for details.
