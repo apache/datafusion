@@ -2385,8 +2385,8 @@ impl DataFrame {
     /// ```
     pub fn fill_null(
         &self,
-        value: ScalarValue,
-        columns: Vec<String>,
+        value: &ScalarValue,
+        columns: &[String],
     ) -> Result<DataFrame> {
         let cols = if columns.is_empty() {
             self.logical_plan()
@@ -2396,7 +2396,7 @@ impl DataFrame {
                 .map(|f| f.as_ref().clone())
                 .collect()
         } else {
-            self.find_columns(&columns)?
+            self.find_columns(columns)?
         };
 
         // Create projections for each column

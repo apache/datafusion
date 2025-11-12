@@ -2129,7 +2129,7 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
 
     let physical_planner =
         datafusion::physical_planner::DefaultPhysicalPlanner::default();
-    physical_planner.optimize_physical_plan(unoptimized, &session_state, |_, _| {})?;
+    physical_planner.optimize_physical_plan(&unoptimized, &session_state, |_, _| {})?;
     Ok(())
 }
 
