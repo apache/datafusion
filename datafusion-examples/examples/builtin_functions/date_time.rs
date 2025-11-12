@@ -26,8 +26,20 @@ use datafusion::common::assert_contains;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Example: Working with Date and Time Functions
+///
+/// This example demonstrates how to work with various date and time
+/// functions in DataFusion using both the DataFrame API and SQL queries.
+///
+/// It includes:
+/// - `make_date`: building `DATE` values from year, month, and day columns
+/// - `to_date`: converting string expressions into `DATE` values
+/// - `to_timestamp`: parsing strings or numeric values into `TIMESTAMP`s
+/// - `to_char`: formatting dates, timestamps, and durations as strings
+///
+/// Together, these examples show how to create, convert, and format temporal
+/// data using DataFusion’s built-in functions.
+pub async fn date_time() -> Result<()> {
     query_make_date().await?;
     query_to_date().await?;
     query_to_timestamp().await?;

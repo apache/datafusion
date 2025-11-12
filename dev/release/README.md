@@ -23,55 +23,91 @@ DataFusion typically has major releases around once per month, including breakin
 
 Patch releases are made on an adhoc basis, but we try and avoid them given the frequent major releases.
 
-## Branching Policy
+## Release Process Overview
 
-- When we prepare a new release, we create a release branch, such as `branch-37` in the Apache repository (not in a fork)
-- We update the crate version and generate the changelog in this branch and create a PR against the main branch
-- Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
-- Bug fixes can be merged to the release branch and patch releases can be created from the release branch
+New development happens on the `main` branch.
+Releases are made from branches, e.g. `branch-37` for the `37.x.y` release series.
 
-#### How to backport (add changes) to `branch-*` branch
+To prepare for a new release series, we:
 
-If you would like to propose your change for inclusion in a release branch for a
-patch release:
+- Create a new branch from `main`, such as `branch-37` in the Apache repository (not in a fork)
+- Continue merging new features changes to `main` branch
+- Prepare the release branch for release:
+  - Update version numbers in `Cargo.toml` files and create `CHANGELOG.md`
+  - Add additional changes to the release branch as needed
+- When the code is ready, create GitHub tags release candidate (rc) artifacts from the release branch.
+- After the release is approved, publish to [crates.io], the ASF distribution servers, and GitHub tags.
+
+To add changes to the release branch, depending on the change we either:
+
+- Fix the issue on `main` and then backport the change to the release branch (e.g. [#18129])
+- Fix the issue on the release branch and then forward-port the change back to `main` (e.g.[#18057])
+
+[crates.io]: https://crates.io/crates/datafusion
+[#18129]: https://github.com/apache/datafusion/pull/18129
+[#18057]: https://github.com/apache/datafusion/pull/18057
+
+## Backporting (add changes) to `branch-*` branch
+
+If you would like to propose your change for inclusion in a patch release, the
+change must be applied to the relevant release branch. To do so please follow
+these steps:
 
 1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
 2. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
 3. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
-For example, to backport commit `12345` from `main` to `branch-43`:
+For example, to backport commit `12345` from `main` to `branch-50`:
 
 ```shell
-git checkout branch-43
-git checkout -b backport_to_43
-git cherry-pick 12345
+git checkout branch-50
+git checkout -b backport_to_50
+git cherry-pick 12345 # your git commit hash
 git push -u <your fork>
-# make a PR as normal
+# make a PR as normal targeting branch-50, prefixed with [branch-50]
 ```
 
-[example release issue]: https://github.com/apache/datafusion/issues/9904
-[example backport pr]: https://github.com/apache/datafusion/pull/10123
+It is also acceptable to fix the issue directly on the release branch first
+and then cherry-pick the change back to `main` branch in a new PR.
 
-## Release Prerequisite
+[example release issue]: https://github.com/apache/datafusion/issues/18072
+[example backport pr]: https://github.com/apache/datafusion/pull/18131
 
-- Have upstream git repo `git@github.com:apache/datafusion.git` add as git remote `apache`.
-- Created a personal access token in GitHub for changelog automation script.
-  - Github PAT should be created with `repo` access
-- Make sure your signing key is added to the following files in SVN:
-  - https://dist.apache.org/repos/dist/dev/datafusion/KEYS
-  - https://dist.apache.org/repos/dist/release/datafusion/KEYS
+## Release Prerequisites
 
-### How to add signing key
+### Add git remote for `apache` repo
+
+The instructions below assume the upstream git repo `git@github.com:apache/datafusion.git` in remote `apache`.
+
+```shell
+git remote add apache git@github.com:apache/datafusion.git
+```
+
+### Create GitHub Personal Access Token (PAT)
+
+A personal access token (PAT) is needed for changelog automation script. If you
+do not already have one, create a token with the `repo` access by navigating to
+[GitHub Developer Settings] page, and [follow these steps].
+
+[github developer settings]: https://github.com/settings/developers
+[follow these steps]: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token
+
+### Add GPG Public Key to SVN `KEYS` file
+
+If you will be releasing the final tarball, your GPG public key must be present in the following SVN files:
+
+- https://dist.apache.org/repos/dist/dev/datafusion/KEYS
+- https://dist.apache.org/repos/dist/release/datafusion/KEYS
 
 See instructions at https://infra.apache.org/release-signing.html#generate for generating keys.
 
-Committers can add signing keys in Subversion client with their ASF account. e.g.:
+Committers can add signing keys using the Subversion client and their ASF account:
 
 ```shell
 $ svn co https://dist.apache.org/repos/dist/dev/datafusion
 $ cd datafusion
-$ editor KEYS
-$ svn ci KEYS
+$ editor KEYS # add your key here
+$ svn ci KEYS # commit changes
 ```
 
 Follow the instructions in the header of the KEYS file to append your key. Here is an example:
@@ -81,35 +117,61 @@ Follow the instructions in the header of the KEYS file to append your key. Here 
 svn commit KEYS -m "Add key for John Doe"
 ```
 
-## Process Overview
+## Release Process: Step by Step
 
 As part of the Apache governance model, official releases consist of signed
 source tarballs approved by the PMC.
+We then publish the code in the approved artifacts to crates.io.
 
-We then use the code in the approved artifacts to release to crates.io and
-PyPI.
+### 1. Create Release Branch
 
-### Change Log
+First create a new release branch from `main` in the apache repository.
 
-We maintain a `CHANGELOG.md` so our users know what has been changed between releases.
+For example, to create the `branch-51` branch for the `51.x.y` release series:
 
-You will need a GitHub Personal Access Token for the following steps. Follow
-[these instructions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
-to generate one if you do not already have one.
+```shell
+git fetch apache             # make sure we are up to date
+git checkout apache/main     # checkout current latest development branch
+git checkout -b branch-51    # create local branch
+git push -u apache branch-51 # push branch to apache remote
+```
 
-The changelog is generated using a Python script. There is a dependency on `PyGitHub`, which can be installed using pip:
+### 2. Prepare PR to Update Changelog and the Release Version
+
+First, prepare a PR to update the changelog and versions to reflect the planned
+release. See [#18173](https://github.com/apache/datafusion/pull/18173) for an example.
+
+#### Update Version Numbers
+
+Manually update the DataFusion version in the root `Cargo.toml` to reflect the new release version.
+
+Ensure Cargo.lock is updated accordingly by running:
+
+```shell
+cargo check -p datafusion
+```
+
+#### Changelog Generation
+
+We maintain a [changelog] so our users know what has been changed between releases.
+
+[changelog]: ../changelog
+
+The changelog is generated using a Python script.
+
+To run the script, you will need a GitHub Personal Access Token (described in the prerequisites section) and the `PyGitHub` library. First install the `PyGitHub` dependency via `pip`:
 
 ```shell
 pip3 install PyGitHub
 ```
 
-To generate the changelog, set the `GITHUB_TOKEN` environment variable to a valid token and then run the script
-providing two commit ids or tags followed by the version number of the release being created. The following
-example generates a change log of all changes between the first commit and the current HEAD revision.
+To generate the changelog, set the `GITHUB_TOKEN` environment variable and then run `./dev/release/generate-changelog.py`
+providing two commit ids or tags followed by the version number of the release being created. For example,
+to generate a change log of all changes between the `50.3.0` tag and `branch-51`, in preparation for release `51.0.0`:
 
 ```shell
 export GITHUB_TOKEN=<your-token-here>
-./dev/release/generate-changelog.py 24.0.0 HEAD 25.0.0 > dev/changelog/25.0.0.md
+./dev/release/generate-changelog.py 50.3.0 branch-51 51.0.0 > dev/changelog/51.0.0.md
 ```
 
 This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
@@ -118,15 +180,20 @@ titles starting with `feat:`, `fix:`, or `docs:`.
 Once the change log is generated, run `prettier` to format the document:
 
 ```shell
-prettier -w dev/changelog/25.0.0md
+prettier -w dev/changelog/51.0.0.md
 ```
 
-## Prepare release commits and PR
+#### Commit and PR
 
-Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
-release.
+Then commit the changes and create a PR targeting the release branch.
 
-See [#9697](https://github.com/apache/datafusion/pull/9697) for an example.
+```shell
+git commit -a -m 'Update version'
+```
+
+Remember to merge any fixes back to `main` branch as well.
+
+### 3. Prepare a PR to Modify `asf.yaml`
 
 Modify `asf.yaml` to protect future release candidate branch to prevent accidental merges:
 
@@ -137,119 +204,124 @@ branch-50:
     required_approving_review_count: 1
 ```
 
-Here are the commands that could be used to prepare the `38.0.0` release:
-
-### Update Version
-
-Checkout the main commit to be released
-
-```shell
-git fetch apache
-git checkout apache/main
-```
-
-Manually update the datafusion version in the root `Cargo.toml` to `38.0.0`.
-
-Run `cargo test` to re-generate some example files:
-
-```shell
-cargo test
-```
-
-Lastly commit the version change:
-
-```shell
-git commit -a -m 'Update version'
-```
-
-## Prepare release candidate artifacts
+### 4. Prepare Release Candidate Artifacts
 
 After the PR gets merged, you are ready to create release artifacts based off the
 merged commit.
 
 (Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
 
-### Pick a Release Candidate (RC) number
+#### Pick a Release Candidate (RC) number
 
-Pick numbers in sequential order, with `0` for `rc0`, `1` for `rc1`, etc.
+Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
-### Create git tag for the release:
+#### Create git Tag for the Release:
 
 While the official release artifacts are signed tarballs and zip files, we also
-tag the commit it was created for convenience and code archaeology.
+tag the commit it was created for convenience and code archaeology. Release tags
+have the format `<version>` (e.g. `38.0.0`), and release candidates have the
+format `<version>-rc<rc>` (e.g. `38.0.0-rc0`). See [the list of existing
+tags].
 
-Using a string such as `38.0.0` as the `<version>`, create and push the tag by running these commands:
+[the list of existing tags]: https://github.com/apache/datafusion/tags
+
+Using a string such as `38.0.0` as the `<version>`, create and push the rc tag by running these commands:
 
 ```shell
 git fetch apache
-git tag <version>-<rc> apache/main
-# push tag to Github remote
-git push apache <version>
+git tag <version>-<rc> apache/branch-X # create tag from the release branch
+git push apache <version>-<rc>         # push tag to Github remote
 ```
 
-### Create, sign, and upload artifacts
-
-Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
+For example, to create the `50.3.0-rc1 tag from `branch-50`:
 
 ```shell
-GH_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 38.0.0 0
+git fetch apache
+git tag 50.3.0-rc1 apache/branch-50
+git push apache 50.3.0-rc1
+```
+
+#### Create, Sign, and Upload Artifacts
+
+Run the `create-tarball.sh` script with the `<version>` tag and `<rc>` and you determined in previous steps:
+
+For example, to create the `50.3.0-rc1` artifacts:
+
+```shell
+GH_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 50.3.0 1
 ```
 
 The `create-tarball.sh` script
 
-1. creates and uploads all release candidate artifacts to the [datafusion
+1. Creates and uploads all release candidate artifacts to the [datafusion
    dev](https://dist.apache.org/repos/dist/dev/datafusion) location on the
-   apache distribution svn server
+   apache distribution SVN server
 
-2. provide you an email template to
+2. Provides you an email template to
    send to dev@datafusion.apache.org for release voting.
 
-### Vote on Release Candidate artifacts
+### 5. Vote on Release Candidate Artifacts
 
 Send the email output from the script to dev@datafusion.apache.org.
 
-For the release to become "official" it needs at least three PMC members to vote +1 on it.
+In order to publish the release on crates.io, it must be "official". To become
+official it needs at least three PMC members to vote +1 on it.
 
-### Verifying Release Candidates
+#### Verifying Release Candidates
 
 The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
 
 ```shell
-./dev/release/verify-release-candidate.sh 38.0.0 0
+./dev/release/verify-release-candidate.sh 50.3.0 1
 ```
 
-#### If the release is not approved
+#### If the Release is not Approved
 
 If the release is not approved, fix whatever the problem is, merge changelog
-changes into main if there is any and try again with the next RC number.
+changes into the release branch and try again with the next RC number.
 
-## Finalize the release
+Remember to merge any fixes back to `main` branch as well.
+
+#### If the Release is Approved: Call the Vote
+
+Call the vote on the Arrow dev list by replying to the RC voting thread. The
+reply should have a new subject constructed by adding `[RESULT]` prefix to the
+old subject line.
+
+Sample announcement template:
+
+```
+The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
+with the release verification.
+```
+
+### 6. Finalize the Release
 
 NOTE: steps in this section can only be done by PMC members.
 
-### After the release is approved
+#### After the release is approved
 
 Move artifacts to the release location in SVN, e.g.
-https://dist.apache.org/repos/dist/release/datafusion/datafusion-38.0.0/, using
+https://dist.apache.org/repos/dist/release/datafusion/datafusion-50.3.0/, using
 the `release-tarball.sh` script:
 
 ```shell
-./dev/release/release-tarball.sh 38.0.0 0
+./dev/release/release-tarball.sh 50.3.0 1
 ```
 
 Congratulations! The release is now official!
 
-### Create release git tags
+### 7. Create Release git tags
 
 Tag the same release candidate commit with the final release tag
 
 ```shell
-git co apache/38.0.0-rc0
-git tag 38.0.0
-git push apache 38.0.0
+git co apache/50.3.0-rc1
+git tag 50.3.0
+git push apache 50.3.0
 ```
 
-### Publish on Crates.io
+### 8. Publish on Crates.io
 
 Only approved releases of the tarball should be published to
 crates.io, in order to conform to Apache Software Foundation
@@ -261,7 +333,7 @@ been made to crates.io using the following instructions.
 Follow [these
 instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
 create an account and login to crates.io before asking to be added as an owner
-to all of the DataFusion crates.
+to all DataFusion crates.
 
 Download and unpack the official release tarball
 
@@ -312,30 +384,21 @@ Verify that the Cargo.toml in the tarball contains the correct version
 
 ### Publish datafusion-cli on Homebrew
 
-[`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
+Note: [`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
 so no action is needed.
 
-### Call the vote
+### 9: Add the release to Apache Reporter
 
-Call the vote on the Arrow dev list by replying to the RC voting thread. The
-reply should have a new subject constructed by adding `[RESULT]` prefix to the
-old subject line.
-
-Sample announcement template:
-
-```
-The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
-with the release verification.
-```
-
-### Add the release to Apache Reporter
-
-Add the release to https://reporter.apache.org/addrelease.html?datafusion using the version number e.g. 38.0.0.
+When you have published the release, please help the project by adding the release to
+[Apache Reporter](https://reporter.apache.org/). The reporter system should
+send you a reminder email, but in case you miss it, you can add
+the release to https://reporter.apache.org/addrelease.html?datafusion following
+the examples from previous releases.
 
 The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
-### Delete old RCs and Releases
+### 10: Delete old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
@@ -371,29 +434,3 @@ Delete a release:
 ```shell
 svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-37.0.0
 ```
-
-### Optional: Write a blog post announcing the release
-
-We typically crowd source release announcements by collaborating on a Google document, usually starting
-with a copy of the previous release announcement.
-
-Run the following commands to get the number of commits and number of unique contributors for inclusion in the blog post.
-
-```shell
-git log --pretty=oneline 37.0.0..38.0.0 datafusion datafusion-cli datafusion-examples | wc -l
-git shortlog -sn 37.0.0..38.0.0 datafusion datafusion-cli datafusion-examples | wc -l
-```
-
-Once there is consensus on the contents of the post, create a PR to add a blog post to the
-[arrow-site](https://github.com/apache/arrow-site) repository. Note that there is no need for a formal
-PMC vote on the blog post contents since this isn't considered to be a "release".
-
-Here is an example blog post PR:
-
-- https://github.com/apache/arrow-site/pull/217
-
-Once the PR is merged, a GitHub action will publish the new blog post to https://arrow.apache.org/blog/.
-
-### Update the version on the download page
-
-Update the version on the [download page](https://datafusion.apache.org/download) to point to the latest release [here](../../docs/source/download.md).

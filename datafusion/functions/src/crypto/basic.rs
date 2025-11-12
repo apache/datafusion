@@ -89,6 +89,7 @@ macro_rules! digest_to_scalar {
         ScalarValue::Binary($INPUT.as_ref().map(|v| {
             let mut digest = $METHOD::default();
             digest.update(v);
+            #[allow(deprecated)]
             digest.finalize().as_slice().to_vec()
         }))
     }};

@@ -342,7 +342,7 @@ impl CpuRuntime {
     /// message such as:
     ///
     /// ```text
-    ///A Tokio 1.x context was found, but IO is disabled.
+    /// A Tokio 1.x context was found, but IO is disabled.
     /// ```
     pub fn handle(&self) -> &Handle {
         &self.handle

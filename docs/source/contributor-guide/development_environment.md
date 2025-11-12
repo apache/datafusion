@@ -77,7 +77,7 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 
 - `rustup update stable` DataFusion generally uses the latest stable release of Rust, though it may lag when new Rust toolchains release
   - See which toolchain is currently pinned in the [`rust-toolchain.toml`](https://github.com/apache/datafusion/blob/main/rust-toolchain.toml) file
-  - This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. `rustup component add --toolchain 1.88 rust-analyzer`
+  - This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. `rustup component add --toolchain 1.88.0 rust-analyzer`
 - `cargo build`
 - `cargo fmt` to format the code
 - etc.

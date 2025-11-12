@@ -119,7 +119,6 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
 ///     Projection: table.column1, table.column2
 ///       Window: window_function
 ///         TableScan: table
-///
 pub(super) fn rewrite_qualify(plan: LogicalPlan) -> Result<LogicalPlan> {
     let transformed_plan = plan.transform_up(|plan| match plan {
         // Check if the filter's input is a Window plan

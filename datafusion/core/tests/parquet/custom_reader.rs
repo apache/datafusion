@@ -80,7 +80,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         .collect();
 
     let source = Arc::new(
-        ParquetSource::default()
+        ParquetSource::new(file_schema.clone())
             // prepare the scan
             .with_parquet_file_reader_factory(Arc::new(
                 InMemoryParquetFileReaderFactory(Arc::clone(&in_memory_object_store)),
@@ -89,7 +89,6 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     let base_config = FileScanConfigBuilder::new(
         // just any url that doesn't point to in memory object store
         ObjectStoreUrl::local_filesystem(),
-        file_schema,
         source,
     )
     .with_file_group(file_group)

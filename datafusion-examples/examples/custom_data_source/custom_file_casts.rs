@@ -44,9 +44,7 @@ use object_store::{ObjectStore, PutPayload};
 // This example enforces that casts must be strictly widening: if the file type is Int64 and the table type is Int32, it will error
 // before even reading the data.
 // Without this custom cast rule DataFusion would happily do the narrowing cast, potentially erroring only if it found a row with data it could not cast.
-
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn custom_file_casts() -> Result<()> {
     println!("=== Creating example data ===");
 
     // Create a logical / table schema with an Int32 column

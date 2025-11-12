@@ -1627,7 +1627,9 @@ async fn register_table() -> Result<()> {
     let df_impl = DataFrame::new(ctx.state(), df.logical_plan().clone());
 
     // register a dataframe as a table
-    ctx.register_table("test_table", df_impl.clone().into_view())?;
+    let table_provider = df_impl.clone().into_view();
+    assert_eq!(table_provider.table_type(), TableType::View);
+    ctx.register_table("test_table", table_provider)?;
 
     // pull the table out
     let table = ctx.table("test_table").await?;
@@ -2864,10 +2866,9 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     |               |       ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*), count(Int64(1))@1 as count(Int64(1))] |
     |               |         AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))]                       |
     |               |           CoalesceBatchesExec: target_batch_size=8192                                                      |
-    |               |             RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4                               |
-    |               |               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                         |
-    |               |                 AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]                        |
-    |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                        |
+    |               |             RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1                               |
+    |               |               AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]                          |
+    |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                          |
     |               |                                                                                                            |
     +---------------+------------------------------------------------------------------------------------------------------------+
     "###
@@ -2876,22 +2877,21 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
         @r###"
-    +---------------+--------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                           |
-    +---------------+--------------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) ASC NULLS LAST                                                  |
-    |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]            |
-    |               |     TableScan: t1 projection=[b]                                               |
-    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                           |
-    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]     |
-    |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(*)]      |
-    |               |       CoalesceBatchesExec: target_batch_size=8192                              |
-    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4       |
-    |               |           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1 |
-    |               |             AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(*)]       |
-    |               |               DataSourceExec: partitions=1, partition_sizes=[1]                |
-    |               |                                                                                |
-    +---------------+--------------------------------------------------------------------------------+
+    +---------------+----------------------------------------------------------------------------+
+    | plan_type     | plan                                                                       |
+    +---------------+----------------------------------------------------------------------------+
+    | logical_plan  | Sort: count(*) ASC NULLS LAST                                              |
+    |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]        |
+    |               |     TableScan: t1 projection=[b]                                           |
+    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                       |
+    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true] |
+    |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(*)]  |
+    |               |       CoalesceBatchesExec: target_batch_size=8192                          |
+    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1   |
+    |               |           AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(*)]     |
+    |               |             DataSourceExec: partitions=1, partition_sizes=[1]              |
+    |               |                                                                            |
+    +---------------+----------------------------------------------------------------------------+
     "###
     );
     Ok(())
@@ -3351,10 +3351,9 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |         ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                             |
     |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                    |
     |               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |
-    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4                                            |
-    |               |                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                      |
-    |               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                     |
-    |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |
+    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                            |
+    |               |                 AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                       |
+    |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                                       |
     |               |                                                                                                                           |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
     "
@@ -3408,10 +3407,9 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                    |
     |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                           |
     |               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |
-    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4                                            |
-    |               |                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                      |
-    |               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                            |
-    |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |
+    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                            |
+    |               |                 AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                              |
+    |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                                       |
     |               |                                                                                                                           |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
     "

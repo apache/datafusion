@@ -386,7 +386,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                let args = self.function_args_to_expr(args, schema, planner_context)?;
+                let (args, arg_names) =
+                    self.function_args_to_expr_with_names(args, schema, planner_context)?;
+
+                let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+                    let signature = match &fun {
+                        WindowFunctionDefinition::AggregateUDF(udaf) => udaf.signature(),
+                        WindowFunctionDefinition::WindowUDF(udwf) => udwf.signature(),
+                    };
+
+                    if let Some(param_names) = &signature.parameter_names {
+                        datafusion_expr::arguments::resolve_function_arguments(
+                            param_names,
+                            args,
+                            arg_names,
+                        )?
+                    } else {
+                        return plan_err!(
+                            "Window function '{}' does not support named arguments",
+                            name
+                        );
+                    }
+                } else {
+                    args
+                };
 
                 // Plan FILTER clause if present
                 let filter = filter
@@ -396,7 +419,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
-                    args,
+                    args: resolved_args,
                     partition_by,
                     order_by,
                     window_frame,
@@ -464,8 +487,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     );
                 }
 
-                let mut args =
-                    self.function_args_to_expr(args, schema, planner_context)?;
+                let (mut args, mut arg_names) =
+                    self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
                 let order_by = if fm.supports_within_group_clause() {
                     let within_group = self.order_by_to_sort_expr(
@@ -479,6 +502,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Add the WITHIN GROUP ordering expressions to the front of the argument list
                     // So function(arg) WITHIN GROUP (ORDER BY x) becomes function(x, arg)
                     if !within_group.is_empty() {
+                        // Prepend None arg names for each WITHIN GROUP expression
+                        let within_group_count = within_group.len();
+                        arg_names = std::iter::repeat_n(None, within_group_count)
+                            .chain(arg_names)
+                            .collect();
+
                         args = within_group
                             .iter()
                             .map(|sort| sort.expr.clone())
@@ -506,9 +535,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .transpose()?
                     .map(Box::new);
 
+                let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+                    if let Some(param_names) = &fm.signature().parameter_names {
+                        datafusion_expr::arguments::resolve_function_arguments(
+                            param_names,
+                            args,
+                            arg_names,
+                        )?
+                    } else {
+                        return plan_err!(
+                            "Aggregate function '{}' does not support named arguments",
+                            fm.name()
+                        );
+                    }
+                } else {
+                    args
+                };
+
                 let mut aggregate_expr = RawAggregateExpr {
                     func: fm,
-                    args,
+                    args: resolved_args,
                     distinct,
                     filter,
                     order_by,
