@@ -609,21 +609,20 @@ config_namespace! {
 
         /// Whether to enable ANSI SQL mode.
         ///
-        /// Currently only used in DataFusion Spark crate
+        /// When `enable_ansi_mode` is set to `true`, the query engine follows ANSI SQL
+        /// semantics for expressions, casting, and error handling. This means:
+        /// - **Strict type coercion rules:** implicit casts between incompatible types are disallowed.
+        /// - **Standard SQL arithmetic behavior:** operations such as division by zero,
+        ///   numeric overflow, or invalid casts raise runtime errors rather than returning
+        ///   `NULL` or adjusted values.
+        /// - **Consistent ANSI behavior** for string concatenation, comparisons, and `NULL` handling.
         ///
-        /// When `enable_ansi_mode` is set to `true`, the query engine enforces ANSI SQL
-        /// semantics for expressions, casting, and error handling. This includes:
-        /// - Strict type coercion rules: implicit casts between incompatible types are disallowed.
-        /// - Standard SQL arithmetic behavior: operations like division by zero or overflow
-        ///   result in runtime errors instead of returning `NULL` or silently truncating values.
-        /// - Reserved keyword enforcement and stricter identifier resolution rules.
-        /// - Behavior consistent with ANSI SQL for string concatenation, comparisons,
-        ///   and `NULL` handling.
-        ///
-        /// When set to `false` (the default), the engine uses a more permissive,
-        /// non-ANSI mode for better compatibility and convenience. This may allow
-        /// implicit type conversions, tolerate invalid inputs, or apply lenient
-        /// error handling.
+        /// When `enable_ansi_mode` is `false` (the default), the engine uses a more permissive,
+        /// non-ANSI mode designed for user convenience and backward compatibility. In this mode:
+        /// - Implicit casts between types are allowed (e.g., string to integer when possible).
+        /// - Arithmetic operations are more lenient — for example, `abs()` on the minimum
+        ///   representable integer value returns the input value instead of raising overflow.
+        /// - Division by zero or invalid casts may return `NULL` instead of failing.
         ///
         /// # Default
         /// `false` — ANSI SQL mode is disabled by default.
