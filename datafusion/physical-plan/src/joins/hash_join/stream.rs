@@ -51,6 +51,7 @@ use datafusion_common::{
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{ready, Stream, StreamExt};
 
 /// Represents build-side of hash join.
@@ -447,11 +448,7 @@ impl HashJoinStream {
             }
             Some(Ok(batch)) => {
                 // Precalculate hash values for fetched batch
-                let keys_values = self
-                    .on_right
-                    .iter()
-                    .map(|c| c.evaluate(&batch)?.into_array(batch.num_rows()))
-                    .collect::<Result<Vec<_>>>()?;
+                let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
                 self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);

@@ -75,6 +75,7 @@ use datafusion_physical_expr::{
 };
 
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -1668,10 +1669,7 @@ pub fn update_hash(
     fifo_hashmap: bool,
 ) -> Result<()> {
     // evaluate the keys
-    let keys_values = on
-        .iter()
-        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
+    let keys_values = evaluate_expressions_to_arrays(on, batch)?;
 
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
