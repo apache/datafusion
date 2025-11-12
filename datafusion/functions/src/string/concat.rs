@@ -117,18 +117,34 @@ impl ConcatFunc {
 
         match arr.data_type() {
             DataType::List(_) => {
-                let list_array = arr.as_any().downcast_ref::<ListArray>()
-                    .ok_or_else(|| datafusion_common::DataFusionError::Plan("Failed to downcast to ListArray".to_string()))?;
+                let list_array =
+                    arr.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+                        datafusion_common::DataFusionError::Plan(
+                            "Failed to downcast to ListArray".to_string(),
+                        )
+                    })?;
                 Ok(Some(list_array.value(row_idx)))
             }
             DataType::LargeList(_) => {
-                let list_array = arr.as_any().downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| datafusion_common::DataFusionError::Plan("Failed to downcast to LargeListArray".to_string()))?;
+                let list_array = arr
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Plan(
+                            "Failed to downcast to LargeListArray".to_string(),
+                        )
+                    })?;
                 Ok(Some(list_array.value(row_idx)))
             }
             DataType::FixedSizeList(_, _) => {
-                let list_array = arr.as_any().downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| datafusion_common::DataFusionError::Plan("Failed to downcast to FixedSizeListArray".to_string()))?;
+                let list_array = arr
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Plan(
+                            "Failed to downcast to FixedSizeListArray".to_string(),
+                        )
+                    })?;
                 Ok(Some(list_array.value(row_idx)))
             }
             _ => plan_err!("Expected list array, got {}", arr.data_type()),
@@ -148,8 +164,12 @@ impl ConcatFunc {
 
         match scalar {
             ScalarValue::List(arr) => {
-                let list_array = arr.as_any().downcast_ref::<ListArray>()
-                    .ok_or_else(|| datafusion_common::DataFusionError::Plan("Failed to downcast scalar List to ListArray".to_string()))?;
+                let list_array =
+                    arr.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+                        datafusion_common::DataFusionError::Plan(
+                            "Failed to downcast scalar List to ListArray".to_string(),
+                        )
+                    })?;
                 if !list_array.is_null(0) {
                     Ok(Some(list_array.value(0)))
                 } else {
@@ -157,8 +177,15 @@ impl ConcatFunc {
                 }
             }
             ScalarValue::LargeList(arr) => {
-                let list_array = arr.as_any().downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| datafusion_common::DataFusionError::Plan("Failed to downcast scalar LargeList to LargeListArray".to_string()))?;
+                let list_array = arr
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Plan(
+                            "Failed to downcast scalar LargeList to LargeListArray"
+                                .to_string(),
+                        )
+                    })?;
                 if !list_array.is_null(0) {
                     Ok(Some(list_array.value(0)))
                 } else {
@@ -895,10 +922,7 @@ mod tests {
             Some(vec![Some(3), Some(4)]),
         ]));
 
-        let args = vec![
-            ColumnarValue::Array(arr1),
-            ColumnarValue::Array(arr2),
-        ];
+        let args = vec![ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)];
 
         let arg_fields = vec![
             Field::new("a", List(Arc::new(Field::new("item", Int32, true))), true),
@@ -912,18 +936,24 @@ mod tests {
             args,
             arg_fields,
             number_rows: 1,
-            return_field: Field::new("result", List(Arc::new(Field::new("item", Int32, true))), true).into(),
+            return_field: Field::new(
+                "result",
+                List(Arc::new(Field::new("item", Int32, true))),
+                true,
+            )
+            .into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatFunc::new().invoke_with_args(func_args)?;
-        
+
         match result {
             ColumnarValue::Array(array) => {
                 let list_array = array.as_any().downcast_ref::<ListArray>().unwrap();
                 let concatenated = list_array.value(0);
-                let int_array = concatenated.as_any().downcast_ref::<Int32Array>().unwrap();
-                
+                let int_array =
+                    concatenated.as_any().downcast_ref::<Int32Array>().unwrap();
+
                 assert_eq!(int_array.len(), 4);
                 assert_eq!(int_array.value(0), 1);
                 assert_eq!(int_array.value(1), 2);
@@ -939,13 +969,10 @@ mod tests {
     #[test]
     fn test_mixed_type_error() -> Result<()> {
         use arrow::datatypes::Field;
-        
+
         // Test that coerce_types properly rejects mixed array/non-array types
         let func = ConcatFunc::new();
-        let arg_types = vec![
-            List(Arc::new(Field::new("item", Int32, true))),
-            Utf8,
-        ];
+        let arg_types = vec![List(Arc::new(Field::new("item", Int32, true))), Utf8];
 
         let result = func.coerce_types(&arg_types);
         assert!(result.is_err());
