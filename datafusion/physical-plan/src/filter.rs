@@ -729,7 +729,6 @@ impl Stream for FilterExecStream {
                         }).and_then(|(array, batch)| {
                             match as_boolean_array(&array) {
                                 Ok(filter_array) => {
-                                    self.metrics.selectivity.add_part(filter_array.true_count());
                                     self.metrics.selectivity.add_total(batch.num_rows());
 
                                     self.batch_coalescer.push_batch_with_filter(batch, filter_array)?;
@@ -746,10 +745,12 @@ impl Stream for FilterExecStream {
                     timer.done();
 
                     if self.batch_coalescer.has_completed_batch() {
-                        poll = Poll::Ready(Some(Ok(self
+                        let batch = self
                             .batch_coalescer
                             .next_completed_batch()
-                            .expect("has_completed_batch is true"))));
+                            .expect("has_completed_batch is true");
+                        self.metrics.selectivity.add_part(batch.num_rows());
+                        poll = Poll::Ready(Some(Ok(batch)));
                         break;
                     }
                     continue;
@@ -759,7 +760,14 @@ impl Stream for FilterExecStream {
                     match self.batch_coalescer.finish_buffered_batch() {
                         Ok(()) => {
                             poll = Poll::Ready(
-                                self.batch_coalescer.next_completed_batch().map(Ok),
+                                self.batch_coalescer.next_completed_batch().map(
+                                    |batch| {
+                                        self.metrics
+                                            .selectivity
+                                            .add_part(batch.num_rows());
+                                        Ok(batch)
+                                    },
+                                ),
                             );
                         }
                         Err(e) => {
