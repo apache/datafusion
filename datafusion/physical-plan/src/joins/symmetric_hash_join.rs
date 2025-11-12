@@ -1240,7 +1240,7 @@ impl OneSideHashJoiner {
             filter_intervals.push((expr.node_index(), expr.interval().clone()))
         }
         // Update the physical expression graph using the join filter intervals:
-        graph.update_ranges(&mut filter_intervals, Interval::CERTAINLY_TRUE)?;
+        graph.update_ranges(&mut filter_intervals, Interval::TRUE)?;
         // Extract the new join filter interval for the build side:
         let calculated_build_side_interval = filter_intervals.remove(0).1;
         // If the intervals have not changed, return early without pruning:

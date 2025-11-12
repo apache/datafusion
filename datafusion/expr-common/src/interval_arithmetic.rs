@@ -430,20 +430,32 @@ impl Interval {
         )
     }
 
-    pub const CERTAINLY_FALSE: Self = Self {
+    /// An interval containing only the 'false' truth value.
+    pub const FALSE: Self = Self {
         lower: ScalarValue::Boolean(Some(false)),
         upper: ScalarValue::Boolean(Some(false)),
     };
 
-    pub const UNCERTAIN: Self = Self {
+    #[deprecated(since = "52.0.0", note = "Use `FALSE` instead")]
+    pub const CERTAINLY_FALSE: Self = Self::FALSE;
+
+    /// An interval containing both the 'true', and 'false' truth values.
+    pub const TRUE_OR_FALSE: Self = Self {
         lower: ScalarValue::Boolean(Some(false)),
         upper: ScalarValue::Boolean(Some(true)),
     };
 
-    pub const CERTAINLY_TRUE: Self = Self {
+    #[deprecated(since = "52.0.0", note = "Use `TRUE_OR_FALSE` instead")]
+    pub const UNCERTAIN: Self = Self::TRUE_OR_FALSE;
+
+    /// An interval containing only the 'true' truth value.
+    pub const TRUE: Self = Self {
         lower: ScalarValue::Boolean(Some(true)),
         upper: ScalarValue::Boolean(Some(true)),
     };
+
+    #[deprecated(since = "52.0.0", note = "Use `TRUE` instead")]
+    pub const CERTAINLY_TRUE: Self = Self::TRUE;
 
     /// Decide if this interval is certainly greater than, possibly greater than,
     /// or can't be greater than `other` by returning `[true, true]`,
@@ -465,16 +477,16 @@ impl Interval {
         {
             // Values in this interval are certainly less than or equal to
             // those in the given interval.
-            Ok(Self::CERTAINLY_FALSE)
+            Ok(Self::FALSE)
         } else if !(self.lower.is_null() || rhs.upper.is_null())
             && (self.lower > rhs.upper)
         {
             // Values in this interval are certainly greater than those in the
             // given interval.
-            Ok(Self::CERTAINLY_TRUE)
+            Ok(Self::TRUE)
         } else {
             // All outcomes are possible.
-            Ok(Self::UNCERTAIN)
+            Ok(Self::TRUE_OR_FALSE)
         }
     }
 
@@ -498,16 +510,16 @@ impl Interval {
         {
             // Values in this interval are certainly greater than or equal to
             // those in the given interval.
-            Ok(Self::CERTAINLY_TRUE)
+            Ok(Self::TRUE)
         } else if !(self.upper.is_null() || rhs.lower.is_null())
             && (self.upper < rhs.lower)
         {
             // Values in this interval are certainly less than those in the
             // given interval.
-            Ok(Self::CERTAINLY_FALSE)
+            Ok(Self::FALSE)
         } else {
             // All outcomes are possible.
-            Ok(Self::UNCERTAIN)
+            Ok(Self::TRUE_OR_FALSE)
         }
     }
 
@@ -556,11 +568,11 @@ impl Interval {
             && (rhs.lower == rhs.upper)
             && (self.lower == rhs.lower)
         {
-            Ok(Self::CERTAINLY_TRUE)
+            Ok(Self::TRUE)
         } else if self.intersect(rhs)?.is_none() {
-            Ok(Self::CERTAINLY_FALSE)
+            Ok(Self::FALSE)
         } else {
-            Ok(Self::UNCERTAIN)
+            Ok(Self::TRUE_OR_FALSE)
         }
     }
 
@@ -585,7 +597,7 @@ impl Interval {
             }
 
             // Return UNCERTAIN when intervals don't have concrete boolean bounds
-            _ => Ok(Self::UNCERTAIN),
+            _ => Ok(Self::TRUE_OR_FALSE),
         }
     }
 
@@ -610,7 +622,7 @@ impl Interval {
             }
 
             // Return UNCERTAIN when intervals don't have concrete boolean bounds
-            _ => Ok(Self::UNCERTAIN),
+            _ => Ok(Self::TRUE_OR_FALSE),
         }
     }
 
@@ -618,12 +630,12 @@ impl Interval {
     pub fn not(&self) -> Result<Self> {
         if self.data_type().ne(&DataType::Boolean) {
             internal_err!("Cannot apply logical negation to a non-boolean interval")
-        } else if self == &Self::CERTAINLY_TRUE {
-            Ok(Self::CERTAINLY_FALSE)
-        } else if self == &Self::CERTAINLY_FALSE {
-            Ok(Self::CERTAINLY_TRUE)
+        } else if self == &Self::TRUE {
+            Ok(Self::FALSE)
+        } else if self == &Self::FALSE {
+            Ok(Self::TRUE)
         } else {
-            Ok(Self::UNCERTAIN)
+            Ok(Self::TRUE_OR_FALSE)
         }
     }
 
@@ -749,12 +761,12 @@ impl Interval {
         match self.intersect(rhs)? {
             Some(intersection) => {
                 if &intersection == rhs {
-                    Ok(Self::CERTAINLY_TRUE)
+                    Ok(Self::TRUE)
                 } else {
-                    Ok(Self::UNCERTAIN)
+                    Ok(Self::TRUE_OR_FALSE)
                 }
             }
-            None => Ok(Self::CERTAINLY_FALSE),
+            None => Ok(Self::FALSE),
         }
     }
 
@@ -765,8 +777,7 @@ impl Interval {
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
     pub fn is_superset(&self, other: &Interval, strict: bool) -> Result<bool> {
-        Ok(!(strict && self.eq(other))
-            && (self.contains(other)? == Interval::CERTAINLY_TRUE))
+        Ok(!(strict && self.eq(other)) && (self.contains(other)? == Interval::TRUE))
     }
 
     /// Add the given interval (`other`) to this interval. Say we have intervals
@@ -875,15 +886,12 @@ impl Interval {
 
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
-        if rhs.contains(&zero_point)? == Self::CERTAINLY_TRUE && !dt.is_unsigned_integer()
-        {
+        if rhs.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer() {
             Self::make_unbounded(&dt)
         }
         // At this point, we know that only one endpoint of the right hand side
         // can be zero.
-        else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE
-            && !dt.is_unsigned_integer()
-        {
+        else if self.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer() {
             Ok(div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point))
         } else {
             Ok(div_helper_zero_exclusive(&dt, self, rhs, &zero_point))
@@ -1738,42 +1746,42 @@ impl From<ScalarValue> for NullableInterval {
 }
 
 impl NullableInterval {
-    /// An interval that only contains 'false'.
+    /// An interval containing only the 'false' truth value.
+    /// This interval is semantically equivalent to [Interval::FALSE].
     pub const FALSE: Self = NullableInterval::NotNull {
-        values: Interval::CERTAINLY_FALSE,
+        values: Interval::FALSE,
     };
 
-    /// An interval that only contains 'true'.
+    /// An interval containing only the 'true' truth value.
+    /// This interval is semantically equivalent to [Interval::TRUE].
     pub const TRUE: Self = NullableInterval::NotNull {
-        values: Interval::CERTAINLY_TRUE,
+        values: Interval::TRUE,
     };
 
-    /// An interval that only contains 'unknown' (boolean null).
+    /// An interval containing only the 'unknown' truth value.
     pub const UNKNOWN: Self = NullableInterval::Null {
         datatype: DataType::Boolean,
     };
 
-    /// An interval that only contains 'true' and 'false'.
-    /// This interval is equivalent to [Interval::UNCERTAIN].
+    /// An interval containing both the 'true', and 'false' truth values.
+    /// This interval is semantically equivalent to [Interval::TRUE_OR_FALSE].
     pub const TRUE_OR_FALSE: Self = NullableInterval::NotNull {
-        values: Interval::UNCERTAIN,
+        values: Interval::TRUE_OR_FALSE,
     };
 
-    /// An interval that only contains 'true' and 'unknown'.
+    /// An interval containing both the 'true' and 'unknown' truth values.
     pub const TRUE_OR_UNKNOWN: Self = NullableInterval::MaybeNull {
-        values: Interval::CERTAINLY_TRUE,
+        values: Interval::TRUE,
     };
 
-    /// An interval that only contains 'false' and 'unknown'.
+    /// An interval containing both the 'false' and 'unknown' truth values.
     pub const FALSE_OR_UNKNOWN: Self = NullableInterval::MaybeNull {
-        values: Interval::CERTAINLY_FALSE,
+        values: Interval::FALSE,
     };
 
-    /// An interval that contains all possible boolean values: 'true', 'false' and 'unknown'.
-    ///
-    /// Note that this is different from [Interval::UNCERTAIN] which only contains 'true' and 'false'.
-    pub const UNCERTAIN: Self = NullableInterval::MaybeNull {
-        values: Interval::UNCERTAIN,
+    /// An interval that contains all possible truth values: 'true', 'false' and 'unknown'.
+    pub const ANY_TRUTH_VALUE: Self = NullableInterval::MaybeNull {
+        values: Interval::TRUE_OR_FALSE,
     };
 
     /// Get the values interval, or None if this interval is definitely null.
@@ -1936,7 +1944,7 @@ impl NullableInterval {
     ///     result,
     ///     NullableInterval::NotNull {
     ///         // Uncertain whether inequality is true or false
-    ///         values: Interval::UNCERTAIN,
+    ///         values: Interval::TRUE_OR_FALSE,
     ///     }
     /// );
     /// ```
@@ -1945,7 +1953,7 @@ impl NullableInterval {
             Operator::IsDistinctFrom => {
                 let values = match (self, rhs) {
                     // NULL is distinct from NULL -> False
-                    (Self::Null { .. }, Self::Null { .. }) => Interval::CERTAINLY_FALSE,
+                    (Self::Null { .. }, Self::Null { .. }) => Interval::FALSE,
                     // x is distinct from y -> x != y,
                     // if at least one of them is never null.
                     (Self::NotNull { .. }, _) | (_, Self::NotNull { .. }) => {
@@ -1955,11 +1963,11 @@ impl NullableInterval {
                             (Some(lhs_values), Some(rhs_values)) => {
                                 lhs_values.equal(rhs_values)?.not()?
                             }
-                            (Some(_), None) | (None, Some(_)) => Interval::CERTAINLY_TRUE,
+                            (Some(_), None) | (None, Some(_)) => Interval::TRUE,
                             (None, None) => unreachable!("Null case handled above"),
                         }
                     }
-                    _ => Interval::UNCERTAIN,
+                    _ => Interval::TRUE_OR_FALSE,
                 };
                 // IsDistinctFrom never returns null.
                 Ok(Self::NotNull { values })
@@ -2289,8 +2297,8 @@ mod tests {
             ),
         ];
         for (first, second) in exactly_gt_cases {
-            assert_eq!(first.gt(second.clone())?, Interval::CERTAINLY_TRUE);
-            assert_eq!(second.lt(first)?, Interval::CERTAINLY_TRUE);
+            assert_eq!(first.gt(second.clone())?, Interval::TRUE);
+            assert_eq!(second.lt(first)?, Interval::TRUE);
         }
 
         let possibly_gt_cases = vec![
@@ -2326,8 +2334,8 @@ mod tests {
             ),
         ];
         for (first, second) in possibly_gt_cases {
-            assert_eq!(first.gt(second.clone())?, Interval::UNCERTAIN);
-            assert_eq!(second.lt(first)?, Interval::UNCERTAIN);
+            assert_eq!(first.gt(second.clone())?, Interval::TRUE_OR_FALSE);
+            assert_eq!(second.lt(first)?, Interval::TRUE_OR_FALSE);
         }
 
         let not_gt_cases = vec![
@@ -2363,8 +2371,8 @@ mod tests {
             ),
         ];
         for (first, second) in not_gt_cases {
-            assert_eq!(first.gt(second.clone())?, Interval::CERTAINLY_FALSE);
-            assert_eq!(second.lt(first)?, Interval::CERTAINLY_FALSE);
+            assert_eq!(first.gt(second.clone())?, Interval::FALSE);
+            assert_eq!(second.lt(first)?, Interval::FALSE);
         }
 
         Ok(())
@@ -2409,8 +2417,8 @@ mod tests {
             ),
         ];
         for (first, second) in exactly_gteq_cases {
-            assert_eq!(first.gt_eq(second.clone())?, Interval::CERTAINLY_TRUE);
-            assert_eq!(second.lt_eq(first)?, Interval::CERTAINLY_TRUE);
+            assert_eq!(first.gt_eq(second.clone())?, Interval::TRUE);
+            assert_eq!(second.lt_eq(first)?, Interval::TRUE);
         }
 
         let possibly_gteq_cases = vec![
@@ -2446,8 +2454,8 @@ mod tests {
             ),
         ];
         for (first, second) in possibly_gteq_cases {
-            assert_eq!(first.gt_eq(second.clone())?, Interval::UNCERTAIN);
-            assert_eq!(second.lt_eq(first)?, Interval::UNCERTAIN);
+            assert_eq!(first.gt_eq(second.clone())?, Interval::TRUE_OR_FALSE);
+            assert_eq!(second.lt_eq(first)?, Interval::TRUE_OR_FALSE);
         }
 
         let not_gteq_cases = vec![
@@ -2479,8 +2487,8 @@ mod tests {
             ),
         ];
         for (first, second) in not_gteq_cases {
-            assert_eq!(first.gt_eq(second.clone())?, Interval::CERTAINLY_FALSE);
-            assert_eq!(second.lt_eq(first)?, Interval::CERTAINLY_FALSE);
+            assert_eq!(first.gt_eq(second.clone())?, Interval::FALSE);
+            assert_eq!(second.lt_eq(first)?, Interval::FALSE);
         }
 
         Ok(())
@@ -2507,8 +2515,8 @@ mod tests {
             ),
         ];
         for (first, second) in exactly_eq_cases {
-            assert_eq!(first.equal(second.clone())?, Interval::CERTAINLY_TRUE);
-            assert_eq!(second.equal(first)?, Interval::CERTAINLY_TRUE);
+            assert_eq!(first.equal(second.clone())?, Interval::TRUE);
+            assert_eq!(second.equal(first)?, Interval::TRUE);
         }
 
         let possibly_eq_cases = vec![
@@ -2544,8 +2552,8 @@ mod tests {
             ),
         ];
         for (first, second) in possibly_eq_cases {
-            assert_eq!(first.equal(second.clone())?, Interval::UNCERTAIN);
-            assert_eq!(second.equal(first)?, Interval::UNCERTAIN);
+            assert_eq!(first.equal(second.clone())?, Interval::TRUE_OR_FALSE);
+            assert_eq!(second.equal(first)?, Interval::TRUE_OR_FALSE);
         }
 
         let not_eq_cases = vec![
@@ -2577,8 +2585,8 @@ mod tests {
             ),
         ];
         for (first, second) in not_eq_cases {
-            assert_eq!(first.equal(second.clone())?, Interval::CERTAINLY_FALSE);
-            assert_eq!(second.equal(first)?, Interval::CERTAINLY_FALSE);
+            assert_eq!(first.equal(second.clone())?, Interval::FALSE);
+            assert_eq!(second.equal(first)?, Interval::FALSE);
         }
 
         Ok(())
@@ -2587,51 +2595,27 @@ mod tests {
     #[test]
     fn and_test() -> Result<()> {
         let cases = vec![
+            (Interval::TRUE_OR_FALSE, Interval::FALSE, Interval::FALSE),
             (
-                Interval::UNCERTAIN,
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_FALSE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
             ),
             (
-                Interval::UNCERTAIN,
-                Interval::UNCERTAIN,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE,
+                Interval::TRUE_OR_FALSE,
             ),
+            (Interval::FALSE, Interval::FALSE, Interval::FALSE),
+            (Interval::FALSE, Interval::TRUE_OR_FALSE, Interval::FALSE),
+            (Interval::FALSE, Interval::TRUE, Interval::FALSE),
+            (Interval::TRUE, Interval::FALSE, Interval::FALSE),
             (
-                Interval::UNCERTAIN,
-                Interval::CERTAINLY_TRUE,
-                Interval::UNCERTAIN,
+                Interval::TRUE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
             ),
-            (
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_FALSE,
-            ),
-            (
-                Interval::CERTAINLY_FALSE,
-                Interval::UNCERTAIN,
-                Interval::CERTAINLY_FALSE,
-            ),
-            (
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_FALSE,
-            ),
-            (
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_FALSE,
-            ),
-            (
-                Interval::CERTAINLY_TRUE,
-                Interval::UNCERTAIN,
-                Interval::UNCERTAIN,
-            ),
-            (
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_TRUE,
-            ),
+            (Interval::TRUE, Interval::TRUE, Interval::TRUE),
         ];
 
         for case in cases {
@@ -2650,50 +2634,26 @@ mod tests {
     fn or_test() -> Result<()> {
         let cases = vec![
             (
-                Interval::UNCERTAIN,
-                Interval::CERTAINLY_FALSE,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
+                Interval::FALSE,
+                Interval::TRUE_OR_FALSE,
             ),
             (
-                Interval::UNCERTAIN,
-                Interval::UNCERTAIN,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
             ),
+            (Interval::TRUE_OR_FALSE, Interval::TRUE, Interval::TRUE),
+            (Interval::FALSE, Interval::FALSE, Interval::FALSE),
             (
-                Interval::UNCERTAIN,
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_TRUE,
+                Interval::FALSE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
             ),
-            (
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_FALSE,
-            ),
-            (
-                Interval::CERTAINLY_FALSE,
-                Interval::UNCERTAIN,
-                Interval::UNCERTAIN,
-            ),
-            (
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_TRUE,
-            ),
-            (
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_FALSE,
-                Interval::CERTAINLY_TRUE,
-            ),
-            (
-                Interval::CERTAINLY_TRUE,
-                Interval::UNCERTAIN,
-                Interval::CERTAINLY_TRUE,
-            ),
-            (
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_TRUE,
-                Interval::CERTAINLY_TRUE,
-            ),
+            (Interval::FALSE, Interval::TRUE, Interval::TRUE),
+            (Interval::TRUE, Interval::FALSE, Interval::TRUE),
+            (Interval::TRUE, Interval::TRUE_OR_FALSE, Interval::TRUE),
+            (Interval::TRUE, Interval::TRUE, Interval::TRUE),
         ];
 
         for case in cases {
@@ -2711,9 +2671,9 @@ mod tests {
     #[test]
     fn not_test() -> Result<()> {
         let cases = vec![
-            (Interval::UNCERTAIN, Interval::UNCERTAIN),
-            (Interval::CERTAINLY_FALSE, Interval::CERTAINLY_TRUE),
-            (Interval::CERTAINLY_TRUE, Interval::CERTAINLY_FALSE),
+            (Interval::TRUE_OR_FALSE, Interval::TRUE_OR_FALSE),
+            (Interval::FALSE, Interval::TRUE),
+            (Interval::TRUE, Interval::FALSE),
         ];
 
         for case in cases {
@@ -2728,8 +2688,8 @@ mod tests {
         let from_nulls =
             Interval::try_new(ScalarValue::Boolean(None), ScalarValue::Boolean(None))?;
 
-        assert!(from_nulls.or(&Interval::CERTAINLY_TRUE).is_ok());
-        assert!(from_nulls.and(&Interval::CERTAINLY_FALSE).is_ok());
+        assert!(from_nulls.or(&Interval::TRUE).is_ok());
+        assert!(from_nulls.and(&Interval::FALSE).is_ok());
 
         Ok(())
     }
@@ -2742,63 +2702,63 @@ mod tests {
             Interval::try_new(ScalarValue::Boolean(None), ScalarValue::Boolean(None))
                 .unwrap();
 
-        assert_eq!(null_interval, Interval::UNCERTAIN);
+        assert_eq!(null_interval, Interval::TRUE_OR_FALSE);
     }
 
     // Asserts that `Interval::UNCERTAIN` represents a set that contains `true`, `false`, and does
     // not contain `null`.
     #[test]
     fn test_uncertain_boolean_interval() {
-        assert!(Interval::UNCERTAIN
+        assert!(Interval::TRUE_OR_FALSE
             .contains_value(ScalarValue::Boolean(Some(true)))
             .unwrap());
-        assert!(Interval::UNCERTAIN
+        assert!(Interval::TRUE_OR_FALSE
             .contains_value(ScalarValue::Boolean(Some(false)))
             .unwrap());
-        assert!(!Interval::UNCERTAIN
+        assert!(!Interval::TRUE_OR_FALSE
             .contains_value(ScalarValue::Boolean(None))
             .unwrap());
-        assert!(!Interval::UNCERTAIN
+        assert!(!Interval::TRUE_OR_FALSE
             .contains_value(ScalarValue::Null)
             .unwrap());
     }
 
     #[test]
     fn test_and_uncertain_boolean_intervals() -> Result<()> {
-        let and_result = Interval::UNCERTAIN.and(&Interval::CERTAINLY_FALSE)?;
-        assert_eq!(and_result, Interval::CERTAINLY_FALSE);
+        let and_result = Interval::TRUE_OR_FALSE.and(&Interval::FALSE)?;
+        assert_eq!(and_result, Interval::FALSE);
 
-        let and_result = Interval::CERTAINLY_FALSE.and(&Interval::UNCERTAIN)?;
-        assert_eq!(and_result, Interval::CERTAINLY_FALSE);
+        let and_result = Interval::FALSE.and(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(and_result, Interval::FALSE);
 
-        let and_result = Interval::UNCERTAIN.and(&Interval::CERTAINLY_TRUE)?;
-        assert_eq!(and_result, Interval::UNCERTAIN);
+        let and_result = Interval::TRUE_OR_FALSE.and(&Interval::TRUE)?;
+        assert_eq!(and_result, Interval::TRUE_OR_FALSE);
 
-        let and_result = Interval::CERTAINLY_TRUE.and(&Interval::UNCERTAIN)?;
-        assert_eq!(and_result, Interval::UNCERTAIN);
+        let and_result = Interval::TRUE.and(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(and_result, Interval::TRUE_OR_FALSE);
 
-        let and_result = Interval::UNCERTAIN.and(&Interval::UNCERTAIN)?;
-        assert_eq!(and_result, Interval::UNCERTAIN);
+        let and_result = Interval::TRUE_OR_FALSE.and(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(and_result, Interval::TRUE_OR_FALSE);
 
         Ok(())
     }
 
     #[test]
     fn test_or_uncertain_boolean_intervals() -> Result<()> {
-        let or_result = Interval::UNCERTAIN.or(&Interval::CERTAINLY_FALSE)?;
-        assert_eq!(or_result, Interval::UNCERTAIN);
+        let or_result = Interval::TRUE_OR_FALSE.or(&Interval::FALSE)?;
+        assert_eq!(or_result, Interval::TRUE_OR_FALSE);
 
-        let or_result = Interval::CERTAINLY_FALSE.or(&Interval::UNCERTAIN)?;
-        assert_eq!(or_result, Interval::UNCERTAIN);
+        let or_result = Interval::FALSE.or(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(or_result, Interval::TRUE_OR_FALSE);
 
-        let or_result = Interval::UNCERTAIN.or(&Interval::CERTAINLY_TRUE)?;
-        assert_eq!(or_result, Interval::CERTAINLY_TRUE);
+        let or_result = Interval::TRUE_OR_FALSE.or(&Interval::TRUE)?;
+        assert_eq!(or_result, Interval::TRUE);
 
-        let or_result = Interval::CERTAINLY_TRUE.or(&Interval::UNCERTAIN)?;
-        assert_eq!(or_result, Interval::CERTAINLY_TRUE);
+        let or_result = Interval::TRUE.or(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(or_result, Interval::TRUE);
 
-        let or_result = Interval::UNCERTAIN.or(&Interval::UNCERTAIN)?;
-        assert_eq!(or_result, Interval::UNCERTAIN);
+        let or_result = Interval::TRUE_OR_FALSE.or(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(or_result, Interval::TRUE_OR_FALSE);
 
         Ok(())
     }
@@ -3041,37 +3001,37 @@ mod tests {
             (
                 Interval::make::<i64>(None, None)?,
                 Interval::make::<i64>(None, None)?,
-                Interval::CERTAINLY_TRUE,
+                Interval::TRUE,
             ),
             (
                 Interval::make(Some(1500_i64), Some(2000_i64))?,
                 Interval::make(Some(1501_i64), Some(1999_i64))?,
-                Interval::CERTAINLY_TRUE,
+                Interval::TRUE,
             ),
             (
                 Interval::make(Some(1000_i64), None)?,
                 Interval::make::<i64>(None, None)?,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
             ),
             (
                 Interval::make(Some(1000_i64), Some(2000_i64))?,
                 Interval::make(Some(500), Some(1500_i64))?,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
             ),
             (
                 Interval::make(Some(16.0), Some(32.0))?,
                 Interval::make(Some(32.0), Some(64.0))?,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
             ),
             (
                 Interval::make(Some(1000_i64), None)?,
                 Interval::make(None, Some(0_i64))?,
-                Interval::CERTAINLY_FALSE,
+                Interval::FALSE,
             ),
             (
                 Interval::make(Some(1500_i64), Some(2000_i64))?,
                 Interval::make(Some(1000_i64), Some(1499_i64))?,
-                Interval::CERTAINLY_FALSE,
+                Interval::FALSE,
             ),
             (
                 Interval::try_new(
@@ -3079,7 +3039,7 @@ mod tests {
                     prev_value(ScalarValue::Float32(Some(1.0))),
                 )?,
                 Interval::make(Some(1.0_f32), Some(1.0_f32))?,
-                Interval::CERTAINLY_FALSE,
+                Interval::FALSE,
             ),
             (
                 Interval::try_new(
@@ -3087,7 +3047,7 @@ mod tests {
                     next_value(ScalarValue::Float32(Some(1.0))),
                 )?,
                 Interval::make(Some(1.0_f32), Some(1.0_f32))?,
-                Interval::CERTAINLY_FALSE,
+                Interval::FALSE,
             ),
         ];
         for (first, second, expected) in possible_cases {
@@ -4330,252 +4290,58 @@ mod tests {
 
     #[test]
     fn nullable_and_test() -> Result<()> {
+        // Test cases: (lhs, rhs, expected) => lhs AND rhs = expected
+        #[rustfmt::skip]
         let cases = vec![
-            (
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::TRUE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::UNKNOWN,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE_OR_FALSE,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
+            (NullableInterval::TRUE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::TRUE, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::TRUE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::TRUE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::FALSE, NullableInterval::TRUE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE_OR_UNKNOWN),
         ];
 
         for case in cases {
@@ -4592,252 +4358,58 @@ mod tests {
 
     #[test]
     fn nullable_or_test() -> Result<()> {
+        // Test cases: (lhs, rhs, expected) => lhs OR rhs = expected
+        #[rustfmt::skip]
         let cases = vec![
-            (
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::FALSE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::FALSE,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::FALSE,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::FALSE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE,
-                NullableInterval::TRUE,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::UNKNOWN,
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::UNCERTAIN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::UNCERTAIN,
-                NullableInterval::UNCERTAIN,
-            ),
+            (NullableInterval::TRUE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::FALSE, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::UNKNOWN, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE),
+            (NullableInterval::FALSE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::FALSE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::FALSE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::FALSE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
         ];
 
         for case in cases {
@@ -4854,23 +4426,16 @@ mod tests {
 
     #[test]
     fn nullable_not_test() -> Result<()> {
+        // Test cases: (interval, expected) => NOT interval = expected
+        #[rustfmt::skip]
         let cases = vec![
             (NullableInterval::TRUE, NullableInterval::FALSE),
             (NullableInterval::FALSE, NullableInterval::TRUE),
             (NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
-            (
-                NullableInterval::TRUE_OR_FALSE,
-                NullableInterval::TRUE_OR_FALSE,
-            ),
-            (
-                NullableInterval::TRUE_OR_UNKNOWN,
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                NullableInterval::FALSE_OR_UNKNOWN,
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (NullableInterval::UNCERTAIN, NullableInterval::UNCERTAIN),
+            (NullableInterval::TRUE_OR_FALSE,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN,NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN,NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
         ];
 
         for case in cases {

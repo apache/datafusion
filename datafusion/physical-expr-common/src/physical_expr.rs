@@ -247,9 +247,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
         let dt = output_interval.data_type();
         if dt.eq(&DataType::Boolean) {
-            let p = if output_interval.eq(&Interval::CERTAINLY_TRUE) {
+            let p = if output_interval.eq(&Interval::TRUE) {
                 ScalarValue::new_one(&dt)
-            } else if output_interval.eq(&Interval::CERTAINLY_FALSE) {
+            } else if output_interval.eq(&Interval::FALSE) {
                 ScalarValue::new_zero(&dt)
             } else {
                 ScalarValue::try_from(&dt)
@@ -309,9 +309,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
                     Ok((*child).clone())
                 } else if new_interval.data_type().eq(&DataType::Boolean) {
                     let dt = old_interval.data_type();
-                    let p = if new_interval.eq(&Interval::CERTAINLY_TRUE) {
+                    let p = if new_interval.eq(&Interval::TRUE) {
                         ScalarValue::new_one(&dt)
-                    } else if new_interval.eq(&Interval::CERTAINLY_FALSE) {
+                    } else if new_interval.eq(&Interval::FALSE) {
                         ScalarValue::new_zero(&dt)
                     } else {
                         unreachable!("Given that we have a range reduction for a boolean interval, we should have certainty")
