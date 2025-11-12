@@ -36,10 +36,7 @@ use datafusion_proto::{
 use prost::Message;
 use tokio::runtime::Handle;
 
-use crate::{
-    df_result, rresult_return,
-    table_provider::{FFI_TableProvider, ForeignTableProvider},
-};
+use crate::{df_result, rresult_return, table_provider::FFI_TableProvider};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
@@ -186,9 +183,9 @@ impl TableFunctionImpl for ForeignTableFunction {
         let table_provider = unsafe { (self.0.call)(&self.0, filters_serialized) };
 
         let table_provider = df_result!(table_provider)?;
-        let table_provider: ForeignTableProvider = (&table_provider).into();
+        let table_provider: Arc<dyn TableProvider> = (&table_provider).into();
 
-        Ok(Arc::new(table_provider))
+        Ok(table_provider)
     }
 }
 
