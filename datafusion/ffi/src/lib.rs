@@ -76,5 +76,13 @@ pub extern "C" fn get_library_marker_id() -> u64 {
     &LIBRARY_MARKER as *const u8 as u64
 }
 
+/// For unit testing in this crate we need to trick the providers
+/// into thinking we have a foreign call. We do this by overwriting
+/// their `library_marker_id` function to return a different value.
+#[cfg(test)]
+pub(crate) extern "C" fn mock_foreign_marker_id() -> u64 {
+    get_library_marker_id() + 1
+}
+
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);
