@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, Float16Array};
+use arrow::array::{Array, Float16Array};
 use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{
