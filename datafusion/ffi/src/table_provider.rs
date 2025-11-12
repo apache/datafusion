@@ -50,8 +50,7 @@ use crate::{
 };
 
 use super::{
-    execution_plan::{FFI_ExecutionPlan, ForeignExecutionPlan},
-    insert_op::FFI_InsertOp,
+    execution_plan::FFI_ExecutionPlan, insert_op::FFI_InsertOp,
     session_config::FFI_SessionConfig,
 };
 use datafusion::error::Result;
@@ -154,7 +153,7 @@ pub struct FFI_TableProvider {
     pub version: unsafe extern "C" fn() -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the plan.
-    /// A [`ForeignExecutionPlan`] should never attempt to access this data.
+    /// A [`ForeignTableProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
 
     /// Utility to identify when FFI objects are accessed locally through
@@ -300,7 +299,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
             .build();
         let ctx = SessionContext::new_with_state(session);
 
-        let input = rresult_return!(ForeignExecutionPlan::try_from(&input).map(Arc::new));
+        let input = rresult_return!(<Arc<dyn ExecutionPlan>>::try_from(&input));
 
         let insert_op = InsertOp::from(insert_op);
 
@@ -449,10 +448,10 @@ impl TableProvider for ForeignTableProvider {
             )
             .await;
 
-            ForeignExecutionPlan::try_from(&df_result!(maybe_plan)?)?
+            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
         };
 
-        Ok(Arc::new(plan))
+        Ok(plan)
     }
 
     /// Tests whether the table provider can make use of a filter expression
@@ -502,10 +501,10 @@ impl TableProvider for ForeignTableProvider {
             let maybe_plan =
                 (self.0.insert_into)(&self.0, &session_config, &input, insert_op).await;
 
-            ForeignExecutionPlan::try_from(&df_result!(maybe_plan)?)?
+            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
         };
 
-        Ok(Arc::new(plan))
+        Ok(plan)
     }
 }
 
