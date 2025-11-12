@@ -94,7 +94,7 @@ unsafe extern "C" fn register_catalog_fn_wrapper(
 ) -> ROption<FFI_CatalogProvider> {
     let runtime = provider.runtime();
     let provider = provider.inner();
-    let catalog = Arc::new(ForeignCatalogProvider::from(catalog));
+    let catalog: Arc<dyn CatalogProvider + Send> = catalog.into();
 
     provider
         .register_catalog(name.into(), catalog)

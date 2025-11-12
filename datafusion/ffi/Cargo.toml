@@ -59,6 +59,7 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 doc-comment = { workspace = true }
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
 
 [features]
 integration-tests = []
