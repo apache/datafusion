@@ -67,7 +67,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
 use datafusion_common::{
     assert_contains, internal_datafusion_err, Constraint, Constraints, DFSchema,
-    DataFusionError, ScalarValue, TableReference, UnnestOptions,
+    DataFusionError, ScalarValue, SchemaError, TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
@@ -301,6 +301,27 @@ async fn select_columns() -> Result<()> {
 
     // the two plans should be identical
     assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_columns_with_nonexistent_columns() -> Result<()> {
+    let t = test_table().await?;
+    let t2 = t.select_columns(&["canada", "c2", "rocks"]);
+
+    match t2 {
+        Err(DataFusionError::SchemaError(boxed_err, _)) => {
+            // Verify it's the first invalid column
+            match boxed_err.as_ref() {
+                SchemaError::FieldNotFound { field, .. } => {
+                    assert_eq!(field.name(), "canada");
+                }
+                _ => panic!("Expected SchemaError::FieldNotFound for 'canada'"),
+            }
+        }
+        _ => panic!("Expected SchemaError"),
+    }
 
     Ok(())
 }
@@ -5423,7 +5444,7 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    Projection: Int32(3) AS $1 [$1:Null;N]
+    Projection: Int32(3) AS $1 [$1:Int32]
       EmptyRelation: rows=1 []
     "
     );

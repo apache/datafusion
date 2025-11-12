@@ -46,8 +46,8 @@ use futures::TryStreamExt;
 use std::any::Any;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Interfacing with a remote catalog (e.g. over a network)
+pub async fn remote_catalog() -> Result<()> {
     // As always, we create a session context to interact with DataFusion
     let ctx = SessionContext::new();
 
