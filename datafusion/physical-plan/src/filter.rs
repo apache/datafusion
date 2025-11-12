@@ -732,7 +732,7 @@ impl Stream for FilterExecStream {
                                     self.metrics.selectivity.add_part(filter_array.true_count());
                                     self.metrics.selectivity.add_total(batch.num_rows());
 
-                                    self.batch_coalescer.push_batch_with_filter(batch.clone(), filter_array)?;
+                                    self.batch_coalescer.push_batch_with_filter(batch, filter_array)?;
                                     Ok(())
                                 }
                                 Err(_) => {
