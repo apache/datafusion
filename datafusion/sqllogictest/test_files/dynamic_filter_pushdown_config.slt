@@ -245,37 +245,41 @@ statement ok
 SET datafusion.execution.parquet.pushdown_filters = true;
 
 # Aggregate dynamic filter should be pushed into the scan when enabled
+# Expecting a `DynamicFilter` inside parquet scanner's predicate
 query TT
-EXPLAIN SELECT category, MAX(score) FROM agg_parquet GROUP BY category;
+EXPLAIN SELECT MAX(score) FROM agg_parquet WHERE category = 'alpha'
 ----
 logical_plan
-01)Aggregate: groupBy=[[agg_parquet.category]], aggr=[[max(agg_parquet.score)]]
-02)--TableScan: agg_parquet projection=[category, score]
+01)Aggregate: groupBy=[[]], aggr=[[max(agg_parquet.score)]]
+02)--Projection: agg_parquet.score
+03)----Filter: agg_parquet.category = Utf8View("alpha")
+04)------TableScan: agg_parquet projection=[category, score], partial_filters=[agg_parquet.category = Utf8View("alpha")]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(agg_parquet.score)]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=4
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_parquet.score)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_parquet.score)]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(agg_parquet.score)]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet]]}, projection=[category, score], file_type=parquet, predicate=DynamicFilter [ empty ]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet]]}, projection=[score], file_type=parquet, predicate=category@0 = alpha AND DynamicFilter [ empty ], pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1, required_guarantees=[category in (alpha)]
 
-# Disable aggregate dynamic filters only (topk/join remain enabled)
+# Disable aggregate dynamic filters only
 statement ok
 SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
 
+# Expecting no `DynamicFilter` inside parquet scanner's predicate
 query TT
-EXPLAIN SELECT category, MAX(score) FROM agg_parquet GROUP BY category;
+EXPLAIN SELECT MAX(score) FROM agg_parquet WHERE category = 'alpha'
 ----
 logical_plan
-01)Aggregate: groupBy=[[agg_parquet.category]], aggr=[[max(agg_parquet.score)]]
-02)--TableScan: agg_parquet projection=[category, score]
+01)Aggregate: groupBy=[[]], aggr=[[max(agg_parquet.score)]]
+02)--Projection: agg_parquet.score
+03)----Filter: agg_parquet.category = Utf8View("alpha")
+04)------TableScan: agg_parquet projection=[category, score], partial_filters=[agg_parquet.category = Utf8View("alpha")]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(agg_parquet.score)]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=4
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_parquet.score)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_parquet.score)]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(agg_parquet.score)]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet]]}, projection=[category, score], file_type=parquet
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet]]}, projection=[score], file_type=parquet, predicate=category@0 = alpha, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1, required_guarantees=[category in (alpha)]
 
 statement ok
 SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;

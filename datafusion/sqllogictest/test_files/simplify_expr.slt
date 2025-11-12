@@ -117,4 +117,3 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[[{x:100}] as a]
 02)--PlaceholderRowExec
-

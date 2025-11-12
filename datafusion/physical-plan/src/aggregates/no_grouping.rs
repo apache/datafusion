@@ -62,8 +62,6 @@ struct AggregateStreamInner {
     input: SendableRecordBatchStream,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    // self's partition index
-    partition: usize,
 
     // ==== Runtime States/Buffers ====
     accumulators: Vec<AccumulatorItem>,
@@ -293,7 +291,6 @@ impl AggregateStream {
             reservation,
             finished: false,
             agg_dyn_filter_state: maybe_dynamic_filter,
-            partition,
         };
 
         let stream = futures::stream::unfold(inner, |mut this| async move {
