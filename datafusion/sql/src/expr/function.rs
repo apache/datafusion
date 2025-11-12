@@ -812,14 +812,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn extract_and_prepend_within_group_args(
         &self,
         within_group: Vec<OrderByExpr>,
-        args: Vec<Expr>,
-        arg_names: Vec<Option<String>>,
+        mut args: Vec<Expr>,
+        mut arg_names: Vec<Option<String>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<WithinGroupExtraction> {
-        let mut args = args;
-        let mut arg_names = arg_names;
-
         let within_group = self.order_by_to_sort_expr(
             within_group,
             schema,
