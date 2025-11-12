@@ -1340,8 +1340,8 @@ concat(str[, ..., str_n]) or concat(array[, ..., array_n])
 
 #### Arguments
 
-- **str**: String or Array expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **str_n**: Subsequent string or array expressions to concatenate.
+- **str_or_array**: String or Array expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str_or_array_n**: Subsequent string or array expressions to concatenate. Cannot mix strings and arrays.
 
 #### Example
 
@@ -1353,11 +1353,11 @@ concat(str[, ..., str_n]) or concat(array[, ..., array_n])
 | datafusion                                            |
 +-------------------------------------------------------+
 > select concat(make_array(1, 2), make_array(3, 4));
-+--------------------------------------------------+
-| concat(make_array(1, 2), make_array(3, 4))      |
-+--------------------------------------------------+
-| [1, 2, 3, 4]                                     |
-+--------------------------------------------------+
++------------------------------------------+
+| concat(make_array(1, 2), make_array(3, 4)) |
++------------------------------------------+
+| [1, 2, 3, 4]                             |
++------------------------------------------+
 ```
 
 **Related functions**:
