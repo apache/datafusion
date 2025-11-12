@@ -6384,8 +6384,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     // Use fill_null to replace nulls on all columns.
     // Only column "b" will be replaced since ScalarValue::Utf8(Some("default".to_string()))
     // can be cast to Utf8.
-    let df_filled =
-        df.fill_null(&ScalarValue::Utf8(Some("default".to_string())), &[])?;
+    let df_filled = df.fill_null(&ScalarValue::Utf8(Some("default".to_string())), &[])?;
 
     let results = df_filled.clone().collect().await?;
 
