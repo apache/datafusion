@@ -66,8 +66,8 @@ use datafusion::test_util::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
 use datafusion_common::{
-    assert_contains, internal_datafusion_err, internal_err, Constraint, Constraints,
-    DFSchema, DataFusionError, ScalarValue, TableReference, UnnestOptions,
+    assert_contains, internal_datafusion_err, Constraint, Constraints, DFSchema,
+    DataFusionError, ScalarValue, SchemaError, TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
@@ -309,9 +309,19 @@ async fn select_columns() -> Result<()> {
 async fn select_columns_with_nonexistent_columns() -> Result<()> {
     let t = test_table().await?;
     let t2 = t.select_columns(&["canada", "c2", "rocks"]);
-    let Err(DataFusionError::SchemaError(_, _)) = t2 else {
-        return internal_err!("select_columns with nonexistent columns should error");
-    };
+
+    match t2 {
+        Err(DataFusionError::SchemaError(boxed_err, _)) => {
+            // Verify it's the first invalid column
+            match boxed_err.as_ref() {
+                SchemaError::FieldNotFound { field, .. } => {
+                    assert_eq!(field.name(), "canada");
+                }
+                _ => panic!("Expected SchemaError::FieldNotFound for 'canada'"),
+            }
+        }
+        _ => panic!("Expected SchemaError"),
+    }
 
     Ok(())
 }
