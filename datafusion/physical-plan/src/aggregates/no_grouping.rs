@@ -191,9 +191,15 @@ impl AggregateStreamInner {
     }
 }
 
-// TODO: move it to a better place
+/// Returns the element-wise minimum of two `ScalarValue`s.
+///
+/// # Null semantics
+/// - `min(NULL, NULL)      = NULL`
+/// - `min(NULL, x)         = x`
+/// - `min(x, NULL)         = x`
+///
 /// # Errors
-/// Returns internal error of v1 and v2 has incompatible types.
+/// Returns internal error if v1 and v2 has incompatible types.
 fn scalar_min(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
     if let Some(result) = scalar_cmp_null_short_circuit(v1, v2) {
         return Ok(result);
@@ -208,8 +214,15 @@ fn scalar_min(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
     }
 }
 
+/// Returns the element-wise maximum of two `ScalarValue`s.
+///
+/// # Null semantics
+/// - `max(NULL, NULL)      = NULL`
+/// - `max(NULL, x)         = x`
+/// - `max(x, NULL)         = x`
+///
 /// # Errors
-/// Returns internal error of v1 and v2 has incompatible types.
+/// Returns internal error if v1 and v2 has incompatible types.
 fn scalar_max(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
     if let Some(result) = scalar_cmp_null_short_circuit(v1, v2) {
         return Ok(result);
