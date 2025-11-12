@@ -213,6 +213,9 @@ impl FunctionArgs {
     }
 }
 
+// Helper type for extracting WITHIN GROUP ordering and prepended args
+type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<String>>);
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -806,8 +809,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let (exprs, names): (Vec<Expr>, Vec<Option<String>>) = pairs.into_iter().unzip();
         Ok((exprs, names))
     }
-
-    type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<String>>);
 
     fn extract_and_prepend_within_group_args(
         &self,
