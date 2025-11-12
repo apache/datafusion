@@ -394,24 +394,16 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     // Build offset buffer that accounts for NULL maps
     // For each row, if it's NULL, the offset stays the same (empty range)
     // If it's not NULL, the offset advances by the number of entries in that map
-    let mut offset_buffer = vec![O::zero()];
     let mut running_offset = O::zero();
+    let mut offset_buffer = vec![running_offset];
     let mut non_null_idx = 0;
-
     for i in 0..original_len {
         let is_null = nulls_bitmap.as_ref().is_some_and(|nulls| nulls.is_null(i));
-        if is_null {
-            // NULL map: offset doesn't advance (empty range)
-            offset_buffer.push(running_offset);
-        } else {
-            // Non-NULL map: advance offset by the number of entries
-            if non_null_idx < key_array_vec.len() {
-                running_offset =
-                    running_offset.add(O::usize_as(key_array_vec[non_null_idx].len()));
-                non_null_idx += 1;
-            }
-            offset_buffer.push(running_offset);
+        if !is_null {
+            running_offset += O::usize_as(keys[non_null_idx].len());
+            non_null_idx += 1;
         }
+        offset_buffer.push(running_offset);
     }
 
     // concatenate all the arrays
