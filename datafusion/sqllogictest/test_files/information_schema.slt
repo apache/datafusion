@@ -217,6 +217,7 @@ datafusion.catalog.newlines_in_values false
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics true
+datafusion.execution.enable_ansi_mode false
 datafusion.execution.enable_recursive_ctes true
 datafusion.execution.enforce_batch_size_in_joins false
 datafusion.execution.keep_partition_by_columns false
@@ -338,6 +339,7 @@ datafusion.catalog.newlines_in_values false Specifies whether newlines in (quote
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 datafusion.execution.collect_statistics true Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Applies to the default `ListingTableProvider` in DataFusion. Defaults to true.
+datafusion.execution.enable_ansi_mode false Whether to enable ANSI SQL mode. Currently only used in DataFusion Spark crate When `enable_ansi_mode` is set to `true`, the query engine enforces ANSI SQL semantics for expressions, casting, and error handling. This includes: - Strict type coercion rules: implicit casts between incompatible types are disallowed. - Standard SQL arithmetic behavior: operations like division by zero or overflow   result in runtime errors instead of returning `NULL` or silently truncating values. - Reserved keyword enforcement and stricter identifier resolution rules. - Behavior consistent with ANSI SQL for string concatenation, comparisons,   and `NULL` handling. When set to `false` (the default), the engine uses a more permissive, non-ANSI mode for better compatibility and convenience. This may allow implicit type conversions, tolerate invalid inputs, or apply lenient error handling. # Default `false` — ANSI SQL mode is disabled by default.
 datafusion.execution.enable_recursive_ctes true Should DataFusion support recursive CTEs
 datafusion.execution.enforce_batch_size_in_joins false Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower.
 datafusion.execution.keep_partition_by_columns false Should DataFusion keep the columns used for partition_by in the output RecordBatches
