@@ -58,6 +58,10 @@ pub struct FFI_CatalogProviderList {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignCatalogProviderList`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_CatalogProviderList {}
@@ -138,6 +142,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         release: release_fn_wrapper,
         version: super::version,
         private_data,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -163,6 +168,7 @@ impl FFI_CatalogProviderList {
             release: release_fn_wrapper,
             version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -177,9 +183,14 @@ pub struct ForeignCatalogProviderList(FFI_CatalogProviderList);
 unsafe impl Send for ForeignCatalogProviderList {}
 unsafe impl Sync for ForeignCatalogProviderList {}
 
-impl From<&FFI_CatalogProviderList> for ForeignCatalogProviderList {
+impl From<&FFI_CatalogProviderList> for Arc<dyn CatalogProviderList + Send> {
     fn from(provider: &FFI_CatalogProviderList) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(unsafe { provider.inner() });
+        }
+
+        Arc::new(ForeignCatalogProviderList(provider.clone()))
+            as Arc<dyn CatalogProviderList + Send>
     }
 }
 
@@ -248,9 +259,11 @@ mod tests {
             .register_catalog("prior_catalog".to_owned(), prior_catalog)
             .is_none());
 
-        let ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None);
+        let mut ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None);
+        ffi_catalog_list.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_catalog_list: ForeignCatalogProviderList = (&ffi_catalog_list).into();
+        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+            (&ffi_catalog_list).into();
 
         let prior_catalog_names = foreign_catalog_list.catalog_names();
         assert_eq!(prior_catalog_names.len(), 1);
