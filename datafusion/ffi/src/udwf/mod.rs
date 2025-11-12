@@ -105,6 +105,10 @@ pub struct FFI_WindowUDF {
     /// Internal data. This is only to be accessed by the provider of the udf.
     /// A [`ForeignWindowUDF`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface.
+    pub library_marker_id: extern "C" fn() -> u64,
 }
 
 unsafe impl Send for FFI_WindowUDF {}
@@ -201,6 +205,7 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         private_data: Box::into_raw(private_data) as *mut c_void,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -230,6 +235,7 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -270,21 +276,25 @@ impl Hash for ForeignWindowUDF {
     }
 }
 
-impl TryFrom<&FFI_WindowUDF> for ForeignWindowUDF {
+impl TryFrom<&FFI_WindowUDF> for Arc<dyn WindowUDFImpl> {
     type Error = DataFusionError;
 
     fn try_from(udf: &FFI_WindowUDF) -> Result<Self, Self::Error> {
-        let name = udf.name.to_owned().into();
-        let signature = Signature::user_defined((&udf.volatility).into());
+        if (udf.library_marker_id)() == crate::get_library_marker_id() {
+            Ok(Arc::clone(unsafe { udf.inner().inner() }))
+        } else {
+            let name = udf.name.to_owned().into();
+            let signature = Signature::user_defined((&udf.volatility).into());
 
-        let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
+            let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
 
-        Ok(Self {
-            name,
-            udf: udf.clone(),
-            aliases,
-            signature,
-        })
+            Ok(Arc::new(ForeignWindowUDF {
+                name,
+                udf: udf.clone(),
+                aliases,
+                signature,
+            }))
+        }
     }
 }
 
@@ -384,7 +394,7 @@ impl From<&FFI_SortOptions> for SortOptions {
 #[cfg(feature = "integration-tests")]
 mod tests {
     use crate::tests::create_record_batch;
-    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+    use crate::udwf::FFI_WindowUDF;
     use arrow::array::{create_array, ArrayRef};
     use datafusion::functions_window::lead_lag::{lag_udwf, WindowShift};
     use datafusion::logical_expr::expr::Sort;
@@ -397,10 +407,11 @@ mod tests {
     ) -> datafusion::common::Result<WindowUDF> {
         let original_udwf = Arc::new(WindowUDF::from(original_udwf));
 
-        let local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        let mut local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udwf: ForeignWindowUDF = (&local_udwf).try_into()?;
-        Ok(foreign_udwf.into())
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;
+        Ok(WindowUDF::new_from_shared_impl(foreign_udwf))
     }
 
     #[test]
@@ -409,11 +420,12 @@ mod tests {
         let original_name = original_udwf.name().to_owned();
 
         // Convert to FFI format
-        let local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        let mut local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
-        let foreign_udwf: ForeignWindowUDF = (&local_udwf).try_into()?;
-        let foreign_udwf: WindowUDF = foreign_udwf.into();
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;
+        let foreign_udwf = WindowUDF::new_from_shared_impl(foreign_udwf);
 
         assert_eq!(original_name, foreign_udwf.name());
         Ok(())
