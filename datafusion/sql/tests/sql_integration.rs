@@ -26,8 +26,8 @@ use common::MockContextProvider;
 use datafusion_common::{assert_contains, DataFusionError, Result};
 use datafusion_expr::{
     col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, ColumnarValue,
-    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -43,7 +43,6 @@ use datafusion_functions_aggregate::{
     count::count_udaf,
     grouping::grouping_udaf,
     min_max::{max_udaf, min_udaf},
-    
 };
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
