@@ -43,6 +43,8 @@ jobs:
       should_skip: ${{ steps.check.outputs.should_skip }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          fetch-depth: 0  # Need history for comparison
       - name: Check if only docs were changed
         id: check
         env:
@@ -63,8 +65,11 @@ jobs:
           # For PRs, check if only docs/markdown were changed
           echo "PR detected, checking changed files..."
 
-          # Get changed files (comparing merge commit with base branch)
-          IFS=$'\n' changed_files=($(git --no-pager diff --name-only HEAD^1))
+          # Fetch the base branch to compare against
+          git fetch origin "${{ github.base_ref }}"
+
+          # Get changed files (comparing PR head with base branch)
+          IFS=$'\n' changed_files=($(git --no-pager diff --name-only "origin/${{ github.base_ref }}"...HEAD))
 
           echo "Changed files:"
           printf '%s\n' "${changed_files[@]}"
