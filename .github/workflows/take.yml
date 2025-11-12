@@ -31,13 +31,13 @@ jobs:
       group: ${{ github.actor }}-issue-assign
     steps:
       - name: Take or untake issue
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          USER_LOGIN: ${{ github.event.comment.user.login }}
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          COMMENT_BODY="${{ github.event.comment.body }}"
-          ISSUE_NUMBER="${{ github.event.issue.number }}"
-          USER_LOGIN="${{ github.event.comment.user.login }}"
-          REPO="${{ github.repository }}"
-          TOKEN="${{ secrets.GITHUB_TOKEN }}"
-
           if [ "$COMMENT_BODY" == "take" ]
           then
             CODE=$(curl -H "Authorization: token $TOKEN" -LI https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER/assignees/$USER_LOGIN -o /dev/null -w '%{http_code}\n' -s)
