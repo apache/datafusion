@@ -5423,7 +5423,7 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    Projection: Int32(3) AS $1 [$1:Null;N]
+    Projection: Int32(3) AS $1 [$1:Int32]
       EmptyRelation: rows=1 []
     "
     );
