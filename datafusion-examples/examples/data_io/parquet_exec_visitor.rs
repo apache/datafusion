@@ -30,8 +30,7 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 
 /// Example of collecting metrics after execution by visiting the `ExecutionPlan`
-#[tokio::main]
-async fn main() {
+pub async fn parquet_exec_visitor() -> datafusion::common::Result<()> {
     let ctx = SessionContext::new();
 
     let test_data = datafusion::test_util::parquet_test_data();
@@ -51,8 +50,8 @@ async fn main() {
         )
         .await;
 
-    let df = ctx.sql("SELECT * FROM my_table").await.unwrap();
-    let plan = df.create_physical_plan().await.unwrap();
+    let df = ctx.sql("SELECT * FROM my_table").await?;
+    let plan = df.create_physical_plan().await?;
 
     // Create empty visitor
     let mut visitor = ParquetExecVisitor {
@@ -63,12 +62,12 @@ async fn main() {
     // Make sure you execute the plan to collect actual execution statistics.
     // For example, in this example the `file_scan_config` is known without executing
     // but the `bytes_scanned` would be None if we did not execute.
-    let mut batch_stream = execute_stream(plan.clone(), ctx.task_ctx()).unwrap();
+    let mut batch_stream = execute_stream(plan.clone(), ctx.task_ctx())?;
     while let Some(batch) = batch_stream.next().await {
         println!("Batch rows: {}", batch.unwrap().num_rows());
     }
 
-    visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
+    visit_execution_plan(plan.as_ref(), &mut visitor)?;
 
     println!(
         "ParquetExecVisitor bytes_scanned: {:?}",
@@ -78,6 +77,8 @@ async fn main() {
         "ParquetExecVisitor file_groups: {:?}",
         visitor.file_groups.unwrap()
     );
+
+    Ok(())
 }
 
 /// Define a struct with fields to hold the execution information you want to
