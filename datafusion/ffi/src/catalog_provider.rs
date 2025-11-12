@@ -120,7 +120,7 @@ unsafe extern "C" fn register_schema_fn_wrapper(
 ) -> RResult<ROption<FFI_SchemaProvider>, RString> {
     let runtime = provider.runtime();
     let provider = provider.inner();
-    let schema = Arc::new(ForeignSchemaProvider::from(schema));
+    let schema: Arc<dyn SchemaProvider + Send> = schema.into();
 
     let returned_schema =
         rresult_return!(provider.register_schema(name.as_str(), schema))
