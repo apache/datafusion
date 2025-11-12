@@ -609,6 +609,8 @@ config_namespace! {
 
         /// Whether to enable ANSI SQL mode.
         ///
+        /// The flag is experimental and relevant only for DataFusion Spark built-in functions
+        ///
         /// When `enable_ansi_mode` is set to `true`, the query engine follows ANSI SQL
         /// semantics for expressions, casting, and error handling. This means:
         /// - **Strict type coercion rules:** implicit casts between incompatible types are disallowed.
