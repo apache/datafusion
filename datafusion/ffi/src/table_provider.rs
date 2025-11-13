@@ -28,10 +28,10 @@ use datafusion::{
     catalog::{Session, TableProvider},
     datasource::TableType,
     error::DataFusionError,
-    execution::{session_state::SessionStateBuilder, TaskContext},
+    execution::TaskContext,
     logical_expr::{logical_plan::dml::InsertOp, TableProviderFilterPushDown},
     physical_plan::ExecutionPlan,
-    prelude::{Expr, SessionContext},
+    prelude::Expr,
 };
 use datafusion_proto::{
     logical_plan::{
@@ -48,13 +48,10 @@ use crate::{
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };
 
-use super::{
-    execution_plan::FFI_ExecutionPlan, insert_op::FFI_InsertOp,
-    session_config::FFI_SessionConfig,
-};
+use super::{execution_plan::FFI_ExecutionPlan, insert_op::FFI_InsertOp};
 use crate::execution::FFI_TaskContextProvider;
+use crate::session::{FFI_Session, ForeignSession};
 use datafusion::error::Result;
-use datafusion_execution::config::SessionConfig;
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 ///
@@ -107,7 +104,7 @@ pub struct FFI_TableProvider {
     /// # Arguments
     ///
     /// * `provider` - the table provider
-    /// * `session_config` - session configuration
+    /// * `session` - session
     /// * `projections` - if specified, only a subset of the columns are returned
     /// * `filters_serialized` - filters to apply to the scan, which are a
     ///   [`LogicalExprList`] protobuf message serialized into bytes to pass
@@ -115,7 +112,7 @@ pub struct FFI_TableProvider {
     /// * `limit` - if specified, limit the number of rows returned
     pub scan: unsafe extern "C" fn(
         provider: &Self,
-        session_config: &FFI_SessionConfig,
+        session: FFI_Session,
         projections: RVec<usize>,
         filters_serialized: RVec<u8>,
         limit: ROption<usize>,
@@ -138,7 +135,7 @@ pub struct FFI_TableProvider {
     pub insert_into:
         unsafe extern "C" fn(
             provider: &Self,
-            session_config: &FFI_SessionConfig,
+            session: FFI_Session,
             input: &FFI_ExecutionPlan,
             insert_op: FFI_InsertOp,
         ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
@@ -236,27 +233,23 @@ unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
 
 unsafe extern "C" fn scan_fn_wrapper(
     provider: &FFI_TableProvider,
-    session_config: &FFI_SessionConfig,
+    session: FFI_Session,
     projections: RVec<usize>,
     filters_serialized: RVec<u8>,
     limit: ROption<usize>,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
     let task_ctx_provider = provider.task_ctx_provider.clone();
+
     let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
         (&provider.task_ctx_provider).try_into();
     let runtime = provider.runtime().clone();
     let internal_provider = Arc::clone(provider.inner());
-    let session_config = session_config.clone();
 
     async move {
-        let task_ctx = rresult_return!(task_ctx);
-        let config = rresult_return!(SessionConfig::try_from(&session_config));
-        let session = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(config)
-            .build();
-        let ctx = SessionContext::new_with_state(session);
+        let foreign_session = rresult_return!(ForeignSession::try_from(&session));
+        let session = session.as_local().unwrap_or(&foreign_session);
 
+        let task_ctx = rresult_return!(task_ctx);
         let filters = match filters_serialized.is_empty() {
             true => vec![],
             false => {
@@ -277,7 +270,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 
         let plan = rresult_return!(
             internal_provider
-                .scan(&ctx.state(), Some(&projections), &filters, limit.into())
+                .scan(session, Some(&projections), &filters, limit.into())
                 .await
         );
 
@@ -292,22 +285,18 @@ unsafe extern "C" fn scan_fn_wrapper(
 
 unsafe extern "C" fn insert_into_fn_wrapper(
     provider: &FFI_TableProvider,
-    session_config: &FFI_SessionConfig,
+    session: FFI_Session,
     input: &FFI_ExecutionPlan,
     insert_op: FFI_InsertOp,
 ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
     let task_ctx_provider = provider.task_ctx_provider.clone();
     let runtime = provider.runtime().clone();
     let internal_provider = Arc::clone(provider.inner());
-    let session_config = session_config.clone();
     let input = input.clone();
 
     async move {
-        let config = rresult_return!(SessionConfig::try_from(&session_config));
-        let session = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(config)
-            .build();
+        let foreign_session = rresult_return!(ForeignSession::try_from(&session));
+        let session = session.as_local().unwrap_or(&foreign_session);
 
         let input = rresult_return!(<Arc<dyn ExecutionPlan>>::try_from(&input));
 
@@ -315,7 +304,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
 
         let plan = rresult_return!(
             internal_provider
-                .insert_into(&session, input, insert_op)
+                .insert_into(session, input, insert_op)
                 .await
         );
 
@@ -441,7 +430,7 @@ impl TableProvider for ForeignTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session_config: FFI_SessionConfig = session.config().into();
+        let session = FFI_Session::new(session, self.0.task_ctx_provider.clone(), None);
 
         let projections: Option<RVec<usize>> =
             projection.map(|p| p.iter().map(|v| v.to_owned()).collect());
@@ -455,7 +444,7 @@ impl TableProvider for ForeignTableProvider {
         let plan = unsafe {
             let maybe_plan = (self.0.scan)(
                 &self.0,
-                &session_config,
+                session,
                 projections.unwrap_or_default(),
                 filters_serialized,
                 limit.into(),
@@ -504,7 +493,7 @@ impl TableProvider for ForeignTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session_config: FFI_SessionConfig = session.config().into();
+        let session = FFI_Session::new(session, self.0.task_ctx_provider.clone(), None);
 
         let rc = Handle::try_current().ok();
         let input = FFI_ExecutionPlan::new(input, self.0.task_ctx_provider.clone(), rc);
@@ -512,7 +501,7 @@ impl TableProvider for ForeignTableProvider {
 
         let plan = unsafe {
             let maybe_plan =
-                (self.0.insert_into)(&self.0, &session_config, &input, insert_op).await;
+                (self.0.insert_into)(&self.0, session, &input, insert_op).await;
 
             <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
         };
@@ -525,7 +514,7 @@ impl TableProvider for ForeignTableProvider {
 mod tests {
     use super::*;
     use arrow::datatypes::Schema;
-    use datafusion::prelude::{col, lit};
+    use datafusion::prelude::{col, lit, SessionContext};
     use datafusion_execution::TaskContextProvider;
 
     fn create_test_table_provider() -> Result<Arc<dyn TableProvider>> {

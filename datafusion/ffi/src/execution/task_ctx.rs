@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::execution::task_ctx_provider::FFI_TaskContextProvider;
-use crate::session_config::FFI_SessionConfig;
+use crate::session::config::FFI_SessionConfig;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
