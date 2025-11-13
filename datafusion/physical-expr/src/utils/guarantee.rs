@@ -124,7 +124,7 @@ impl LiteralGuarantee {
             // for an `AND` conjunction to be true, all terms individually must be true
             .fold(GuaranteeBuilder::new(), |builder, expr| {
                 if let Some(cel) = ColOpLit::try_new(expr) {
-                    builder.aggregate_conjunct(cel)
+                    builder.aggregate_conjunct(&cel)
                 } else if let Some(inlist) = expr
                     .as_any()
                     .downcast_ref::<crate::expressions::InListExpr>()
@@ -292,7 +292,7 @@ impl<'a> GuaranteeBuilder<'a> {
     /// # Examples
     /// * `AND (a = 1)`: `a` is guaranteed to be 1
     /// * `AND (a != 1)`: a is guaranteed to not be 1
-    fn aggregate_conjunct(self, col_op_lit: ColOpLit<'a>) -> Self {
+    fn aggregate_conjunct(self, col_op_lit: &ColOpLit<'a>) -> Self {
         self.aggregate_multi_conjunct(
             col_op_lit.col,
             col_op_lit.guarantee,

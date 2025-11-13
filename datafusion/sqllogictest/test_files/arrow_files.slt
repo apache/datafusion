@@ -128,3 +128,263 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 # Errors in partition filters should be reported
 query error Divide by zero error
 SELECT f0 FROM arrow_partitioned WHERE CASE WHEN true THEN 1 / 0 ELSE part END = 1;
+
+#############
+## Arrow IPC stream format support
+#############
+
+# Test CREATE EXTERNAL TABLE with stream format
+statement ok
+CREATE EXTERNAL TABLE arrow_stream
+STORED AS ARROW
+LOCATION '../datasource-arrow/tests/data/example_stream.arrow';
+
+# physical plan for stream format
+query TT
+EXPLAIN SELECT * FROM arrow_stream
+----
+logical_plan TableScan: arrow_stream projection=[f0, f1, f2]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/datasource-arrow/tests/data/example_stream.arrow]]}, projection=[f0, f1, f2], file_type=arrow_stream
+
+# stream format should return same data as file format
+query ITB
+SELECT * FROM arrow_stream
+----
+1 foo true
+2 bar NULL
+3 baz false
+4 NULL true
+
+# Verify both file and stream formats return identical results
+query ITB
+SELECT * FROM arrow_simple ORDER BY f0
+----
+1 foo true
+2 bar NULL
+3 baz false
+4 NULL true
+
+query ITB
+SELECT * FROM arrow_stream ORDER BY f0
+----
+1 foo true
+2 bar NULL
+3 baz false
+4 NULL true
+
+# Both formats should support projection pushdown
+query IT
+SELECT f0, f1 FROM arrow_simple ORDER BY f0
+----
+1 foo
+2 bar
+3 baz
+4 NULL
+
+query IT
+SELECT f0, f1 FROM arrow_stream ORDER BY f0
+----
+1 foo
+2 bar
+3 baz
+4 NULL
+
+# Both formats should support filtering
+query ITB
+SELECT * FROM arrow_simple WHERE f0 > 2 ORDER BY f0
+----
+3 baz false
+4 NULL true
+
+query ITB
+SELECT * FROM arrow_stream WHERE f0 > 2 ORDER BY f0
+----
+3 baz false
+4 NULL true
+
+# Test aggregations on stream format
+query I
+SELECT COUNT(*) FROM arrow_stream
+----
+4
+
+query I
+SELECT SUM(f0) FROM arrow_stream
+----
+10
+
+query I
+SELECT MAX(f0) FROM arrow_stream
+----
+4
+
+query I
+SELECT MIN(f0) FROM arrow_stream WHERE f0 IS NOT NULL
+----
+1
+
+# Test aggregations on file format for comparison
+query I
+SELECT COUNT(*) FROM arrow_simple
+----
+4
+
+query I
+SELECT SUM(f0) FROM arrow_simple
+----
+10
+
+# Test joins between file and stream formats
+query ITBITB
+SELECT a.f0, a.f1, a.f2, b.f0, b.f1, b.f2
+FROM arrow_simple a
+JOIN arrow_stream b ON a.f0 = b.f0
+WHERE a.f0 <= 2
+ORDER BY a.f0
+----
+1 foo true 1 foo true
+2 bar NULL 2 bar NULL
+
+# Test that both formats work in UNION
+query ITB
+SELECT * FROM arrow_simple WHERE f0 = 1
+UNION ALL
+SELECT * FROM arrow_stream WHERE f0 = 2
+ORDER BY f0
+----
+1 foo true
+2 bar NULL
+
+# Test GROUP BY on stream format
+query BI
+SELECT f2, COUNT(*) as cnt FROM arrow_stream GROUP BY f2 ORDER BY f2
+----
+false 1
+true 2
+NULL 1
+
+# Test DISTINCT on stream format
+query B
+SELECT DISTINCT f2 FROM arrow_stream ORDER BY f2
+----
+false
+true
+NULL
+
+# Test subquery with stream format
+query I
+SELECT f0 FROM arrow_simple WHERE f0 IN (SELECT f0 FROM arrow_stream WHERE f0 < 3) ORDER BY f0
+----
+1
+2
+
+# ARROW partitioned table (stream format)
+statement ok
+CREATE EXTERNAL TABLE arrow_partitioned_stream (
+    part Int,
+    f0 Bigint,
+    f1 String,
+    f2 Boolean
+)
+STORED AS ARROW
+LOCATION '../core/tests/data/partitioned_table_arrow_stream/'
+PARTITIONED BY (part);
+
+# select wildcard
+query ITBI
+SELECT * FROM arrow_partitioned_stream ORDER BY f0;
+----
+1 foo true 123
+2 bar false 123
+3 baz true 456
+4 NULL NULL 456
+
+# select all fields
+query IITB
+SELECT part, f0, f1, f2 FROM arrow_partitioned_stream ORDER BY f0;
+----
+123 1 foo true
+123 2 bar false
+456 3 baz true
+456 4 NULL NULL
+
+# select without partition column
+query IB
+SELECT f0, f2 FROM arrow_partitioned_stream ORDER BY f0
+----
+1 true
+2 false
+3 true
+4 NULL
+
+# select only partition column
+query I
+SELECT part FROM arrow_partitioned_stream ORDER BY part
+----
+123
+123
+456
+456
+
+# select without any table-related columns in projection
+query I
+SELECT 1 FROM arrow_partitioned_stream
+----
+1
+1
+1
+1
+
+# select with partition filter
+query I
+SELECT f0 FROM arrow_partitioned_stream WHERE part = 123 ORDER BY f0
+----
+1
+2
+
+# select with partition filter should scan only one directory
+query TT
+EXPLAIN SELECT f0 FROM arrow_partitioned_stream WHERE part = 456
+----
+logical_plan TableScan: arrow_partitioned_stream projection=[f0], full_filters=[arrow_partitioned_stream.part = Int32(456)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_arrow_stream/part=456/data.arrow]]}, projection=[f0], file_type=arrow_stream
+
+
+# Errors in partition filters should be reported
+query error Divide by zero error
+SELECT f0 FROM arrow_partitioned_stream WHERE CASE WHEN true THEN 1 / 0 ELSE part END = 1;
+
+# Test CREATE EXTERNAL TABLE with empty stream format
+statement ok
+CREATE EXTERNAL TABLE arrow_stream_empty
+STORED AS ARROW
+LOCATION '../datasource-arrow/tests/data/example_stream_empty.arrow'; 
+
+# physical plan for empty stream format
+query TT
+EXPLAIN SELECT * FROM arrow_stream_empty
+----
+logical_plan TableScan: arrow_stream_empty projection=[f0, f1, f2]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/datasource-arrow/tests/data/example_stream_empty.arrow]]}, projection=[f0, f1, f2], file_type=arrow_stream
+
+# stream format should return same data as file format
+query ITB
+SELECT * FROM arrow_stream_empty
+----
+
+# Test CREATE EXTERNAL TABLE with corrupted stream format
+statement ok
+CREATE EXTERNAL TABLE arrow_stream_corrupted_metadata_length
+STORED AS ARROW
+LOCATION '../datasource-arrow/tests/data/example_stream_corrupted_metadata_length.arrow'; 
+
+# physical plan for corrupted stream format
+query TT
+EXPLAIN SELECT * FROM arrow_stream_corrupted_metadata_length
+----
+logical_plan TableScan: arrow_stream_corrupted_metadata_length projection=[f0, f1, f2]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/datasource-arrow/tests/data/example_stream_corrupted_metadata_length.arrow]]}, projection=[f0, f1, f2], file_type=arrow_stream
+
+# querying corrupted stream format should result in error
+query error DataFusion error: Arrow error: Parser error: Unsupported message header type in IPC stream: 'NONE'
+SELECT * FROM arrow_stream_corrupted_metadata_length

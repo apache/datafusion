@@ -57,6 +57,7 @@ pub use datafusion_physical_expr::projection::{
     update_expr, ProjectionExpr, ProjectionExprs,
 };
 
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -357,14 +358,7 @@ impl ProjectionStream {
     fn batch_project(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         // Records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        let arrays = self
-            .expr
-            .iter()
-            .map(|expr| {
-                expr.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let arrays = evaluate_expressions_to_arrays(&self.expr, batch)?;
 
         if arrays.is_empty() {
             let options =

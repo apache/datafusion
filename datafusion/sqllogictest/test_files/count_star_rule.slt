@@ -1,4 +1,4 @@
-# Licensed to the Apache Software Foundation (ASF) under one
+# Licensed to the Apache Software Foundation (ASF) under onecount_star
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
 # regarding copyright ownership.  The ASF licenses this file
@@ -50,10 +50,9 @@ physical_plan
 01)ProjectionExec: expr=[a@0 as a, count(Int64(1))@1 as count()]
 02)--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]
 03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 0;
@@ -69,10 +68,9 @@ physical_plan
 03)----FilterExec: count(Int64(1))@1 > 0
 04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]
 05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 1;

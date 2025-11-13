@@ -42,8 +42,7 @@ use std::sync::Arc;
 ///
 /// This example is rather simple and does not cover all cases required for a
 /// real implementation.
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn function_factory() -> Result<()> {
     // First we must configure the SessionContext with our function factory
     let ctx = SessionContext::new()
         // register custom function factory

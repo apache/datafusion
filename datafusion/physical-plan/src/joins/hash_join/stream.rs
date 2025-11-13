@@ -42,7 +42,7 @@ use crate::{
     RecordBatchStream, SendableRecordBatchStream,
 };
 
-use arrow::array::{ArrayRef, UInt32Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -51,6 +51,7 @@ use datafusion_common::{
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{ready, Stream, StreamExt};
 
 /// Represents build-side of hash join.
@@ -296,6 +297,35 @@ pub(super) fn lookup_join_hashmap(
     Ok((build_indices, probe_indices, next_offset))
 }
 
+/// Counts the number of distinct elements in the input array.
+///
+/// The input array must be sorted (e.g., `[0, 1, 1, 2, 2, ...]`) and contain no null values.
+#[inline]
+fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
+    if indices.is_empty() {
+        return 0;
+    }
+
+    debug_assert!(indices.null_count() == 0);
+
+    let values_buf = indices.values();
+    let values = values_buf.as_ref();
+    let mut iter = values.iter();
+    let Some(&first) = iter.next() else {
+        return 0;
+    };
+
+    let mut count = 1usize;
+    let mut last = first;
+    for &value in iter {
+        if value != last {
+            last = value;
+            count += 1;
+        }
+    }
+    count
+}
+
 impl HashJoinStream {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -447,11 +477,7 @@ impl HashJoinStream {
             }
             Some(Ok(batch)) => {
                 // Precalculate hash values for fetched batch
-                let keys_values = self
-                    .on_right
-                    .iter()
-                    .map(|c| c.evaluate(&batch)?.into_array(batch.num_rows()))
-                    .collect::<Result<Vec<_>>>()?;
+                let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
                 self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);
@@ -483,6 +509,10 @@ impl HashJoinStream {
         let state = self.state.try_as_process_probe_batch_mut()?;
         let build_side = self.build_side.try_as_ready_mut()?;
 
+        self.join_metrics
+            .probe_hit_rate
+            .add_total(state.batch.num_rows());
+
         let timer = self.join_metrics.join_time.timer();
 
         // if the left side is empty, we can skip the (potentially expensive) join operation
@@ -494,7 +524,6 @@ impl HashJoinStream {
                 &self.column_indices,
                 self.join_type,
             )?;
-            self.join_metrics.output_batches.add(1);
             timer.done();
 
             self.state = HashJoinStreamState::FetchProbeBatch;
@@ -512,6 +541,18 @@ impl HashJoinStream {
             self.batch_size,
             state.offset,
         )?;
+
+        let distinct_right_indices_count = count_distinct_sorted_indices(&right_indices);
+
+        self.join_metrics
+            .probe_hit_rate
+            .add_part(distinct_right_indices_count);
+
+        self.join_metrics.avg_fanout.add_part(left_indices.len());
+
+        self.join_metrics
+            .avg_fanout
+            .add_total(distinct_right_indices_count);
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
@@ -597,7 +638,6 @@ impl HashJoinStream {
             )?
         };
 
-        self.join_metrics.output_batches.add(1);
         timer.done();
 
         if next_offset.is_none() {
@@ -653,8 +693,6 @@ impl HashJoinStream {
         if let Ok(ref batch) = result {
             self.join_metrics.input_batches.add(1);
             self.join_metrics.input_rows.add(batch.num_rows());
-
-            self.join_metrics.output_batches.add(1);
         }
         timer.done();
 

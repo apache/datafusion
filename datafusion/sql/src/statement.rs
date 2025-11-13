@@ -1037,7 +1037,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if limit.is_some() {
                     return not_impl_err!("Update-limit clause not supported")?;
                 }
-                self.update_to_plan(table, assignments, update_from, selection)
+                self.update_to_plan(table, &assignments, update_from, selection)
             }
 
             Statement::Delete(Delete {
@@ -1070,7 +1070,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 let table_name = self.get_delete_target(from)?;
-                self.delete_to_plan(table_name, selection)
+                self.delete_to_plan(&table_name, selection)
             }
 
             Statement::StartTransaction {
@@ -1100,7 +1100,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if has_end_keyword {
                     return not_impl_err!("Transaction with END keyword not supported");
                 }
-                self.validate_transaction_kind(transaction)?;
+                self.validate_transaction_kind(transaction.as_ref())?;
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &TransactionMode| match m {
@@ -1222,6 +1222,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     None => None,
                 };
+                // Validate default arguments
+                let first_default = match args.as_ref() {
+                    Some(arg) => arg.iter().position(|t| t.default_expr.is_some()),
+                    None => None,
+                };
+                let last_non_default = match args.as_ref() {
+                    Some(arg) => arg
+                        .iter()
+                        .rev()
+                        .position(|t| t.default_expr.is_none())
+                        .map(|reverse_pos| arg.len() - reverse_pos - 1),
+                    None => None,
+                };
+                if let (Some(pos_default), Some(pos_non_default)) =
+                    (first_default, last_non_default)
+                {
+                    if pos_non_default > pos_default {
+                        return plan_err!(
+                            "Non-default arguments cannot follow default arguments."
+                        );
+                    }
+                }
                 // At the moment functions can't be qualified `schema.name`
                 let name = match &name.0[..] {
                     [] => exec_err!("Function should have name")?,
@@ -1233,9 +1255,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //
                 let arg_types = args.as_ref().map(|arg| {
                     arg.iter()
-                        .map(|t| Arc::new(Field::new("", t.data_type.clone(), true)))
+                        .map(|t| {
+                            let name = match t.name.clone() {
+                                Some(name) => name.value,
+                                None => "".to_string(),
+                            };
+                            Arc::new(Field::new(name, t.data_type.clone(), true))
+                        })
                         .collect::<Vec<_>>()
                 });
+                // Validate parameter style
+                if let Some(ref fields) = arg_types {
+                    let count_positional =
+                        fields.iter().filter(|f| f.name() == "").count();
+                    if !(count_positional == 0 || count_positional == fields.len()) {
+                        return plan_err!("All function arguments must use either named or positional style.");
+                    }
+                }
                 let mut planner_context = PlannerContext::new()
                     .with_prepare_param_data_types(arg_types.unwrap_or_default());
 
@@ -1903,7 +1939,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn delete_to_plan(
         &self,
-        table_name: ObjectName,
+        table_name: &ObjectName,
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
@@ -1947,7 +1983,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn update_to_plan(
         &self,
         table: TableWithJoins,
-        assignments: Vec<Assignment>,
+        assignments: &[Assignment],
         from: Option<TableWithJoins>,
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
@@ -2353,7 +2389,7 @@ ON p.function_name = r.routine_name
 
     fn validate_transaction_kind(
         &self,
-        kind: Option<BeginTransactionKind>,
+        kind: Option<&BeginTransactionKind>,
     ) -> Result<()> {
         match kind {
             // BEGIN

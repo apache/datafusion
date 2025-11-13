@@ -21,10 +21,12 @@ use crate::Expr;
 use datafusion_common::{metadata::FieldMetadata, ScalarValue};
 
 /// Create a literal expression
+#[allow(clippy::needless_pass_by_value)]
 pub fn lit<T: Literal>(n: T) -> Expr {
     n.lit()
 }
 
+#[allow(clippy::needless_pass_by_value)]
 pub fn lit_with_metadata<T: Literal>(n: T, metadata: Option<FieldMetadata>) -> Expr {
     let Some(metadata) = metadata else {
         return n.lit();
@@ -45,6 +47,7 @@ pub fn lit_with_metadata<T: Literal>(n: T, metadata: Option<FieldMetadata>) -> E
 }
 
 /// Create a literal timestamp expression
+#[allow(clippy::needless_pass_by_value)]
 pub fn lit_timestamp_nano<T: TimestampLiteral>(n: T) -> Expr {
     n.lit_timestamp_nano()
 }

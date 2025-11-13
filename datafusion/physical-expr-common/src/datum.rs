@@ -18,7 +18,10 @@
 use arrow::array::BooleanArray;
 use arrow::array::{make_comparator, ArrayRef, Datum};
 use arrow::buffer::NullBuffer;
-use arrow::compute::SortOptions;
+use arrow::compute::kernels::cmp::{
+    distinct, eq, gt, gt_eq, lt, lt_eq, neq, not_distinct,
+};
+use arrow::compute::{ilike, like, nilike, nlike, SortOptions};
 use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, internal_err};
@@ -53,22 +56,49 @@ pub fn apply(
     }
 }
 
-/// Applies a binary [`Datum`] comparison kernel `f` to `lhs` and `rhs`
+/// Applies a binary [`Datum`] comparison operator `op` to `lhs` and `rhs`
 pub fn apply_cmp(
+    op: Operator,
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
-    f: impl Fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
 ) -> Result<ColumnarValue> {
-    apply(lhs, rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+    if lhs.data_type().is_nested() {
+        apply_cmp_for_nested(op, lhs, rhs)
+    } else {
+        let f = match op {
+            Operator::Eq => eq,
+            Operator::NotEq => neq,
+            Operator::Lt => lt,
+            Operator::LtEq => lt_eq,
+            Operator::Gt => gt,
+            Operator::GtEq => gt_eq,
+            Operator::IsDistinctFrom => distinct,
+            Operator::IsNotDistinctFrom => not_distinct,
+
+            Operator::LikeMatch => like,
+            Operator::ILikeMatch => ilike,
+            Operator::NotLikeMatch => nlike,
+            Operator::NotILikeMatch => nilike,
+
+            _ => {
+                return internal_err!("Invalid compare operator: {}", op);
+            }
+        };
+
+        apply(lhs, rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+    }
 }
 
-/// Applies a binary [`Datum`] comparison kernel `f` to `lhs` and `rhs` for nested type like
+/// Applies a binary [`Datum`] comparison operator `op` to `lhs` and `rhs` for nested type like
 /// List, FixedSizeList, LargeList, Struct, Union, Map, or a dictionary of a nested type
 pub fn apply_cmp_for_nested(
     op: Operator,
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
+    let left_data_type = lhs.data_type();
+    let right_data_type = rhs.data_type();
+
     if matches!(
         op,
         Operator::Eq
@@ -79,12 +109,18 @@ pub fn apply_cmp_for_nested(
             | Operator::GtEq
             | Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
-    ) {
+    ) && left_data_type.equals_datatype(&right_data_type)
+    {
         apply(lhs, rhs, |l, r| {
             Ok(Arc::new(compare_op_for_nested(op, l, r)?))
         })
     } else {
-        internal_err!("invalid operator for nested")
+        internal_err!(
+            "invalid operator or data type mismatch for nested data, op {} left {}, right {}",
+            op,
+            left_data_type,
+            right_data_type
+        )
     }
 }
 
@@ -97,7 +133,7 @@ pub fn compare_with_eq(
     if is_nested {
         compare_op_for_nested(Operator::Eq, lhs, rhs)
     } else {
-        arrow::compute::kernels::cmp::eq(lhs, rhs).map_err(|e| arrow_datafusion_err!(e))
+        eq(lhs, rhs).map_err(|e| arrow_datafusion_err!(e))
     }
 }
 

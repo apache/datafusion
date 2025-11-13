@@ -40,18 +40,24 @@ use std::io::Write;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-/// A macro to assert that some particular line contains two substrings
+/// A macro to assert that some particular line contains the given substrings
 ///
-/// Usage: `assert_metrics!(actual, operator_name, metrics)`
+/// Usage: `assert_metrics!(actual, operator_name, metrics_1, metrics_2, ...)`
 macro_rules! assert_metrics {
-    ($ACTUAL: expr, $OPERATOR_NAME: expr, $METRICS: expr) => {
+    ($ACTUAL: expr, $OPERATOR_NAME: expr, $($METRICS: expr),+) => {
         let found = $ACTUAL
             .lines()
-            .any(|line| line.contains($OPERATOR_NAME) && line.contains($METRICS));
+            .any(|line| line.contains($OPERATOR_NAME) $( && line.contains($METRICS))+);
+
+        let mut metrics = String::new();
+        $(metrics.push_str(format!(" '{}',", $METRICS).as_str());)+
+        // remove the last `,` from the string
+        metrics.pop();
+
         assert!(
             found,
-            "Can not find a line with both '{}' and '{}' in\n\n{}",
-            $OPERATOR_NAME, $METRICS, $ACTUAL
+            "Cannot find a line with operator name '{}' and metrics containing values {} in :\n\n{}",
+            $OPERATOR_NAME, metrics, $ACTUAL
         );
     };
 }

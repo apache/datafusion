@@ -155,8 +155,7 @@ use url::Url;
 ///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable
 /// [Page Index](https://github.com/apache/parquet-format/blob/master/PageIndex.md)
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn parquet_advanced_index() -> Result<()> {
     // the object store is used to read the parquet files (in this case, it is
     // a local file system, but in a real system it could be S3, GCS, etc)
     let object_store: Arc<dyn ObjectStore> =
@@ -239,6 +238,7 @@ pub struct IndexTableProvider {
     /// if true, use row selections in addition to row group selections
     use_row_selections: AtomicBool,
 }
+
 impl IndexTableProvider {
     /// Create a new IndexTableProvider
     /// * `object_store` - the object store implementation to use for reading files
@@ -491,19 +491,18 @@ impl TableProvider for IndexTableProvider {
                 .with_file(indexed_file);
 
         let file_source = Arc::new(
-            ParquetSource::default()
+            ParquetSource::new(schema.clone())
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
                 .with_predicate(predicate)
                 // provide the factory to create parquet reader without re-reading metadata
                 .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
-        let file_scan_config =
-            FileScanConfigBuilder::new(object_store_url, schema, file_source)
-                .with_limit(limit)
-                .with_projection_indices(projection.cloned())
-                .with_file(partitioned_file)
-                .build();
+        let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
+            .with_limit(limit)
+            .with_projection_indices(projection.cloned())
+            .with_file(partitioned_file)
+            .build();
 
         // Finally, put it all together into a DataSourceExec
         Ok(DataSourceExec::from_data_source(file_scan_config))
@@ -540,6 +539,7 @@ impl CachedParquetFileReaderFactory {
             metadata: HashMap::new(),
         }
     }
+
     /// Add the pre-parsed information about the file to the factor
     fn with_file(mut self, indexed_file: &IndexedFile) -> Self {
         self.metadata.insert(

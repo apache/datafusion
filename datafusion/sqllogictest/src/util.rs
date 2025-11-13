@@ -95,7 +95,7 @@ pub fn df_value_validator(
             warn!("[{i}] {}<eol>", normalized_actual[i]);
             warn!(
                 "[{i}] {}<eol>",
-                if normalized_expected.len() >= i {
+                if normalized_expected.len() > i {
                     &normalized_expected[i]
                 } else {
                     "No more results"
