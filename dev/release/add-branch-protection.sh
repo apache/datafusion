@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-set -e
+set -eu
 
 # Script to add branch protection for a new release branch in .asf.yaml
 #
