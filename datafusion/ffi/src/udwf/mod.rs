@@ -25,19 +25,14 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
 };
 use arrow_schema::{Field, FieldRef};
-use datafusion::logical_expr::LimitEffect;
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::{
-    error::DataFusionError,
-    logical_expr::{
-        function::WindowUDFFieldArgs, type_coercion::functions::fields_with_window_udf,
-        PartitionEvaluator,
-    },
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_expr::{
+    function::WindowUDFFieldArgs, type_coercion::functions::fields_with_window_udf,
+    LimitEffect, PartitionEvaluator,
 };
-use datafusion::{
-    error::Result,
-    logical_expr::{Signature, WindowUDF, WindowUDFImpl},
-};
+use datafusion_expr::{Signature, WindowUDF, WindowUDFImpl};
+use datafusion_physical_expr::PhysicalExpr;
+
 use datafusion_common::exec_err;
 use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
@@ -336,7 +331,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
 
     fn partition_evaluator(
         &self,
-        args: datafusion::logical_expr::function::PartitionEvaluatorArgs,
+        args: datafusion_expr::function::PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let evaluator = unsafe {
             let args = FFI_PartitionEvaluatorArgs::try_new(

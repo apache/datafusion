@@ -16,7 +16,7 @@
 // under the License.
 
 use abi_stable::StableAbi;
-use datafusion::{datasource::TableType, logical_expr::TableProviderFilterPushDown};
+use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 /// FFI safe version of [`TableProviderFilterPushDown`].
 #[repr(C)]

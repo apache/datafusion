@@ -24,15 +24,7 @@ use abi_stable::{
 use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{Session, TableProvider},
-    datasource::TableType,
-    error::DataFusionError,
-    execution::TaskContext,
-    logical_expr::{logical_plan::dml::InsertOp, TableProviderFilterPushDown},
-    physical_plan::ExecutionPlan,
-    prelude::Expr,
-};
+use datafusion_catalog::{Session, TableProvider};
 use datafusion_proto::{
     logical_plan::{
         from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
@@ -51,7 +43,11 @@ use crate::{
 use super::{execution_plan::FFI_ExecutionPlan, insert_op::FFI_InsertOp};
 use crate::execution::FFI_TaskContextProvider;
 use crate::session::{FFI_Session, ForeignSession};
-use datafusion::error::Result;
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion_physical_plan::ExecutionPlan;
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 ///

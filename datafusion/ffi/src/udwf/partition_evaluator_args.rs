@@ -26,13 +26,10 @@ use arrow::{
     ffi::FFI_ArrowSchema,
 };
 use arrow_schema::FieldRef;
-use datafusion::{
-    error::{DataFusionError, Result},
-    logical_expr::function::PartitionEvaluatorArgs,
-    physical_plan::{expressions::Column, PhysicalExpr},
-};
-use datafusion_common::exec_datafusion_err;
+use datafusion_common::{exec_datafusion_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_expr::function::PartitionEvaluatorArgs;
+use datafusion_physical_plan::{expressions::Column, PhysicalExpr};
 use datafusion_proto::{
     physical_plan::{
         from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,

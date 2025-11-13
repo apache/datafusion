@@ -21,7 +21,8 @@ use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
     StableAbi,
 };
-use datafusion::catalog::{CatalogProvider, SchemaProvider};
+use datafusion_catalog::{CatalogProvider, SchemaProvider};
+use datafusion_common::error::Result;
 use tokio::runtime::Handle;
 
 use crate::{
@@ -30,7 +31,6 @@ use crate::{
 };
 
 use crate::execution::FFI_TaskContextProvider;
-use datafusion::error::Result;
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
 #[repr(C)]

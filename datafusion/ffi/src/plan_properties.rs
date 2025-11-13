@@ -27,15 +27,13 @@ use abi_stable::{
     StableAbi,
 };
 use arrow::datatypes::SchemaRef;
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_expr::EquivalenceProperties,
-    physical_plan::{
-        execution_plan::{Boundedness, EmissionType},
-        PlanProperties,
-    },
-};
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::{
+    execution_plan::{Boundedness, EmissionType},
+    PlanProperties,
+};
 use datafusion_proto::{
     physical_plan::{
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},

@@ -32,15 +32,13 @@ use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::execution::FFI_TaskContextProvider;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion::catalog::{CatalogProviderList, MemoryCatalogProviderList};
-use datafusion::{
-    catalog::{
-        CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider,
-        TableProvider,
-    },
-    common::exec_err,
-    datasource::MemTable,
+use datafusion_catalog::{
+    CatalogProvider, CatalogProviderList, MemTable, MemoryCatalogProvider,
+    MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
+};
+use datafusion_common::{
     error::{DataFusionError, Result},
+    exec_err,
 };
 
 /// This schema provider is intended only for unit tests. It prepopulates with one
@@ -52,7 +50,7 @@ pub struct FixedSchemaProvider {
 
 pub fn fruit_table() -> Arc<dyn TableProvider + 'static> {
     use arrow::datatypes::{DataType, Field};
-    use datafusion::common::record_batch;
+    use datafusion_common::record_batch;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("units", DataType::Int32, true),

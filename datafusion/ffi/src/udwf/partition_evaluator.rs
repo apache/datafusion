@@ -23,11 +23,11 @@ use abi_stable::{
     StableAbi,
 };
 use arrow::{array::ArrayRef, error::ArrowError};
-use datafusion::{
+use datafusion_common::{
     error::{DataFusionError, Result},
-    logical_expr::{window_state::WindowAggState, PartitionEvaluator},
     scalar::ScalarValue,
 };
+use datafusion_expr::{window_state::WindowAggState, PartitionEvaluator};
 use prost::Message;
 
 use super::range::FFI_Range;

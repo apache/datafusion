@@ -24,20 +24,14 @@ use accumulator_args::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 use arrow::datatypes::{DataType, Field};
 use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
-use datafusion::{
-    error::DataFusionError,
-    logical_expr::{
-        function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-        type_coercion::functions::fields_with_aggregate_udf,
-        utils::AggregateOrderSensitivity,
-        Accumulator, GroupsAccumulator,
-    },
+use datafusion_common::error::Result;
+use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_expr::{
+    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+    type_coercion::functions::fields_with_aggregate_udf,
+    utils::AggregateOrderSensitivity,
+    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
-use datafusion::{
-    error::Result,
-    logical_expr::{AggregateUDF, AggregateUDFImpl, Signature},
-};
-use datafusion_common::exec_datafusion_err;
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::FFI_GroupsAccumulator;
 use std::hash::{Hash, Hasher};

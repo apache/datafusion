@@ -22,11 +22,12 @@ use abi_stable::{
     StableAbi,
 };
 
-use datafusion::error::Result;
-use datafusion::{
-    catalog::{TableFunctionImpl, TableProvider},
-    prelude::{Expr, SessionContext},
-};
+use crate::execution::FFI_TaskContextProvider;
+use crate::{df_result, rresult_return, table_provider::FFI_TableProvider};
+use datafusion_catalog::{TableFunctionImpl, TableProvider};
+use datafusion_common::error::Result;
+use datafusion_execution::TaskContext;
+use datafusion_expr::Expr;
 use datafusion_proto::{
     logical_plan::{
         from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
@@ -35,9 +36,6 @@ use datafusion_proto::{
 };
 use prost::Message;
 use tokio::runtime::Handle;
-
-use crate::execution::FFI_TaskContextProvider;
-use crate::{df_result, rresult_return, table_provider::FFI_TableProvider};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
@@ -98,13 +96,13 @@ unsafe extern "C" fn call_fn_wrapper(
     let runtime = udtf.runtime();
     let udtf_inner = udtf.inner();
 
-    let default_ctx = SessionContext::new();
+    let ctx: Arc<TaskContext> = rresult_return!((&udtf.task_ctx_provider).try_into());
     let codec = DefaultLogicalExtensionCodec {};
 
     let proto_filters = rresult_return!(LogicalExprList::decode(args.as_ref()));
 
     let args =
-        rresult_return!(parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec));
+        rresult_return!(parse_exprs(proto_filters.expr.iter(), ctx.as_ref(), &codec));
 
     let table_provider = rresult_return!(udtf_inner.call(&args));
     RResult::ROk(FFI_TableProvider::new(
@@ -212,6 +210,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use datafusion::logical_expr::ptr_eq::arc_ptr_eq;
+    use datafusion::prelude::SessionContext;
     use datafusion::{
         catalog::MemTable, common::exec_err, prelude::lit, scalar::ScalarValue,
     };

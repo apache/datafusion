@@ -25,11 +25,10 @@ use abi_stable::{
 };
 use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
-use datafusion::{
-    error::DataFusionError,
-    logical_expr::function::AccumulatorArgs,
-    physical_expr::{PhysicalExpr, PhysicalSortExpr},
-};
+use datafusion_common::error::DataFusionError;
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::TaskContext;
 use datafusion_proto::{

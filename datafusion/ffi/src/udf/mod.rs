@@ -32,19 +32,14 @@ use arrow::{
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
 use arrow_schema::FieldRef;
-use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::ReturnFieldArgs;
-use datafusion::{
-    error::DataFusionError,
-    logical_expr::type_coercion::functions::data_types_with_scalar_udf,
-};
-use datafusion::{
-    error::Result,
-    logical_expr::{
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    },
-};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::internal_err;
+use datafusion_expr::ReturnFieldArgs;
+use datafusion_expr::{
+    type_coercion::functions::data_types_with_scalar_udf, ColumnarValue,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+};
 use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };

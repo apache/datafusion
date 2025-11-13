@@ -19,14 +19,12 @@ use crate::{
     udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF, udtf::FFI_TableFunction,
     udwf::FFI_WindowUDF,
 };
-use datafusion::{
-    catalog::TableFunctionImpl,
-    functions::math::{abs::AbsFunc, random::RandomFunc},
-    functions_aggregate::{stddev::Stddev, sum::Sum},
-    functions_table::generate_series::RangeFunc,
-    functions_window::rank::Rank,
-    logical_expr::{AggregateUDF, ScalarUDF, WindowUDF},
-};
+use datafusion_catalog::TableFunctionImpl;
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_functions::math::{abs::AbsFunc, random::RandomFunc};
+use datafusion_functions_aggregate::{stddev::Stddev, sum::Sum};
+use datafusion_functions_table::generate_series::RangeFunc;
+use datafusion_functions_window::rank::Rank;
 
 use crate::execution::FFI_TaskContextProvider;
 use std::sync::Arc;
@@ -73,7 +71,7 @@ pub(crate) extern "C" fn create_ffi_rank_func(
     let udwf: Arc<WindowUDF> = Arc::new(
         Rank::new(
             "rank_demo".to_string(),
-            datafusion::functions_window::rank::RankType::Basic,
+            datafusion_functions_window::rank::RankType::Basic,
         )
         .into(),
     );

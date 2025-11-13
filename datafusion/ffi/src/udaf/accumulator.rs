@@ -15,21 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
 use arrow::{array::ArrayRef, error::ArrowError};
-use datafusion::{
+use datafusion_common::{
     error::{DataFusionError, Result},
-    logical_expr::Accumulator,
     scalar::ScalarValue,
 };
+use datafusion_expr::Accumulator;
 use prost::Message;
 use std::ptr::null_mut;
 use std::{ffi::c_void, ops::Deref};
-
-use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`Accumulator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function

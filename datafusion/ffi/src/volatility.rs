@@ -16,7 +16,7 @@
 // under the License.
 
 use abi_stable::StableAbi;
-use datafusion::logical_expr::Volatility;
+use datafusion_expr::Volatility;
 
 #[repr(C)]
 #[derive(Debug, StableAbi, Clone)]

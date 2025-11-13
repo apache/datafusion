@@ -38,11 +38,9 @@ use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::execution::FFI_TaskContextProvider;
 use crate::tests::catalog::create_catalog_provider_list;
 use arrow::array::RecordBatch;
+use arrow_schema::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
-use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema},
-    common::record_batch,
-};
+use datafusion_common::record_batch;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,

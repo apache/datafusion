@@ -21,7 +21,7 @@ use abi_stable::{
     std_types::{ROption, RString, RVec},
     StableAbi,
 };
-use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+use datafusion_catalog::{CatalogProvider, CatalogProviderList};
 use tokio::runtime::Handle;
 
 use crate::catalog_provider::{FFI_CatalogProvider, ForeignCatalogProvider};

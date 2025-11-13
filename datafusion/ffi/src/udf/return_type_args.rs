@@ -20,10 +20,10 @@ use abi_stable::{
     StableAbi,
 };
 use arrow_schema::FieldRef;
-use datafusion::{
-    common::exec_datafusion_err, error::DataFusionError, logical_expr::ReturnFieldArgs,
-    scalar::ScalarValue,
+use datafusion_common::{
+    error::DataFusionError, exec_datafusion_err, scalar::ScalarValue,
 };
+use datafusion_expr::ReturnFieldArgs;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};

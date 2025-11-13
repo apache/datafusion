@@ -28,10 +28,9 @@ use arrow::{
     error::ArrowError,
     ffi::to_ffi,
 };
-use datafusion::{
-    error::{DataFusionError, Result},
-    logical_expr::{EmitTo, GroupsAccumulator},
-};
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_expr::{EmitTo, GroupsAccumulator};
+
 use std::ptr::null_mut;
 use std::{ffi::c_void, ops::Deref, sync::Arc};
 
