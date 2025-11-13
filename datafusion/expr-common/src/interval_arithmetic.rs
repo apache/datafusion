@@ -596,7 +596,7 @@ impl Interval {
                 })
             }
 
-            // Return UNCERTAIN when intervals don't have concrete boolean bounds
+            // Return TRUE_OR_FALSE when intervals don't have concrete boolean bounds
             _ => Ok(Self::TRUE_OR_FALSE),
         }
     }
@@ -621,7 +621,7 @@ impl Interval {
                 })
             }
 
-            // Return UNCERTAIN when intervals don't have concrete boolean bounds
+            // Return TRUE_OR_FALSE when intervals don't have concrete boolean bounds
             _ => Ok(Self::TRUE_OR_FALSE),
         }
     }
@@ -2695,7 +2695,7 @@ mod tests {
     }
 
     // Tests that there's no such thing as a 'null' boolean interval.
-    // An interval with two `Boolean(None)` boundaries is normalised to `Interval::UNCERTAIN`.
+    // An interval with two `Boolean(None)` boundaries is normalised to `Interval::TRUE_OR_FALSE`.
     #[test]
     fn test_null_boolean_interval() {
         let null_interval =
@@ -2705,7 +2705,7 @@ mod tests {
         assert_eq!(null_interval, Interval::TRUE_OR_FALSE);
     }
 
-    // Asserts that `Interval::UNCERTAIN` represents a set that contains `true`, `false`, and does
+    // Asserts that `Interval::TRUE_OR_FALSE` represents a set that contains `true`, `false`, and does
     // not contain `null`.
     #[test]
     fn test_uncertain_boolean_interval() {
