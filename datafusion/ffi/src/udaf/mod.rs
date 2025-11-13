@@ -616,6 +616,7 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::datatypes::Schema;
     use datafusion::{
         common::create_array, functions_aggregate::sum::Sum,
@@ -624,8 +625,6 @@ mod tests {
     };
     use std::any::Any;
     use std::collections::HashMap;
-
-    use super::*;
 
     #[derive(Default, Debug, Hash, Eq, PartialEq)]
     struct SumWithCopiedMetadata {
@@ -819,5 +818,27 @@ mod tests {
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::HardRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::SoftRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Beneficial);
+    }
+
+    #[test]
+    fn test_ffi_udaf_local_bypass() -> Result<()> {
+        let original_udaf = Sum::new();
+        let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
+
+        let mut ffi_udaf = FFI_AggregateUDF::from(original_udaf);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&ffi_udaf).try_into()?;
+        assert!(foreign_udaf.as_any().downcast_ref::<Sum>().is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_udaf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&ffi_udaf).try_into()?;
+        assert!(foreign_udaf
+            .as_any()
+            .downcast_ref::<ForeignAggregateUDF>()
+            .is_some());
+
+        Ok(())
     }
 }

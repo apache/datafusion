@@ -510,13 +510,11 @@ impl TableProvider for ForeignTableProvider {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::datatypes::Schema;
     use datafusion::prelude::{col, lit};
 
-    use super::*;
-
-    #[tokio::test]
-    async fn test_round_trip_ffi_table_provider_scan() -> Result<()> {
+    fn create_test_table_provider() -> Result<Arc<dyn TableProvider>> {
         use arrow::datatypes::Field;
         use datafusion::arrow::{
             array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
@@ -536,10 +534,16 @@ mod tests {
             vec![Arc::new(Float32Array::from(vec![64.0]))],
         )?;
 
-        let ctx = SessionContext::new();
+        Ok(Arc::new(MemTable::try_new(
+            schema,
+            vec![vec![batch1], vec![batch2]],
+        )?))
+    }
 
-        let provider =
-            Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
+    #[tokio::test]
+    async fn test_round_trip_ffi_table_provider_scan() -> Result<()> {
+        let provider = create_test_table_provider()?;
+        let ctx = SessionContext::new();
 
         let mut ffi_provider = FFI_TableProvider::new(provider, true, None);
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
@@ -560,31 +564,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_round_trip_ffi_table_provider_insert_into() -> Result<()> {
-        use arrow::datatypes::Field;
-        use datafusion::arrow::{
-            array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
-        };
-        use datafusion::datasource::MemTable;
-
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-        // define data in two partitions
-        let batch1 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
-        )?;
-        let batch2 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Float32Array::from(vec![64.0]))],
-        )?;
-
+        let provider = create_test_table_provider()?;
         let ctx = SessionContext::new();
 
-        let provider =
-            Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
-
-        let ffi_provider = FFI_TableProvider::new(provider, true, None);
+        let mut ffi_provider = FFI_TableProvider::new(provider, true, None);
+        ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
 
@@ -650,6 +634,30 @@ mod tests {
             "+-----+"
         ];
         assert_batches_eq!(expected, &result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_table_provider_local_bypass() -> Result<()> {
+        let table_provider = create_test_table_provider()?;
+
+        let mut ffi_table = FFI_TableProvider::new(table_provider, false, None);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
+        assert!(foreign_table
+            .as_any()
+            .downcast_ref::<datafusion::datasource::MemTable>()
+            .is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_table.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
+        assert!(foreign_table
+            .as_any()
+            .downcast_ref::<ForeignTableProvider>()
+            .is_some());
+
         Ok(())
     }
 }

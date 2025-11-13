@@ -309,8 +309,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_round_trip_ffi_plan_properties() -> Result<()> {
+    fn create_test_props() -> Result<PlanProperties> {
         use arrow::datatypes::{DataType, Field, Schema};
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
@@ -319,19 +318,42 @@ mod tests {
         let _ = eqp.reorder([PhysicalSortExpr::new_default(
             datafusion::physical_plan::expressions::col("a", &schema)?,
         )]);
-        let original_props = PlanProperties::new(
+        Ok(PlanProperties::new(
             eqp,
             Partitioning::RoundRobinBatch(3),
             EmissionType::Incremental,
             Boundedness::Bounded,
-        );
+        ))
+    }
 
+    #[test]
+    fn test_round_trip_ffi_plan_properties() -> Result<()> {
+        let original_props = create_test_props()?;
         let mut local_props_ptr = FFI_PlanProperties::from(&original_props);
         local_props_ptr.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_props: PlanProperties = local_props_ptr.try_into()?;
 
         assert_eq!(format!("{foreign_props:?}"), format!("{original_props:?}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_local_bypass() -> Result<()> {
+        let props = create_test_props()?;
+
+        let ffi_plan = FFI_PlanProperties::from(&props);
+
+        // Verify local libraries
+        let foreign_plan: PlanProperties = ffi_plan.try_into()?;
+        assert_eq!(format!("{foreign_plan:?}"), format!("{:?}", foreign_plan));
+
+        // Verify different library markers still can produce identical properties
+        let mut ffi_plan = FFI_PlanProperties::from(&props);
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: PlanProperties = ffi_plan.try_into()?;
+        assert_eq!(format!("{foreign_plan:?}"), format!("{:?}", foreign_plan));
 
         Ok(())
     }

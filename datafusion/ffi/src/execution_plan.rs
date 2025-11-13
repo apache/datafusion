@@ -269,10 +269,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        self.children
-            .iter()
-            .map(|p| p as &Arc<dyn ExecutionPlan>)
-            .collect()
+        self.children.iter().collect()
     }
 
     fn with_new_children(
@@ -301,6 +298,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
         physical_plan::{
@@ -309,8 +307,6 @@ mod tests {
         },
         prelude::SessionContext,
     };
-
-    use super::*;
 
     #[derive(Debug)]
     pub struct EmptyExec {
@@ -449,5 +445,28 @@ mod tests {
         assert_eq!(parent_foreign.children().len(), 1);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_local_bypass() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+        let ctx = SessionContext::new();
+
+        let plan = Arc::new(EmptyExec::new(schema));
+
+        let mut ffi_plan = FFI_ExecutionPlan::new(plan, ctx.task_ctx(), None);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into().unwrap();
+        assert!(foreign_plan.as_any().downcast_ref::<EmptyExec>().is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into().unwrap();
+        assert!(foreign_plan
+            .as_any()
+            .downcast_ref::<ForeignExecutionPlan>()
+            .is_some());
     }
 }

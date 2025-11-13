@@ -347,4 +347,26 @@ mod tests {
         let returned_schema = foreign_catalog.schema("second_schema");
         assert!(returned_schema.is_some());
     }
+
+    #[test]
+    fn test_ffi_catalog_provider_local_bypass() {
+        let catalog = Arc::new(MemoryCatalogProvider::new());
+
+        let mut ffi_catalog = FFI_CatalogProvider::new(catalog, None);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
+        assert!(foreign_catalog
+            .as_any()
+            .downcast_ref::<MemoryCatalogProvider>()
+            .is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
+        assert!(foreign_catalog
+            .as_any()
+            .downcast_ref::<ForeignCatalogProvider>()
+            .is_some());
+    }
 }
