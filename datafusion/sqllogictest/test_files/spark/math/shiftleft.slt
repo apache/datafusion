@@ -228,3 +228,19 @@ FROM VALUES (1, 1), (2, 2), (3, 3) t(value, shift)
 2 UInt64
 8 UInt64
 24 UInt64
+
+# pure null handling
+query IT
+SELECT shiftleft(null, 1), arrow_typeof(shiftleft(null, 1));
+----
+NULL Int32
+
+query IT
+SELECT shiftleft(null, null), arrow_typeof(shiftleft(null, null));
+----
+NULL Int32
+
+query IT
+SELECT shiftleft(1::bigint, null), arrow_typeof(shiftleft(1::bigint, null));
+----
+NULL Int64

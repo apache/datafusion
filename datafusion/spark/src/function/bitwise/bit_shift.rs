@@ -142,11 +142,6 @@ fn shift_inner(
     bit_shift_type: BitShiftType,
 ) -> Result<ArrayRef> {
     let [value_array, shift_array] = take_function_args(name, arrays)?;
-
-    if value_array.data_type().is_null() || shift_array.data_type().is_null() {
-        return Ok(Arc::new(Int32Array::new_null(value_array.len())));
-    }
-
     let shift_array = shift_array.as_primitive::<Int32Type>();
 
     fn shift<T>(
@@ -281,11 +276,7 @@ impl ScalarUDFImpl for SparkBitShift {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0].is_null() {
-            Ok(DataType::Int32)
-        } else {
-            Ok(arg_types[0].clone())
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

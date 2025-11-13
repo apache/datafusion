@@ -233,3 +233,19 @@ FROM VALUES (4, 1), (8, 2), (16, 3) t(value, shift)
 2 UInt64
 2 UInt64
 2 UInt64
+
+# pure null handling
+query IT
+SELECT shiftrightunsigned(null, 1), arrow_typeof(shiftrightunsigned(null, 1));
+----
+NULL Int32
+
+query IT
+SELECT shiftrightunsigned(null, null), arrow_typeof(shiftrightunsigned(null, null));
+----
+NULL Int32
+
+query IT
+SELECT shiftrightunsigned(1::bigint, null), arrow_typeof(shiftrightunsigned(1::bigint, null));
+----
+NULL Int64
