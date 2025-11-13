@@ -403,10 +403,29 @@
 -->
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
+<section id="datafusion-52-0-0">
+<h2>DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code><a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
+<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
+<p>You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/18566">status of the <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code> release here</a></p>
+<section id="aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false">
+<h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false" title="Link to this heading">#</a></h3>
+<p>This method specifies whether an aggregate function allows <code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code>/<code class="docutils literal notranslate"><span class="pre">RESPECT</span> <span class="pre">NULLS</span></code>
+during SQL parsing, with the implication it respects these configs during computation.</p>
+<p>Most DataFusion aggregate functions silently ignored this syntax in prior versions
+as they did not make use of it and it was permitted by default. We change this so
+only the few functions which do respect this clause (e.g. <code class="docutils literal notranslate"><span class="pre">array_agg</span></code>, <code class="docutils literal notranslate"><span class="pre">first_value</span></code>,
+<code class="docutils literal notranslate"><span class="pre">last_value</span></code>) need to implement it.</p>
+<p>Custom user defined aggregate functions will also error if this syntax is used,
+unless they explicitly declare support by overriding the method.</p>
+<p>For example, SQL parsing will now fail for queries such as this:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">median</span><span class="p">(</span><span class="n">c1</span><span class="p">)</span><span class="w"> </span><span class="k">IGNORE</span><span class="w"> </span><span class="n">NULLS</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span>
+</pre></div>
+</div>
+<p>Instead of silently succeeding.</p>
+</section>
+</section>
 <section id="datafusion-51-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code><a class="headerlink" href="#datafusion-51-0-0" title="Link to this heading">#</a></h2>
-<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
-<p>You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/17558">status of the <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code>release here</a></p>
 <section id="arrow-parquet-updated-to-57-0-0">
 <h3><code class="docutils literal notranslate"><span class="pre">arrow</span></code> / <code class="docutils literal notranslate"><span class="pre">parquet</span></code> updated to 57.0.0<a class="headerlink" href="#arrow-parquet-updated-to-57-0-0" title="Link to this heading">#</a></h3>
 </section>
@@ -1641,6 +1660,10 @@ take care of constructing the <code class="docutils literal notranslate"><span c
   </div>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code></a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-51-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#arrow-parquet-updated-to-57-0-0"><code class="docutils literal notranslate"><span class="pre">arrow</span></code> / <code class="docutils literal notranslate"><span class="pre">parquet</span></code> updated to 57.0.0</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrade-to-arrow-57-0-0-and-parquet-57-0-0">Upgrade to arrow <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code> and parquet <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code></a></li>

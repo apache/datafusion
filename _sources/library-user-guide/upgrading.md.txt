@@ -19,11 +19,34 @@
 
 # Upgrade Guides
 
+## DataFusion `52.0.0`
+
+**Note:** DataFusion `52.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+You can see the current [status of the `52.0.0` release here](https://github.com/apache/datafusion/issues/18566)
+
+### `AggregateUDFImpl::supports_null_handling_clause` now defaults to `false`
+
+This method specifies whether an aggregate function allows `IGNORE NULLS`/`RESPECT NULLS`
+during SQL parsing, with the implication it respects these configs during computation.
+
+Most DataFusion aggregate functions silently ignored this syntax in prior versions
+as they did not make use of it and it was permitted by default. We change this so
+only the few functions which do respect this clause (e.g. `array_agg`, `first_value`,
+`last_value`) need to implement it.
+
+Custom user defined aggregate functions will also error if this syntax is used,
+unless they explicitly declare support by overriding the method.
+
+For example, SQL parsing will now fail for queries such as this:
+
+```sql
+SELECT median(c1) IGNORE NULLS FROM table
+```
+
+Instead of silently succeeding.
+
 ## DataFusion `51.0.0`
-
-**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-
-You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
 
 ### `arrow` / `parquet` updated to 57.0.0
 
