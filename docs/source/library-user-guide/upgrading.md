@@ -67,6 +67,47 @@ SELECT median(c1) IGNORE NULLS FROM table
 
 Instead of silently succeeding.
 
+### FFI object conversion
+
+Many of the structs in the `datafusion-ffi` crate have been updated to allow easier
+conversion to the underlying trait types they represent. This simplifies some code
+paths, but also provides an additional improvement in cases where library code goes
+through a round trip via the foreign function interface.
+
+To update your code, suppose you have a `FFI_SchemaProvider` called `ffi_provider`
+and you wish to use this as a `SchemaProvider`. In the old approach you would do
+something like:
+
+```rust
+    let foreign_provider: ForeignSchemaProvider = provider.into();
+    let foreign_provider = Arc::new(foreign_provider) as Arc<dyn SchemaProvider>;
+```
+
+This code should now be written as:
+
+```rust
+    let foreign_provider: Arc<dyn SchemaProvider + Send> = provider.into();
+    let foreign_provider = foreign_provider as Arc<dyn SchemaProvider>;
+```
+
+For the case of user defined functions, the updates are similar but you
+may need to change the way you call the creation of the `ScalarUDF`.
+Aggregate and window functions follow the same pattern.
+
+Previously you may write:
+
+```rust
+    let foreign_udf: ForeignScalarUDF = ffi_udf.try_into()?;
+    let foreign_udf: ScalarUDF = foreign_udf.into();
+```
+
+Instead this should now be:
+
+```rust
+    let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.try_into()?;
+    let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
+```
+
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0
