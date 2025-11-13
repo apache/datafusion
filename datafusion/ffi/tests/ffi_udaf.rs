@@ -24,25 +24,26 @@ mod tests {
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl};
     use datafusion::prelude::{col, SessionContext};
-    use std::sync::Arc;
-
+    use datafusion_execution::TaskContextProvider;
     use datafusion_ffi::tests::utils::get_module;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_ffi_udaf() -> Result<()> {
         let module = get_module()?;
+        let ctx = Arc::new(SessionContext::default());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
         let ffi_sum_func =
             module
                 .create_sum_udaf()
                 .ok_or(DataFusionError::NotImplemented(
                     "External table provider failed to implement create_udaf".to_string(),
-                ))?();
+                ))?(task_ctx_provider.into());
         let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).try_into()?;
 
         let udaf = AggregateUDF::new_from_shared_impl(foreign_sum_func);
 
-        let ctx = SessionContext::default();
         let record_batch = record_batch!(
             ("a", Int32, vec![1, 2, 2, 4, 4, 4, 4]),
             ("b", Float64, vec![1.0, 2.0, 2.0, 4.0, 4.0, 4.0, 4.0])
@@ -73,19 +74,20 @@ mod tests {
     #[tokio::test]
     async fn test_ffi_grouping_udaf() -> Result<()> {
         let module = get_module()?;
+        let ctx = Arc::new(SessionContext::default());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
         let ffi_stddev_func =
             module
                 .create_stddev_udaf()
                 .ok_or(DataFusionError::NotImplemented(
                     "External table provider failed to implement create_udaf".to_string(),
-                ))?();
+                ))?(task_ctx_provider.into());
         let foreign_stddev_func: Arc<dyn AggregateUDFImpl> =
             (&ffi_stddev_func).try_into()?;
 
         let udaf = AggregateUDF::new_from_shared_impl(foreign_stddev_func);
 
-        let ctx = SessionContext::default();
         let record_batch = record_batch!(
             ("a", Int32, vec![1, 2, 2, 4, 4, 4, 4]),
             (
