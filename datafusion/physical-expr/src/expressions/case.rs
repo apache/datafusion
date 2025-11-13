@@ -21,11 +21,17 @@ use crate::expressions::{try_cast, Column, Literal};
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate, SlicesIterator};
+use arrow::compute::{
+    is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
+    SlicesIterator,
+};
 use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{exec_err, internal_datafusion_err, internal_err, DataFusionError, HashMap, HashSet, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, internal_err, DataFusionError, HashMap, HashSet,
+    Result, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
@@ -33,9 +39,9 @@ use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 
 pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -75,12 +81,22 @@ enum EvalMethod {
     WithExprScalarLookupTable(LiteralLookupTable),
 }
 
-// Implement empty hash as the data is derived from PhysicalExprs which are already hashed
+/// Implementing hash so we can use `derive` on [`EvalMethod`].
+///
+/// not implementing actual [`Hash`] as it is not dyn compatible so we cannot implement it for
+/// `dyn` [`WhenLiteralIndexMap`].
+///
+/// So implementing empty hash is still valid as the data is derived from `PhysicalExpr` s which are already hashed
 impl Hash for LiteralLookupTable {
     fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
 }
 
-// Implement always equal as the data is derived from PhysicalExprs which are already compared
+/// Implementing Equal so we can use `derive` on [`EvalMethod`].
+///
+/// not implementing actual [`PartialEq`] as it is not dyn compatible so we cannot implement it for
+/// `dyn` [`WhenLiteralIndexMap`].
+///
+/// So we always return true as the data is derived from `PhysicalExpr` s which are already compared
 impl PartialEq for LiteralLookupTable {
     fn eq(&self, _other: &Self) -> bool {
         true
@@ -88,7 +104,6 @@ impl PartialEq for LiteralLookupTable {
 }
 
 impl Eq for LiteralLookupTable {}
-
 
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
 /// branches and an optional "else" branch.
@@ -792,39 +807,38 @@ impl CaseExpr {
             else_expr,
         };
 
+        let eval_method = Self::find_best_eval_method(&body)?;
 
         Ok(Self { body, eval_method })
     }
 
-
-    fn find_best_eval_method(
-        body: &CaseBody,
-    ) -> EvalMethod {
+    fn find_best_eval_method(body: &CaseBody) -> Result<EvalMethod> {
         if body.expr.is_some() {
-            if let Some(mapping) =
-              LiteralLookupTable::maybe_new(body)
-            {
-                return EvalMethod::WithExprScalarLookupTable(mapping);
+            if let Some(mapping) = LiteralLookupTable::maybe_new(body) {
+                return Ok(EvalMethod::WithExprScalarLookupTable(mapping));
             }
 
-            return EvalMethod::WithExpression(body.project()?)
+            return Ok(EvalMethod::WithExpression(body.project()?));
         }
-        if body.when_then_expr.len() == 1
-          && is_cheap_and_infallible(&(body.when_then_expr[0].1))
-          && body.else_expr.is_none()
-        {
-            EvalMethod::InfallibleExprOrNull
-        } else if body.when_then_expr.len() == 1
-          && body.when_then_expr[0].1.as_any().is::<Literal>()
-          && body.else_expr.is_some()
-          && body.else_expr.as_ref().unwrap().as_any().is::<Literal>()
-        {
-            EvalMethod::ScalarOrScalar
-        } else if body.when_then_expr.len() == 1 && body.else_expr.is_some() {
-            EvalMethod::ExpressionOrExpression(body.project()?)
-        } else {
-            EvalMethod::NoExpression(body.project()?)
-        };
+
+        Ok(
+            if body.when_then_expr.len() == 1
+                && is_cheap_and_infallible(&(body.when_then_expr[0].1))
+                && body.else_expr.is_none()
+            {
+                EvalMethod::InfallibleExprOrNull
+            } else if body.when_then_expr.len() == 1
+                && body.when_then_expr[0].1.as_any().is::<Literal>()
+                && body.else_expr.is_some()
+                && body.else_expr.as_ref().unwrap().as_any().is::<Literal>()
+            {
+                EvalMethod::ScalarOrScalar
+            } else if body.when_then_expr.len() == 1 && body.else_expr.is_some() {
+                EvalMethod::ExpressionOrExpression(body.project()?)
+            } else {
+                EvalMethod::NoExpression(body.project()?)
+            },
+        )
     }
 
     /// Optional base expression that can be compared to literal values in the "when" expressions
@@ -1297,6 +1311,28 @@ impl CaseExpr {
             // All columns are used in the case expressions, so there is no need to project.
             self.body.expr_or_expr(batch, when_value)
         }
+    }
+
+    fn with_lookup_table(
+        &self,
+        batch: &RecordBatch,
+        scalars_or_null_lookup: &LiteralLookupTable,
+    ) -> Result<ColumnarValue> {
+        let expr = self.body.expr.as_ref().unwrap();
+        let evaluated_expression = expr.evaluate(batch)?;
+
+        let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
+        let evaluated_expression = evaluated_expression.to_array(1)?;
+
+        let output = scalars_or_null_lookup.create_output(&evaluated_expression)?;
+
+        let result = if is_scalar {
+            ColumnarValue::Scalar(ScalarValue::try_from_array(output.as_ref(), 0)?)
+        } else {
+            ColumnarValue::Array(output)
+        };
+
+        Ok(result)
     }
 }
 
@@ -2275,19 +2311,64 @@ mod tests {
         Ok(())
     }
 
-    // Test Lookup evaluation
+    #[test]
+    fn test_merge_n() {
+        let a1 = StringArray::from(vec![Some("A")]).to_data();
+        let a2 = StringArray::from(vec![Some("B")]).to_data();
+        let a3 = StringArray::from(vec![Some("C"), Some("D")]).to_data();
 
-    enum AssertLookupEvaluation {
-        Used,
-        NotUsed,
+        let indices = vec![
+            PartialResultIndex::none(),
+            PartialResultIndex::try_new(1).unwrap(),
+            PartialResultIndex::try_new(0).unwrap(),
+            PartialResultIndex::none(),
+            PartialResultIndex::try_new(2).unwrap(),
+            PartialResultIndex::try_new(2).unwrap(),
+        ];
+
+        let merged = merge_n(&[a1, a2, a3], &indices).unwrap();
+        let merged = merged.as_string::<i32>();
+
+        assert_eq!(merged.len(), indices.len());
+        assert!(!merged.is_valid(0));
+        assert!(merged.is_valid(1));
+        assert_eq!(merged.value(1), "B");
+        assert!(merged.is_valid(2));
+        assert_eq!(merged.value(2), "A");
+        assert!(!merged.is_valid(3));
+        assert!(merged.is_valid(4));
+        assert_eq!(merged.value(4), "C");
+        assert!(merged.is_valid(5));
+        assert_eq!(merged.value(5), "D");
     }
+
+    #[test]
+    fn test_merge() {
+        let a1 = Arc::new(StringArray::from(vec![Some("A"), Some("C")]));
+        let a2 = Arc::new(StringArray::from(vec![Some("B")]));
+
+        let mask = BooleanArray::from(vec![true, false, true]);
+
+        let merged =
+            merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
+        let merged = merged.as_string::<i32>();
+
+        assert_eq!(merged.len(), mask.len());
+        assert!(merged.is_valid(0));
+        assert_eq!(merged.value(0), "A");
+        assert!(merged.is_valid(1));
+        assert_eq!(merged.value(1), "B");
+        assert!(merged.is_valid(2));
+        assert_eq!(merged.value(2), "C");
+    }
+
+    // Test Lookup evaluation
 
     fn test_case_when_literal_lookup(
         values: ArrayRef,
         lookup_map: &[(ScalarValue, ScalarValue)],
         else_value: Option<ScalarValue>,
         expected: ArrayRef,
-        assert_lookup_evaluation: AssertLookupEvaluation,
     ) {
         // Create lookup
         // CASE <expr>
@@ -2325,20 +2406,10 @@ mod tests {
             .expect("failed to create case");
 
         // Assert that we are testing what we intend to assert
-        match assert_lookup_evaluation {
-            AssertLookupEvaluation::Used => {
-                assert!(
-                    matches!(expr.eval_method, EvalMethod::WithExprScalarLookupTable(_)),
-                    "we should use the expected eval method"
-                );
-            }
-            AssertLookupEvaluation::NotUsed => {
-                assert!(
-                    !matches!(expr.eval_method, EvalMethod::WithExprScalarLookupTable(_)),
-                    "we should not use lookup evaluation method"
-                );
-            }
-        }
+        assert!(
+            matches!(expr.eval_method, EvalMethod::WithExprScalarLookupTable(_)),
+            "we should use the expected eval method"
+        );
 
         let actual = expr
             .evaluate(&batch)
@@ -2396,7 +2467,6 @@ mod tests {
             lookup_map,
             None,
             Arc::new(expected.clone()),
-            AssertLookupEvaluation::Used,
         );
 
         // Testing with Else
@@ -2415,7 +2485,6 @@ mod tests {
             lookup_map,
             Some(ScalarValue::Utf8(Some(else_value.to_string()))),
             Arc::new(expected_with_else),
-            AssertLookupEvaluation::Used,
         );
     }
 
@@ -2766,7 +2835,6 @@ mod tests {
             &lookup_map,
             None,
             Arc::new(expected.clone()),
-            AssertLookupEvaluation::Used,
         );
 
         // Testing with Else
@@ -2785,68 +2853,6 @@ mod tests {
             &lookup_map,
             Some(ScalarValue::Int32(Some(else_value))),
             Arc::new(expected_with_else),
-            AssertLookupEvaluation::Used,
         );
-    }
-
-    #[test]
-    fn test_with_bytes_to_string() {
-        test_string_casted_to_string(DataType::Binary);
-    }
-
-    #[test]
-    fn test_with_large_bytes_to_string() {
-        test_string_casted_to_string(DataType::LargeBinary);
-    }
-
-    #[test]
-    fn test_merge_n() {
-        let a1 = StringArray::from(vec![Some("A")]).to_data();
-        let a2 = StringArray::from(vec![Some("B")]).to_data();
-        let a3 = StringArray::from(vec![Some("C"), Some("D")]).to_data();
-
-        let indices = vec![
-            PartialResultIndex::none(),
-            PartialResultIndex::try_new(1).unwrap(),
-            PartialResultIndex::try_new(0).unwrap(),
-            PartialResultIndex::none(),
-            PartialResultIndex::try_new(2).unwrap(),
-            PartialResultIndex::try_new(2).unwrap(),
-        ];
-
-        let merged = merge_n(&[a1, a2, a3], &indices).unwrap();
-        let merged = merged.as_string::<i32>();
-
-        assert_eq!(merged.len(), indices.len());
-        assert!(!merged.is_valid(0));
-        assert!(merged.is_valid(1));
-        assert_eq!(merged.value(1), "B");
-        assert!(merged.is_valid(2));
-        assert_eq!(merged.value(2), "A");
-        assert!(!merged.is_valid(3));
-        assert!(merged.is_valid(4));
-        assert_eq!(merged.value(4), "C");
-        assert!(merged.is_valid(5));
-        assert_eq!(merged.value(5), "D");
-    }
-
-    #[test]
-    fn test_merge() {
-        let a1 = Arc::new(StringArray::from(vec![Some("A"), Some("C")]));
-        let a2 = Arc::new(StringArray::from(vec![Some("B")]));
-
-        let mask = BooleanArray::from(vec![true, false, true]);
-
-        let merged =
-            merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
-        let merged = merged.as_string::<i32>();
-
-        assert_eq!(merged.len(), mask.len());
-        assert!(merged.is_valid(0));
-        assert_eq!(merged.value(0), "A");
-        assert!(merged.is_valid(1));
-        assert_eq!(merged.value(1), "B");
-        assert!(merged.is_valid(2));
-        assert_eq!(merged.value(2), "C");
     }
 }

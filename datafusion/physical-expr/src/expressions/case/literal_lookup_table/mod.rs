@@ -26,16 +26,15 @@ use crate::expressions::case::literal_lookup_table::bytes_like_lookup_table::{
     GenericBytesViewHelper,
 };
 use crate::expressions::case::literal_lookup_table::primitive_lookup_table::PrimitiveIndexMap;
-use crate::expressions::case::{CaseBody, WhenThen};
+use crate::expressions::case::CaseBody;
 use crate::expressions::Literal;
-use arrow::array::{downcast_integer, downcast_primitive, ArrayRef, Int32Array, UInt32Array};
+use arrow::array::{downcast_integer, downcast_primitive, ArrayRef, UInt32Array};
 use arrow::datatypes::{
     ArrowDictionaryKeyType, BinaryViewType, DataType, GenericBinaryType,
     GenericStringType, StringViewType,
 };
 use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use indexmap::IndexMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -99,7 +98,8 @@ impl LiteralLookupTable {
         }
 
         // Try to downcast all the WHEN/THEN expressions to literals
-        let when_then_exprs_maybe_literals = body.when_then_expr
+        let when_then_exprs_maybe_literals = body
+            .when_then_expr
             .iter()
             .map(|(when, then)| {
                 let when_maybe_literal = when.as_any().downcast_ref::<Literal>();
@@ -148,14 +148,12 @@ impl LiteralLookupTable {
             map.into_iter().unzip()
         };
 
-        let else_value: ScalarValue = if let Some(else_expr) = body.else_expr {
+        let else_value: ScalarValue = if let Some(else_expr) = &body.else_expr {
             let literal = else_expr.as_any().downcast_ref::<Literal>()?;
 
             literal.value().clone()
         } else {
-            let Ok(null_scalar) =
-                ScalarValue::try_new_null(&then[0].data_type())
-            else {
+            let Ok(null_scalar) = ScalarValue::try_new_null(&then[0].data_type()) else {
                 return None;
             };
 
@@ -185,8 +183,7 @@ impl LiteralLookupTable {
         }
 
         let then_and_else_values = ScalarValue::iter_to_array(
-            then
-                .iter()
+            then.iter()
                 // The else is in the end
                 .chain(std::iter::once(&else_value))
                 .cloned(),
@@ -218,8 +215,9 @@ impl LiteralLookupTable {
         // An optimize version would depend on the type of the values_to_take_from
         // For example, if the type is view we can just keep pointing to the same value (similar to dictionary)
         // if the type is dictionary we can just use the indices as is (or cast them to the key type) and create a new dictionary array
-        let output = arrow::compute::take(&self.then_and_else_values, &take_indices, None)
-            .map_err(|e| arrow_datafusion_err!(e))?;
+        let output =
+            arrow::compute::take(&self.then_and_else_values, &take_indices, None)
+                .map_err(|e| arrow_datafusion_err!(e))?;
 
         Ok(output)
     }
