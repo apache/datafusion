@@ -1801,6 +1801,12 @@ impl SessionContext {
     }
 }
 
+impl datafusion_execution::TaskContextProvider for SessionContext {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        SessionContext::task_ctx(self)
+    }
+}
+
 impl FunctionRegistry for SessionContext {
     fn udfs(&self) -> HashSet<String> {
         self.state.read().udfs()
