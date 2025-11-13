@@ -121,7 +121,7 @@ logical_plan
 03)----TableScan: sink_table projection=[c1, c2, c3]
 physical_plan
 01)CoalescePartitionsExec: fetch=5
-02)--FilterExec: c3@2 > 0
+02)--FilterExec: c3@2 > 0, fetch=5
 03)----RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
 04)------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
 

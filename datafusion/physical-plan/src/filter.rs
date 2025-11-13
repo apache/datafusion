@@ -182,19 +182,6 @@ impl FilterExec {
         })
     }
 
-    pub fn with_fetch(&self, fetch: Option<usize>) -> Result<Self> {
-        Ok(Self {
-            predicate: Arc::clone(&self.predicate),
-            input: Arc::clone(&self.input),
-            metrics: self.metrics.clone(),
-            default_selectivity: self.default_selectivity,
-            cache: self.cache.clone(),
-            projection: self.projection.clone(),
-            batch_size: self.batch_size,
-            fetch,
-        })
-    }
-
     /// The expression to filter on. This expression must evaluate to a boolean value.
     pub fn predicate(&self) -> &Arc<dyn PhysicalExpr> {
         &self.predicate
@@ -371,8 +358,14 @@ impl DisplayAs for FilterExec {
                 } else {
                     "".to_string()
                 };
-                let fetch = self.fetch.map_or("".to_string(), |f| format!(", fetch={}", f));
-                write!(f, "FilterExec: {}{}{}", self.predicate, display_projections, fetch)
+                let fetch = self
+                    .fetch
+                    .map_or("".to_string(), |f| format!(", fetch={}", f));
+                write!(
+                    f,
+                    "FilterExec: {}{}{}",
+                    self.predicate, display_projections, fetch
+                )
             }
             DisplayFormatType::TreeRender => {
                 write!(f, "predicate={}", fmt_sql(self.predicate.as_ref()))
@@ -414,7 +407,7 @@ impl ExecutionPlan for FilterExec {
                 e.with_default_selectivity(selectivity)
             })
             .and_then(|e| e.with_projection(self.projection().cloned()))
-            .map(|e| Arc::new(e) as _)
+            .map(|e| e.with_fetch(self.fetch).unwrap())
     }
 
     fn execute(
@@ -430,7 +423,11 @@ impl ExecutionPlan for FilterExec {
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
-            batch_coalescer: LimitedBatchCoalescer::new(self.schema(), self.batch_size, self.fetch),
+            batch_coalescer: LimitedBatchCoalescer::new(
+                self.schema(),
+                self.batch_size,
+                self.fetch,
+            ),
         }))
     }
 
@@ -599,6 +596,19 @@ impl ExecutionPlan for FilterExec {
             updated_node,
         })
     }
+
+    fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(Self {
+            predicate: Arc::clone(&self.predicate),
+            input: Arc::clone(&self.input),
+            metrics: self.metrics.clone(),
+            default_selectivity: self.default_selectivity,
+            cache: self.cache.clone(),
+            projection: self.projection.clone(),
+            batch_size: self.batch_size,
+            fetch,
+        }))
+    }
 }
 
 impl EmbeddedProjection for FilterExec {
@@ -692,27 +702,20 @@ impl FilterExecMetrics {
 }
 
 impl FilterExecStream {
-    fn flush_remaining_batches(self: &mut Self) -> Poll<Option<std::result::Result<RecordBatch, DataFusionError>>> {
+    fn flush_remaining_batches(
+        self: &mut Self,
+    ) -> Poll<Option<std::result::Result<RecordBatch, DataFusionError>>> {
         // Flush any remaining buffered batch
         match self.batch_coalescer.finish() {
             Ok(()) => {
-                Poll::Ready(
-                    self.batch_coalescer.next_completed_batch().map(
-                        |batch| {
-                            self.metrics
-                                .selectivity
-                                .add_part(batch.num_rows());
-                            Ok(batch)
-                        },
-                    ),
-                )
+                Poll::Ready(self.batch_coalescer.next_completed_batch().map(|batch| {
+                    self.metrics.selectivity.add_part(batch.num_rows());
+                    Ok(batch)
+                }))
             }
-            Err(e) => {
-               Poll::Ready(Some(Err(e.into())))
-            }
+            Err(e) => Poll::Ready(Some(Err(e.into()))),
         }
     }
-    
 }
 
 pub fn batch_filter(
@@ -793,7 +796,6 @@ impl Stream for FilterExecStream {
                         poll = self.flush_remaining_batches();
                         break;
                     }
-
 
                     if let Some(batch) = self.batch_coalescer.next_completed_batch() {
                         self.metrics.selectivity.add_part(batch.num_rows());
