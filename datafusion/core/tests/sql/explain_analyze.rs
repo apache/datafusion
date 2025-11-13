@@ -1156,3 +1156,24 @@ async fn nested_loop_join_selectivity() {
         );
     }
 }
+
+#[tokio::test]
+async fn explain_analyze_hash_join() {
+    let sql = "EXPLAIN ANALYZE \
+            SELECT * \
+            FROM generate_series(10) as t1(a) \
+            JOIN generate_series(20) as t2(b) \
+            ON t1.a=t2.b";
+
+    for (level, needle, should_contain) in [
+        (ExplainAnalyzeLevel::Summary, "probe_hit_rate", true),
+        (ExplainAnalyzeLevel::Summary, "avg_fanout", true),
+    ] {
+        let plan = collect_plan(sql, level).await;
+        assert_eq!(
+            plan.contains(needle),
+            should_contain,
+            "plan for level {level:?} unexpected content: {plan}"
+        );
+    }
+}
