@@ -519,10 +519,7 @@ pub fn arrays_into_list_array(
     arr: impl IntoIterator<Item = ArrayRef>,
 ) -> Result<ListArray> {
     let arr = arr.into_iter().collect::<Vec<_>>();
-    if arr.is_empty() {
-        return _internal_err!("Cannot wrap empty array into list array");
-    }
-
+    assert_or_internal_err!(!arr.is_empty(),"Cannot wrap empty array into list array");
     let lens = arr.iter().map(|x| x.len()).collect::<Vec<_>>();
     // Assume data type is consistent
     let data_type = arr[0].data_type().to_owned();
