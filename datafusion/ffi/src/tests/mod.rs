@@ -35,6 +35,7 @@ use crate::udwf::FFI_WindowUDF;
 
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
 use crate::catalog_provider_list::FFI_CatalogProviderList;
+use crate::execution::FFI_TaskContextProvider;
 use crate::tests::catalog::create_catalog_provider_list;
 use arrow::array::RecordBatch;
 use async_provider::create_async_table_provider;
@@ -47,7 +48,6 @@ use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
     create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
 };
-use crate::execution::FFI_TaskContextProvider;
 
 mod async_provider;
 pub mod catalog;
@@ -66,7 +66,8 @@ pub struct ForeignLibraryModule {
     pub create_catalog: extern "C" fn(FFI_TaskContextProvider) -> FFI_CatalogProvider,
 
     /// Construct an opinionated catalog provider list
-    pub create_catalog_list: extern "C" fn(FFI_TaskContextProvider) -> FFI_CatalogProviderList,
+    pub create_catalog_list:
+        extern "C" fn(FFI_TaskContextProvider) -> FFI_CatalogProviderList,
 
     /// Constructs the table provider
     pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,

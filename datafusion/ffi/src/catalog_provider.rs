@@ -114,7 +114,13 @@ unsafe extern "C" fn schema_fn_wrapper(
 ) -> ROption<FFI_SchemaProvider> {
     let maybe_schema = provider.inner().schema(name.as_str());
     maybe_schema
-        .map(|schema| FFI_SchemaProvider::new(schema, provider.runtime()))
+        .map(|schema| {
+            FFI_SchemaProvider::new(
+                schema,
+                provider.runtime(),
+                provider.task_ctx_provider.clone(),
+            )
+        })
         .into()
 }
 
@@ -124,12 +130,18 @@ unsafe extern "C" fn register_schema_fn_wrapper(
     schema: &FFI_SchemaProvider,
 ) -> RResult<ROption<FFI_SchemaProvider>, RString> {
     let runtime = provider.runtime();
-    let provider = provider.inner();
+    let inner_provider = provider.inner();
     let schema: Arc<dyn SchemaProvider + Send> = schema.into();
 
     let returned_schema =
-        rresult_return!(provider.register_schema(name.as_str(), schema))
-            .map(|schema| FFI_SchemaProvider::new(schema, runtime))
+        rresult_return!(inner_provider.register_schema(name.as_str(), schema))
+            .map(|schema| {
+                FFI_SchemaProvider::new(
+                    schema,
+                    runtime,
+                    provider.task_ctx_provider.clone(),
+                )
+            })
             .into();
 
     RResult::ROk(returned_schema)
@@ -141,14 +153,20 @@ unsafe extern "C" fn deregister_schema_fn_wrapper(
     cascade: bool,
 ) -> RResult<ROption<FFI_SchemaProvider>, RString> {
     let runtime = provider.runtime();
-    let provider = provider.inner();
+    let inner_provider = provider.inner();
 
     let maybe_schema =
-        rresult_return!(provider.deregister_schema(name.as_str(), cascade));
+        rresult_return!(inner_provider.deregister_schema(name.as_str(), cascade));
 
     RResult::ROk(
         maybe_schema
-            .map(|schema| FFI_SchemaProvider::new(schema, runtime))
+            .map(|schema| {
+                FFI_SchemaProvider::new(
+                    schema,
+                    runtime,
+                    provider.task_ctx_provider.clone(),
+                )
+            })
             .into(),
     )
 }
@@ -274,7 +292,11 @@ impl CatalogProvider for ForeignCatalogProvider {
         unsafe {
             let schema = match schema.as_any().downcast_ref::<ForeignSchemaProvider>() {
                 Some(s) => &s.0,
-                None => &FFI_SchemaProvider::new(schema, None),
+                None => &FFI_SchemaProvider::new(
+                    schema,
+                    None,
+                    self.0.task_ctx_provider.clone(),
+                ),
             };
             let returned_schema: Option<FFI_SchemaProvider> =
                 df_result!((self.0.register_schema)(&self.0, name.into(), schema))?
