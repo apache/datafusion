@@ -404,8 +404,6 @@ The accompanying `AggregateUDF::is_ordered_set_aggregate` has also been renamed 
 No functionality has been changed with regards to this method; it still refers only to permitting use of `WITHIN GROUP`
 SQL syntax for the aggregate function.
 
-
-
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
