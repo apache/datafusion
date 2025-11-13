@@ -286,7 +286,7 @@ pub fn map_origin_col_to_filter_col(
 ///    the [`convert_filter_columns`] function.
 /// 5. Searches for the converted filter expression in the filter expression using the
 ///    [`check_filter_expr_contains_sort_information`] function.
-/// 6. If an exact match is found, returns the converted filter expression as [`Some(Arc<dyn PhysicalExpr>)`].
+/// 6. If an exact match is found, returns the converted filter expression as `Some(Arc<dyn PhysicalExpr>)`.
 /// 7. If all columns are not included or an exact match is not found, returns [`None`].
 ///
 /// Examples:
@@ -655,7 +655,6 @@ pub fn combine_two_batches(
 /// * `visited` - A hash set to store the visited indices.
 /// * `offset` - An offset to the indices in the `PrimitiveArray`.
 /// * `indices` - The input `PrimitiveArray` of type `T` which stores the indices to be recorded.
-///
 pub fn record_visited_indices<T: ArrowPrimitiveType>(
     visited: &mut HashSet<usize>,
     offset: usize,
@@ -683,8 +682,6 @@ pub struct StreamJoinMetrics {
     pub(crate) right: StreamJoinSideMetrics,
     /// Memory used by sides in bytes
     pub(crate) stream_memory_usage: metrics::Gauge,
-    /// Number of batches produced by this operator
-    pub(crate) output_batches: metrics::Count,
     /// Number of rows produced by this operator
     pub(crate) baseline_metrics: BaselineMetrics,
 }
@@ -710,13 +707,9 @@ impl StreamJoinMetrics {
         let stream_memory_usage =
             MetricBuilder::new(metrics).gauge("stream_memory_usage", partition);
 
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
-
         Self {
             left,
             right,
-            output_batches,
             stream_memory_usage,
             baseline_metrics: BaselineMetrics::new(metrics, partition),
         }

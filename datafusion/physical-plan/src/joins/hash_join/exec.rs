@@ -77,6 +77,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 
@@ -238,7 +239,6 @@ impl JoinLeftData {
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
-///
 /// ```
 ///
 /// 2. the **probe phase** where the tuples of the probe side are streamed
@@ -273,7 +273,6 @@ impl JoinLeftData {
 ///     └────────────┘                                            └────────────┘
 ///
 ///        build side                                                probe side
-///
 /// ```
 ///
 /// # Example "Optimal" Plans
@@ -1467,13 +1466,7 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let left_values = on_left
-        .iter()
-        .map(|c| {
-            c.evaluate(&single_batch)?
-                .into_array(single_batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let left_values = evaluate_expressions_to_arrays(&on_left, &single_batch)?;
 
     // Compute bounds for dynamic filter if enabled
     let bounds = match bounds_accumulators {
@@ -3454,11 +3447,7 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; left.num_rows()];
-        let hashes = create_hashes(
-            &[Arc::clone(&left.columns()[0])],
-            &random_state,
-            hashes_buff,
-        )?;
+        let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
         // Maps both values to both indices (1 and 2, representing input 0 and 1)
         // 0 -> (0, 1)
@@ -3487,11 +3476,7 @@ mod tests {
         let right_keys_values =
             key_column.evaluate(&right)?.into_array(right.num_rows())?;
         let mut hashes_buffer = vec![0; right.num_rows()];
-        create_hashes(
-            &[Arc::clone(&right_keys_values)],
-            &random_state,
-            &mut hashes_buffer,
-        )?;
+        create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
@@ -3525,11 +3510,7 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; left.num_rows()];
-        let hashes = create_hashes(
-            &[Arc::clone(&left.columns()[0])],
-            &random_state,
-            hashes_buff,
-        )?;
+        let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
         hashmap_left.insert_unique(hashes[0], (hashes[0], 1u32), |(h, _)| *h);
         hashmap_left.insert_unique(hashes[0], (hashes[0], 2u32), |(h, _)| *h);
@@ -3552,11 +3533,7 @@ mod tests {
         let right_keys_values =
             key_column.evaluate(&right)?.into_array(right.num_rows())?;
         let mut hashes_buffer = vec![0; right.num_rows()];
-        create_hashes(
-            &[Arc::clone(&right_keys_values)],
-            &random_state,
-            &mut hashes_buffer,
-        )?;
+        create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,

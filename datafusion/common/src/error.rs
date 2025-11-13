@@ -684,7 +684,10 @@ impl DataFusionError {
 /// let mut builder = DataFusionError::builder();
 /// builder.add_error(DataFusionError::Internal("foo".to_owned()));
 /// // ok_or returns the value if no errors have been added
-/// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+/// assert_contains!(
+///     builder.error_or(42).unwrap_err().to_string(),
+///     "Internal error: foo"
+/// );
 /// ```
 #[derive(Debug, Default)]
 pub struct DataFusionErrorBuilder(Vec<DataFusionError>);
@@ -702,7 +705,10 @@ impl DataFusionErrorBuilder {
     /// # use datafusion_common::{assert_contains, DataFusionError};
     /// let mut builder = DataFusionError::builder();
     /// builder.add_error(DataFusionError::Internal("foo".to_owned()));
-    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    /// assert_contains!(
+    ///     builder.error_or(42).unwrap_err().to_string(),
+    ///     "Internal error: foo"
+    /// );
     /// ```
     pub fn add_error(&mut self, error: DataFusionError) {
         self.0.push(error);
@@ -714,8 +720,11 @@ impl DataFusionErrorBuilder {
     /// ```
     /// # use datafusion_common::{assert_contains, DataFusionError};
     /// let builder = DataFusionError::builder()
-    ///   .with_error(DataFusionError::Internal("foo".to_owned()));
-    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    ///     .with_error(DataFusionError::Internal("foo".to_owned()));
+    /// assert_contains!(
+    ///     builder.error_or(42).unwrap_err().to_string(),
+    ///     "Internal error: foo"
+    /// );
     /// ```
     pub fn with_error(mut self, error: DataFusionError) -> Self {
         self.0.push(error);
@@ -747,6 +756,116 @@ macro_rules! unwrap_or_internal_err {
             ))
         })?
     };
+}
+
+/// Assert a condition, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_or_internal_err!(predicate);
+/// assert_or_internal_err!(predicate, "human readable message");
+/// assert_or_internal_err!(predicate, format!("details: {}", value));
+/// ```
+#[macro_export]
+macro_rules! assert_or_internal_err {
+    ($cond:expr) => {
+        if !$cond {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {}",
+                stringify!($cond)
+            )));
+        }
+    };
+    ($cond:expr, $($arg:tt)+) => {
+        if !$cond {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {}: {}",
+                stringify!($cond),
+                format!($($arg)+)
+            )));
+        }
+    };
+}
+
+/// Assert equality, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_eq_or_internal_err!(actual, expected);
+/// assert_eq_or_internal_err!(left_expr, right_expr, "values must match");
+/// assert_eq_or_internal_err!(lhs, rhs, "metadata: {}", extra);
+/// ```
+#[macro_export]
+macro_rules! assert_eq_or_internal_err {
+    ($left:expr, $right:expr $(,)?) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val != right_val {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {} == {} (left: {:?}, right: {:?})",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val
+            )));
+        }
+    }};
+    ($left:expr, $right:expr, $($arg:tt)+) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val != right_val {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {} == {} (left: {:?}, right: {:?}): {}",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val,
+                format!($($arg)+)
+            )));
+        }
+    }};
+}
+
+/// Assert inequality, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_ne_or_internal_err!(left, right);
+/// assert_ne_or_internal_err!(lhs_expr, rhs_expr, "values must differ");
+/// assert_ne_or_internal_err!(a, b, "context {}", info);
+/// ```
+#[macro_export]
+macro_rules! assert_ne_or_internal_err {
+    ($left:expr, $right:expr $(,)?) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val == right_val {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {} != {} (left: {:?}, right: {:?})",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val
+            )));
+        }
+    }};
+    ($left:expr, $right:expr, $($arg:tt)+) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val == right_val {
+            return Err(DataFusionError::Internal(format!(
+                "Assertion failed: {} != {} (left: {:?}, right: {:?}): {}",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val,
+                format!($($arg)+)
+            )));
+        }
+    }};
 }
 
 /// Add a macros for concise  DataFusionError::* errors declaration
@@ -965,6 +1084,115 @@ mod test {
     use std::sync::Arc;
 
     use arrow::error::ArrowError;
+    use insta::assert_snapshot;
+
+    fn ok_result() -> Result<()> {
+        Ok(())
+    }
+
+    #[test]
+    fn test_assert_eq_or_internal_err_passes() -> Result<()> {
+        assert_eq_or_internal_err!(1, 1);
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_eq_or_internal_err_fails() {
+        fn check() -> Result<()> {
+            assert_eq_or_internal_err!(1, 2, "expected equality");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_ne_or_internal_err_passes() -> Result<()> {
+        assert_ne_or_internal_err!(1, 2);
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_ne_or_internal_err_fails() {
+        fn check() -> Result<()> {
+            assert_ne_or_internal_err!(3, 3, "values must differ");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_passes() -> Result<()> {
+        assert_or_internal_err!(true);
+        assert_or_internal_err!(true, "message");
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_fails_default() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false);
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_fails_with_message() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false, "custom message");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false: custom message.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_with_format_arguments() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false, "custom {}", 42);
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false: custom 42.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
 
     #[test]
     fn test_error_size() {

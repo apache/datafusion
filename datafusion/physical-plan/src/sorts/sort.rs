@@ -34,7 +34,8 @@ use crate::filter_pushdown::{
 };
 use crate::limit::LimitStream;
 use crate::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics, SplitMetrics,
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput, SpillMetrics,
+    SplitMetrics,
 };
 use crate::projection::{make_with_child, update_ordering, ProjectionExec};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -133,7 +134,6 @@ impl ExternalSorterMetrics {
 ///    └─────┘
 ///
 /// in_mem_batches
-///
 /// ```
 ///
 /// # When data does not fit in available memory
@@ -739,7 +739,7 @@ impl ExternalSorter {
 
             let sorted = sort_batch(&batch, &expressions, None)?;
 
-            metrics.record_output(sorted.num_rows());
+            (&sorted).record_output(&metrics);
             drop(batch);
             drop(reservation);
             Ok(sorted)

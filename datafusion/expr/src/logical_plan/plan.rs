@@ -203,7 +203,6 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
-///
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -1157,7 +1156,7 @@ impl LogicalPlan {
 
     /// Helper for [Self::with_new_exprs] to use when no expressions are expected.
     #[inline]
-    #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
+    #[expect(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
     fn assert_no_expressions(&self, expr: Vec<Expr>) -> Result<()> {
         if !expr.is_empty() {
             return internal_err!("{self:?} should have no exprs, got {:?}", expr);
@@ -1167,7 +1166,7 @@ impl LogicalPlan {
 
     /// Helper for [Self::with_new_exprs] to use when no inputs are expected.
     #[inline]
-    #[allow(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
+    #[expect(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
     fn assert_no_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<()> {
         if !inputs.is_empty() {
             return internal_err!("{self:?} should have no inputs, got: {:?}", inputs);
@@ -1267,7 +1266,6 @@ impl LogicalPlan {
     ///    \n  TableScan: t1",
     ///    plan.display_indent().to_string()
     ///  );
-    ///
     /// ```
     pub fn with_param_values(
         self,
@@ -1473,7 +1471,10 @@ impl LogicalPlan {
                     // Preserve name to avoid breaking column references to this expression
                     Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
                 }
-            })
+            })?
+            // always recompute the schema to ensure the changed in the schema's field should be
+            // poplulated to the plan's parent
+            .map_data(|plan| plan.recompute_schema())
         })
         .map(|res| res.data)
     }
@@ -1561,20 +1562,20 @@ impl LogicalPlan {
     /// ```
     ///
     /// ```
-    /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
-    /// let schema = Schema::new(vec![
-    ///     Field::new("id", DataType::Int32, false),
-    /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
-    ///     .filter(col("id").eq(lit(5))).unwrap()
-    ///     .build().unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t1"), &schema, None)
+    ///     .unwrap()
+    ///     .filter(col("id").eq(lit(5)))
+    ///     .unwrap()
+    ///     .build()
+    ///     .unwrap();
     ///
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1",
-    ///             display_string);
+    /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1", display_string);
     /// ```
     pub fn display_indent(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
@@ -1603,21 +1604,24 @@ impl LogicalPlan {
     /// ```
     ///
     /// ```
-    /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
-    /// let schema = Schema::new(vec![
-    ///     Field::new("id", DataType::Int32, false),
-    /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
-    ///     .filter(col("id").eq(lit(5))).unwrap()
-    ///     .build().unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t1"), &schema, None)
+    ///     .unwrap()
+    ///     .filter(col("id").eq(lit(5)))
+    ///     .unwrap()
+    ///     .build()
+    ///     .unwrap();
     ///
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: t1.id = Int32(5) [id:Int32]\
+    /// assert_eq!(
+    ///     "Filter: t1.id = Int32(5) [id:Int32]\
     ///             \n  TableScan: t1 [id:Int32]",
-    ///             display_string);
+    ///     display_string
+    /// );
     /// ```
     pub fn display_indent_schema(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
@@ -1665,14 +1669,15 @@ impl LogicalPlan {
     /// structure, and one with additional details such as schema.
     ///
     /// ```
-    /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
-    /// let schema = Schema::new(vec![
-    ///     Field::new("id", DataType::Int32, false),
-    /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
-    ///     .filter(col("id").eq(lit(5))).unwrap()
-    ///     .build().unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t1"), &schema, None)
+    ///     .unwrap()
+    ///     .filter(col("id").eq(lit(5)))
+    ///     .unwrap()
+    ///     .build()
+    ///     .unwrap();
     ///
     /// // Format using display_graphviz
     /// let graphviz_string = format!("{}", plan.display_graphviz());
@@ -1684,7 +1689,6 @@ impl LogicalPlan {
     /// ```bash
     ///   dot -Tpdf < /tmp/example.dot  > /tmp/example.pdf
     /// ```
-    ///
     pub fn display_graphviz(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
@@ -1723,13 +1727,13 @@ impl LogicalPlan {
     /// Projection: id
     /// ```
     /// ```
-    /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
-    /// let schema = Schema::new(vec![
-    ///     Field::new("id", DataType::Int32, false),
-    /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
-    ///     .build().unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t1"), &schema, None)
+    ///     .unwrap()
+    ///     .build()
+    ///     .unwrap();
     ///
     /// // Format using display
     /// let display_string = format!("{}", plan.display());
@@ -3480,6 +3484,7 @@ impl Aggregate {
     ///
     /// This method should only be called when you are absolutely sure that the schema being
     /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
@@ -4246,6 +4251,7 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
+    use crate::select_expr::SelectExpr;
     use crate::test::function_stub::{count, count_udaf};
     use crate::{
         binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
@@ -4822,6 +4828,35 @@ mod tests {
             .clone()
             .with_param_values(param_values)
             .expect_err("prepared field metadata mismatch unexpectedly succeeded");
+    }
+
+    #[test]
+    fn test_replace_placeholder_empty_relation_valid_schema() {
+        // SELECT $1, $2;
+        let plan = LogicalPlanBuilder::empty(false)
+            .project(vec![
+                SelectExpr::from(placeholder("$1")),
+                SelectExpr::from(placeholder("$2")),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // original
+        assert_snapshot!(plan.display_indent_schema(), @r"
+        Projection: $1, $2 [$1:Null;N, $2:Null;N]
+          EmptyRelation: rows=0 []
+        ");
+
+        let plan = plan
+            .with_param_values(vec![ScalarValue::from(1i32), ScalarValue::from("s")])
+            .unwrap();
+
+        // replaced
+        assert_snapshot!(plan.display_indent_schema(), @r#"
+        Projection: Int32(1) AS $1, Utf8("s") AS $2 [$1:Int32, $2:Utf8]
+          EmptyRelation: rows=0 []
+        "#);
     }
 
     #[test]

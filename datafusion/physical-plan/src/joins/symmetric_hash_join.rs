@@ -78,6 +78,7 @@ use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use ahash::RandomState;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{ready, Stream, StreamExt};
 use parking_lot::Mutex;
 
@@ -796,7 +797,6 @@ fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) ->
 /// # Returns
 ///
 /// A tuple of two arrays of primitive types representing the build and probe indices.
-///
 fn calculate_indices_by_join_type<L: ArrowPrimitiveType, R: ArrowPrimitiveType>(
     build_side: JoinSide,
     prune_length: usize,
@@ -1066,14 +1066,8 @@ fn lookup_join_hashmap(
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    let keys_values = probe_on
-        .iter()
-        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
-    let build_join_values = build_on
-        .iter()
-        .map(|c| c.evaluate(build_batch)?.into_array(build_batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
+    let keys_values = evaluate_expressions_to_arrays(probe_on, probe_batch)?;
+    let build_join_values = evaluate_expressions_to_arrays(build_on, build_batch)?;
 
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
@@ -1377,7 +1371,6 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                     }
                 }
                 Some((batch, _)) => {
-                    self.metrics.output_batches.add(1);
                     return self
                         .metrics
                         .baseline_metrics

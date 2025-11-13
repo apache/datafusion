@@ -31,7 +31,7 @@ use crate::physical_optimizer::test_utils::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_common::{Result,  TableReference};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -72,10 +72,15 @@ fn csv_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
+    let options = CsvOptions {
+        has_header: Some(false),
+        delimiter: 0,
+        quote: 0,
+        ..Default::default()
+    };
     let mut builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
-        Arc::new(CsvSource::new(false, 0, 0)),
+        Arc::new(CsvSource::new(schema.clone()).with_csv_options(options)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100));
     if let Some(ordering) = LexOrdering::new(sort_exprs) {
@@ -357,6 +362,94 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
     ");
 
     Ok(())
+}
+
+#[tokio::test]
+// Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true(
+) -> Result<()> {
+    assert_snapshot!(
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
+        @r"
+    Input Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      CoalescePartitionsExec
+        UnionExec
+          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+
+    Optimized Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [nullable_col@0 ASC]
+        UnionExec
+          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+// Test with `repartition_sorts` disabled, causing a full resort of the data
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false(
+) -> Result<()> {
+    assert_snapshot!(
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
+        @r"
+    Input Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      CoalescePartitionsExec
+        UnionExec
+          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+
+    Optimized Plan:
+    OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
+      SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+        CoalescePartitionsExec
+          UnionExec
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet
+    ");
+    Ok(())
+}
+
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
+    repartition_sorts: bool,
+) -> Result<String> {
+    let schema = create_test_schema()?;
+
+    // Source 1, will be sorted explicitly (on `nullable_col`)
+    let source1 = parquet_exec(schema.clone());
+    let ordering1 = [sort_expr("nullable_col", &schema)].into();
+    let sort1 = sort_exec(ordering1, source1.clone());
+
+    // Source 2, pre-sorted (on `nullable_col`)
+    let parquet_ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let source2 = parquet_exec_with_sort(schema.clone(), vec![parquet_ordering.clone()]);
+
+    let union = union_exec(vec![sort1, source2]);
+
+    let coalesced = coalesce_partitions_exec(union);
+
+    // Required sorted / single partitioned output
+    let requirement = [PhysicalSortRequirement::new(
+        col("nullable_col", &schema)?,
+        Some(SortOptions::new(false, true)),
+    )]
+    .into();
+    let physical_plan = Arc::new(OutputRequirementExec::new(
+        coalesced,
+        Some(OrderingRequirements::new(requirement)),
+        Distribution::SinglePartition,
+        None,
+    ));
+
+    let test =
+        EnforceSortingTest::new(physical_plan).with_repartition_sorts(repartition_sorts);
+    Ok(test.run())
 }
 
 #[tokio::test]

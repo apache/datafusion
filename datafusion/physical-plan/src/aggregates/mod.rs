@@ -26,12 +26,18 @@ use crate::aggregates::{
     topk_stream::GroupedTopKAggregateStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::filter_pushdown::{
+    ChildFilterDescription, FilterDescription, FilterPushdownPhase, PushedDownPredicate,
+};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr::utils::collect_columns;
+use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -53,6 +59,7 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
 
 pub mod group_values;
@@ -1025,6 +1032,88 @@ impl ExecutionPlan for AggregateExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
     }
+
+    /// Push down parent filters when possible (see implementation comment for details),
+    /// but do not introduce any new self filters.
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // It's safe to push down filters through aggregates when filters only reference
+        // grouping columns, because such filters determine which groups to compute, not
+        // *how* to compute them. Each group's aggregate values (SUM, COUNT, etc.) are
+        // calculated from the same input rows regardless of whether we filter before or
+        // after grouping - filtering before just eliminates entire groups early.
+        // This optimization is NOT safe for filters on aggregated columns (like filtering on
+        // the result of SUM or COUNT), as those require computing all groups first.
+
+        let grouping_columns: HashSet<_> = self
+            .group_by
+            .expr()
+            .iter()
+            .flat_map(|(expr, _)| collect_columns(expr))
+            .collect();
+
+        // Analyze each filter separately to determine if it can be pushed down
+        let mut safe_filters = Vec::new();
+        let mut unsafe_filters = Vec::new();
+
+        for filter in parent_filters {
+            let filter_columns: HashSet<_> =
+                collect_columns(&filter).into_iter().collect();
+
+            // Check if this filter references non-grouping columns
+            let references_non_grouping = !grouping_columns.is_empty()
+                && !filter_columns.is_subset(&grouping_columns);
+
+            if references_non_grouping {
+                unsafe_filters.push(filter);
+                continue;
+            }
+
+            // For GROUPING SETS, verify this filter's columns appear in all grouping sets
+            if self.group_by.groups().len() > 1 {
+                let filter_column_indices: Vec<usize> = filter_columns
+                    .iter()
+                    .filter_map(|filter_col| {
+                        self.group_by.expr().iter().position(|(expr, _)| {
+                            collect_columns(expr).contains(filter_col)
+                        })
+                    })
+                    .collect();
+
+                // Check if any of this filter's columns are missing from any grouping set
+                let has_missing_column = self.group_by.groups().iter().any(|null_mask| {
+                    filter_column_indices
+                        .iter()
+                        .any(|&idx| null_mask.get(idx) == Some(&true))
+                });
+
+                if has_missing_column {
+                    unsafe_filters.push(filter);
+                    continue;
+                }
+            }
+
+            // This filter is safe to push down
+            safe_filters.push(filter);
+        }
+
+        // Build child filter description with both safe and unsafe filters
+        let child = self.children()[0];
+        let mut child_desc = ChildFilterDescription::from_child(&safe_filters, child)?;
+
+        // Add unsafe filters as unsupported
+        child_desc.parent_filters.extend(
+            unsafe_filters
+                .into_iter()
+                .map(PushedDownPredicate::unsupported),
+        );
+
+        Ok(FilterDescription::new().with_child(child_desc))
+    }
 }
 
 fn create_schema(
@@ -1346,25 +1435,14 @@ pub fn finalize_aggregation(
     }
 }
 
-/// Evaluates expressions against a record batch.
-fn evaluate(
-    expr: &[Arc<dyn PhysicalExpr>],
-    batch: &RecordBatch,
-) -> Result<Vec<ArrayRef>> {
-    expr.iter()
-        .map(|expr| {
-            expr.evaluate(batch)
-                .and_then(|v| v.into_array(batch.num_rows()))
-        })
-        .collect()
-}
-
-/// Evaluates expressions against a record batch.
+/// Evaluates groups of expressions against a record batch.
 pub fn evaluate_many(
     expr: &[Vec<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    expr.iter().map(|expr| evaluate(expr, batch)).collect()
+    expr.iter()
+        .map(|expr| evaluate_expressions_to_arrays(expr, batch))
+        .collect()
 }
 
 fn evaluate_optional(
@@ -1418,23 +1496,14 @@ pub fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    let exprs: Vec<ArrayRef> = group_by
-        .expr
-        .iter()
-        .map(|(expr, _)| {
-            let value = expr.evaluate(batch)?;
-            value.into_array(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let null_exprs: Vec<ArrayRef> = group_by
-        .null_expr
-        .iter()
-        .map(|(expr, _)| {
-            let value = expr.evaluate(batch)?;
-            value.into_array(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let exprs = evaluate_expressions_to_arrays(
+        group_by.expr.iter().map(|(expr, _)| expr),
+        batch,
+    )?;
+    let null_exprs = evaluate_expressions_to_arrays(
+        group_by.null_expr.iter().map(|(expr, _)| expr),
+        batch,
+    )?;
 
     group_by
         .groups

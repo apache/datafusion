@@ -74,8 +74,9 @@ impl JsonOpener {
 }
 
 /// JsonSource holds the extra configuration that is necessary for [`JsonOpener`]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct JsonSource {
+    table_schema: datafusion_datasource::TableSchema,
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
@@ -83,9 +84,15 @@ pub struct JsonSource {
 }
 
 impl JsonSource {
-    /// Initialize a JsonSource with default values
-    pub fn new() -> Self {
-        Self::default()
+    /// Initialize a JsonSource with the provided schema
+    pub fn new(table_schema: impl Into<datafusion_datasource::TableSchema>) -> Self {
+        Self {
+            table_schema: table_schema.into(),
+            batch_size: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projected_statistics: None,
+            schema_adapter_factory: None,
+        }
     }
 }
 
@@ -116,15 +123,16 @@ impl FileSource for JsonSource {
         self
     }
 
+    fn table_schema(&self) -> &datafusion_datasource::TableSchema {
+        &self.table_schema
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
         Arc::new(conf)
     }
 
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projected_statistics = Some(statistics);

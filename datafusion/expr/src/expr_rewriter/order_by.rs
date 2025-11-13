@@ -52,7 +52,7 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     // on top of them)
     if plan_inputs.len() == 1 {
         let proj_exprs = plan.expressions();
-        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0])
+        rewrite_in_terms_of_projection(expr, &proj_exprs, plan_inputs[0])
     } else {
         Ok(expr)
     }
@@ -71,7 +71,7 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
 /// 2. t produces an output schema with two columns "a", "b + c"
 fn rewrite_in_terms_of_projection(
     expr: Expr,
-    proj_exprs: Vec<Expr>,
+    proj_exprs: &[Expr],
     input: &LogicalPlan,
 ) -> Result<Expr> {
     // assumption is that each item in exprs, such as "b + c" is
@@ -104,7 +104,7 @@ fn rewrite_in_terms_of_projection(
 
         // look for the column named the same as this expr
         let mut found = None;
-        for proj_expr in &proj_exprs {
+        for proj_expr in proj_exprs {
             proj_expr.apply(|e| {
                 if expr_match(&search_col, e) {
                     found = Some(e.clone());
