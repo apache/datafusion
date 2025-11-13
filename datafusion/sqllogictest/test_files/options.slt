@@ -23,7 +23,6 @@
 statement ok
 create table a(c0 int) as values (1), (2);
 
-# Expect coalesce and default batch size
 query TT
 explain SELECT * FROM a WHERE c0 < 1;
 ----
