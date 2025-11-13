@@ -208,16 +208,14 @@ impl<T: BytesMapHelperWrapperTrait> Debug for BytesLikeIndexMap<T> {
     }
 }
 
-impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
-    for BytesLikeIndexMap<Helper>
-{
-    fn try_new(
+impl<Helper: BytesMapHelperWrapperTrait> BytesLikeIndexMap<Helper> {
+    /// Try creating a new lookup table from the given literals and else index
+    ///
+    /// `literals` are guaranteed to be unique and non-nullable
+    pub(super) fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
         else_index: u32,
-    ) -> datafusion_common::Result<Self>
-    where
-        Self: Sized,
-    {
+    ) -> datafusion_common::Result<Self> {
         let input = ScalarValue::iter_to_array(unique_non_null_literals)?;
 
         // Literals are guaranteed to not contain nulls
@@ -241,7 +239,11 @@ impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
             _phantom_data: Default::default(),
         })
     }
+}
 
+impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
+    for BytesLikeIndexMap<Helper>
+{
     fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>> {
         let bytes_iter = Helper::array_to_iter(array)?;
         let indices = bytes_iter

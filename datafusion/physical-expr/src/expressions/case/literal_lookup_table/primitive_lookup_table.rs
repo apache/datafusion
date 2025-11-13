@@ -49,18 +49,18 @@ where
     }
 }
 
-impl<T> WhenLiteralIndexMap for PrimitiveIndexMap<T>
+impl<T> PrimitiveIndexMap<T>
 where
     T: ArrowPrimitiveType,
     T::Native: ToHashableKey,
 {
-    fn try_new(
+    /// Try creating a new lookup table from the given literals and else index
+    ///
+    /// `literals` are guaranteed to be unique and non-nullable
+    pub(super) fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
         else_index: u32,
-    ) -> datafusion_common::Result<Self>
-    where
-        Self: Sized,
-    {
+    ) -> datafusion_common::Result<Self> {
         let input = ScalarValue::iter_to_array(unique_non_null_literals)?;
 
         // Literals are guaranteed to not contain nulls
@@ -79,7 +79,13 @@ where
 
         Ok(Self { map, else_index })
     }
+}
 
+impl<T> WhenLiteralIndexMap for PrimitiveIndexMap<T>
+where
+    T: ArrowPrimitiveType,
+    T::Native: ToHashableKey,
+{
     fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>> {
         let indices = array
             .as_primitive::<T>()

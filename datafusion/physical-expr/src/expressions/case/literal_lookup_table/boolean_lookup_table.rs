@@ -26,14 +26,14 @@ pub(super) struct BooleanIndexMap {
     else_index: u32,
 }
 
-impl WhenLiteralIndexMap for BooleanIndexMap {
-    fn try_new(
+impl BooleanIndexMap {
+    /// Try creating a new lookup table from the given literals and else index
+    ///
+    /// `literals` are guaranteed to be unique and non-nullable
+    pub(super) fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
         else_index: u32,
-    ) -> datafusion_common::Result<Self>
-    where
-        Self: Sized,
-    {
+    ) -> datafusion_common::Result<Self> {
         let mut true_index: Option<u32> = None;
         let mut false_index: Option<u32> = None;
 
@@ -74,7 +74,9 @@ impl WhenLiteralIndexMap for BooleanIndexMap {
             else_index,
         })
     }
+}
 
+impl WhenLiteralIndexMap for BooleanIndexMap {
     fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>> {
         Ok(array
             .as_boolean()

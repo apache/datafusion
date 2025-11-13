@@ -227,16 +227,6 @@ impl LiteralLookupTable {
 ///
 /// The else index is used when a value is not found in the lookup table
 pub(super) trait WhenLiteralIndexMap: Debug + Send + Sync {
-    /// Try creating a new lookup table from the given literals and else index
-    ///
-    /// `literals` are guaranteed to be unique and non-nullable
-    fn try_new(
-        unique_non_null_literals: Vec<ScalarValue>,
-        else_index: u32,
-    ) -> datafusion_common::Result<Self>
-    where
-        Self: Sized;
-
     /// Return indices to take from the literals based on the values in the given array
     fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>>;
 }
