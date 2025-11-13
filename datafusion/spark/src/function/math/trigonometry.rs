@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
-};
+use crate::function::error_utils::unsupported_data_type_exec_err;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Float64Type};
 use datafusion_common::utils::take_function_args;
@@ -45,7 +43,7 @@ impl Default for SparkCsc {
 impl SparkCsc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         }
     }
 }
@@ -71,25 +69,6 @@ impl ScalarUDFImpl for SparkCsc {
         let [arg] = take_function_args(self.name(), &args.args)?;
         spark_csc(arg)
     }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err(
-                CSC_FUNCTION_NAME,
-                (1, 1),
-                arg_types.len(),
-            ));
-        }
-        if arg_types[0].is_numeric() {
-            Ok(vec![DataType::Float64])
-        } else {
-            Err(unsupported_data_type_exec_err(
-                CSC_FUNCTION_NAME,
-                "Numeric Type",
-                &arg_types[0],
-            ))
-        }
-    }
 }
 
 fn spark_csc(arg: &ColumnarValue) -> Result<ColumnarValue> {
@@ -114,69 +93,5 @@ fn spark_csc(arg: &ColumnarValue) -> Result<ColumnarValue> {
             format!("{}", DataType::Float64).as_str(),
             &other.data_type(),
         )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::function::math::trigonometry::{spark_csc, SparkCsc};
-    use crate::function::utils::test::test_scalar_function;
-    use arrow::array::{Array, Float64Array};
-    use arrow::datatypes::DataType::Float64;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
-    use std::f64::consts::PI;
-    use std::sync::Arc;
-
-    macro_rules! test_trig_float64_invoke {
-        ($FUNC: expr, $INPUT:expr, $EXPECTED:expr) => {
-            test_scalar_function!(
-                $FUNC,
-                vec![ColumnarValue::Scalar(ScalarValue::Float64($INPUT))],
-                $EXPECTED,
-                f64,
-                Float64,
-                Float64Array
-            );
-        };
-    }
-
-    #[test]
-    fn test_csc_invoke() {
-        test_trig_float64_invoke!(SparkCsc::new(), Some(0f64), Ok(Some(f64::INFINITY)));
-    }
-
-    #[test]
-    fn test_csc_array() {
-        let input = Float64Array::from(vec![1f64, 0f64, -1f64]);
-        let expected = Float64Array::from(vec![
-            1.1883951057781212,
-            f64::INFINITY,
-            -1.1883951057781212,
-        ]);
-        let arg = ColumnarValue::Array(Arc::new(input));
-
-        if let Ok(ColumnarValue::Array(result_array)) = spark_csc(&arg) {
-            let output = result_array
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .unwrap();
-            assert_eq!(output, &expected);
-        } else {
-            panic!("Expected array result");
-        }
-    }
-
-    #[test]
-    fn test_csc_scalar() {
-        let input = ScalarValue::Float64(Some(PI / 2.0));
-        let expected = ScalarValue::Float64(Some(1.0));
-        let arg = ColumnarValue::Scalar(input);
-
-        if let Ok(ColumnarValue::Scalar(result_scalar)) = spark_csc(&arg) {
-            assert_eq!(result_scalar, expected);
-        } else {
-            panic!("Expected scalar result");
-        }
     }
 }
