@@ -460,11 +460,12 @@ mod tests {
     fn test_ffi_execution_plan_local_bypass() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
         let plan = Arc::new(EmptyExec::new(schema));
 
-        let mut ffi_plan = FFI_ExecutionPlan::new(plan, ctx, None);
+        let mut ffi_plan = FFI_ExecutionPlan::new(plan, task_ctx_provider, None);
 
         // Verify local libraries can be downcast to their original
         let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into().unwrap();

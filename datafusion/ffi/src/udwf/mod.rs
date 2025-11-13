@@ -419,10 +419,10 @@ mod tests {
 
     fn create_test_foreign_udwf(
         original_udwf: impl WindowUDFImpl + 'static,
+        ctx: &Arc<dyn TaskContextProvider>,
     ) -> datafusion::common::Result<WindowUDF> {
         let original_udwf = Arc::new(WindowUDF::from(original_udwf));
 
-        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
         let mut local_udwf = FFI_WindowUDF::new(Arc::clone(&original_udwf), ctx);
         local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
@@ -450,7 +450,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_lag_udwf() -> datafusion::common::Result<()> {
-        let udwf = create_test_foreign_udwf(WindowShift::lag())?;
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let udwf = create_test_foreign_udwf(WindowShift::lag(), &ctx)?;
 
         let ctx = SessionContext::default();
         let df = ctx.read_batch(create_record_batch(-5, 5))?;
