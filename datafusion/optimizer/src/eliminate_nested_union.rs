@@ -55,6 +55,9 @@ impl OptimizerRule for EliminateNestedUnion {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
+            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => Ok(
+                Transformed::yes(Arc::unwrap_or_clone(inputs.pop().unwrap())),
+            ),
             LogicalPlan::Union(Union { inputs, schema }) => {
                 let inputs = inputs
                     .into_iter()
@@ -419,5 +422,29 @@ mod tests {
             Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value
               TableScan: table_1
         ")
+    }
+
+    #[test]
+    fn eliminate_one_union() -> Result<()> {
+        let plan = table_scan(Some("table"), &schema(), None)?.build()?;
+        let schema = Arc::clone(plan.schema());
+        // note it is not possible to create a single input union via
+        // LogicalPlanBuilder so create it manually here
+        let plan = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(plan)],
+            schema,
+        });
+
+        // Note we can't use the same assert_optimized_plan_equal as creating a
+        // single input union is not possible via LogicalPlanBuilder and other passes
+        // throw errors / don't handle the schema correctly.
+        assert_optimized_plan_eq_snapshot!(
+            OptimizerContext::new().with_max_passes(1),
+            vec![Arc::new(EliminateNestedUnion::new())],
+            plan,
+            @r"
+        TableScan: table
+        "
+        )
     }
 }

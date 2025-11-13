@@ -52,7 +52,6 @@ pub mod eliminate_group_by_constant;
 pub mod eliminate_join;
 pub mod eliminate_limit;
 pub mod eliminate_nested_union;
-pub mod eliminate_one_union;
 pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
