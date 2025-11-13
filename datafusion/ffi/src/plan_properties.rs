@@ -17,6 +17,8 @@
 
 use std::{ffi::c_void, sync::Arc};
 
+use crate::execution::FFI_TaskContextProvider;
+use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
 use abi_stable::{
     std_types::{
         RResult::{self, ROk},
@@ -32,8 +34,8 @@ use datafusion::{
         execution_plan::{Boundedness, EmissionType},
         PlanProperties,
     },
-    prelude::SessionContext,
 };
+use datafusion_execution::TaskContext;
 use datafusion_proto::{
     physical_plan::{
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
@@ -43,8 +45,6 @@ use datafusion_proto::{
     protobuf::{Partitioning, PhysicalSortExprNodeCollection},
 };
 use prost::Message;
-
-use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
@@ -68,6 +68,10 @@ pub struct FFI_PlanProperties {
 
     /// Return the schema of the plan.
     pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
+
+    /// Provider for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    pub task_ctx_provider: FFI_TaskContextProvider,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
@@ -154,8 +158,12 @@ impl Drop for FFI_PlanProperties {
     }
 }
 
-impl From<&PlanProperties> for FFI_PlanProperties {
-    fn from(props: &PlanProperties) -> Self {
+impl FFI_PlanProperties {
+    pub fn new(
+        props: &PlanProperties,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
+    ) -> Self {
+        let task_ctx_provider = task_ctx_provider.into();
         let private_data = Box::new(PlanPropertiesPrivateData {
             props: props.clone(),
         });
@@ -166,6 +174,7 @@ impl From<&PlanProperties> for FFI_PlanProperties {
             boundedness: boundedness_fn_wrapper,
             output_ordering: output_ordering_fn_wrapper,
             schema: schema_fn_wrapper,
+            task_ctx_provider,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
@@ -184,9 +193,8 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let ffi_schema = unsafe { (ffi_props.schema)(&ffi_props) };
         let schema = (&ffi_schema.0).try_into()?;
 
-        // TODO Extend FFI to get the registry and codex
-        let default_ctx = SessionContext::new();
-        let task_context = default_ctx.task_ctx();
+        // TODO Extend FFI to get the codec
+        let task_ctx: Arc<TaskContext> = (&ffi_props.task_ctx_provider).try_into()?;
         let codex = DefaultPhysicalExtensionCodec {};
 
         let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
@@ -196,7 +204,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let sort_exprs = parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
-            &task_context,
+            task_ctx.as_ref(),
             &schema,
             &codex,
         )?;
@@ -208,7 +216,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let partitioning = parse_protobuf_partitioning(
             Some(&proto_output_partitioning),
-            &task_context,
+            task_ctx.as_ref(),
             &schema,
             &codex,
         )?
@@ -305,9 +313,10 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
-
     use super::*;
+    use datafusion::prelude::SessionContext;
+    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
+    use datafusion_execution::TaskContextProvider;
 
     fn create_test_props() -> Result<PlanProperties> {
         use arrow::datatypes::{DataType, Field, Schema};
@@ -329,7 +338,9 @@ mod tests {
     #[test]
     fn test_round_trip_ffi_plan_properties() -> Result<()> {
         let original_props = create_test_props()?;
-        let mut local_props_ptr = FFI_PlanProperties::from(&original_props);
+        let ctx = Arc::new(SessionContext::default()) as Arc<dyn TaskContextProvider>;
+
+        let mut local_props_ptr = FFI_PlanProperties::new(&original_props, ctx);
         local_props_ptr.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_props: PlanProperties = local_props_ptr.try_into()?;
@@ -342,15 +353,16 @@ mod tests {
     #[test]
     fn test_ffi_execution_plan_local_bypass() -> Result<()> {
         let props = create_test_props()?;
+        let ctx = Arc::new(SessionContext::default()) as Arc<dyn TaskContextProvider>;
 
-        let ffi_plan = FFI_PlanProperties::from(&props);
+        let ffi_plan = FFI_PlanProperties::new(&props, Arc::clone(&ctx));
 
         // Verify local libraries
         let foreign_plan: PlanProperties = ffi_plan.try_into()?;
         assert_eq!(format!("{foreign_plan:?}"), format!("{:?}", foreign_plan));
 
         // Verify different library markers still can produce identical properties
-        let mut ffi_plan = FFI_PlanProperties::from(&props);
+        let mut ffi_plan = FFI_PlanProperties::new(&props, ctx);
         ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_plan: PlanProperties = ffi_plan.try_into()?;
         assert_eq!(format!("{foreign_plan:?}"), format!("{:?}", foreign_plan));

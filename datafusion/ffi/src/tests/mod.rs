@@ -84,10 +84,10 @@ pub struct ForeignLibraryModule {
         extern "C" fn(FFI_TaskContextProvider) -> FFI_TableFunction,
 
     /// Create an aggregate UDAF using sum
-    pub create_sum_udaf: extern "C" fn() -> FFI_AggregateUDF,
+    pub create_sum_udaf: extern "C" fn(FFI_TaskContextProvider) -> FFI_AggregateUDF,
 
     /// Create  grouping UDAF using stddev
-    pub create_stddev_udaf: extern "C" fn() -> FFI_AggregateUDF,
+    pub create_stddev_udaf: extern "C" fn(FFI_TaskContextProvider) -> FFI_AggregateUDF,
 
     pub create_rank_udwf: extern "C" fn() -> FFI_WindowUDF,
 

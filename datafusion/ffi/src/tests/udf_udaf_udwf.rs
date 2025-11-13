@@ -51,16 +51,20 @@ pub(crate) extern "C" fn create_ffi_table_func(
     FFI_TableFunction::new(udtf, None, task_ctx_provider)
 }
 
-pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
+pub(crate) extern "C" fn create_ffi_sum_func(
+    task_ctx_provider: FFI_TaskContextProvider,
+) -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
 
-    udaf.into()
+    FFI_AggregateUDF::new(udaf, task_ctx_provider)
 }
 
-pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
+pub(crate) extern "C" fn create_ffi_stddev_func(
+    task_ctx_provider: FFI_TaskContextProvider,
+) -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Stddev::new().into());
 
-    udaf.into()
+    FFI_AggregateUDF::new(udaf, task_ctx_provider)
 }
 
 pub(crate) extern "C" fn create_ffi_rank_func() -> FFI_WindowUDF {
