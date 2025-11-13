@@ -58,8 +58,8 @@ semver = "1.0.27"
 tokio = { workspace = true }
 
 [dev-dependencies]
-doc-comment = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
+doc-comment = { workspace = true }
 
 [features]
 integration-tests = []
