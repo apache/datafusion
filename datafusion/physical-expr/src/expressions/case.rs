@@ -84,7 +84,7 @@ enum EvalMethod {
 /// Implementing hash so we can use `derive` on [`EvalMethod`].
 ///
 /// not implementing actual [`Hash`] as it is not dyn compatible so we cannot implement it for
-/// `dyn` [`WhenLiteralIndexMap`].
+/// `dyn` [`literal_lookup_table::WhenLiteralIndexMap`].
 ///
 /// So implementing empty hash is still valid as the data is derived from `PhysicalExpr` s which are already hashed
 impl Hash for LiteralLookupTable {
@@ -94,7 +94,7 @@ impl Hash for LiteralLookupTable {
 /// Implementing Equal so we can use `derive` on [`EvalMethod`].
 ///
 /// not implementing actual [`PartialEq`] as it is not dyn compatible so we cannot implement it for
-/// `dyn` [`WhenLiteralIndexMap`].
+/// `dyn` [`literal_lookup_table::WhenLiteralIndexMap`].
 ///
 /// So we always return true as the data is derived from `PhysicalExpr` s which are already compared
 impl PartialEq for LiteralLookupTable {
@@ -1324,7 +1324,7 @@ impl CaseExpr {
         let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
         let evaluated_expression = evaluated_expression.to_array(1)?;
 
-        let output = scalars_or_null_lookup.create_output(&evaluated_expression)?;
+        let output = scalars_or_null_lookup.evaluate_input(&evaluated_expression)?;
 
         let result = if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(output.as_ref(), 0)?)
@@ -1383,9 +1383,7 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression(p) => self.expr_or_expr(batch, p),
-            EvalMethod::WithExprScalarLookupTable(ref e) => {
-                self.with_lookup_table(batch, e)
-            }
+            EvalMethod::WithExprScalarLookupTable(t) => self.with_lookup_table(batch, t),
         }
     }
 

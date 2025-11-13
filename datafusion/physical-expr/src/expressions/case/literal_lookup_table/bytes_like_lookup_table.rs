@@ -210,6 +210,7 @@ impl<T: BytesMapHelperWrapperTrait> Debug for BytesLikeIndexMap<T> {
 
 impl<Helper: BytesMapHelperWrapperTrait> BytesLikeIndexMap<Helper> {
     /// Try creating a new lookup table from the given literals and else index
+    /// The index of each literal in the vector is used as the mapped value in the lookup table.
     ///
     /// `literals` are guaranteed to be unique and non-nullable
     pub(super) fn try_new(
