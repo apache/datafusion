@@ -18,6 +18,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContextProvider;
 use abi_stable::{std_types::RVec, StableAbi};
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -29,9 +30,9 @@ use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::function::PartitionEvaluatorArgs,
     physical_plan::{expressions::Column, PhysicalExpr},
-    prelude::SessionContext,
 };
 use datafusion_common::exec_datafusion_err;
+use datafusion_execution::TaskContext;
 use datafusion_proto::{
     physical_plan::{
         from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,
@@ -53,11 +54,17 @@ pub struct FFI_PartitionEvaluatorArgs {
     is_reversed: bool,
     ignore_nulls: bool,
     schema: WrappedSchema,
+
+    /// Provider for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    pub task_ctx_provider: FFI_TaskContextProvider,
 }
 
-impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
-    type Error = DataFusionError;
-    fn try_from(args: PartitionEvaluatorArgs) -> Result<Self, DataFusionError> {
+impl FFI_PartitionEvaluatorArgs {
+    pub fn try_new(
+        args: PartitionEvaluatorArgs,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
+    ) -> Result<Self, DataFusionError> {
         // This is a bit of a hack. Since PartitionEvaluatorArgs does not carry a schema
         // around, and instead passes the data types directly we are unable to decode the
         // protobuf PhysicalExpr correctly. In evaluating the code the only place these
@@ -117,6 +124,7 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
             schema,
             is_reversed: args.is_reversed(),
             ignore_nulls: args.ignore_nulls(),
+            task_ctx_provider: task_ctx_provider.into(),
         })
     }
 }
@@ -136,10 +144,10 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_PartitionEvaluatorArgs) -> Result<Self> {
-        let default_ctx = SessionContext::new();
         let codec = DefaultPhysicalExtensionCodec {};
 
         let schema: SchemaRef = value.schema.into();
+        let task_ctx: Arc<TaskContext> = (&value.task_ctx_provider).try_into()?;
 
         let input_exprs = value
             .input_exprs
@@ -149,7 +157,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .map_err(|e| exec_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
             .iter()
             .map(|expr_node| {
-                parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)
+                parse_physical_expr(expr_node, task_ctx.as_ref(), &schema, &codec)
             })
             .collect::<Result<Vec<_>>>()?;
 
