@@ -21,21 +21,21 @@ use datafusion_common::{internal_err, ScalarValue};
 
 #[derive(Clone, Debug)]
 pub(super) struct BooleanIndexMap {
-    true_index: i32,
-    false_index: i32,
-    else_index: i32,
+    true_index: u32,
+    false_index: u32,
+    else_index: u32,
 }
 
 impl WhenLiteralIndexMap for BooleanIndexMap {
     fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
-        else_index: i32,
+        else_index: u32,
     ) -> datafusion_common::Result<Self>
     where
         Self: Sized,
     {
-        let mut true_index: Option<i32> = None;
-        let mut false_index: Option<i32> = None;
+        let mut true_index: Option<u32> = None;
+        let mut false_index: Option<u32> = None;
 
         for (index, literal) in unique_non_null_literals.into_iter().enumerate() {
             match literal {
@@ -45,7 +45,7 @@ impl WhenLiteralIndexMap for BooleanIndexMap {
                             "Duplicate true literal found in literals for BooleanIndexMap"
                         );
                     }
-                    true_index = Some(index as i32);
+                    true_index = Some(index as u32);
                 }
                 ScalarValue::Boolean(Some(false)) => {
                     if false_index.is_some() {
@@ -53,7 +53,7 @@ impl WhenLiteralIndexMap for BooleanIndexMap {
                             "Duplicate false literal found in literals for BooleanIndexMap"
                         );
                     }
-                    false_index = Some(index as i32);
+                    false_index = Some(index as u32);
                 }
                 ScalarValue::Boolean(None) => {
                     return internal_err!(
@@ -75,7 +75,7 @@ impl WhenLiteralIndexMap for BooleanIndexMap {
         })
     }
 
-    fn match_values(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<i32>> {
+    fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>> {
         Ok(array
             .as_boolean()
             .into_iter()
@@ -84,6 +84,6 @@ impl WhenLiteralIndexMap for BooleanIndexMap {
                 Some(false) => self.false_index,
                 None => self.else_index,
             })
-            .collect::<Vec<i32>>())
+            .collect::<Vec<u32>>())
     }
 }

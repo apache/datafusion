@@ -24,7 +24,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 #[derive(Clone)]
-pub(super) struct PrimitiveArrayMapHolder<T>
+pub(super) struct PrimitiveIndexMap<T>
 where
     T: ArrowPrimitiveType,
     T::Native: ToHashableKey,
@@ -32,31 +32,31 @@ where
     /// Literal value to map index
     ///
     /// If searching this map becomes a bottleneck consider using linear map implementations for small hashmaps
-    map: HashMap<<T::Native as ToHashableKey>::HashableKey, i32>,
-    else_index: i32,
+    map: HashMap<<T::Native as ToHashableKey>::HashableKey, u32>,
+    else_index: u32,
 }
 
-impl<T> Debug for PrimitiveArrayMapHolder<T>
+impl<T> Debug for PrimitiveIndexMap<T>
 where
     T: ArrowPrimitiveType,
     T::Native: ToHashableKey,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PrimitiveArrayMapHolder")
+        f.debug_struct("PrimitiveIndexMap")
             .field("map", &self.map)
             .field("else_index", &self.else_index)
             .finish()
     }
 }
 
-impl<T> WhenLiteralIndexMap for PrimitiveArrayMapHolder<T>
+impl<T> WhenLiteralIndexMap for PrimitiveIndexMap<T>
 where
     T: ArrowPrimitiveType,
     T::Native: ToHashableKey,
 {
     fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
-        else_index: i32,
+        else_index: u32,
     ) -> datafusion_common::Result<Self>
     where
         Self: Sized,
@@ -74,13 +74,13 @@ where
             .iter()
             .enumerate()
             // Because literals are unique we can collect directly, and we can avoid only inserting the first occurrence
-            .map(|(map_index, value)| (value.into_hashable_key(), map_index as i32))
+            .map(|(map_index, value)| (value.into_hashable_key(), map_index as u32))
             .collect();
 
         Ok(Self { map, else_index })
     }
 
-    fn match_values(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<i32>> {
+    fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>> {
         let indices = array
             .as_primitive::<T>()
             .into_iter()
@@ -93,7 +93,7 @@ where
 
                 None => self.else_index,
             })
-            .collect::<Vec<i32>>();
+            .collect::<Vec<u32>>();
 
         Ok(indices)
     }

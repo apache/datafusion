@@ -191,10 +191,10 @@ where
 #[derive(Clone)]
 pub(super) struct BytesLikeIndexMap<Helper: BytesMapHelperWrapperTrait> {
     /// Map from non-null literal value the first occurrence index in the literals
-    map: HashMap<Vec<u8>, i32>,
+    map: HashMap<Vec<u8>, u32>,
 
     /// The index to return when no match is found
-    else_index: i32,
+    else_index: u32,
 
     _phantom_data: PhantomData<Helper>,
 }
@@ -213,7 +213,7 @@ impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
 {
     fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
-        else_index: i32,
+        else_index: u32,
     ) -> datafusion_common::Result<Self>
     where
         Self: Sized,
@@ -227,11 +227,11 @@ impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
 
         let bytes_iter = Helper::array_to_iter(&input)?;
 
-        let map: HashMap<Vec<u8>, i32> = bytes_iter
+        let map: HashMap<Vec<u8>, u32> = bytes_iter
             // Flattening Option<&[u8]> to &[u8] as literals cannot contain nulls
             .flatten()
             .enumerate()
-            .map(|(map_index, value): (usize, &[u8])| (value.to_vec(), map_index as i32))
+            .map(|(map_index, value): (usize, &[u8])| (value.to_vec(), map_index as u32))
             // Because literals are unique we can collect directly, and we can avoid only inserting the first occurrence
             .collect();
 
@@ -242,14 +242,14 @@ impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
         })
     }
 
-    fn match_values(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<i32>> {
+    fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>> {
         let bytes_iter = Helper::array_to_iter(array)?;
         let indices = bytes_iter
             .map(|value| match value {
                 Some(value) => self.map.get(value).copied().unwrap_or(self.else_index),
                 None => self.else_index,
             })
-            .collect::<Vec<i32>>();
+            .collect::<Vec<u32>>();
 
         Ok(indices)
     }

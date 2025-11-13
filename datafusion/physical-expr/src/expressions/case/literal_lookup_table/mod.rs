@@ -25,10 +25,10 @@ use crate::expressions::case::literal_lookup_table::bytes_like_lookup_table::{
     FixedBinaryHelper, FixedBytesDictionaryHelper, GenericBytesHelper,
     GenericBytesViewHelper,
 };
-use crate::expressions::case::literal_lookup_table::primitive_lookup_table::PrimitiveArrayMapHolder;
-use crate::expressions::case::WhenThen;
+use crate::expressions::case::literal_lookup_table::primitive_lookup_table::PrimitiveIndexMap;
+use crate::expressions::case::{CaseBody, WhenThen};
 use crate::expressions::Literal;
-use arrow::array::{downcast_integer, downcast_primitive, ArrayRef, Int32Array};
+use arrow::array::{downcast_integer, downcast_primitive, ArrayRef, Int32Array, UInt32Array};
 use arrow::datatypes::{
     ArrowDictionaryKeyType, BinaryViewType, DataType, GenericBinaryType,
     GenericStringType, StringViewType,
@@ -81,26 +81,25 @@ pub(in super::super) struct LiteralLookupTable {
 
     /// [`ArrayRef`] where `array[i] = then_literals[i]`
     /// the last value in the array is the else_expr
-    values_to_take_from: ArrayRef,
+    ///
+    /// This will be used to take from based on the indices returned by the lookup table to build the final output
+    then_and_else_values: ArrayRef,
 }
 
 impl LiteralLookupTable {
-    pub(in super::super) fn maybe_new(
-        when_then_expr: &Vec<WhenThen>,
-        else_expr: &Option<Arc<dyn PhysicalExpr>>,
-    ) -> Option<Self> {
+    pub(in super::super) fn maybe_new(body: &CaseBody) -> Option<Self> {
         // We can't use the optimization if we don't have any when then pairs
-        if when_then_expr.is_empty() {
+        if body.when_then_expr.is_empty() {
             return None;
         }
 
         // If we only have 1 than this optimization is not useful
-        if when_then_expr.len() == 1 {
+        if body.when_then_expr.len() == 1 {
             return None;
         }
 
         // Try to downcast all the WHEN/THEN expressions to literals
-        let when_then_exprs_maybe_literals = when_then_expr
+        let when_then_exprs_maybe_literals = body.when_then_expr
             .iter()
             .map(|(when, then)| {
                 let when_maybe_literal = when.as_any().downcast_ref::<Literal>();
@@ -136,8 +135,8 @@ impl LiteralLookupTable {
 
         // Keep only the first occurrence of each when literal (as the first match is used)
         // and remove nulls (as they cannot be matched - case NULL WHEN NULL THEN ... ELSE ... END always goes to ELSE)
-        let (when_literals, then_literals): (Vec<ScalarValue>, Vec<ScalarValue>) = {
-            let mut map = IndexMap::with_capacity(when_then_expr.len());
+        let (when, then): (Vec<ScalarValue>, Vec<ScalarValue>) = {
+            let mut map = IndexMap::with_capacity(body.when_then_expr.len());
 
             for (when, then) in when_then_exprs_scalars.into_iter() {
                 // Don't overwrite existing entries as we want to keep the first occurrence
@@ -149,13 +148,13 @@ impl LiteralLookupTable {
             map.into_iter().unzip()
         };
 
-        let else_expr: ScalarValue = if let Some(else_expr) = else_expr {
+        let else_value: ScalarValue = if let Some(else_expr) = body.else_expr {
             let literal = else_expr.as_any().downcast_ref::<Literal>()?;
 
             literal.value().clone()
         } else {
             let Ok(null_scalar) =
-                ScalarValue::try_new_null(&then_literals[0].data_type())
+                ScalarValue::try_new_null(&then[0].data_type())
             else {
                 return None;
             };
@@ -164,46 +163,46 @@ impl LiteralLookupTable {
         };
 
         {
-            let data_type = when_literals[0].data_type();
+            let data_type = when[0].data_type();
 
             // If not all the WHEN literals are the same data type we cannot use this optimization
-            if when_literals.iter().any(|l| l.data_type() != data_type) {
+            if when.iter().any(|l| l.data_type() != data_type) {
                 return None;
             }
         }
 
         {
-            let data_type = then_literals[0].data_type();
+            let data_type = then[0].data_type();
 
             // If not all the then and the else literals are the same data type we cannot use this optimization
-            if then_literals.iter().any(|l| l.data_type() != data_type) {
+            if then.iter().any(|l| l.data_type() != data_type) {
                 return None;
             }
 
-            if else_expr.data_type() != data_type {
+            if else_value.data_type() != data_type {
                 return None;
             }
         }
 
-        let output_array = ScalarValue::iter_to_array(
-            then_literals
+        let then_and_else_values = ScalarValue::iter_to_array(
+            then
                 .iter()
                 // The else is in the end
-                .chain(std::iter::once(&else_expr))
+                .chain(std::iter::once(&else_value))
                 .cloned(),
         )
         .ok()?;
 
         let lookup = try_creating_lookup_table(
-            when_literals,
+            when,
             // The else expression is in the end
-            output_array.len() as i32 - 1,
+            then_and_else_values.len() as u32 - 1,
         )
         .ok()?;
 
         Some(Self {
             lookup,
-            values_to_take_from: output_array,
+            then_and_else_values,
         })
     }
 
@@ -211,15 +210,15 @@ impl LiteralLookupTable {
         &self,
         expr_array: &ArrayRef,
     ) -> datafusion_common::Result<ArrayRef> {
-        let take_indices = self.lookup.match_values(expr_array)?;
+        let take_indices = self.lookup.map_to_indices(expr_array)?;
 
         // Zero-copy conversion
-        let take_indices = Int32Array::from(take_indices);
+        let take_indices = UInt32Array::from(take_indices);
 
         // An optimize version would depend on the type of the values_to_take_from
         // For example, if the type is view we can just keep pointing to the same value (similar to dictionary)
         // if the type is dictionary we can just use the indices as is (or cast them to the key type) and create a new dictionary array
-        let output = arrow::compute::take(&self.values_to_take_from, &take_indices, None)
+        let output = arrow::compute::take(&self.then_and_else_values, &take_indices, None)
             .map_err(|e| arrow_datafusion_err!(e))?;
 
         Ok(output)
@@ -235,18 +234,18 @@ pub(super) trait WhenLiteralIndexMap: Debug + Send + Sync {
     /// `literals` are guaranteed to be unique and non-nullable
     fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
-        else_index: i32,
+        else_index: u32,
     ) -> datafusion_common::Result<Self>
     where
         Self: Sized;
 
     /// Return indices to take from the literals based on the values in the given array
-    fn match_values(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<i32>>;
+    fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>>;
 }
 
 pub(crate) fn try_creating_lookup_table(
     unique_non_null_literals: Vec<ScalarValue>,
-    else_index: i32,
+    else_index: u32,
 ) -> datafusion_common::Result<Arc<dyn WhenLiteralIndexMap>> {
     assert_ne!(
         unique_non_null_literals.len(),
@@ -263,7 +262,7 @@ pub(crate) fn try_creating_lookup_table(
         data_type if data_type.is_primitive() => {
             macro_rules! create_matching_map {
                 ($t:ty) => {{
-                    let lookup_table = PrimitiveArrayMapHolder::<$t>::try_new(
+                    let lookup_table = PrimitiveIndexMap::<$t>::try_new(
                         unique_non_null_literals,
                         else_index,
                     )?;
@@ -367,7 +366,7 @@ pub(crate) fn try_creating_lookup_table(
 fn create_lookup_table_for_dictionary_input<K: ArrowDictionaryKeyType + Send + Sync>(
     value: &DataType,
     unique_non_null_literals: Vec<ScalarValue>,
-    else_index: i32,
+    else_index: u32,
 ) -> datafusion_common::Result<Arc<dyn WhenLiteralIndexMap>> {
     // TODO - optimize dictionary to use different wrapper that takes advantage of it being a dictionary
     match value {

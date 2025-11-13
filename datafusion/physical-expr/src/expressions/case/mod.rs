@@ -21,15 +21,11 @@ use crate::expressions::{try_cast, Column, Literal};
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{
-    is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
-};
-use arrow::datatypes::{DataType, Schema, UInt32Type};
+use arrow::compute::{is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate, SlicesIterator};
+use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{exec_err, internal_datafusion_err, internal_err, DataFusionError, HashMap, HashSet, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
@@ -39,6 +35,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 
 pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -48,13 +45,13 @@ enum EvalMethod {
     ///      [WHEN ...]
     ///      [ELSE result]
     /// END
-    NoExpression,
+    NoExpression(ProjectedCaseBody),
     /// CASE expression
     ///     WHEN value THEN result
     ///     [WHEN ...]
     ///     [ELSE result]
     /// END
-    WithExpression,
+    WithExpression(ProjectedCaseBody),
     /// This is a specialization for a specific use case where we can take a fast path
     /// for expressions that are infallible and can be cheaply computed for the entire
     /// record batch rather than just for the rows where the predicate is true.
@@ -70,7 +67,7 @@ enum EvalMethod {
     /// if there is just one when/then pair and both the `then` and `else` are expressions
     ///
     /// CASE WHEN condition THEN expression ELSE expression END
-    ExpressionOrExpression,
+    ExpressionOrExpression(ProjectedCaseBody),
 
     /// This is a specialization for [`EvalMethod::WithExpression`] when the value and results are literals
     ///
@@ -92,6 +89,129 @@ impl PartialEq for LiteralLookupTable {
 
 impl Eq for LiteralLookupTable {}
 
+
+/// The body of a CASE expression which consists of an optional base expression, the "when/then"
+/// branches and an optional "else" branch.
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct CaseBody {
+    /// Optional base expression that can be compared to literal values in the "when" expressions
+    expr: Option<Arc<dyn PhysicalExpr>>,
+    /// One or more when/then expressions
+    when_then_expr: Vec<WhenThen>,
+    /// Optional "else" expression
+    else_expr: Option<Arc<dyn PhysicalExpr>>,
+}
+
+impl CaseBody {
+    /// Derives a [ProjectedCaseBody] from this [CaseBody].
+    fn project(&self) -> Result<ProjectedCaseBody> {
+        // Determine the set of columns that are used in all the expressions of the case body.
+        let mut used_column_indices = HashSet::<usize>::new();
+        let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
+            expr.apply(|expr| {
+                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    used_column_indices.insert(column.index());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("Closure cannot fail");
+        };
+
+        if let Some(e) = &self.expr {
+            collect_column_indices(e);
+        }
+        self.when_then_expr.iter().for_each(|(w, t)| {
+            collect_column_indices(w);
+            collect_column_indices(t);
+        });
+        if let Some(e) = &self.else_expr {
+            collect_column_indices(e);
+        }
+
+        // Construct a mapping from the original column index to the projected column index.
+        let column_index_map = used_column_indices
+            .iter()
+            .enumerate()
+            .map(|(projected, original)| (*original, projected))
+            .collect::<HashMap<usize, usize>>();
+
+        // Construct the projected body by rewriting each expression from the original body
+        // using the column index mapping.
+        let project = |expr: &Arc<dyn PhysicalExpr>| -> Result<Arc<dyn PhysicalExpr>> {
+            Arc::clone(expr)
+                .transform_down(|e| {
+                    if let Some(column) = e.as_any().downcast_ref::<Column>() {
+                        let original = column.index();
+                        let projected = *column_index_map.get(&original).unwrap();
+                        if projected != original {
+                            return Ok(Transformed::yes(Arc::new(Column::new(
+                                column.name(),
+                                projected,
+                            ))));
+                        }
+                    }
+                    Ok(Transformed::no(e))
+                })
+                .map(|t| t.data)
+        };
+
+        let projected_body = CaseBody {
+            expr: self.expr.as_ref().map(project).transpose()?,
+            when_then_expr: self
+                .when_then_expr
+                .iter()
+                .map(|(e, t)| Ok((project(e)?, project(t)?)))
+                .collect::<Result<Vec<_>>>()?,
+            else_expr: self.else_expr.as_ref().map(project).transpose()?,
+        };
+
+        // Construct the projection vector
+        let projection = column_index_map
+            .iter()
+            .sorted_by_key(|(_, v)| **v)
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>();
+
+        Ok(ProjectedCaseBody {
+            projection,
+            body: projected_body,
+        })
+    }
+}
+
+/// A derived case body that can be used to evaluate a case expression after projecting
+/// record batches using a projection vector.
+///
+/// This is used to avoid filtering columns that are not used in the
+/// input `RecordBatch` when progressively evaluating a `CASE` expression's
+/// remainder batches. Filtering these columns is wasteful since for a record
+/// batch of `n` rows, filtering requires at worst a copy of `n - 1` values
+/// per array. If these filtered values will never be accessed, the time spent
+/// producing them is better avoided.
+///
+/// For example, if we are evaluating the following case expression that
+/// only references columns B and D:
+///
+/// ```sql
+/// SELECT CASE WHEN B > 10 THEN D ELSE NULL END FROM (VALUES (...)) T(A, B, C, D)
+/// ```
+///
+/// Of the 4 input columns `[A, B, C, D]`, the `CASE` expression only access `B` and `D`.
+/// Filtering `A` and `C` would be unnecessary and wasteful.
+///
+/// If we only retain columns `B` and `D` using `RecordBatch::project` and the projection vector
+/// `[1, 3]`, the indices of these two columns will change to `[0, 1]`. To evaluate the
+/// case expression, it will need to be rewritten from `CASE WHEN B@1 > 10 THEN D@3 ELSE NULL END`
+/// to `CASE WHEN B@0 > 10 THEN D@1 ELSE NULL END`.
+///
+/// The projection vector and the rewritten expression (which only differs from the original in
+/// column reference indices) are held in a `ProjectedCaseBody`.
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct ProjectedCaseBody {
+    projection: Vec<usize>,
+    body: CaseBody,
+}
+
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with
 /// corresponding "then" expressions, and an optional "else" expression.
@@ -111,12 +231,8 @@ impl Eq for LiteralLookupTable {}
 /// END
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct CaseExpr {
-    /// Optional base expression that can be compared to literal values in the "when" expressions
-    expr: Option<Arc<dyn PhysicalExpr>>,
-    /// One or more when/then expressions
-    when_then_expr: Vec<WhenThen>,
-    /// Optional "else" expression
-    else_expr: Option<Arc<dyn PhysicalExpr>>,
+    /// The case expression body
+    body: CaseBody,
     /// Evaluation method to use
     eval_method: EvalMethod,
 }
@@ -124,13 +240,13 @@ pub struct CaseExpr {
 impl std::fmt::Display for CaseExpr {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "CASE ")?;
-        if let Some(e) = &self.expr {
+        if let Some(e) = &self.body.expr {
             write!(f, "{e} ")?;
         }
-        for (w, t) in &self.when_then_expr {
+        for (w, t) in &self.body.when_then_expr {
             write!(f, "WHEN {w} THEN {t} ")?;
         }
-        if let Some(e) = &self.else_expr {
+        if let Some(e) = &self.body.else_expr {
             write!(f, "ELSE {e} ")?;
         }
         write!(f, "END")
@@ -147,11 +263,24 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
-fn create_filter(predicate: &BooleanArray) -> FilterPredicate {
+fn create_filter(predicate: &BooleanArray, optimize: bool) -> FilterPredicate {
     let mut filter_builder = FilterBuilder::new(predicate);
-    // Always optimize the filter since we use them multiple times.
-    filter_builder = filter_builder.optimize();
+    if optimize {
+        // Always optimize the filter since we use them multiple times.
+        filter_builder = filter_builder.optimize();
+    }
     filter_builder.build()
+}
+
+fn multiple_arrays(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(fields) => {
+            fields.len() > 1
+                || fields.len() == 1 && multiple_arrays(fields[0].data_type())
+        }
+        DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
+        _ => false,
+    }
 }
 
 // This should be removed when https://github.com/apache/arrow-rs/pull/8693
@@ -189,6 +318,84 @@ fn filter_array(
     filter: &FilterPredicate,
 ) -> std::result::Result<ArrayRef, ArrowError> {
     filter.filter(array)
+}
+
+fn merge(
+    mask: &BooleanArray,
+    truthy: ColumnarValue,
+    falsy: ColumnarValue,
+) -> std::result::Result<ArrayRef, ArrowError> {
+    let (truthy, truthy_is_scalar) = match truthy {
+        ColumnarValue::Array(a) => (a, false),
+        ColumnarValue::Scalar(s) => (s.to_array()?, true),
+    };
+    let (falsy, falsy_is_scalar) = match falsy {
+        ColumnarValue::Array(a) => (a, false),
+        ColumnarValue::Scalar(s) => (s.to_array()?, true),
+    };
+
+    if truthy_is_scalar && falsy_is_scalar {
+        return zip(mask, &Scalar::new(truthy), &Scalar::new(falsy));
+    }
+
+    let falsy = falsy.to_data();
+    let truthy = truthy.to_data();
+
+    let mut mutable = MutableArrayData::new(vec![&truthy, &falsy], false, truthy.len());
+
+    // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
+    // fill with falsy values
+
+    // keep track of how much is filled
+    let mut filled = 0;
+    let mut falsy_offset = 0;
+    let mut truthy_offset = 0;
+
+    SlicesIterator::new(mask).for_each(|(start, end)| {
+        // the gap needs to be filled with falsy values
+        if start > filled {
+            if falsy_is_scalar {
+                for _ in filled..start {
+                    // Copy the first item from the 'falsy' array into the output buffer.
+                    mutable.extend(1, 0, 1);
+                }
+            } else {
+                let falsy_length = start - filled;
+                let falsy_end = falsy_offset + falsy_length;
+                mutable.extend(1, falsy_offset, falsy_end);
+                falsy_offset = falsy_end;
+            }
+        }
+        // fill with truthy values
+        if truthy_is_scalar {
+            for _ in start..end {
+                // Copy the first item from the 'truthy' array into the output buffer.
+                mutable.extend(0, 0, 1);
+            }
+        } else {
+            let truthy_length = end - start;
+            let truthy_end = truthy_offset + truthy_length;
+            mutable.extend(0, truthy_offset, truthy_end);
+            truthy_offset = truthy_end;
+        }
+        filled = end;
+    });
+    // the remaining part is falsy
+    if filled < mask.len() {
+        if falsy_is_scalar {
+            for _ in filled..mask.len() {
+                // Copy the first item from the 'falsy' array into the output buffer.
+                mutable.extend(1, 0, 1);
+            }
+        } else {
+            let falsy_length = mask.len() - filled;
+            let falsy_end = falsy_offset + falsy_length;
+            mutable.extend(1, falsy_offset, falsy_end);
+        }
+    }
+
+    let data = mutable.freeze();
+    Ok(make_array(data))
 }
 
 /// Merges elements by index from a list of [`ArrayData`], creating a new [`ColumnarValue`] from
@@ -242,9 +449,8 @@ fn filter_array(
 /// │└─────────┘│  │    2    │                             │    D    │
 /// └───────────┘  └─────────┘                             └─────────┘
 ///    values        indices                                  result
-///
 /// ```
-fn merge(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
+fn merge_n(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
     #[cfg(debug_assertions)]
     for ix in indices {
         if let Some(index) = ix.index() {
@@ -549,7 +755,7 @@ impl ResultBuilder {
             }
             ResultState::Partial { arrays, indices } => {
                 // Merge partial results into a single array.
-                Ok(ColumnarValue::Array(merge(&arrays, &indices)?))
+                Ok(ColumnarValue::Array(merge_n(&arrays, &indices)?))
             }
             ResultState::Complete(v) => {
                 // If we have a complete result, we can just return it.
@@ -577,80 +783,94 @@ impl CaseExpr {
         };
 
         if when_then_expr.is_empty() {
-            exec_err!("There must be at least one WHEN clause")
-        } else {
-            let eval_method =
-                Self::find_best_eval_method(&expr, &when_then_expr, &else_expr);
-
-            Ok(Self {
-                expr,
-                when_then_expr,
-                else_expr,
-                eval_method,
-            })
+            return exec_err!("There must be at least one WHEN clause");
         }
+
+        let body = CaseBody {
+            expr,
+            when_then_expr,
+            else_expr,
+        };
+
+
+        Ok(Self { body, eval_method })
     }
 
+
     fn find_best_eval_method(
-        expr: &Option<Arc<dyn PhysicalExpr>>,
-        when_then_expr: &Vec<WhenThen>,
-        else_expr: &Option<Arc<dyn PhysicalExpr>>,
+        body: &CaseBody,
     ) -> EvalMethod {
-        if expr.is_some() {
+        if body.expr.is_some() {
             if let Some(mapping) =
-                LiteralLookupTable::maybe_new(when_then_expr, else_expr)
+              LiteralLookupTable::maybe_new(body)
             {
                 return EvalMethod::WithExprScalarLookupTable(mapping);
             }
 
-            return EvalMethod::WithExpression;
+            return EvalMethod::WithExpression(body.project()?)
         }
-
-        if when_then_expr.len() == 1
-            && is_cheap_and_infallible(&(when_then_expr[0].1))
-            && else_expr.is_none()
+        if body.when_then_expr.len() == 1
+          && is_cheap_and_infallible(&(body.when_then_expr[0].1))
+          && body.else_expr.is_none()
         {
             EvalMethod::InfallibleExprOrNull
-        } else if when_then_expr.len() == 1
-            && when_then_expr[0].1.as_any().is::<Literal>()
-            && else_expr.is_some()
-            && else_expr.as_ref().unwrap().as_any().is::<Literal>()
+        } else if body.when_then_expr.len() == 1
+          && body.when_then_expr[0].1.as_any().is::<Literal>()
+          && body.else_expr.is_some()
+          && body.else_expr.as_ref().unwrap().as_any().is::<Literal>()
         {
             EvalMethod::ScalarOrScalar
-        } else if when_then_expr.len() == 1 && else_expr.is_some() {
-            EvalMethod::ExpressionOrExpression
+        } else if body.when_then_expr.len() == 1 && body.else_expr.is_some() {
+            EvalMethod::ExpressionOrExpression(body.project()?)
         } else {
-            EvalMethod::NoExpression
-        }
+            EvalMethod::NoExpression(body.project()?)
+        };
     }
 
     /// Optional base expression that can be compared to literal values in the "when" expressions
     pub fn expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.expr.as_ref()
+        self.body.expr.as_ref()
     }
 
     /// One or more when/then expressions
     pub fn when_then_expr(&self) -> &[WhenThen] {
-        &self.when_then_expr
+        &self.body.when_then_expr
     }
 
     /// Optional "else" expression
     pub fn else_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.else_expr.as_ref()
+        self.body.else_expr.as_ref()
     }
 }
 
-impl CaseExpr {
-    /// This function evaluates the form of CASE that matches an expression to fixed values.
-    ///
-    /// CASE expression
-    ///     WHEN value THEN result
-    ///     [WHEN ...]
-    ///     [ELSE result]
-    /// END
-    fn case_when_with_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.data_type(&batch.schema())?;
-        let mut result_builder = ResultBuilder::new(&return_type, batch.num_rows());
+impl CaseBody {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        // since all then results have the same data type, we can choose any one as the
+        // return data type except for the null.
+        let mut data_type = DataType::Null;
+        for i in 0..self.when_then_expr.len() {
+            data_type = self.when_then_expr[i].1.data_type(input_schema)?;
+            if !data_type.equals_datatype(&DataType::Null) {
+                break;
+            }
+        }
+        // if all then results are null, we use data type of else expr instead if possible.
+        if data_type.equals_datatype(&DataType::Null) {
+            if let Some(e) = &self.else_expr {
+                data_type = e.data_type(input_schema)?;
+            }
+        }
+
+        Ok(data_type)
+    }
+
+    /// See [CaseExpr::case_when_with_expr].
+    fn case_when_with_expr(
+        &self,
+        batch: &RecordBatch,
+        return_type: &DataType,
+    ) -> Result<ColumnarValue> {
+        let mut result_builder = ResultBuilder::new(return_type, batch.num_rows());
 
         // `remainder_rows` contains the indices of the rows that need to be evaluated
         let mut remainder_rows: ArrayRef =
@@ -679,7 +899,7 @@ impl CaseExpr {
 
             // If there is an else expression, use that as the default value for the null rows
             // Otherwise the default `null` value from the result builder will be used.
-            if let Some(e) = self.else_expr() {
+            if let Some(e) = &self.else_expr {
                 let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
 
                 if base_all_null {
@@ -688,7 +908,7 @@ impl CaseExpr {
                     result_builder.add_branch_result(&remainder_rows, nulls_value)?;
                 } else {
                     // Filter out the null rows and evaluate the else expression for those
-                    let nulls_filter = create_filter(&not(&base_not_nulls)?);
+                    let nulls_filter = create_filter(&not(&base_not_nulls)?, true);
                     let nulls_batch =
                         filter_record_batch(&remainder_batch, &nulls_filter)?;
                     let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
@@ -703,7 +923,7 @@ impl CaseExpr {
             }
 
             // Remove the null rows from the remainder batch
-            let not_null_filter = create_filter(&base_not_nulls);
+            let not_null_filter = create_filter(&base_not_nulls, true);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &not_null_filter)?);
             remainder_rows = filter_array(&remainder_rows, &not_null_filter)?;
@@ -723,8 +943,7 @@ impl CaseExpr {
                     compare_with_eq(&a, &base_values, base_value_is_nested)
                 }
                 ColumnarValue::Scalar(s) => {
-                    let scalar = Scalar::new(s.to_array()?);
-                    compare_with_eq(&scalar, &base_values, base_value_is_nested)
+                    compare_with_eq(&s.to_scalar()?, &base_values, base_value_is_nested)
                 }
             }?;
 
@@ -750,7 +969,7 @@ impl CaseExpr {
             // for the current branch
             // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
             // this unconditionally.
-            let then_filter = create_filter(&when_value);
+            let then_filter = create_filter(&when_value, true);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
@@ -773,7 +992,7 @@ impl CaseExpr {
                     not(&prep_null_mask_filter(&when_value))
                 }
             }?;
-            let next_filter = create_filter(&next_selection);
+            let next_filter = create_filter(&next_selection, true);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
@@ -782,7 +1001,7 @@ impl CaseExpr {
 
         // If we reached this point, some rows were left unmatched.
         // Check if those need to be evaluated using the 'else' expression.
-        if let Some(e) = self.else_expr() {
+        if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
@@ -792,16 +1011,13 @@ impl CaseExpr {
         result_builder.finish()
     }
 
-    /// This function evaluates the form of CASE where each WHEN expression is a boolean
-    /// expression.
-    ///
-    /// CASE WHEN condition THEN result
-    ///      [WHEN ...]
-    ///      [ELSE result]
-    /// END
-    fn case_when_no_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.data_type(&batch.schema())?;
-        let mut result_builder = ResultBuilder::new(&return_type, batch.num_rows());
+    /// See [CaseExpr::case_when_no_expr].
+    fn case_when_no_expr(
+        &self,
+        batch: &RecordBatch,
+        return_type: &DataType,
+    ) -> Result<ColumnarValue> {
+        let mut result_builder = ResultBuilder::new(return_type, batch.num_rows());
 
         // `remainder_rows` contains the indices of the rows that need to be evaluated
         let mut remainder_rows: ArrayRef =
@@ -842,7 +1058,7 @@ impl CaseExpr {
             // for the current branch
             // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
             // this unconditionally.
-            let then_filter = create_filter(when_value);
+            let then_filter = create_filter(when_value, true);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
@@ -865,7 +1081,7 @@ impl CaseExpr {
                     not(&prep_null_mask_filter(when_value))
                 }
             }?;
-            let next_filter = create_filter(&next_selection);
+            let next_filter = create_filter(&next_selection, true);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
@@ -873,7 +1089,7 @@ impl CaseExpr {
 
         // If we reached this point, some rows were left unmatched.
         // Check if those need to be evaluated using the 'else' expression.
-        if let Some(e) = self.else_expr() {
+        if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
@@ -881,6 +1097,94 @@ impl CaseExpr {
         }
 
         result_builder.finish()
+    }
+
+    /// See [CaseExpr::expr_or_expr].
+    fn expr_or_expr(
+        &self,
+        batch: &RecordBatch,
+        when_value: &BooleanArray,
+    ) -> Result<ColumnarValue> {
+        let when_value = match when_value.null_count() {
+            0 => Cow::Borrowed(when_value),
+            _ => {
+                // `prep_null_mask_filter` is required to ensure null is treated as false
+                Cow::Owned(prep_null_mask_filter(when_value))
+            }
+        };
+
+        let optimize_filter = batch.num_columns() > 1
+            || (batch.num_columns() == 1 && multiple_arrays(batch.column(0).data_type()));
+
+        let when_filter = create_filter(&when_value, optimize_filter);
+        let then_batch = filter_record_batch(batch, &when_filter)?;
+        let then_value = self.when_then_expr[0].1.evaluate(&then_batch)?;
+
+        let else_selection = not(&when_value)?;
+        let else_filter = create_filter(&else_selection, optimize_filter);
+        let else_batch = filter_record_batch(batch, &else_filter)?;
+
+        // keep `else_expr`'s data type and return type consistent
+        let e = self.else_expr.as_ref().unwrap();
+        let return_type = self.data_type(&batch.schema())?;
+        let else_expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
+            .unwrap_or_else(|_| Arc::clone(e));
+
+        let else_value = else_expr.evaluate(&else_batch)?;
+
+        Ok(ColumnarValue::Array(merge(
+            &when_value,
+            then_value,
+            else_value,
+        )?))
+    }
+}
+
+impl CaseExpr {
+    /// This function evaluates the form of CASE that matches an expression to fixed values.
+    ///
+    /// CASE expression
+    ///     WHEN value THEN result
+    ///     [WHEN ...]
+    ///     [ELSE result]
+    /// END
+    fn case_when_with_expr(
+        &self,
+        batch: &RecordBatch,
+        projected: &ProjectedCaseBody,
+    ) -> Result<ColumnarValue> {
+        let return_type = self.data_type(&batch.schema())?;
+        if projected.projection.len() < batch.num_columns() {
+            let projected_batch = batch.project(&projected.projection)?;
+            projected
+                .body
+                .case_when_with_expr(&projected_batch, &return_type)
+        } else {
+            self.body.case_when_with_expr(batch, &return_type)
+        }
+    }
+
+    /// This function evaluates the form of CASE where each WHEN expression is a boolean
+    /// expression.
+    ///
+    /// CASE WHEN condition THEN result
+    ///      [WHEN ...]
+    ///      [ELSE result]
+    /// END
+    fn case_when_no_expr(
+        &self,
+        batch: &RecordBatch,
+        projected: &ProjectedCaseBody,
+    ) -> Result<ColumnarValue> {
+        let return_type = self.data_type(&batch.schema())?;
+        if projected.projection.len() < batch.num_columns() {
+            let projected_batch = batch.project(&projected.projection)?;
+            projected
+                .body
+                .case_when_no_expr(&projected_batch, &return_type)
+        } else {
+            self.body.case_when_no_expr(batch, &return_type)
+        }
     }
 
     /// This function evaluates the specialized case of:
@@ -893,8 +1197,8 @@ impl CaseExpr {
     /// that are infallible because the expression will be evaluated for all
     /// rows in the input batch.
     fn case_column_or_null(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let when_expr = &self.when_then_expr[0].0;
-        let then_expr = &self.when_then_expr[0].1;
+        let when_expr = &self.body.when_then_expr[0].0;
+        let then_expr = &self.body.when_then_expr[0].1;
 
         match when_expr.evaluate(batch)? {
             // WHEN true --> column
@@ -934,7 +1238,7 @@ impl CaseExpr {
         let return_type = self.data_type(&batch.schema())?;
 
         // evaluate when expression
-        let when_value = self.when_then_expr[0].0.evaluate(batch)?;
+        let when_value = self.body.when_then_expr[0].0.evaluate(batch)?;
         let when_value = when_value.into_array(batch.num_rows())?;
         let when_value = as_boolean_array(&when_value).map_err(|_| {
             internal_datafusion_err!("WHEN expression did not return a BooleanArray")
@@ -947,10 +1251,10 @@ impl CaseExpr {
         };
 
         // evaluate then_value
-        let then_value = self.when_then_expr[0].1.evaluate(batch)?;
+        let then_value = self.body.when_then_expr[0].1.evaluate(batch)?;
         let then_value = Scalar::new(then_value.into_array(1)?);
 
-        let Some(e) = self.else_expr() else {
+        let Some(e) = &self.body.else_expr else {
             return internal_err!("expression did not evaluate to an array");
         };
         // keep `else_expr`'s data type and return type consistent
@@ -959,12 +1263,17 @@ impl CaseExpr {
         Ok(ColumnarValue::Array(zip(&when_value, &then_value, &else_)?))
     }
 
-    fn expr_or_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.data_type(&batch.schema())?;
-
+    fn expr_or_expr(
+        &self,
+        batch: &RecordBatch,
+        projected: &ProjectedCaseBody,
+    ) -> Result<ColumnarValue> {
         // evaluate when condition on batch
-        let when_value = self.when_then_expr[0].0.evaluate(batch)?;
-        let when_value = when_value.into_array(batch.num_rows())?;
+        let when_value = self.body.when_then_expr[0].0.evaluate(batch)?;
+        // `num_rows == 1` is intentional to avoid expanding scalars.
+        // If the `when_value` is effectively a scalar, the 'all true' and 'all false' checks
+        // below will avoid incorrectly using the scalar as a merge/zip mask.
+        let when_value = when_value.into_array(1)?;
         let when_value = as_boolean_array(&when_value).map_err(|e| {
             DataFusionError::Context(
                 "WHEN expression did not return a BooleanArray".to_string(),
@@ -972,60 +1281,22 @@ impl CaseExpr {
             )
         })?;
 
-        // For the true and false/null selection vectors, bypass `evaluate_selection` and merging
-        // results. This avoids materializing the array for the other branch which we will discard
-        // entirely anyway.
         let true_count = when_value.true_count();
-        if true_count == batch.num_rows() {
-            return self.when_then_expr[0].1.evaluate(batch);
+        if true_count == when_value.len() {
+            // All input rows are true, just call the 'then' expression
+            self.body.when_then_expr[0].1.evaluate(batch)
         } else if true_count == 0 {
-            return self.else_expr.as_ref().unwrap().evaluate(batch);
-        }
-
-        // Treat 'NULL' as false value
-        let when_value = match when_value.null_count() {
-            0 => Cow::Borrowed(when_value),
-            _ => Cow::Owned(prep_null_mask_filter(when_value)),
-        };
-
-        let then_value = self.when_then_expr[0]
-            .1
-            .evaluate_selection(batch, &when_value)?
-            .into_array(batch.num_rows())?;
-
-        // evaluate else expression on the values not covered by when_value
-        let remainder = not(&when_value)?;
-        let e = self.else_expr.as_ref().unwrap();
-        // keep `else_expr`'s data type and return type consistent
-        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
-            .unwrap_or_else(|_| Arc::clone(e));
-        let else_ = expr
-            .evaluate_selection(batch, &remainder)?
-            .into_array(batch.num_rows())?;
-
-        Ok(ColumnarValue::Array(zip(&remainder, &else_, &then_value)?))
-    }
-
-    fn with_lookup_table(
-        &self,
-        batch: &RecordBatch,
-        scalars_or_null_lookup: &LiteralLookupTable,
-    ) -> Result<ColumnarValue> {
-        let expr = self.expr.as_ref().unwrap();
-        let evaluated_expression = expr.evaluate(batch)?;
-
-        let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
-        let evaluated_expression = evaluated_expression.to_array(1)?;
-
-        let output = scalars_or_null_lookup.create_output(&evaluated_expression)?;
-
-        let result = if is_scalar {
-            ColumnarValue::Scalar(ScalarValue::try_from_array(output.as_ref(), 0)?)
+            // All input rows are false/null, just call the 'else' expression
+            self.body.else_expr.as_ref().unwrap().evaluate(batch)
+        } else if projected.projection.len() < batch.num_columns() {
+            // The case expressions do not use all the columns of the input batch.
+            // Project first to reduce time spent filtering.
+            let projected_batch = batch.project(&projected.projection)?;
+            projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
-            ColumnarValue::Array(output)
-        };
-
-        Ok(result)
+            // All columns are used in the case expressions, so there is no need to project.
+            self.body.expr_or_expr(batch, when_value)
+        }
     }
 }
 
@@ -1036,35 +1307,20 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        // since all then results have the same data type, we can choose any one as the
-        // return data type except for the null.
-        let mut data_type = DataType::Null;
-        for i in 0..self.when_then_expr.len() {
-            data_type = self.when_then_expr[i].1.data_type(input_schema)?;
-            if !data_type.equals_datatype(&DataType::Null) {
-                break;
-            }
-        }
-        // if all then results are null, we use data type of else expr instead if possible.
-        if data_type.equals_datatype(&DataType::Null) {
-            if let Some(e) = &self.else_expr {
-                data_type = e.data_type(input_schema)?;
-            }
-        }
-
-        Ok(data_type)
+        self.body.data_type(input_schema)
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
         // this expression is nullable if any of the input expressions are nullable
         let then_nullable = self
+            .body
             .when_then_expr
             .iter()
             .map(|(_, t)| t.nullable(input_schema))
             .collect::<Result<Vec<_>>>()?;
         if then_nullable.contains(&true) {
             Ok(true)
-        } else if let Some(e) = &self.else_expr {
+        } else if let Some(e) = &self.body.else_expr {
             e.nullable(input_schema)
         } else {
             // CASE produces NULL if there is no `else` expr
@@ -1074,23 +1330,23 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        match self.eval_method {
-            EvalMethod::WithExpression => {
+        match &self.eval_method {
+            EvalMethod::WithExpression(p) => {
                 // this use case evaluates "expr" and then compares the values with the "when"
                 // values
-                self.case_when_with_expr(batch)
+                self.case_when_with_expr(batch, p)
             }
-            EvalMethod::NoExpression => {
+            EvalMethod::NoExpression(p) => {
                 // The "when" conditions all evaluate to boolean in this use case and can be
                 // arbitrary expressions
-                self.case_when_no_expr(batch)
+                self.case_when_no_expr(batch, p)
             }
             EvalMethod::InfallibleExprOrNull => {
                 // Specialization for CASE WHEN expr THEN column [ELSE NULL] END
                 self.case_column_or_null(batch)
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
-            EvalMethod::ExpressionOrExpression => self.expr_or_expr(batch),
+            EvalMethod::ExpressionOrExpression(p) => self.expr_or_expr(batch, p),
             EvalMethod::WithExprScalarLookupTable(ref e) => {
                 self.with_lookup_table(batch, e)
             }
@@ -1099,15 +1355,15 @@ impl PhysicalExpr for CaseExpr {
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         let mut children = vec![];
-        if let Some(expr) = &self.expr {
+        if let Some(expr) = &self.body.expr {
             children.push(expr)
         }
-        self.when_then_expr.iter().for_each(|(cond, value)| {
+        self.body.when_then_expr.iter().for_each(|(cond, value)| {
             children.push(cond);
             children.push(value);
         });
 
-        if let Some(else_expr) = &self.else_expr {
+        if let Some(else_expr) = &self.body.else_expr {
             children.push(else_expr)
         }
         children
@@ -1122,7 +1378,7 @@ impl PhysicalExpr for CaseExpr {
             internal_err!("CaseExpr: Wrong number of children")
         } else {
             let (expr, when_then_expr, else_expr) =
-                match (self.expr().is_some(), self.else_expr().is_some()) {
+                match (self.expr().is_some(), self.body.else_expr.is_some()) {
                     (true, true) => (
                         Some(&children[0]),
                         &children[1..children.len() - 1],
@@ -1148,12 +1404,12 @@ impl PhysicalExpr for CaseExpr {
 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "CASE ")?;
-        if let Some(e) = &self.expr {
+        if let Some(e) = &self.body.expr {
             e.fmt_sql(f)?;
             write!(f, " ")?;
         }
 
-        for (w, t) in &self.when_then_expr {
+        for (w, t) in &self.body.when_then_expr {
             write!(f, "WHEN ")?;
             w.fmt_sql(f)?;
             write!(f, " THEN ")?;
@@ -1161,7 +1417,7 @@ impl PhysicalExpr for CaseExpr {
             write!(f, " ")?;
         }
 
-        if let Some(e) = &self.else_expr {
+        if let Some(e) = &self.body.else_expr {
             write!(f, "ELSE ")?;
             e.fmt_sql(f)?;
             write!(f, " ")?;
@@ -1186,7 +1442,7 @@ mod tests {
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -1906,7 +2162,7 @@ mod tests {
         let expr = CaseExpr::try_new(None, vec![(when, then)], Some(else_expr))?;
         assert!(matches!(
             expr.eval_method,
-            EvalMethod::ExpressionOrExpression
+            EvalMethod::ExpressionOrExpression(_)
         ));
         let result = expr
             .evaluate(&batch)?
@@ -2544,279 +2800,53 @@ mod tests {
     }
 
     #[test]
-    fn test_with_fixed_size_bytes_to_string() {
-        test_fixed_binary_casted_to_string(DataType::FixedSizeBinary(3));
+    fn test_merge_n() {
+        let a1 = StringArray::from(vec![Some("A")]).to_data();
+        let a2 = StringArray::from(vec![Some("B")]).to_data();
+        let a3 = StringArray::from(vec![Some("C"), Some("D")]).to_data();
+
+        let indices = vec![
+            PartialResultIndex::none(),
+            PartialResultIndex::try_new(1).unwrap(),
+            PartialResultIndex::try_new(0).unwrap(),
+            PartialResultIndex::none(),
+            PartialResultIndex::try_new(2).unwrap(),
+            PartialResultIndex::try_new(2).unwrap(),
+        ];
+
+        let merged = merge_n(&[a1, a2, a3], &indices).unwrap();
+        let merged = merged.as_string::<i32>();
+
+        assert_eq!(merged.len(), indices.len());
+        assert!(!merged.is_valid(0));
+        assert!(merged.is_valid(1));
+        assert_eq!(merged.value(1), "B");
+        assert!(merged.is_valid(2));
+        assert_eq!(merged.value(2), "A");
+        assert!(!merged.is_valid(3));
+        assert!(merged.is_valid(4));
+        assert_eq!(merged.value(4), "C");
+        assert!(merged.is_valid(5));
+        assert_eq!(merged.value(5), "D");
     }
 
     #[test]
-    fn test_with_string_view_to_string() {
-        test_string_casted_to_string(DataType::Utf8View);
-    }
+    fn test_merge() {
+        let a1 = Arc::new(StringArray::from(vec![Some("A"), Some("C")]));
+        let a2 = Arc::new(StringArray::from(vec![Some("B")]));
 
-    #[test]
-    fn test_with_binary_view_to_string() {
-        test_string_casted_to_string(DataType::BinaryView);
-    }
+        let mask = BooleanArray::from(vec![true, false, true]);
 
-    fn test_string_casted_to_string(input_data_type: DataType) {
-        let mut lookup_map = create_lookup([
-            (Some("why".to_string()), Some("one")),
-            (Some("what".to_string()), Some("two")),
-            (Some("when".to_string()), Some("three")),
-        ]);
+        let merged =
+            merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
+        let merged = merged.as_string::<i32>();
 
-        // Cast all when to the input data type
-        lookup_map.iter_mut().for_each(|(when, _)| {
-            *when = when
-                .cast_to(&input_data_type)
-                .expect("should be able to cast");
-        });
-
-        let (input_values, expected) =
-            create_input_and_expected::<StringArray, StringArray, _, _>([
-                (Some("why"), Some("one")),
-                (Some("5"), None), // No match in WHEN
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some("what"), Some("two")),
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some("what"), Some("two")),
-                (Some("5"), None), // No match in WHEN
-            ]);
-
-        let input_values = arrow::compute::cast(&input_values, &input_data_type)
-            .expect("should be able to cast");
-
-        test_lookup_eval_with_and_without_else(
-            &lookup_map,
-            Arc::new(input_values),
-            expected,
-        );
-    }
-
-    fn test_fixed_binary_casted_to_string(input_data_type: DataType) {
-        let mut lookup_map = create_lookup([
-            (
-                ScalarValue::FixedSizeBinary(3, Some("why".as_bytes().to_vec())),
-                Some("one"),
-            ),
-            (
-                ScalarValue::FixedSizeBinary(3, Some("dad".as_bytes().to_vec())),
-                Some("two"),
-            ),
-            (
-                ScalarValue::FixedSizeBinary(3, Some("mom".as_bytes().to_vec())),
-                Some("three"),
-            ),
-        ]);
-
-        // Cast all when to the input data type
-        lookup_map.iter_mut().for_each(|(when, _)| {
-            *when = when
-                .cast_to(&input_data_type)
-                .expect("should be able to cast");
-        });
-
-        let (input_values, expected) =
-            create_input_and_expected::<FixedSizeBinaryArray, StringArray, _, _>([
-                (Some(b"why" as &[u8]), Some("one")),
-                (Some(b"555"), None), // No match in WHEN
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some(b"dad"), Some("two")),
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some(b"dad"), Some("two")),
-                (Some(b"555"), None), // No match in WHEN
-            ]);
-
-        let input_values = arrow::compute::cast(&input_values, &input_data_type)
-            .expect("should be able to cast");
-
-        test_lookup_eval_with_and_without_else(
-            &lookup_map,
-            Arc::new(input_values),
-            expected,
-        );
-    }
-
-    #[test]
-    fn test_large_string_to_string() {
-        test_string_casted_to_string(DataType::LargeUtf8);
-    }
-
-    #[test]
-    fn test_different_dictionary_keys_with_string_values_to_string() {
-        for key_type in [
-            DataType::Int8,
-            DataType::UInt8,
-            DataType::Int16,
-            DataType::UInt16,
-            DataType::Int32,
-            DataType::UInt32,
-            DataType::Int64,
-            DataType::UInt64,
-        ] {
-            test_string_casted_to_string(DataType::Dictionary(
-                Box::new(key_type),
-                Box::new(DataType::Utf8),
-            ));
-        }
-    }
-
-    #[test]
-    fn test_string_like_dictionary_to_string() {
-        for data_type in [DataType::Utf8, DataType::LargeUtf8] {
-            test_string_casted_to_string(
-                // test int
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(data_type)),
-            );
-        }
-    }
-
-    #[test]
-    fn test_binary_like_dictionary_to_string() {
-        for data_type in [
-            DataType::Binary,
-            DataType::LargeBinary,
-            DataType::FixedSizeBinary(3),
-        ] {
-            test_fixed_binary_casted_to_string(
-                // test int
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(data_type)),
-            );
-        }
-    }
-
-    fn test_dictionary_view_value_to_string(input_data_type: DataType) {
-        /// Because casting From String to Dictionary<Int32, StringView> or to Dictionary<Int32, BinaryView>
-        /// we need to do manual casting
-        fn cast_to_dictionary_of_view(
-            array_to_cast: &dyn Array,
-            input_data_type: &DataType,
-        ) -> ArrayRef {
-            let string_dictionary = arrow::compute::cast(
-                array_to_cast,
-                &DataType::Dictionary(
-                    Box::new(DataType::Int32),
-                    Box::new(DataType::Utf8),
-                ),
-            )
-            .expect("should be able to cast");
-
-            let string_dictionary = string_dictionary.as_dictionary::<Int32Type>();
-            let (keys, values) = string_dictionary.clone().into_parts();
-            let dictionary_values_casted = arrow::compute::cast(&values, input_data_type)
-                .expect("should be able to cast");
-
-            let final_dictionary_array =
-                DictionaryArray::new(keys, dictionary_values_casted);
-
-            Arc::new(final_dictionary_array)
-        }
-
-        let mut lookup_map = create_lookup([
-            (Some("why".to_string()), Some("one")),
-            (Some("what".to_string()), Some("two")),
-            (Some("when".to_string()), Some("three")),
-        ]);
-
-        // Cast all when to the input data type
-        lookup_map.iter_mut().for_each(|(when, _)| {
-            // First cast to dictionary of string
-            let when_array = when
-                .to_array_of_size(1)
-                .expect("should be able to convert scalar to array");
-            let casted_array = cast_to_dictionary_of_view(&when_array, &input_data_type);
-            *when = ScalarValue::try_from_array(&casted_array, 0)
-                .expect("should be able to convert array to scalar");
-        });
-
-        let (input_values, expected) =
-            create_input_and_expected::<StringArray, StringArray, _, _>([
-                (Some("why"), Some("one")),
-                (Some("5"), None), // No match in WHEN
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some("what"), Some("two")),
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some("what"), Some("two")),
-                (Some("5"), None), // No match in WHEN
-            ]);
-
-        let input_values = cast_to_dictionary_of_view(&input_values, &input_data_type);
-
-        test_lookup_eval_with_and_without_else(
-            &lookup_map,
-            Arc::new(input_values),
-            expected,
-        );
-    }
-
-    #[test]
-    fn test_string_and_binary_view_dictionary_to_string() {
-        for data_type in [DataType::Utf8View, DataType::BinaryView] {
-            test_dictionary_view_value_to_string(data_type);
-        }
-    }
-
-    #[test]
-    fn test_boolean_to_string_lookup_table() {
-        let lookup_map = create_lookup([
-            (Some(true), Some("one")),
-            (Some(false), Some("two")),
-            (Some(true), Some("three")),
-        ]);
-
-        let (input_values, expected) =
-            create_input_and_expected::<BooleanArray, StringArray, _, _>([
-                (Some(true), Some("one")),
-                (None, None),
-                (Some(false), Some("two")),
-                (Some(true), Some("one")),
-                (Some(false), Some("two")),
-                (Some(false), Some("two")),
-                (None, None),
-            ]);
-
-        test_lookup_eval_with_and_without_else(
-            &lookup_map,
-            Arc::new(input_values),
-            expected,
-        );
-    }
-
-    #[test]
-    fn test_with_strings_to_int32_with_different_else_type() {
-        let lookup_map = create_lookup([
-            (Some("why"), Some(42)),
-            (Some("what"), Some(22)),
-            (Some("when"), Some(17)),
-        ]);
-
-        let else_value = 101;
-
-        let (input_values, expected) =
-            create_input_and_expected::<StringArray, Int32Array, _, _>([
-                (Some("why"), Some(42)),
-                (Some("5"), Some(else_value)), // No match in WHEN
-                (None, Some(else_value)), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some("what"), Some(22)),
-                (None, Some(else_value)), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (None, Some(else_value)), // None cases are never match in CASE <expr> WHEN <value> syntax
-                (Some("what"), Some(22)),
-                (Some("5"), Some(else_value)), // No match in WHEN
-            ]);
-
-        let input_values = Arc::new(input_values) as ArrayRef;
-
-        // Test case
-        test_case_when_literal_lookup(
-            input_values,
-            &lookup_map,
-            Some(ScalarValue::Int8(Some(else_value as i8))),
-            Arc::new(expected),
-            // Assert not used as the else type is different than the then data types
-            AssertLookupEvaluation::NotUsed,
-        );
+        assert_eq!(merged.len(), mask.len());
+        assert!(merged.is_valid(0));
+        assert_eq!(merged.value(0), "A");
+        assert!(merged.is_valid(1));
+        assert_eq!(merged.value(1), "B");
+        assert!(merged.is_valid(2));
+        assert_eq!(merged.value(2), "C");
     }
 }
