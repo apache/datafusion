@@ -63,8 +63,7 @@ use object_store::{ObjectStore, PutPayload};
 // 1. Push down predicates for better filtering
 // 2. Avoid expensive JSON parsing at query time
 // 3. Leverage columnar storage benefits for the materialized fields
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn json_shredding() -> Result<()> {
     println!("=== Creating example data with flat columns and underscore prefixes ===");
 
     // Create sample data with flat columns using underscore prefixes

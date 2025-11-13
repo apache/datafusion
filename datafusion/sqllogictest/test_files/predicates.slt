@@ -767,15 +767,14 @@ physical_plan
 06)--------CoalesceBatchesExec: target_batch_size=8192
 07)----------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)], projection=[l_extendedprice@1, l_discount@2, p_partkey@3]
 08)------------CoalesceBatchesExec: target_batch_size=8192
-09)--------------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
-10)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], file_type=csv, has_header=true
-12)------------CoalesceBatchesExec: target_batch_size=8192
-13)--------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-14)----------------CoalesceBatchesExec: target_batch_size=8192
-15)------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
-16)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-17)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
+09)--------------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=1
+10)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], file_type=csv, has_header=true
+11)------------CoalesceBatchesExec: target_batch_size=8192
+12)--------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
+13)----------------CoalesceBatchesExec: target_batch_size=8192
+14)------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
+15)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+16)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
 
 # Simplification of a binary operator with a NULL value
 

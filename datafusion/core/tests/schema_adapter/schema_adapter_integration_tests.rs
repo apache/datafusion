@@ -284,12 +284,12 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     // Create a test factory
     let factory = Arc::new(UppercaseAdapterFactory {});
 
-    // Test ArrowSource
+    // Test ArrowFileSource
     {
         let schema =
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let table_schema = TableSchema::new(schema, vec![]);
-        let source = ArrowSource::new(table_schema);
+        let source = ArrowSource::new_file_source(table_schema);
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())

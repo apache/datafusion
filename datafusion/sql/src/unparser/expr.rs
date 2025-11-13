@@ -40,8 +40,8 @@ use arrow::datatypes::{
 };
 use arrow::util::display::array_value_to_string;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
-    ScalarValue,
+    assert_eq_or_internal_err, assert_or_internal_err, internal_datafusion_err,
+    internal_err, not_impl_err, plan_err, Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
@@ -447,9 +447,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::ScalarVariable(_, ids) => {
-                if ids.is_empty() {
-                    return internal_err!("Not a valid ScalarVariable");
-                }
+                assert_or_internal_err!(!ids.is_empty(), "Not a valid ScalarVariable");
 
                 Ok(if ids.len() == 1 {
                     ast::Expr::Identifier(
@@ -593,9 +591,11 @@ impl Unparser<'_> {
     }
 
     fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() != 2 {
-            return internal_err!("array_element must have exactly 2 arguments");
-        }
+        assert_eq_or_internal_err!(
+            args.len(),
+            2,
+            "array_element must have exactly 2 arguments"
+        );
         let array = self.expr_to_sql(&args[0])?;
         let index = self.expr_to_sql(&args[1])?;
         Ok(ast::Expr::CompoundFieldAccess {
@@ -605,9 +605,10 @@ impl Unparser<'_> {
     }
 
     fn named_struct_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if !args.len().is_multiple_of(2) {
-            return internal_err!("named_struct must have an even number of arguments");
-        }
+        assert_or_internal_err!(
+            args.len().is_multiple_of(2),
+            "named_struct must have an even number of arguments"
+        );
 
         let args = args
             .chunks_exact(2)
@@ -628,9 +629,11 @@ impl Unparser<'_> {
     }
 
     fn get_field_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() != 2 {
-            return internal_err!("get_field must have exactly 2 arguments");
-        }
+        assert_eq_or_internal_err!(
+            args.len(),
+            2,
+            "get_field must have exactly 2 arguments"
+        );
 
         let field = match &args[1] {
             Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
@@ -672,9 +675,7 @@ impl Unparser<'_> {
     }
 
     fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() != 2 {
-            return internal_err!("map must have exactly 2 arguments");
-        }
+        assert_eq_or_internal_err!(args.len(), 2, "map must have exactly 2 arguments");
 
         let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
         else {

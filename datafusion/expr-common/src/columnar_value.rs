@@ -113,10 +113,12 @@ impl ColumnarValue {
         }
     }
 
-    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
-    /// number of rows. [`Self::Scalar`] is converted by repeating the same
-    /// scalar multiple times which is not as efficient as handling the scalar
-    /// directly.
+    /// Convert any [`Self::Scalar`] into an Arrow [`ArrayRef`] with the specified
+    /// number of rows  by repeating the same scalar multiple times,
+    /// which is not as efficient as handling the scalar directly.
+    /// [`Self::Array`] will just be returned as is.
+    ///
+    /// See [`Self::into_array_of_size`] if you need to validate the length of the output array.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -135,6 +137,38 @@ impl ColumnarValue {
     /// number of rows. [`Self::Scalar`] is converted by repeating the same
     /// scalar multiple times which is not as efficient as handling the scalar
     /// directly.
+    /// This validates that if this is [`Self::Array`], it has the expected length.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size or
+    /// if the array length does not match the expected length
+    pub fn into_array_of_size(self, num_rows: usize) -> Result<ArrayRef> {
+        match self {
+            ColumnarValue::Array(array) => {
+                if array.len() == num_rows {
+                    Ok(array)
+                } else {
+                    internal_err!(
+                        "Array length {} does not match expected length {}",
+                        array.len(),
+                        num_rows
+                    )
+                }
+            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+        }
+    }
+
+    /// Convert any [`Self::Scalar`] into an Arrow [`ArrayRef`] with the specified
+    /// number of rows  by repeating the same scalar multiple times,
+    /// which is not as efficient as handling the scalar directly.
+    /// [`Self::Array`] will just be returned as is.
+    ///
+    /// See [`Self::to_array_of_size`] if you need to validate the length of the output array.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -147,6 +181,36 @@ impl ColumnarValue {
             ColumnarValue::Array(array) => Arc::clone(array),
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
         })
+    }
+
+    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
+    /// scalar multiple times which is not as efficient as handling the scalar
+    /// directly.
+    /// This validates that if this is [`Self::Array`], it has the expected length.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size or
+    /// if the array length does not match the expected length
+    pub fn to_array_of_size(&self, num_rows: usize) -> Result<ArrayRef> {
+        match self {
+            ColumnarValue::Array(array) => {
+                if array.len() == num_rows {
+                    Ok(Arc::clone(array))
+                } else {
+                    internal_err!(
+                        "Array length {} does not match expected length {}",
+                        array.len(),
+                        num_rows
+                    )
+                }
+            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+        }
     }
 
     /// Null columnar values are implemented as a null array in order to pass batch
@@ -248,6 +312,34 @@ impl fmt::Display for ColumnarValue {
 mod tests {
     use super::*;
     use arrow::array::Int32Array;
+
+    #[test]
+    fn into_array_of_size() {
+        // Array case
+        let arr = make_array(1, 3);
+        let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
+        assert_eq!(&arr_columnar_value.into_array_of_size(3).unwrap(), &arr);
+
+        // Scalar case
+        let scalar_columnar_value = ColumnarValue::Scalar(ScalarValue::Int32(Some(42)));
+        let expected_array = make_array(42, 100);
+        assert_eq!(
+            &scalar_columnar_value.into_array_of_size(100).unwrap(),
+            &expected_array
+        );
+
+        // Array case with wrong size
+        let arr = make_array(1, 3);
+        let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
+        let result = arr_columnar_value.into_array_of_size(5);
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().starts_with(
+                "Internal error: Array length 3 does not match expected length 5"
+            ),
+            "Found: {err}"
+        );
+    }
 
     #[test]
     fn values_to_arrays() {

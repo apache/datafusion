@@ -224,6 +224,10 @@ impl AggregateUDFImpl for ArrayAgg {
         datafusion_expr::ReversedUDAF::Reversed(array_agg_udaf())
     }
 
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

@@ -358,10 +358,6 @@ impl AggregateUDFImpl for PercentileCont {
         }
     }
 
-    fn supports_null_handling_clause(&self) -> bool {
-        false
-    }
-
     fn supports_within_group_clause(&self) -> bool {
         true
     }

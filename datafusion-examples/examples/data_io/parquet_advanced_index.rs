@@ -155,8 +155,7 @@ use url::Url;
 ///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable
 /// [Page Index](https://github.com/apache/parquet-format/blob/master/PageIndex.md)
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn parquet_advanced_index() -> Result<()> {
     // the object store is used to read the parquet files (in this case, it is
     // a local file system, but in a real system it could be S3, GCS, etc)
     let object_store: Arc<dyn ObjectStore> =
@@ -239,6 +238,7 @@ pub struct IndexTableProvider {
     /// if true, use row selections in addition to row group selections
     use_row_selections: AtomicBool,
 }
+
 impl IndexTableProvider {
     /// Create a new IndexTableProvider
     /// * `object_store` - the object store implementation to use for reading files
@@ -539,6 +539,7 @@ impl CachedParquetFileReaderFactory {
             metadata: HashMap::new(),
         }
     }
+
     /// Add the pre-parsed information about the file to the factor
     fn with_file(mut self, indexed_file: &IndexedFile) -> Self {
         self.metadata.insert(

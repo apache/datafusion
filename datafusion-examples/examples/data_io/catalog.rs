@@ -34,8 +34,8 @@ use std::{any::Any, collections::HashMap, path::Path, sync::Arc};
 use std::{fs::File, io::Write};
 use tempfile::TempDir;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Register the table into a custom catalog
+pub async fn catalog() -> Result<()> {
     env_logger::builder()
         .filter_level(log::LevelFilter::Info)
         .init();
@@ -134,12 +134,14 @@ struct DirSchemaOpts<'a> {
     dir: &'a Path,
     format: Arc<dyn FileFormat>,
 }
+
 /// Schema where every file with extension `ext` in a given `dir` is a table.
 #[derive(Debug)]
 struct DirSchema {
     ext: String,
     tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
 }
+
 impl DirSchema {
     async fn create(state: &SessionState, opts: DirSchemaOpts<'_>) -> Result<Arc<Self>> {
         let DirSchemaOpts { ext, dir, format } = opts;
@@ -172,6 +174,7 @@ impl DirSchema {
             ext: ext.to_string(),
         }))
     }
+
     #[allow(unused)]
     fn name(&self) -> &str {
         &self.ext
@@ -198,6 +201,7 @@ impl SchemaProvider for DirSchema {
         let tables = self.tables.read().unwrap();
         tables.contains_key(name)
     }
+
     fn register_table(
         &self,
         name: String,
@@ -223,6 +227,7 @@ impl SchemaProvider for DirSchema {
 struct DirCatalog {
     schemas: RwLock<HashMap<String, Arc<dyn SchemaProvider>>>,
 }
+
 impl DirCatalog {
     fn new() -> Self {
         Self {
@@ -230,10 +235,12 @@ impl DirCatalog {
         }
     }
 }
+
 impl CatalogProvider for DirCatalog {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn register_schema(
         &self,
         name: &str,
@@ -260,11 +267,13 @@ impl CatalogProvider for DirCatalog {
         }
     }
 }
+
 /// Catalog lists holds multiple catalog providers. Each context has a single catalog list.
 #[derive(Debug)]
 struct CustomCatalogProviderList {
     catalogs: RwLock<HashMap<String, Arc<dyn CatalogProvider>>>,
 }
+
 impl CustomCatalogProviderList {
     fn new() -> Self {
         Self {
@@ -272,10 +281,12 @@ impl CustomCatalogProviderList {
         }
     }
 }
+
 impl CatalogProviderList for CustomCatalogProviderList {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn register_catalog(
         &self,
         name: String,
