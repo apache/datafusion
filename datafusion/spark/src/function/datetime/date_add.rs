@@ -26,8 +26,7 @@ use datafusion_common::cast::{
     as_date32_array, as_int16_array, as_int32_array, as_int8_array,
 };
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, internal_err, DataFusionError,
-    Result,
+    assert_eq_or_internal_err, internal_err, DataFusionError, Result,
 };
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,

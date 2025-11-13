@@ -22,8 +22,8 @@ use arrow::array::{ArrayRef, AsArray, Date32Array};
 use arrow::datatypes::{DataType, Date32Type};
 use chrono::{Datelike, Duration, NaiveDate};
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, exec_datafusion_err, internal_err,
-    DataFusionError, Result, ScalarValue,
+    assert_eq_or_internal_err, exec_datafusion_err, internal_err, DataFusionError,
+    Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
