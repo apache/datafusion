@@ -471,7 +471,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let args = acc_args.try_into()?;
+        let args =
+            FFI_AccumulatorArgs::try_new(acc_args, self.udaf.task_ctx_provider.clone())?;
         unsafe {
             df_result!((self.udaf.accumulator)(&self.udaf, args))
                 .map(<Box<dyn Accumulator>>::from)
@@ -518,13 +519,15 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        let args = match FFI_AccumulatorArgs::try_from(args) {
-            Ok(v) => v,
-            Err(e) => {
-                log::warn!("Attempting to convert accumulator arguments: {e}");
-                return false;
-            }
-        };
+        let args =
+            match FFI_AccumulatorArgs::try_new(args, self.udaf.task_ctx_provider.clone())
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("Attempting to convert accumulator arguments: {e}");
+                    return false;
+                }
+            };
 
         unsafe { (self.udaf.groups_accumulator_supported)(&self.udaf, args) }
     }
@@ -533,7 +536,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        let args = FFI_AccumulatorArgs::try_from(args)?;
+        let args =
+            FFI_AccumulatorArgs::try_new(args, self.udaf.task_ctx_provider.clone())?;
 
         unsafe {
             df_result!((self.udaf.create_groups_accumulator)(&self.udaf, args))
@@ -549,7 +553,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        let args = args.try_into()?;
+        let args =
+            FFI_AccumulatorArgs::try_new(args, self.udaf.task_ctx_provider.clone())?;
         unsafe {
             df_result!((self.udaf.create_sliding_accumulator)(&self.udaf, args))
                 .map(<Box<dyn Accumulator>>::from)
