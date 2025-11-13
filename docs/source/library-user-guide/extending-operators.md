@@ -61,7 +61,7 @@ This example demonstrates creating a custom TopK operator that optimizes "find t
 
 ### Background
 
-A "Top K" node is a common query optimization used for queries like "find the top 3 customers by revenue". 
+A "Top K" node is a common query optimization used for queries like "find the top 3 customers by revenue".
 
 **Example SQL:**
 ```sql
@@ -93,13 +93,13 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     fn name(&self) -> &str {
         "TopK"
     }
-    fn inputs(&self) -> Vec {
+    fn inputs(&self) -> Vec<&LogicalPlan> {
         vec![&self.input]
     }
     fn schema(&self) -> &DFSchemaRef {
         self.input.schema()
     }
-    fn expressions(&self) -> Vec {
+    fn expressions(&self) -> Vec<Expr> {
         vec![self.expr.expr.clone()]
     }
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -107,9 +107,9 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     }
     fn with_exprs_and_inputs(
         &self,
-        mut exprs: Vec,
-        mut inputs: Vec,
-    ) -> Result {
+        mut exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
         Ok(Self {
             k: self.k,
             input: inputs.swap_remove(0),
@@ -126,16 +126,16 @@ impl OptimizerRule for TopKOptimizerRule {
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
-    ) -> Result<Transformed> {
+    ) -> Result<Transformed<LogicalPlan>> {
         // Look for pattern: Limit -> Sort and replace with TopK
         let LogicalPlan::Limit(ref limit) = plan else {
             return Ok(Transformed::no(plan));
         };
-        
+
         let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
             return Ok(Transformed::no(plan));
         };
-        
+
         if let LogicalPlan::Sort(Sort { ref expr, ref input, .. }) = limit.input.as_ref() {
             if expr.len() == 1 {
                 return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
@@ -147,7 +147,7 @@ impl OptimizerRule for TopKOptimizerRule {
                 })));
             }
         }
-        
+
         Ok(Transformed::no(plan))
     }
 }
@@ -162,11 +162,11 @@ impl ExtensionPlanner for TopKPlanner {
         _planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
-    ) -> Result<Option<Arc>> {
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(
-            if let Some(topk_node) = node.as_any().downcast_ref::() {
+            if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
                 Some(Arc::new(TopKExec::new(
                     physical_inputs[0].clone(),
                     topk_node.k,
@@ -182,7 +182,7 @@ impl ExtensionPlanner for TopKPlanner {
 #### 4. TopKExec - Physical Execution
 ```rust,ignore
 struct TopKExec {
-    input: Arc,
+    input: Arc<dyn ExecutionPlan>,
     k: usize,
     cache: PlanProperties,
 }
@@ -190,8 +190,8 @@ impl ExecutionPlan for TopKExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc,
-    ) -> Result {
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TopKReader {
             input: self.input.execute(partition, context)?,
             k: self.k,
@@ -212,9 +212,8 @@ let state = SessionStateBuilder::new()
     .with_query_planner(Arc::new(TopKQueryPlanner {}))
     .with_optimizer_rule(Arc::new(TopKOptimizerRule::default()))
     .build();
-    
+
 let ctx = SessionContext::new_with_state(state);
 ```
 
 For the complete implementation, see `datafusion/core/tests/user_defined/user_defined_plan.rs`.
-```
