@@ -18,12 +18,10 @@
 use std::sync::Arc;
 
 use abi_stable::StableAbi;
-use arrow::{
-    array::{make_array, ArrayRef},
-    datatypes::{Schema, SchemaRef},
-    error::ArrowError,
-    ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
-};
+use arrow::array::{make_array, ArrayRef};
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::error::ArrowError;
+use arrow::ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema};
 use log::error;
 
 /// This is a wrapper struct around FFI_ArrowSchema simply to indicate

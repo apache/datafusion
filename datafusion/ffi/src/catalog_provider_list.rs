@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, ffi::c_void, sync::Arc};
+use std::any::Any;
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{ROption, RString, RVec},
-    StableAbi,
-};
+use abi_stable::std_types::{ROption, RString, RVec};
+use abi_stable::StableAbi;
 use datafusion_catalog::{CatalogProvider, CatalogProviderList};
 use tokio::runtime::Handle;
 
@@ -262,10 +262,11 @@ impl CatalogProviderList for ForeignCatalogProviderList {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::catalog::{MemoryCatalogProvider, MemoryCatalogProviderList};
     use datafusion::prelude::SessionContext;
     use datafusion_execution::TaskContextProvider;
+
+    use super::*;
 
     #[test]
     fn test_round_trip_ffi_catalog_provider_list() {

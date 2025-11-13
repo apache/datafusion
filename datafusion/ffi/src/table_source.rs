@@ -88,8 +88,9 @@ impl From<TableType> for FFI_TableType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::error::Result;
+
+    use super::*;
 
     fn round_trip_filter_pushdown(pushdown: TableProviderFilterPushDown) -> Result<()> {
         let ffi_pushdown: FFI_TableProviderFilterPushDown = (&pushdown).into();

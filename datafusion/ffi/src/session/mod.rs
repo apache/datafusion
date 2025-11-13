@@ -15,19 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow_wrappers::WrappedSchema;
-use crate::execution::{FFI_TaskContext, FFI_TaskContextProvider};
-use crate::execution_plan::FFI_ExecutionPlan;
-use crate::session::config::FFI_SessionConfig;
-use crate::udaf::FFI_AggregateUDF;
-use crate::udf::FFI_ScalarUDF;
-use crate::udwf::FFI_WindowUDF;
-use crate::{df_result, rresult, rresult_return};
-use abi_stable::std_types::{RHashMap, RStr};
-use abi_stable::{
-    std_types::{RResult, RString, RVec},
-    StableAbi,
-};
+use std::any::Any;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::sync::Arc;
+
+use abi_stable::std_types::{RHashMap, RResult, RStr, RString, RVec};
+use abi_stable::StableAbi;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
@@ -45,20 +39,25 @@ use datafusion_expr::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
-use datafusion_proto::logical_plan::{
-    from_proto::parse_expr, to_proto::serialize_expr, DefaultLogicalExtensionCodec,
-};
-use datafusion_proto::physical_plan::{
-    from_proto::parse_physical_expr, to_proto::serialize_physical_expr,
-    DefaultPhysicalExtensionCodec,
-};
+use datafusion_proto::logical_plan::from_proto::parse_expr;
+use datafusion_proto::logical_plan::to_proto::serialize_expr;
+use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
+use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use datafusion_proto::protobuf::{LogicalExprNode, PhysicalExprNode};
 use datafusion_session::Session;
 use prost::Message;
-use std::any::Any;
-use std::collections::HashMap;
-use std::{ffi::c_void, sync::Arc};
 use tokio::runtime::Handle;
+
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::{FFI_TaskContext, FFI_TaskContextProvider};
+use crate::execution_plan::FFI_ExecutionPlan;
+use crate::session::config::FFI_SessionConfig;
+use crate::udaf::FFI_AggregateUDF;
+use crate::udf::FFI_ScalarUDF;
+use crate::udwf::FFI_WindowUDF;
+use crate::{df_result, rresult, rresult_return};
 
 pub mod config;
 
@@ -570,13 +569,15 @@ impl Session for ForeignSession {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::prelude::SessionContext;
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
-    use std::sync::Arc;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_ffi_session() -> Result<(), DataFusionError> {

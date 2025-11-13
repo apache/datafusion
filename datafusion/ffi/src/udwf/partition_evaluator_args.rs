@@ -15,29 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::arrow_wrappers::WrappedSchema;
-use crate::execution::FFI_TaskContextProvider;
-use abi_stable::{std_types::RVec, StableAbi};
-use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    error::ArrowError,
-    ffi::FFI_ArrowSchema,
-};
+use abi_stable::std_types::RVec;
+use abi_stable::StableAbi;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::error::ArrowError;
+use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
 use datafusion_common::{exec_datafusion_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::function::PartitionEvaluatorArgs;
-use datafusion_physical_plan::{expressions::Column, PhysicalExpr};
-use datafusion_proto::{
-    physical_plan::{
-        from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,
-        DefaultPhysicalExtensionCodec,
-    },
-    protobuf::PhysicalExprNode,
-};
+use datafusion_physical_plan::expressions::Column;
+use datafusion_physical_plan::PhysicalExpr;
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_exprs;
+use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+use datafusion_proto::protobuf::PhysicalExprNode;
 use prost::Message;
+
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContextProvider;
 
 /// A stable struct for sharing [`PartitionEvaluatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function

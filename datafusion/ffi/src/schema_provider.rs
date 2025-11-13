@@ -15,24 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, ffi::c_void, sync::Arc};
+use std::any::Any;
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
-    StableAbi,
-};
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use abi_stable::StableAbi;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{SchemaProvider, TableProvider};
 use datafusion_common::error::{DataFusionError, Result};
 use tokio::runtime::Handle;
 
-use crate::{
-    df_result, rresult_return,
-    table_provider::{FFI_TableProvider, ForeignTableProvider},
-};
-
 use crate::execution::FFI_TaskContextProvider;
+use crate::table_provider::{FFI_TableProvider, ForeignTableProvider};
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`SchemaProvider`] across FFI boundaries.
 #[repr(C)]
@@ -342,11 +339,13 @@ impl SchemaProvider for ForeignSchemaProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::Schema;
+    use datafusion::catalog::MemorySchemaProvider;
+    use datafusion::datasource::empty::EmptyTable;
     use datafusion::prelude::SessionContext;
-    use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
     use datafusion_execution::TaskContextProvider;
+
+    use super::*;
 
     fn empty_table() -> Arc<dyn TableProvider> {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))

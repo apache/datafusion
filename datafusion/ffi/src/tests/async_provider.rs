@@ -25,11 +25,10 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
-use super::create_record_batch;
-use crate::execution::FFI_TaskContextProvider;
-use crate::table_provider::FFI_TableProvider;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
@@ -42,10 +41,12 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 use futures::Stream;
-use tokio::{
-    runtime::Handle,
-    sync::{broadcast, mpsc},
-};
+use tokio::runtime::Handle;
+use tokio::sync::{broadcast, mpsc};
+
+use super::create_record_batch;
+use crate::execution::FFI_TaskContextProvider;
+use crate::table_provider::FFI_TableProvider;
 
 #[derive(Debug)]
 pub struct AsyncTableProvider {

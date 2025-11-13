@@ -15,27 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc};
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{RResult, RString, RVec},
-    StableAbi,
-};
-
-use crate::execution::FFI_TaskContextProvider;
-use crate::{df_result, rresult_return, table_provider::FFI_TableProvider};
+use abi_stable::std_types::{RResult, RString, RVec};
+use abi_stable::StableAbi;
 use datafusion_catalog::{TableFunctionImpl, TableProvider};
 use datafusion_common::error::Result;
 use datafusion_execution::TaskContext;
 use datafusion_expr::Expr;
-use datafusion_proto::{
-    logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
-    },
-    protobuf::LogicalExprList,
-};
+use datafusion_proto::logical_plan::from_proto::parse_exprs;
+use datafusion_proto::logical_plan::to_proto::serialize_exprs;
+use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+use datafusion_proto::protobuf::LogicalExprList;
 use prost::Message;
 use tokio::runtime::Handle;
+
+use crate::execution::FFI_TaskContextProvider;
+use crate::table_provider::FFI_TableProvider;
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
@@ -202,19 +200,18 @@ impl TableFunctionImpl for ForeignTableFunction {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::{
-        array::{
-            record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
-        },
-        datatypes::{DataType, Field, Schema},
+    use arrow::array::{
+        record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
     };
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::catalog::MemTable;
+    use datafusion::common::exec_err;
     use datafusion::logical_expr::ptr_eq::arc_ptr_eq;
-    use datafusion::prelude::SessionContext;
-    use datafusion::{
-        catalog::MemTable, common::exec_err, prelude::lit, scalar::ScalarValue,
-    };
+    use datafusion::prelude::{lit, SessionContext};
+    use datafusion::scalar::ScalarValue;
     use datafusion_execution::TaskContextProvider;
+
+    use super::*;
 
     #[derive(Debug)]
     struct TestUDTF {}

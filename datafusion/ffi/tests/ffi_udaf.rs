@@ -19,6 +19,8 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
+    use std::sync::Arc;
+
     use arrow::array::Float64Array;
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
@@ -26,7 +28,6 @@ mod tests {
     use datafusion::prelude::{col, SessionContext};
     use datafusion_execution::TaskContextProvider;
     use datafusion_ffi::tests::utils::get_module;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_ffi_udaf() -> Result<()> {

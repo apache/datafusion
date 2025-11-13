@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{
-    std_types::{ROption, RResult, RStr, RString, RVec},
-    StableAbi,
-};
+use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use abi_stable::std_types::{ROption, RResult, RStr, RString, RVec};
+use abi_stable::StableAbi;
 use accumulator::FFI_Accumulator;
 use accumulator_args::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 use arrow::datatypes::{DataType, Field};
@@ -26,26 +28,26 @@ use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
 use datafusion_common::error::Result;
 use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_expr::function::{
+    AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
+};
+use datafusion_expr::type_coercion::functions::fields_with_aggregate_udf;
+use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_expr::{
-    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-    type_coercion::functions::fields_with_aggregate_udf,
-    utils::AggregateOrderSensitivity,
     Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::FFI_GroupsAccumulator;
-use std::hash::{Hash, Hasher};
-use std::{ffi::c_void, sync::Arc};
-
-use crate::execution::FFI_TaskContextProvider;
-use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    df_result, rresult, rresult_return,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-    volatility::FFI_Volatility,
-};
 use prost::{DecodeError, Message};
+
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContextProvider;
+use crate::util::{
+    rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
+    vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped,
+};
+use crate::volatility::FFI_Volatility;
+use crate::{df_result, rresult, rresult_return};
 
 mod accumulator;
 mod accumulator_args;
@@ -626,17 +628,19 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::datatypes::Schema;
-    use datafusion::prelude::SessionContext;
-    use datafusion::{
-        common::create_array, functions_aggregate::sum::Sum,
-        physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
-        scalar::ScalarValue,
-    };
-    use datafusion_execution::TaskContextProvider;
     use std::any::Any;
     use std::collections::HashMap;
+
+    use arrow::datatypes::Schema;
+    use datafusion::common::create_array;
+    use datafusion::functions_aggregate::sum::Sum;
+    use datafusion::physical_expr::PhysicalSortExpr;
+    use datafusion::physical_plan::expressions::col;
+    use datafusion::prelude::SessionContext;
+    use datafusion::scalar::ScalarValue;
+    use datafusion_execution::TaskContextProvider;
+
+    use super::*;
 
     #[derive(Default, Debug, Hash, Eq, PartialEq)]
     struct SumWithCopiedMetadata {

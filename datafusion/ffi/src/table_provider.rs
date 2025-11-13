@@ -15,39 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, ffi::c_void, sync::Arc};
+use std::any::Any;
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
-    StableAbi,
-};
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use abi_stable::StableAbi;
 use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider};
-use datafusion_proto::{
-    logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
-    },
-    protobuf::LogicalExprList,
-};
-use prost::Message;
-use tokio::runtime::Handle;
-
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    df_result, rresult_return,
-    table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
-};
-
-use super::{execution_plan::FFI_ExecutionPlan, insert_op::FFI_InsertOp};
-use crate::execution::FFI_TaskContextProvider;
-use crate::session::{FFI_Session, ForeignSession};
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_proto::logical_plan::from_proto::parse_exprs;
+use datafusion_proto::logical_plan::to_proto::serialize_exprs;
+use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+use datafusion_proto::protobuf::LogicalExprList;
+use prost::Message;
+use tokio::runtime::Handle;
+
+use super::execution_plan::FFI_ExecutionPlan;
+use super::insert_op::FFI_InsertOp;
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContextProvider;
+use crate::session::{FFI_Session, ForeignSession};
+use crate::table_source::{FFI_TableProviderFilterPushDown, FFI_TableType};
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 ///
@@ -508,16 +504,17 @@ impl TableProvider for ForeignTableProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::Schema;
     use datafusion::prelude::{col, lit, SessionContext};
     use datafusion_execution::TaskContextProvider;
 
+    use super::*;
+
     fn create_test_table_provider() -> Result<Arc<dyn TableProvider>> {
         use arrow::datatypes::Field;
-        use datafusion::arrow::{
-            array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
-        };
+        use datafusion::arrow::array::Float32Array;
+        use datafusion::arrow::datatypes::DataType;
+        use datafusion::arrow::record_batch::RecordBatch;
         use datafusion::datasource::MemTable;
 
         let schema =
@@ -598,9 +595,9 @@ mod tests {
     #[tokio::test]
     async fn test_aggregation() -> Result<()> {
         use arrow::datatypes::Field;
-        use datafusion::arrow::{
-            array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
-        };
+        use datafusion::arrow::array::Float32Array;
+        use datafusion::arrow::datatypes::DataType;
+        use datafusion::arrow::record_batch::RecordBatch;
         use datafusion::common::assert_batches_eq;
         use datafusion::datasource::MemTable;
 

@@ -15,44 +15,40 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
-    StableAbi,
-};
-use arrow::datatypes::Schema;
-use arrow::{
-    compute::SortOptions,
-    datatypes::{DataType, SchemaRef},
-};
+use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use abi_stable::StableAbi;
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::{Field, FieldRef};
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_expr::{
-    function::WindowUDFFieldArgs, type_coercion::functions::fields_with_window_udf,
-    LimitEffect, PartitionEvaluator,
-};
-use datafusion_expr::{Signature, WindowUDF, WindowUDFImpl};
-use datafusion_physical_expr::PhysicalExpr;
-
 use datafusion_common::exec_err;
+use datafusion_expr::function::WindowUDFFieldArgs;
+use datafusion_expr::type_coercion::functions::fields_with_window_udf;
+use datafusion_expr::{
+    LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
+};
+use datafusion_physical_expr::PhysicalExpr;
 use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
-use std::hash::{Hash, Hasher};
-use std::{ffi::c_void, sync::Arc};
 
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
+use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContextProvider;
-use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    df_result, rresult, rresult_return,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-    volatility::FFI_Volatility,
+use crate::util::{
+    rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
+    vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped,
 };
+use crate::volatility::FFI_Volatility;
+use crate::{df_result, rresult, rresult_return};
 
 /// A stable struct for sharing a [`WindowUDF`] across FFI boundaries.
 #[repr(C)]
@@ -402,15 +398,17 @@ impl From<&FFI_SortOptions> for SortOptions {
 #[cfg(test)]
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use crate::tests::create_record_batch;
-    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+    use std::sync::Arc;
+
     use arrow::array::{create_array, ArrayRef};
     use datafusion::functions_window::lead_lag::{lag_udwf, WindowShift};
     use datafusion::logical_expr::expr::Sort;
     use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
     use datafusion::prelude::SessionContext;
     use datafusion_execution::TaskContextProvider;
-    use std::sync::Arc;
+
+    use crate::tests::create_record_batch;
+    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 
     fn create_test_foreign_udwf(
         original_udwf: impl WindowUDFImpl + 'static,

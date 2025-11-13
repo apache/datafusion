@@ -17,29 +17,28 @@
 
 use std::sync::Arc;
 
-use crate::arrow_wrappers::WrappedSchema;
-use crate::execution::FFI_TaskContextProvider;
-use abi_stable::{
-    std_types::{RString, RVec},
-    StableAbi,
-};
-use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
+use abi_stable::std_types::{RString, RVec};
+use abi_stable::StableAbi;
+use arrow::datatypes::Schema;
+use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
 use datafusion_common::error::DataFusionError;
-use datafusion_expr::function::AccumulatorArgs;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::TaskContext;
-use datafusion_proto::{
-    physical_plan::{
-        from_proto::{parse_physical_exprs, parse_physical_sort_exprs},
-        to_proto::{serialize_physical_exprs, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
-    },
-    protobuf::PhysicalAggregateExprNode,
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_proto::physical_plan::from_proto::{
+    parse_physical_exprs, parse_physical_sort_exprs,
 };
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_physical_exprs, serialize_physical_sort_exprs,
+};
+use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+use datafusion_proto::protobuf::PhysicalAggregateExprNode;
 use prost::Message;
+
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContextProvider;
 
 /// A stable struct for sharing [`AccumulatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding field
@@ -176,15 +175,17 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::prelude::SessionContext;
-    use datafusion::{
-        error::Result, logical_expr::function::AccumulatorArgs,
-        physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
-    };
-    use datafusion_execution::TaskContextProvider;
     use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::error::Result;
+    use datafusion::logical_expr::function::AccumulatorArgs;
+    use datafusion::physical_expr::PhysicalSortExpr;
+    use datafusion::physical_plan::expressions::col;
+    use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextProvider;
+
+    use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 
     #[test]
     fn test_round_trip_accumulator_args() -> Result<()> {

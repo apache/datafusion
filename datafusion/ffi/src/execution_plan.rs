@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, pin::Pin, sync::Arc};
+use std::ffi::c_void;
+use std::pin::Pin;
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{RResult, RString, RVec},
-    StableAbi,
-};
-use datafusion_common::error::DataFusionError;
-use datafusion_common::error::Result;
+use abi_stable::std_types::{RResult, RString, RVec};
+use abi_stable::StableAbi;
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -30,10 +29,9 @@ use datafusion_physical_plan::{
 use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
-use crate::{
-    df_result, plan_properties::FFI_PlanProperties,
-    record_batch_stream::FFI_RecordBatchStream, rresult, rresult_return,
-};
+use crate::plan_properties::FFI_PlanProperties;
+use crate::record_batch_stream::FFI_RecordBatchStream;
+use crate::{df_result, rresult, rresult_return};
 
 /// A stable struct for sharing a [`ExecutionPlan`] across FFI boundaries.
 #[repr(C)]
@@ -304,16 +302,13 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::{
-        physical_plan::{
-            execution_plan::{Boundedness, EmissionType},
-            Partitioning,
-        },
-        prelude::SessionContext,
-    };
+    use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion::physical_plan::Partitioning;
+    use datafusion::prelude::SessionContext;
     use datafusion_execution::TaskContextProvider;
+
+    use super::*;
 
     #[derive(Debug)]
     pub struct EmptyExec {

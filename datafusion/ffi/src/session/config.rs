@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{
-    std_types::{RHashMap, RString},
-    StableAbi,
-};
+use std::collections::HashMap;
+use std::ffi::c_void;
+
+use abi_stable::std_types::{RHashMap, RString};
+use abi_stable::StableAbi;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::config::SessionConfig;
-use std::{collections::HashMap, ffi::c_void};
 
 /// A stable struct for sharing [`SessionConfig`] across FFI boundaries.
 /// Instead of attempting to expose the entire SessionConfig interface, we

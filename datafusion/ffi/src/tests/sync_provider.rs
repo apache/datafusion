@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use datafusion_catalog::MemTable;
+
 use super::{create_record_batch, create_test_schema};
 use crate::execution::FFI_TaskContextProvider;
 use crate::table_provider::FFI_TableProvider;
-use datafusion_catalog::MemTable;
-use std::sync::Arc;
 
 pub(crate) fn create_sync_table_provider(
     task_ctx_provider: FFI_TaskContextProvider,

@@ -15,22 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, ops::Range};
+use std::ffi::c_void;
+use std::ops::Range;
 
-use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
-use abi_stable::{
-    std_types::{RResult, RString, RVec},
-    StableAbi,
-};
-use arrow::{array::ArrayRef, error::ArrowError};
-use datafusion_common::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
-use datafusion_expr::{window_state::WindowAggState, PartitionEvaluator};
+use abi_stable::std_types::{RResult, RString, RVec};
+use abi_stable::StableAbi;
+use arrow::array::ArrayRef;
+use arrow::error::ArrowError;
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::scalar::ScalarValue;
+use datafusion_expr::window_state::WindowAggState;
+use datafusion_expr::PartitionEvaluator;
 use prost::Message;
 
 use super::range::FFI_Range;
+use crate::arrow_wrappers::WrappedArray;
+use crate::{df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`PartitionEvaluator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -335,11 +335,12 @@ impl PartitionEvaluator for ForeignPartitionEvaluator {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::ArrayRef;
+    use datafusion::logical_expr::PartitionEvaluator;
+
     use crate::udwf::partition_evaluator::{
         FFI_PartitionEvaluator, ForeignPartitionEvaluator,
     };
-    use arrow::array::ArrayRef;
-    use datafusion::logical_expr::PartitionEvaluator;
 
     #[derive(Debug)]
     struct TestPartitionEvaluator {}

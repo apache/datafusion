@@ -15,17 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, task::Poll};
+use std::ffi::c_void;
+use std::task::Poll;
 
-use abi_stable::{
-    std_types::{ROption, RResult, RString},
-    StableAbi,
-};
-use arrow::array::{Array, RecordBatch};
-use arrow::{
-    array::{make_array, StructArray},
-    ffi::{from_ffi, to_ffi},
-};
+use abi_stable::std_types::{ROption, RResult, RString};
+use abi_stable::StableAbi;
+use arrow::array::{make_array, Array, RecordBatch, StructArray};
+use arrow::ffi::{from_ffi, to_ffi};
 use async_ffi::{ContextExt, FfiContext, FfiPoll};
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::{exec_datafusion_err, exec_err};
@@ -33,10 +29,8 @@ use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use futures::{Stream, TryStreamExt};
 use tokio::runtime::Handle;
 
-use crate::{
-    arrow_wrappers::{WrappedArray, WrappedSchema},
-    rresult,
-};
+use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
+use crate::rresult;
 
 /// A stable struct for sharing [`RecordBatchStream`] across FFI boundaries.
 /// We use the async-ffi crate for handling async calls across libraries.
@@ -213,13 +207,13 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::{
-        common::record_batch, error::Result, execution::SendableRecordBatchStream,
-        test_util::bounded_stream,
-    };
+    use datafusion::common::record_batch;
+    use datafusion::error::Result;
+    use datafusion::execution::SendableRecordBatchStream;
+    use datafusion::test_util::bounded_stream;
+    use futures::StreamExt;
 
     use super::FFI_RecordBatchStream;
-    use futures::StreamExt;
 
     #[tokio::test]
     async fn test_round_trip_record_batch_stream() -> Result<()> {

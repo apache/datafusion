@@ -25,21 +25,22 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
-use crate::catalog_provider::FFI_CatalogProvider;
-use crate::catalog_provider_list::FFI_CatalogProviderList;
-use crate::execution::FFI_TaskContextProvider;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
 use datafusion_catalog::{
     CatalogProvider, CatalogProviderList, MemTable, MemoryCatalogProvider,
     MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
 };
-use datafusion_common::{
-    error::{DataFusionError, Result},
-    exec_err,
-};
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::exec_err;
+
+use crate::catalog_provider::FFI_CatalogProvider;
+use crate::catalog_provider_list::FFI_CatalogProviderList;
+use crate::execution::FFI_TaskContextProvider;
 
 /// This schema provider is intended only for unit tests. It prepopulates with one
 /// table and only allows for tables named sales and purchases.

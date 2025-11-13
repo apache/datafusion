@@ -15,34 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc};
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use crate::execution::FFI_TaskContextProvider;
-use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
-use abi_stable::{
-    std_types::{
-        RResult::{self, ROk},
-        RString, RVec,
-    },
-    StableAbi,
-};
+use abi_stable::std_types::RResult::{self, ROk};
+use abi_stable::std_types::{RString, RVec};
+use abi_stable::StableAbi;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_plan::{
-    execution_plan::{Boundedness, EmissionType},
-    PlanProperties,
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::PlanProperties;
+use datafusion_proto::physical_plan::from_proto::{
+    parse_physical_sort_exprs, parse_protobuf_partitioning,
 };
-use datafusion_proto::{
-    physical_plan::{
-        from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
-        to_proto::{serialize_partitioning, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
-    },
-    protobuf::{Partitioning, PhysicalSortExprNodeCollection},
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_partitioning, serialize_physical_sort_exprs,
 };
+use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+use datafusion_proto::protobuf::{Partitioning, PhysicalSortExprNodeCollection};
 use prost::Message;
+
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContextProvider;
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
@@ -311,10 +308,12 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use datafusion::physical_expr::PhysicalSortExpr;
+    use datafusion::physical_plan::Partitioning;
     use datafusion::prelude::SessionContext;
-    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
     use datafusion_execution::TaskContextProvider;
+
+    use super::*;
 
     fn create_test_props() -> Result<PlanProperties> {
         use arrow::datatypes::{DataType, Field, Schema};

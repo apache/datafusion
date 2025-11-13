@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow_wrappers::WrappedSchema;
-use abi_stable::std_types::RVec;
-use arrow::datatypes::Field;
-use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
-use arrow_schema::FieldRef;
 use std::sync::Arc;
+
+use abi_stable::std_types::RVec;
+use arrow::datatypes::{DataType, Field};
+use arrow::ffi::FFI_ArrowSchema;
+use arrow_schema::FieldRef;
+
+use crate::arrow_wrappers::WrappedSchema;
 
 /// This macro is a helpful conversion utility to convert from an abi_stable::RResult to a
 /// DataFusion result.

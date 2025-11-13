@@ -15,22 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, ffi::c_void, sync::Arc};
+use std::any::Any;
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
-    StableAbi,
-};
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use abi_stable::StableAbi;
 use datafusion_catalog::{CatalogProvider, SchemaProvider};
 use datafusion_common::error::Result;
 use tokio::runtime::Handle;
 
-use crate::{
-    df_result, rresult_return,
-    schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider},
-};
-
 use crate::execution::FFI_TaskContextProvider;
+use crate::schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider};
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
 #[repr(C)]
@@ -325,10 +322,11 @@ impl CatalogProvider for ForeignCatalogProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
     use datafusion::prelude::SessionContext;
     use datafusion_execution::TaskContextProvider;
+
+    use super::*;
 
     #[test]
     fn test_round_trip_ffi_catalog_provider() {

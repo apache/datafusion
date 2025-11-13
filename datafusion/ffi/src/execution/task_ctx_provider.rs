@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::execution::task_ctx::FFI_TaskContext;
-use crate::{df_result, rresult};
-use abi_stable::std_types::RResult;
-use abi_stable::{std_types::RString, StableAbi};
+use std::ffi::c_void;
+use std::sync::{Arc, Weak};
+
+use abi_stable::std_types::{RResult, RString};
+use abi_stable::StableAbi;
 use datafusion_common::{exec_datafusion_err, DataFusionError};
 use datafusion_execution::{TaskContext, TaskContextProvider};
-use std::sync::Weak;
-use std::{ffi::c_void, sync::Arc};
+
+use crate::execution::task_ctx::FFI_TaskContext;
+use crate::{df_result, rresult};
 
 /// Struct for accessing the [`TaskContext`]. This method contains a weak
 /// reference, so there are no guarantees that the [`TaskContext`] remains
