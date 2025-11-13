@@ -328,10 +328,9 @@ impl SchemaProvider for ForeignSchemaProvider {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::datatypes::Schema;
     use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
-
-    use super::*;
 
     fn empty_table() -> Arc<dyn TableProvider> {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
@@ -391,5 +390,27 @@ mod tests {
             .expect("Unable to query table");
         assert!(returned_schema.is_some());
         assert!(foreign_schema_provider.table_exist("second_table"));
+    }
+
+    #[test]
+    fn test_ffi_schema_provider_local_bypass() {
+        let schema_provider = Arc::new(MemorySchemaProvider::new());
+
+        let mut ffi_schema = FFI_SchemaProvider::new(schema_provider, None);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();
+        assert!(foreign_schema
+            .as_any()
+            .downcast_ref::<MemorySchemaProvider>()
+            .is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_schema.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();
+        assert!(foreign_schema
+            .as_any()
+            .downcast_ref::<ForeignSchemaProvider>()
+            .is_some());
     }
 }

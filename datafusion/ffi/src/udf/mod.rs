@@ -44,6 +44,7 @@ use datafusion::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     },
 };
+use datafusion_common::internal_err;
 use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
@@ -65,13 +66,6 @@ pub struct FFI_ScalarUDF {
 
     /// FFI equivalent to the `volatility` of a [`ScalarUDF`]
     pub volatility: FFI_Volatility,
-
-    /// Determines the return type of the underlying [`ScalarUDF`] based on the
-    /// argument types.
-    pub return_type: unsafe extern "C" fn(
-        udf: &Self,
-        arg_types: RVec<WrappedSchema>,
-    ) -> RResult<WrappedSchema, RString>,
 
     /// Determines the return info of the underlying [`ScalarUDF`]. Either this
     /// or return_type may be implemented on a UDF.
@@ -132,21 +126,6 @@ impl FFI_ScalarUDF {
         let private_data = self.private_data as *const ScalarUDFPrivateData;
         unsafe { &(*private_data).udf }
     }
-}
-
-unsafe extern "C" fn return_type_fn_wrapper(
-    udf: &FFI_ScalarUDF,
-    arg_types: RVec<WrappedSchema>,
-) -> RResult<WrappedSchema, RString> {
-    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
-
-    let return_type = udf
-        .inner()
-        .return_type(&arg_types)
-        .and_then(|v| FFI_ArrowSchema::try_from(v).map_err(DataFusionError::from))
-        .map(WrappedSchema);
-
-    rresult!(return_type)
 }
 
 unsafe extern "C" fn return_field_from_args_fn_wrapper(
@@ -260,7 +239,6 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             volatility,
             short_circuits,
             invoke_with_args: invoke_with_args_fn_wrapper,
-            return_type: return_type_fn_wrapper,
             return_field_from_args: return_field_from_args_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -360,14 +338,8 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
-
-        let result = unsafe { (self.udf.return_type)(&self.udf, arg_types) };
-
-        let result = df_result!(result);
-
-        result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("ForeignScalarUDF implements return_field_from_args instead.")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -469,6 +441,29 @@ mod tests {
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&local_udf).try_into()?;
 
         assert_eq!(original_udf.name(), foreign_udf.name());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udf_local_bypass() -> Result<()> {
+        use datafusion::functions::math::abs::AbsFunc;
+        let original_udf = AbsFunc::new();
+        let original_udf = Arc::new(ScalarUDF::from(original_udf));
+
+        let mut ffi_udf = FFI_ScalarUDF::from(original_udf);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).try_into()?;
+        assert!(foreign_udf.as_any().downcast_ref::<AbsFunc>().is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).try_into()?;
+        assert!(foreign_udf
+            .as_any()
+            .downcast_ref::<ForeignScalarUDF>()
+            .is_some());
 
         Ok(())
     }

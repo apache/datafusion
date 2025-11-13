@@ -324,14 +324,13 @@ impl Accumulator for ForeignAccumulator {
 
 #[cfg(test)]
 mod tests {
+    use super::{FFI_Accumulator, ForeignAccumulator};
     use arrow::array::{make_array, Array};
     use datafusion::{
         common::create_array, error::Result,
         functions_aggregate::average::AvgAccumulator, logical_expr::Accumulator,
         scalar::ScalarValue,
     };
-
-    use super::FFI_Accumulator;
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
@@ -379,6 +378,37 @@ mod tests {
             original_supports_retract,
             foreign_accum.supports_retract_batch()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_accumulator_local_bypass() -> Result<()> {
+        let original_accum = AvgAccumulator::default();
+        let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
+        let original_size = boxed_accum.size();
+
+        let ffi_accum: FFI_Accumulator = boxed_accum.into();
+
+        // Verify local libraries can be downcast to their original
+        let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
+                as *const AvgAccumulator);
+            assert_eq!(original_size, concrete.size());
+        }
+
+        // Verify different library markers generate foreign accumulator
+        let original_accum = AvgAccumulator::default();
+        let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
+        let mut ffi_accum: FFI_Accumulator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
+                as *const ForeignAccumulator);
+            assert_eq!(original_size, concrete.size());
+        }
 
         Ok(())
     }

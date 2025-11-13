@@ -201,17 +201,17 @@ impl TableFunctionImpl for ForeignTableFunction {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::{
         array::{
             record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
         },
         datatypes::{DataType, Field, Schema},
     };
+    use datafusion::logical_expr::ptr_eq::arc_ptr_eq;
     use datafusion::{
         catalog::MemTable, common::exec_err, prelude::lit, scalar::ScalarValue,
     };
-
-    use super::*;
 
     #[derive(Debug)]
     struct TestUDTF {}
@@ -322,6 +322,24 @@ mod tests {
             ("field-2", UInt64, [3, 3, 3, 3])
         )?;
         assert_eq!(returned_batches[1], expected_batch_1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udtf_local_bypass() -> Result<()> {
+        let original_udtf = Arc::new(TestUDTF {}) as Arc<dyn TableFunctionImpl>;
+
+        let mut ffi_udtf = FFI_TableFunction::from(Arc::clone(&original_udtf));
+
+        // Verify local libraries can be downcast to their original
+        let foreign_udtf: Arc<dyn TableFunctionImpl> = ffi_udtf.clone().into();
+        assert!(arc_ptr_eq(&original_udtf, &foreign_udtf));
+
+        // Verify different library markers generate foreign providers
+        ffi_udtf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udtf: Arc<dyn TableFunctionImpl> = ffi_udtf.into();
+        assert!(!arc_ptr_eq(&original_udtf, &foreign_udtf));
 
         Ok(())
     }
