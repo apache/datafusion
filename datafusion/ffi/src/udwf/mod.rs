@@ -50,6 +50,7 @@ mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
+use crate::execution::FFI_TaskContextProvider;
 use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 use crate::{
     arrow_wrappers::WrappedSchema,
@@ -94,6 +95,10 @@ pub struct FFI_WindowUDF {
     ) -> RResult<RVec<WrappedSchema>, RString>,
 
     pub sort_options: ROption<FFI_SortOptions>,
+
+    /// Provider for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    pub task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -202,6 +207,7 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         sort_options: udwf.sort_options.clone(),
         coerce_types: coerce_types_fn_wrapper,
         field: field_fn_wrapper,
+        task_ctx_provider: udwf.task_ctx_provider.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         private_data: Box::into_raw(private_data) as *mut c_void,
@@ -215,8 +221,12 @@ impl Clone for FFI_WindowUDF {
     }
 }
 
-impl From<Arc<WindowUDF>> for FFI_WindowUDF {
-    fn from(udf: Arc<WindowUDF>) -> Self {
+impl FFI_WindowUDF {
+    pub fn new(
+        udf: Arc<WindowUDF>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
+    ) -> Self {
+        let task_ctx_provider = task_ctx_provider.into();
         let name = udf.name().into();
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
@@ -232,6 +242,7 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             sort_options,
             coerce_types: coerce_types_fn_wrapper,
             field: field_fn_wrapper,
+            task_ctx_provider,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -400,6 +411,7 @@ mod tests {
     use datafusion::logical_expr::expr::Sort;
     use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
     use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextProvider;
     use std::sync::Arc;
 
     fn create_test_foreign_udwf(
@@ -407,7 +419,8 @@ mod tests {
     ) -> datafusion::common::Result<WindowUDF> {
         let original_udwf = Arc::new(WindowUDF::from(original_udwf));
 
-        let mut local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let mut local_udwf = FFI_WindowUDF::new(Arc::clone(&original_udwf), ctx);
         local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;
@@ -418,9 +431,10 @@ mod tests {
     fn test_round_trip_udwf() -> datafusion::common::Result<()> {
         let original_udwf = lag_udwf();
         let original_name = original_udwf.name().to_owned();
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
 
         // Convert to FFI format
-        let mut local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+        let mut local_udwf = FFI_WindowUDF::new(Arc::clone(&original_udwf), ctx);
         local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
@@ -463,8 +477,9 @@ mod tests {
     #[test]
     fn test_ffi_udwf_local_bypass() -> datafusion_common::Result<()> {
         let original_udwf = Arc::new(WindowUDF::from(WindowShift::lag()));
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
 
-        let mut ffi_udwf = FFI_WindowUDF::from(original_udwf);
+        let mut ffi_udwf = FFI_WindowUDF::new(original_udwf, ctx);
 
         // Verify local libraries can be downcast to their original
         let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).try_into()?;

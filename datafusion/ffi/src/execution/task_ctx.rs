@@ -122,10 +122,16 @@ unsafe extern "C" fn aggregate_functions_fn_wrapper(
 unsafe extern "C" fn window_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
 ) -> RHashMap<RString, FFI_WindowUDF> {
+    let task_ctx_provider = &ctx.task_ctx_provider;
     let ctx = ctx.inner();
     ctx.window_functions()
         .iter()
-        .map(|(name, udf)| (name.to_owned().into(), FFI_WindowUDF::from(Arc::clone(udf))))
+        .map(|(name, udf)| {
+            (
+                name.to_owned().into(),
+                FFI_WindowUDF::new(Arc::clone(udf), task_ctx_provider.clone()),
+            )
+        })
         .collect()
 }
 
