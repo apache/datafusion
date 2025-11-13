@@ -34,6 +34,7 @@ use crate::{
     table_provider::{FFI_TableProvider, ForeignTableProvider},
 };
 
+use crate::execution::FFI_TaskContextProvider;
 use datafusion::error::Result;
 
 /// A stable struct for sharing [`SchemaProvider`] across FFI boundaries.
@@ -66,6 +67,10 @@ pub struct FFI_SchemaProvider {
         ) -> RResult<ROption<FFI_TableProvider>, RString>,
 
     pub table_exist: unsafe extern "C" fn(provider: &Self, name: RString) -> bool,
+
+    /// Provider for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    pub task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -187,14 +192,15 @@ unsafe extern "C" fn clone_fn_wrapper(
     FFI_SchemaProvider {
         owner_name: provider.owner_name.clone(),
         table_names: table_names_fn_wrapper,
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-        version: super::version,
-        private_data,
         table: table_fn_wrapper,
         register_table: register_table_fn_wrapper,
         deregister_table: deregister_table_fn_wrapper,
         table_exist: table_exist_fn_wrapper,
+        task_ctx_provider: provider.task_ctx_provider.clone(),
+        clone: clone_fn_wrapper,
+        release: release_fn_wrapper,
+        version: super::version,
+        private_data,
         library_marker_id: crate::get_library_marker_id,
     }
 }
@@ -210,21 +216,24 @@ impl FFI_SchemaProvider {
     pub fn new(
         provider: Arc<dyn SchemaProvider + Send>,
         runtime: Option<Handle>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
+        let task_ctx_provider = task_ctx_provider.into();
         let owner_name = provider.owner_name().map(|s| s.into()).into();
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
         Self {
             owner_name,
             table_names: table_names_fn_wrapper,
-            clone: clone_fn_wrapper,
-            release: release_fn_wrapper,
-            version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
             table: table_fn_wrapper,
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
+            task_ctx_provider,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -330,7 +339,9 @@ impl SchemaProvider for ForeignSchemaProvider {
 mod tests {
     use super::*;
     use arrow::datatypes::Schema;
+    use datafusion::prelude::SessionContext;
     use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
+    use datafusion_execution::TaskContextProvider;
 
     fn empty_table() -> Arc<dyn TableProvider> {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
@@ -345,7 +356,8 @@ mod tests {
             .unwrap()
             .is_none());
 
-        let mut ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let mut ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None, ctx);
         ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =
@@ -395,8 +407,9 @@ mod tests {
     #[test]
     fn test_ffi_schema_provider_local_bypass() {
         let schema_provider = Arc::new(MemorySchemaProvider::new());
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
 
-        let mut ffi_schema = FFI_SchemaProvider::new(schema_provider, None);
+        let mut ffi_schema = FFI_SchemaProvider::new(schema_provider, None, ctx);
 
         // Verify local libraries can be downcast to their original
         let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();

@@ -22,9 +22,9 @@ mod tests {
     use datafusion::catalog::{CatalogProvider, CatalogProviderList};
     use datafusion::prelude::SessionContext;
     use datafusion_common::DataFusionError;
+    use datafusion_execution::TaskContextProvider;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
-    use datafusion_execution::TaskContextProvider;
 
     #[tokio::test]
     async fn test_catalog() -> datafusion_common::Result<()> {

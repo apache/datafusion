@@ -29,6 +29,7 @@ use std::{any::Any, fmt::Debug, sync::Arc};
 
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
+use crate::execution::FFI_TaskContextProvider;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
 use datafusion::{
@@ -40,7 +41,6 @@ use datafusion::{
     datasource::MemTable,
     error::{DataFusionError, Result},
 };
-use crate::execution::FFI_TaskContextProvider;
 
 /// This schema provider is intended only for unit tests. It prepopulates with one
 /// table and only allows for tables named sales and purchases.
@@ -179,7 +179,9 @@ impl CatalogProvider for FixedCatalogProvider {
     }
 }
 
-pub(crate) extern "C" fn create_catalog_provider(task_ctx_provider: FFI_TaskContextProvider) -> FFI_CatalogProvider {
+pub(crate) extern "C" fn create_catalog_provider(
+    task_ctx_provider: FFI_TaskContextProvider,
+) -> FFI_CatalogProvider {
     let catalog_provider = Arc::new(FixedCatalogProvider::default());
     FFI_CatalogProvider::new(catalog_provider, None, task_ctx_provider)
 }
@@ -231,7 +233,9 @@ impl CatalogProviderList for FixedCatalogProviderList {
     }
 }
 
-pub(crate) extern "C" fn create_catalog_provider_list(task_ctx_provider: FFI_TaskContextProvider) -> FFI_CatalogProviderList {
+pub(crate) extern "C" fn create_catalog_provider_list(
+    task_ctx_provider: FFI_TaskContextProvider,
+) -> FFI_CatalogProviderList {
     let catalog_provider_list = Arc::new(FixedCatalogProviderList::default());
     FFI_CatalogProviderList::new(catalog_provider_list, None, task_ctx_provider)
 }
