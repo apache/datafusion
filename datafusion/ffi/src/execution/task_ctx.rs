@@ -49,7 +49,7 @@ pub struct FFI_TaskContext {
 
     pub window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
 
-    /// Accessor for TaskContext to be used during protobuf serialization
+    /// Provider for TaskContext to be used during protobuf serialization
     /// and deserialization.
     pub task_ctx_provider: FFI_TaskContextProvider,
 
