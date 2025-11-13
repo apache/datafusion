@@ -24,10 +24,13 @@ mod tests {
     use datafusion_common::DataFusionError;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
+    use datafusion_execution::TaskContextProvider;
 
     #[tokio::test]
     async fn test_catalog() -> datafusion_common::Result<()> {
         let module = get_module()?;
+        let ctx = Arc::new(SessionContext::default());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
         let ffi_catalog =
             module
@@ -35,10 +38,9 @@ mod tests {
                 .ok_or(DataFusionError::NotImplemented(
                     "External catalog provider failed to implement create_catalog"
                         .to_string(),
-                ))?();
+                ))?(task_ctx_provider.into());
         let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 
-        let ctx = SessionContext::default();
         let _ = ctx.register_catalog("fruit", foreign_catalog);
 
         let df = ctx.table("fruit.apple.purchases").await?;
@@ -56,17 +58,19 @@ mod tests {
     async fn test_catalog_list() -> datafusion_common::Result<()> {
         let module = get_module()?;
 
+        let ctx = Arc::new(SessionContext::default());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+
         let ffi_catalog_list =
             module
                 .create_catalog_list()
                 .ok_or(DataFusionError::NotImplemented(
                     "External catalog provider failed to implement create_catalog"
                         .to_string(),
-                ))?();
+                ))?(task_ctx_provider.into());
         let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
             (&ffi_catalog_list).into();
 
-        let ctx = SessionContext::default();
         ctx.register_catalog_list(foreign_catalog_list);
 
         let df = ctx.table("blue.apple.purchases").await?;

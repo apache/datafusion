@@ -47,6 +47,7 @@ use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
     create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
 };
+use crate::execution::FFI_TaskContextProvider;
 
 mod async_provider;
 pub mod catalog;
@@ -62,10 +63,10 @@ pub mod utils;
 /// module.
 pub struct ForeignLibraryModule {
     /// Construct an opinionated catalog provider
-    pub create_catalog: extern "C" fn() -> FFI_CatalogProvider,
+    pub create_catalog: extern "C" fn(FFI_TaskContextProvider) -> FFI_CatalogProvider,
 
     /// Construct an opinionated catalog provider list
-    pub create_catalog_list: extern "C" fn() -> FFI_CatalogProviderList,
+    pub create_catalog_list: extern "C" fn(FFI_TaskContextProvider) -> FFI_CatalogProviderList,
 
     /// Constructs the table provider
     pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,

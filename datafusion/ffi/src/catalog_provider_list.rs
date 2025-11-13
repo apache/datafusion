@@ -25,6 +25,7 @@ use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use tokio::runtime::Handle;
 
 use crate::catalog_provider::{FFI_CatalogProvider, ForeignCatalogProvider};
+use crate::execution::FFI_TaskContextProvider;
 
 /// A stable struct for sharing [`CatalogProviderList`] across FFI boundaries.
 #[repr(C)]
@@ -44,6 +45,10 @@ pub struct FFI_CatalogProviderList {
     /// Access a catalog
     pub catalog:
         unsafe extern "C" fn(&Self, name: RString) -> ROption<FFI_CatalogProvider>,
+
+    /// Provider for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    pub task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -97,12 +102,14 @@ unsafe extern "C" fn register_catalog_fn_wrapper(
     catalog: &FFI_CatalogProvider,
 ) -> ROption<FFI_CatalogProvider> {
     let runtime = provider.runtime();
-    let provider = provider.inner();
+    let inner_provider = provider.inner();
     let catalog: Arc<dyn CatalogProvider + Send> = catalog.into();
 
-    provider
+    inner_provider
         .register_catalog(name.into(), catalog)
-        .map(|catalog| FFI_CatalogProvider::new(catalog, runtime))
+        .map(|catalog| {
+            FFI_CatalogProvider::new(catalog, runtime, provider.task_ctx_provider.clone())
+        })
         .into()
 }
 
@@ -111,10 +118,12 @@ unsafe extern "C" fn catalog_fn_wrapper(
     name: RString,
 ) -> ROption<FFI_CatalogProvider> {
     let runtime = provider.runtime();
-    let provider = provider.inner();
-    provider
+    let inner_provider = provider.inner();
+    inner_provider
         .catalog(name.as_str())
-        .map(|catalog| FFI_CatalogProvider::new(catalog, runtime))
+        .map(|catalog| {
+            FFI_CatalogProvider::new(catalog, runtime, provider.task_ctx_provider.clone())
+        })
         .into()
 }
 
@@ -138,6 +147,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         register_catalog: register_catalog_fn_wrapper,
         catalog_names: catalog_names_fn_wrapper,
         catalog: catalog_fn_wrapper,
+        task_ctx_provider: provider.task_ctx_provider.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
@@ -157,13 +167,16 @@ impl FFI_CatalogProviderList {
     pub fn new(
         provider: Arc<dyn CatalogProviderList + Send>,
         runtime: Option<Handle>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
+        let task_ctx_provider = task_ctx_provider.into();
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
         Self {
             register_catalog: register_catalog_fn_wrapper,
             catalog_names: catalog_names_fn_wrapper,
             catalog: catalog_fn_wrapper,
+            task_ctx_provider,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -214,7 +227,11 @@ impl CatalogProviderList for ForeignCatalogProviderList {
             let catalog = match catalog.as_any().downcast_ref::<ForeignCatalogProvider>()
             {
                 Some(s) => &s.0,
-                None => &FFI_CatalogProvider::new(catalog, None),
+                None => &FFI_CatalogProvider::new(
+                    catalog,
+                    None,
+                    self.0.task_ctx_provider.clone(),
+                ),
             };
 
             (self.0.register_catalog)(&self.0, name.into(), catalog)
@@ -245,9 +262,10 @@ impl CatalogProviderList for ForeignCatalogProviderList {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::catalog::{MemoryCatalogProvider, MemoryCatalogProviderList};
-
     use super::*;
+    use datafusion::catalog::{MemoryCatalogProvider, MemoryCatalogProviderList};
+    use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextProvider;
 
     #[test]
     fn test_round_trip_ffi_catalog_provider_list() {
@@ -259,7 +277,8 @@ mod tests {
             .register_catalog("prior_catalog".to_owned(), prior_catalog)
             .is_none());
 
-        let mut ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None);
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let mut ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None, ctx);
         ffi_catalog_list.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
@@ -298,7 +317,8 @@ mod tests {
     fn test_ffi_catalog_provider_list_local_bypass() {
         let catalog_list = Arc::new(MemoryCatalogProviderList::new());
 
-        let mut ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None);
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let mut ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None, ctx);
 
         // Verify local libraries can be downcast to their original
         let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
