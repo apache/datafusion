@@ -465,20 +465,38 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         // - Correlation can't be calculated when a group only has 1 record, or when
         //   the `denominator` state is 0. In these cases, the final aggregation
         //   result should be `Null` (according to PostgreSQL's behavior).
+        // - However, if any of the accumulated values contain NaN, the result should
+        //   be NaN regardless of the count (even for single-row groups).
         //
         for i in 0..n {
-            if self.count[i] < 2 {
-                values.push(0.0);
-                nulls.append_null();
-                continue;
-            }
-
             let count = self.count[i];
             let sum_x = self.sum_x[i];
             let sum_y = self.sum_y[i];
             let sum_xy = self.sum_xy[i];
             let sum_xx = self.sum_xx[i];
             let sum_yy = self.sum_yy[i];
+
+            // Check for NaN in the sums BEFORE checking count
+            // If BOTH sum_x AND sum_y are NaN, then both input values are NaN → return NaN
+            // If only ONE of them is NaN, then only one input value is NaN → return NULL
+            // This takes precedence over the count < 2 check
+            if sum_x.is_nan() && sum_y.is_nan() {
+                // Both inputs are NaN → return NaN
+                values.push(f64::NAN);
+                nulls.append_non_null();
+                continue;
+            } else if sum_x.is_nan() || sum_y.is_nan() {
+                // Only one input is NaN → return NULL
+                values.push(0.0);
+                nulls.append_null();
+                continue;
+            }
+
+            if count < 2 {
+                values.push(0.0);
+                nulls.append_null();
+                continue;
+            }
 
             let mean_x = sum_x / count as f64;
             let mean_y = sum_y / count as f64;

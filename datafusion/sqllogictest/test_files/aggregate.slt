@@ -597,6 +597,64 @@ from data
 ----
 1
 
+# correlation_query_with_nans_f32
+query IR
+with data as (
+    select 1 id, 1 as f, 'nan'::float as b
+    union all
+    select 2 id, 'nan'::float as f, 1 as b
+    union all
+    select 3 id, 'nan'::float as f, null as b
+    union all
+    select 4 id, null as f, 'nan'::float as b
+    union all
+    select 5 id, 'nan'::float as f, 'nan'::float as b
+    union all
+    select 5 id, 1 as f, 1 as b
+    union all
+    select 6 id, 'nan'::float as f, 'nan'::float as b
+)
+select id, corr(f, b)
+from data
+group by id
+order by id
+----
+1 NULL
+2 NULL
+3 NULL
+4 NULL
+5 NaN
+6 NaN
+
+# correlation_query_with_nans_f64
+query IR
+with data as (
+    select 1 id, 1 as f, 'nan'::double as b
+    union all
+    select 2 id, 'nan'::double as f, 1 as b
+    union all
+    select 3 id, 'nan'::double as f, null as b
+    union all
+    select 4 id, null as f, 'nan'::double as b
+    union all
+    select 5 id, 'nan'::double as f, 'nan'::double as b
+    union all
+    select 5 id, 1 as f, 1 as b
+    union all
+    select 6 id, 'nan'::double as f, 'nan'::double as b
+)
+select id, corr(f, b)
+from data
+group by id
+order by id
+----
+1 NULL
+2 NULL
+3 NULL
+4 NULL
+5 NaN
+6 NaN
+
 # csv_query_variance_1
 query R
 SELECT var_pop(c2) FROM aggregate_test_100
