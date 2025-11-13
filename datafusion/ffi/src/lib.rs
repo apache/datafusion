@@ -43,6 +43,7 @@ pub mod udwf;
 pub mod util;
 pub mod volatility;
 
+mod extension_codec;
 #[cfg(feature = "integration-tests")]
 pub mod tests;
 
