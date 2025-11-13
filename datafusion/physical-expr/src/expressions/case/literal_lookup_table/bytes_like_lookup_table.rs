@@ -193,9 +193,6 @@ pub(super) struct BytesLikeIndexMap<Helper: BytesMapHelperWrapperTrait> {
     /// Map from non-null literal value the first occurrence index in the literals
     map: HashMap<Vec<u8>, u32>,
 
-    /// The index to return when no match is found
-    else_index: u32,
-
     _phantom_data: PhantomData<Helper>,
 }
 
@@ -203,7 +200,6 @@ impl<T: BytesMapHelperWrapperTrait> Debug for BytesLikeIndexMap<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BytesMapHelper")
             .field("map", &self.map)
-            .field("else_index", &self.else_index)
             .finish()
     }
 }
@@ -215,7 +211,6 @@ impl<Helper: BytesMapHelperWrapperTrait> BytesLikeIndexMap<Helper> {
     /// `literals` are guaranteed to be unique and non-nullable
     pub(super) fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
-        else_index: u32,
     ) -> datafusion_common::Result<Self> {
         let input = ScalarValue::iter_to_array(unique_non_null_literals)?;
 
@@ -236,7 +231,6 @@ impl<Helper: BytesMapHelperWrapperTrait> BytesLikeIndexMap<Helper> {
 
         Ok(Self {
             map,
-            else_index,
             _phantom_data: Default::default(),
         })
     }
@@ -245,12 +239,16 @@ impl<Helper: BytesMapHelperWrapperTrait> BytesLikeIndexMap<Helper> {
 impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
     for BytesLikeIndexMap<Helper>
 {
-    fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>> {
+    fn map_to_indices(
+        &self,
+        array: &ArrayRef,
+        else_index: u32,
+    ) -> datafusion_common::Result<Vec<u32>> {
         let bytes_iter = Helper::array_to_iter(array)?;
         let indices = bytes_iter
             .map(|value| match value {
-                Some(value) => self.map.get(value).copied().unwrap_or(self.else_index),
-                None => self.else_index,
+                Some(value) => self.map.get(value).copied().unwrap_or(else_index),
+                None => else_index,
             })
             .collect::<Vec<u32>>();
 

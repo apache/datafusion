@@ -21,9 +21,8 @@ use datafusion_common::{internal_err, ScalarValue};
 
 #[derive(Clone, Debug)]
 pub(super) struct BooleanIndexMap {
-    true_index: u32,
-    false_index: u32,
-    else_index: u32,
+    true_index: Option<u32>,
+    false_index: Option<u32>,
 }
 
 impl BooleanIndexMap {
@@ -33,7 +32,6 @@ impl BooleanIndexMap {
     /// `literals` are guaranteed to be unique and non-nullable
     pub(super) fn try_new(
         unique_non_null_literals: Vec<ScalarValue>,
-        else_index: u32,
     ) -> datafusion_common::Result<Self> {
         let mut true_index: Option<u32> = None;
         let mut false_index: Option<u32> = None;
@@ -70,22 +68,28 @@ impl BooleanIndexMap {
         }
 
         Ok(Self {
-            true_index: true_index.unwrap_or(else_index),
-            false_index: false_index.unwrap_or(else_index),
-            else_index,
+            true_index,
+            false_index,
         })
     }
 }
 
 impl WhenLiteralIndexMap for BooleanIndexMap {
-    fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>> {
+    fn map_to_indices(
+        &self,
+        array: &ArrayRef,
+        else_index: u32,
+    ) -> datafusion_common::Result<Vec<u32>> {
+        let true_index = self.true_index.unwrap_or(else_index);
+        let false_index = self.false_index.unwrap_or(else_index);
+
         Ok(array
             .as_boolean()
             .into_iter()
             .map(|value| match value {
-                Some(true) => self.true_index,
-                Some(false) => self.false_index,
-                None => self.else_index,
+                Some(true) => true_index,
+                Some(false) => false_index,
+                None => else_index,
             })
             .collect::<Vec<u32>>())
     }

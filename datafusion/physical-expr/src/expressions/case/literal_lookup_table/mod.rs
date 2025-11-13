@@ -78,6 +78,8 @@ pub(in super::super) struct LiteralLookupTable {
     /// The lookup table to use for evaluating the CASE expression
     lookup: Arc<dyn WhenLiteralIndexMap>,
 
+    else_index: u32,
+
     /// [`ArrayRef`] where `array[i] = then_literals[i]`
     /// the last value in the array is the else_expr
     ///
@@ -189,17 +191,15 @@ impl LiteralLookupTable {
                 .cloned(),
         )
         .ok()?;
+        // The else expression is in the end
+        let else_index = then_and_else_values.len() as u32 - 1;
 
-        let lookup = try_creating_lookup_table(
-            when,
-            // The else expression is in the end
-            then_and_else_values.len() as u32 - 1,
-        )
-        .ok()?;
+        let lookup = try_creating_lookup_table(when).ok()?;
 
         Some(Self {
             lookup,
             then_and_else_values,
+            else_index,
         })
     }
 
@@ -207,7 +207,7 @@ impl LiteralLookupTable {
         &self,
         expr_array: &ArrayRef,
     ) -> datafusion_common::Result<ArrayRef> {
-        let take_indices = self.lookup.map_to_indices(expr_array)?;
+        let take_indices = self.lookup.map_to_indices(expr_array, self.else_index)?;
 
         // Zero-copy conversion
         let take_indices = UInt32Array::from(take_indices);
@@ -228,12 +228,17 @@ impl LiteralLookupTable {
 /// The else index is used when a value is not found in the lookup table
 pub(super) trait WhenLiteralIndexMap: Debug + Send + Sync {
     /// Return indices to take from the literals based on the values in the given array
-    fn map_to_indices(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<u32>>;
+    ///
+    /// `else_index` is the index to use when a value is not found in the lookup table
+    fn map_to_indices(
+        &self,
+        array: &ArrayRef,
+        else_index: u32,
+    ) -> datafusion_common::Result<Vec<u32>>;
 }
 
 pub(crate) fn try_creating_lookup_table(
     unique_non_null_literals: Vec<ScalarValue>,
-    else_index: u32,
 ) -> datafusion_common::Result<Arc<dyn WhenLiteralIndexMap>> {
     assert_ne!(
         unique_non_null_literals.len(),
@@ -242,18 +247,15 @@ pub(crate) fn try_creating_lookup_table(
     );
     match unique_non_null_literals[0].data_type() {
         DataType::Boolean => {
-            let lookup_table =
-                BooleanIndexMap::try_new(unique_non_null_literals, else_index)?;
+            let lookup_table = BooleanIndexMap::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
         data_type if data_type.is_primitive() => {
             macro_rules! create_matching_map {
                 ($t:ty) => {{
-                    let lookup_table = PrimitiveIndexMap::<$t>::try_new(
-                        unique_non_null_literals,
-                        else_index,
-                    )?;
+                    let lookup_table =
+                        PrimitiveIndexMap::<$t>::try_new(unique_non_null_literals)?;
                     Ok(Arc::new(lookup_table))
                 }};
             }
@@ -270,43 +272,34 @@ pub(crate) fn try_creating_lookup_table(
         DataType::Utf8 => {
             let lookup_table = BytesLikeIndexMap::<
                 GenericBytesHelper<GenericStringType<i32>>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
         DataType::LargeUtf8 => {
             let lookup_table = BytesLikeIndexMap::<
                 GenericBytesHelper<GenericStringType<i64>>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
         DataType::Binary => {
             let lookup_table = BytesLikeIndexMap::<
                 GenericBytesHelper<GenericBinaryType<i32>>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
         DataType::LargeBinary => {
             let lookup_table = BytesLikeIndexMap::<
                 GenericBytesHelper<GenericBinaryType<i64>>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
         DataType::FixedSizeBinary(_) => {
             let lookup_table = BytesLikeIndexMap::<FixedBinaryHelper>::try_new(
                 unique_non_null_literals,
-                else_index,
             )?;
             Ok(Arc::new(lookup_table))
         }
@@ -315,7 +308,6 @@ pub(crate) fn try_creating_lookup_table(
             let lookup_table =
                 BytesLikeIndexMap::<GenericBytesViewHelper<StringViewType>>::try_new(
                     unique_non_null_literals,
-                    else_index,
                 )?;
             Ok(Arc::new(lookup_table))
         }
@@ -323,7 +315,6 @@ pub(crate) fn try_creating_lookup_table(
             let lookup_table =
                 BytesLikeIndexMap::<GenericBytesViewHelper<BinaryViewType>>::try_new(
                     unique_non_null_literals,
-                    else_index,
                 )?;
             Ok(Arc::new(lookup_table))
         }
@@ -334,7 +325,6 @@ pub(crate) fn try_creating_lookup_table(
                     create_lookup_table_for_dictionary_input::<$t>(
                         value.as_ref(),
                         unique_non_null_literals,
-                        else_index,
                     )
                 }};
             }
@@ -354,43 +344,34 @@ pub(crate) fn try_creating_lookup_table(
 fn create_lookup_table_for_dictionary_input<K: ArrowDictionaryKeyType + Send + Sync>(
     value: &DataType,
     unique_non_null_literals: Vec<ScalarValue>,
-    else_index: u32,
 ) -> datafusion_common::Result<Arc<dyn WhenLiteralIndexMap>> {
     // TODO - optimize dictionary to use different wrapper that takes advantage of it being a dictionary
     match value {
         DataType::Utf8 => {
             let lookup_table = BytesLikeIndexMap::<
                 BytesDictionaryHelper<K, GenericStringType<i32>>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
         DataType::LargeUtf8 => {
             let lookup_table = BytesLikeIndexMap::<
                 BytesDictionaryHelper<K, GenericStringType<i64>>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
         DataType::Binary => {
             let lookup_table = BytesLikeIndexMap::<
                 BytesDictionaryHelper<K, GenericBinaryType<i32>>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
         DataType::LargeBinary => {
             let lookup_table = BytesLikeIndexMap::<
                 BytesDictionaryHelper<K, GenericBinaryType<i64>>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
 
@@ -398,7 +379,6 @@ fn create_lookup_table_for_dictionary_input<K: ArrowDictionaryKeyType + Send + S
             let lookup_table =
                 BytesLikeIndexMap::<FixedBytesDictionaryHelper<K>>::try_new(
                     unique_non_null_literals,
-                    else_index,
                 )?;
             Ok(Arc::new(lookup_table))
         }
@@ -406,17 +386,13 @@ fn create_lookup_table_for_dictionary_input<K: ArrowDictionaryKeyType + Send + S
         DataType::Utf8View => {
             let lookup_table = BytesLikeIndexMap::<
                 BytesViewDictionaryHelper<K, StringViewType>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
         DataType::BinaryView => {
             let lookup_table = BytesLikeIndexMap::<
                 BytesViewDictionaryHelper<K, BinaryViewType>,
-            >::try_new(
-                unique_non_null_literals, else_index
-            )?;
+            >::try_new(unique_non_null_literals)?;
             Ok(Arc::new(lookup_table))
         }
         _ => Err(plan_datafusion_err!(
