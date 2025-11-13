@@ -50,12 +50,20 @@ Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/
 
 ## WITHIN GROUP / Ordered-set aggregates
 
-Some aggregate functions support the SQL `WITHIN GROUP (ORDER BY ...)` clause. This clause is used by
-ordered-set aggregate functions (for example, percentile and rank-like aggregations) to specify the ordering
-of inputs that the aggregate relies on. In DataFusion, only aggregate functions that explicitly opt into
-ordered-set semantics via their implementation will accept `WITHIN GROUP`; attempting to use `WITHIN GROUP`
-with a regular aggregate (for example `SUM(x) WITHIN GROUP (ORDER BY x)`) will fail during planning with an
-error. This matches Postgres semantics and ensures ordered-set behavior is opt-in for user-defined aggregates.
+Some aggregate functions accept the SQL `WITHIN GROUP (ORDER BY ...)` clause to specify the ordering the
+aggregate relies on. In DataFusion this is opt-in: only aggregate functions whose implementation returns
+`true` from `AggregateUDFImpl::supports_within_group_clause()` accept the `WITHIN GROUP` clause. Attempting to
+use `WITHIN GROUP` with a regular aggregate (for example, `SELECT SUM(x) WITHIN GROUP (ORDER BY x)`) will fail
+during planning with an error: "WITHIN GROUP is only supported for ordered-set aggregate functions".
+
+Currently, the built-in aggregate functions that support `WITHIN GROUP` are:
+
+- `percentile_cont` — exact percentile aggregate (also available as `percentile_cont(column, percentile)`)
+- `approx_percentile_cont` — approximate percentile using the t-digest algorithm
+- `approx_percentile_cont_with_weight` — approximate weighted percentile using the t-digest algorithm
+
+Note: rank-like functions such as `rank()`, `dense_rank()`, and `percent_rank()` are window functions and
+use the `OVER (...)` clause; they are not ordered-set aggregates that accept `WITHIN GROUP` in DataFusion.
 
 Example (ordered-set aggregate):
 
