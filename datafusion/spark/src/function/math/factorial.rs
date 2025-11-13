@@ -22,7 +22,9 @@ use arrow::array::{Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int32, Int64};
 use datafusion_common::cast::as_int32_array;
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, exec_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 
@@ -99,9 +101,7 @@ const FACTORIALS: [i64; 21] = [
 ];
 
 pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    if args.len() != 1 {
-        return internal_err!("`factorial` expects exactly one argument");
-    }
+    assert_eq_or_internal_err!(args.len(), 1, "`factorial` expects exactly one argument");
 
     match &args[0] {
         ColumnarValue::Scalar(ScalarValue::Int32(value)) => {

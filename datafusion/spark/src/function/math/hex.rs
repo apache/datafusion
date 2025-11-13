@@ -29,8 +29,9 @@ use arrow::{
 };
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::{
+    assert_eq_or_internal_err,
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
-    exec_err, internal_err, DataFusionError,
+    exec_err, DataFusionError,
 };
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
@@ -184,9 +185,7 @@ pub fn compute_hex(
     args: &[ColumnarValue],
     lowercase: bool,
 ) -> Result<ColumnarValue, DataFusionError> {
-    if args.len() != 1 {
-        return internal_err!("hex expects exactly one argument");
-    }
+    assert_eq_or_internal_err!(args.len(), 1, "hex expects exactly one argument");
 
     let input = match &args[0] {
         ColumnarValue::Scalar(value) => ColumnarValue::Array(value.to_array()?),

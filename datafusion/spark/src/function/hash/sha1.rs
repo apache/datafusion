@@ -24,7 +24,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_large_binary_array,
 };
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, exec_err, DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -117,10 +117,12 @@ fn spark_sha1_impl<'a>(input: impl Iterator<Item = Option<&'a [u8]>>) -> ArrayRe
 
 fn spark_sha1(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [input] = args else {
-        return internal_err!(
-            "Spark `sha1` function requires 1 argument, got {}",
-            args.len()
+        assert_eq_or_internal_err!(
+            args.len(),
+            1,
+            "Spark `sha1` function requires 1 argument"
         );
+        unreachable!()
     };
 
     match input.data_type() {
