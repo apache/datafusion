@@ -196,7 +196,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
             .create_initial_plan(logical_plan, session_state)
             .await?;
 
-        self.optimize_physical_plan(&plan, session_state, |_, _| {})
+        self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
 
     /// Create a physical expression from a logical expression
@@ -2062,7 +2062,7 @@ impl DefaultPhysicalPlanner {
                     .await?;
 
                 let optimized_plan = self.optimize_physical_plan(
-                    &physical_plan,
+                    physical_plan,
                     session_state,
                     |_plan, _optimizer| {},
                 )?;
@@ -2146,7 +2146,7 @@ impl DefaultPhysicalPlanner {
                     }
 
                     let optimized_plan = self.optimize_physical_plan(
-                        &input,
+                        input,
                         session_state,
                         |plan, optimizer| {
                             let optimizer_name = optimizer.name().to_string();
@@ -2246,9 +2246,10 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
+    #[allow(clippy::needless_pass_by_value)]
     pub fn optimize_physical_plan<F>(
         &self,
-        plan: &Arc<dyn ExecutionPlan>,
+        plan: Arc<dyn ExecutionPlan>,
         session_state: &SessionState,
         mut observer: F,
     ) -> Result<Arc<dyn ExecutionPlan>>
@@ -2267,9 +2268,9 @@ impl DefaultPhysicalPlanner {
 
         // This runs once before any optimization,
         // to verify that the plan fulfills the base requirements.
-        InvariantChecker(InvariantLevel::Always).check(plan)?;
+        InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
-        let mut new_plan = Arc::clone(plan);
+        let mut new_plan = Arc::clone(&plan);
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer

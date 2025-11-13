@@ -2377,16 +2377,17 @@ impl DataFrame {
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
     /// // Fill nulls in only columns "a" and "c":
-    /// let df = df.fill_null(&ScalarValue::from(0), &["a".to_owned(), "c".to_owned()])?;
+    /// let df = df.fill_null(ScalarValue::from(0), vec!["a".to_owned(), "c".to_owned()])?;
     /// // Fill nulls across all columns:
-    /// let df = df.fill_null(&ScalarValue::from(0), &[])?;
+    /// let df = df.fill_null(ScalarValue::from(0), vec![])?;
     /// # Ok(())
     /// # }
     /// ```
+    #[allow(clippy::needless_pass_by_value)]
     pub fn fill_null(
         &self,
-        value: &ScalarValue,
-        columns: &[String],
+        value: ScalarValue,
+        columns: Vec<String>,
     ) -> Result<DataFrame> {
         let cols = if columns.is_empty() {
             self.logical_plan()
@@ -2396,7 +2397,7 @@ impl DataFrame {
                 .map(|f| f.as_ref().clone())
                 .collect()
         } else {
-            self.find_columns(columns)?
+            self.find_columns(&columns)?
         };
 
         // Create projections for each column

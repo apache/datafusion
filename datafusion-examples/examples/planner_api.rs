@@ -124,7 +124,7 @@ async fn to_physical_plan_step_by_step_demo(
     // on DefaultPhysicalPlanner. Not all planners will provide this feature.
     let planner = DefaultPhysicalPlanner::default();
     let physical_plan =
-        planner.optimize_physical_plan(&physical_plan, &ctx.state(), |_, _| {})?;
+        planner.optimize_physical_plan(physical_plan, &ctx.state(), |_, _| {})?;
     println!(
         "Optimized physical plan:\n\n{}\n\n",
         displayable(physical_plan.as_ref()).indent(false)
