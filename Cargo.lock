@@ -2299,6 +2299,8 @@ dependencies = [
  "async-trait",
  "datafusion",
  "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
  "datafusion-functions-aggregate-common",
  "datafusion-proto",
  "datafusion-proto-common",
