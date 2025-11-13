@@ -482,8 +482,7 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                MemorySourceConfig::try_new_as_values(Arc::clone(schema.inner()), exprs)?
-                    as _
+                MemorySourceConfig::try_new_as_values(schema.inner(), &exprs)? as _
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,

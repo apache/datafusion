@@ -283,8 +283,8 @@ impl MemorySourceConfig {
 
     /// Create a new execution plan from a list of constant values (`ValuesExec`)
     pub fn try_new_as_values(
-        schema: SchemaRef,
-        data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+        schema: &SchemaRef,
+        data: &[Vec<Arc<dyn PhysicalExpr>>],
     ) -> Result<Arc<DataSourceExec>> {
         if data.is_empty() {
             return plan_err!("Values list cannot be empty");
@@ -326,13 +326,13 @@ impl MemorySourceConfig {
             .collect::<Result<Vec<_>>>()?;
 
         let batch = RecordBatch::try_new_with_options(
-            Arc::clone(&schema),
+            Arc::clone(schema),
             arrays,
             &RecordBatchOptions::new().with_row_count(Some(n_row)),
         )?;
 
         let partitions = vec![batch];
-        Self::try_new_from_batches(Arc::clone(&schema), partitions)
+        Self::try_new_from_batches(schema, partitions)
     }
 
     /// Create a new plan using the provided schema and batches.
@@ -340,7 +340,7 @@ impl MemorySourceConfig {
     /// Errors if any of the batches don't match the provided schema, or if no
     /// batches are provided.
     pub fn try_new_from_batches(
-        schema: SchemaRef,
+        schema: &SchemaRef,
         batches: Vec<RecordBatch>,
     ) -> Result<Arc<DataSourceExec>> {
         if batches.is_empty() {
@@ -349,7 +349,7 @@ impl MemorySourceConfig {
 
         for batch in &batches {
             let batch_schema = batch.schema();
-            if batch_schema != schema {
+            if batch_schema != *schema {
                 return plan_err!(
                     "Batch has invalid schema. Expected: {}, got: {}",
                     schema,
@@ -361,8 +361,8 @@ impl MemorySourceConfig {
         let partitions = vec![batches];
         let source = Self {
             partitions,
-            schema: Arc::clone(&schema),
-            projected_schema: Arc::clone(&schema),
+            schema: Arc::clone(schema),
+            projected_schema: Arc::clone(schema),
             projection: None,
             sort_information: vec![],
             show_sizes: true,
@@ -859,7 +859,7 @@ mod tests {
         let schema = batch.schema();
         let batches = vec![batch.clone(), batch];
 
-        let exec = MemorySourceConfig::try_new_from_batches(schema, batches).unwrap();
+        let exec = MemorySourceConfig::try_new_from_batches(&schema, batches).unwrap();
         assert_eq!(exec.fetch(), None);
 
         let exec = exec.with_fetch(Some(4)).unwrap();
@@ -881,7 +881,7 @@ mod tests {
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
         let schema = aggr_test_schema();
-        let empty = MemorySourceConfig::try_new_as_values(schema, vec![]);
+        let empty = MemorySourceConfig::try_new_as_values(&schema, &[]);
         assert!(empty.is_err());
         Ok(())
     }
@@ -891,14 +891,15 @@ mod tests {
         let batch = make_partition(7);
         let schema = batch.schema();
         let batches = vec![batch.clone(), batch];
-        let _exec = MemorySourceConfig::try_new_from_batches(schema, batches).unwrap();
+        let _exec = MemorySourceConfig::try_new_from_batches(&schema, batches).unwrap();
     }
 
     #[test]
     fn new_exec_with_batches_empty() {
         let batch = make_partition(7);
         let schema = batch.schema();
-        let _ = MemorySourceConfig::try_new_from_batches(schema, Vec::new()).unwrap_err();
+        let _ =
+            MemorySourceConfig::try_new_from_batches(&schema, Vec::new()).unwrap_err();
     }
 
     #[test]
@@ -910,7 +911,7 @@ mod tests {
             Field::new("col0", DataType::UInt32, false),
             Field::new("col1", DataType::Utf8, false),
         ]));
-        let _ = MemorySourceConfig::try_new_from_batches(invalid_schema, batches)
+        let _ = MemorySourceConfig::try_new_from_batches(&invalid_schema, batches)
             .unwrap_err();
     }
 
@@ -922,17 +923,11 @@ mod tests {
             DataType::UInt32,
             false,
         )]));
-        let _ = MemorySourceConfig::try_new_as_values(
-            Arc::clone(&schema),
-            vec![vec![lit(1u32)]],
-        )
-        .unwrap();
+        let data1 = vec![vec![lit(1u32)]];
+        let _ = MemorySourceConfig::try_new_as_values(&schema, &data1).unwrap();
         // Test that a null value is rejected
-        let _ = MemorySourceConfig::try_new_as_values(
-            schema,
-            vec![vec![lit(ScalarValue::UInt32(None))]],
-        )
-        .unwrap_err();
+        let data2 = vec![vec![lit(ScalarValue::UInt32(None))]];
+        let _ = MemorySourceConfig::try_new_as_values(&schema, &data2).unwrap_err();
     }
 
     #[test]
@@ -943,10 +938,9 @@ mod tests {
             vec![lit(ScalarValue::Null)],
         ];
         let rows = data.len();
-        let values = MemorySourceConfig::try_new_as_values(
-            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
-            data,
-        )?;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)]));
+        let values = MemorySourceConfig::try_new_as_values(&schema, &data)?;
 
         assert_eq!(
             values.partition_statistics(None)?,

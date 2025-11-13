@@ -581,7 +581,8 @@ impl DataSource for FileScanConfig {
         if let Some(filter) = self.file_source.filter() {
             // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
             // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
-            match Self::add_filter_equivalence_info(filter, &mut eq_properties, &schema) {
+            match Self::add_filter_equivalence_info(&filter, &mut eq_properties, &schema)
+            {
                 Ok(()) => {}
                 Err(e) => {
                     warn!("Failed to add filter equivalence info: {e}");
@@ -782,12 +783,12 @@ impl FileScanConfig {
     }
 
     fn add_filter_equivalence_info(
-        filter: Arc<dyn PhysicalExpr>,
+        filter: &Arc<dyn PhysicalExpr>,
         eq_properties: &mut EquivalenceProperties,
         schema: &Schema,
     ) -> Result<()> {
         // Gather valid equality pairs from the filter expression
-        let equal_pairs = split_conjunction(&filter).into_iter().filter_map(|expr| {
+        let equal_pairs = split_conjunction(filter).into_iter().filter_map(|expr| {
             // Ignore any binary expressions that reference non-existent columns in the current schema
             // (e.g. due to unnecessary projections being removed)
             reassign_expr_columns(Arc::clone(expr), schema)
@@ -1147,7 +1148,7 @@ impl PartitionColumnProjector {
     // - `partition_values`: the list of partition values, one for each partition column
     pub fn project(
         &mut self,
-        file_batch: RecordBatch,
+        file_batch: &RecordBatch,
         partition_values: &[ScalarValue],
     ) -> Result<RecordBatch> {
         let expected_cols =
@@ -1672,7 +1673,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                file_batch,
+                &file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -1700,7 +1701,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                file_batch,
+                &file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -1730,7 +1731,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                file_batch,
+                &file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -1758,7 +1759,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                file_batch,
+                &file_batch,
                 &[
                     ScalarValue::from("2021"),
                     ScalarValue::from("10"),

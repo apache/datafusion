@@ -215,7 +215,7 @@ impl FileStream {
                             self.file_stream_metrics.time_scanning_total.stop();
                             let result = self
                                 .pc_projector
-                                .project(batch, partition_values)
+                                .project(&batch, partition_values)
                                 .map(|batch| match &mut self.remain {
                                     Some(remain) => {
                                         if *remain > batch.num_rows() {

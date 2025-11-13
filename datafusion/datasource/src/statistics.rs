@@ -152,33 +152,29 @@ impl MinMaxStatistics {
             .into_iter()
             .unzip();
 
-        Self::new(
-            &min_max_sort_order,
-            &min_max_schema,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), min_values).map_err(
-                |e| {
-                    DataFusionError::ArrowError(
-                        Box::new(e),
-                        Some("\ncreate min batch".to_string()),
-                    )
-                },
-            )?,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), max_values).map_err(
-                |e| {
-                    DataFusionError::ArrowError(
-                        Box::new(e),
-                        Some("\ncreate max batch".to_string()),
-                    )
-                },
-            )?,
-        )
+        let min_batch = RecordBatch::try_new(Arc::clone(&min_max_schema), min_values)
+            .map_err(|e| {
+                DataFusionError::ArrowError(
+                    Box::new(e),
+                    Some("\ncreate min batch".to_string()),
+                )
+            })?;
+        let max_batch = RecordBatch::try_new(Arc::clone(&min_max_schema), max_values)
+            .map_err(|e| {
+                DataFusionError::ArrowError(
+                    Box::new(e),
+                    Some("\ncreate max batch".to_string()),
+                )
+            })?;
+
+        Self::new(&min_max_sort_order, &min_max_schema, &min_batch, &max_batch)
     }
 
     pub fn new(
         sort_order: &LexOrdering,
         schema: &SchemaRef,
-        min_values: RecordBatch,
-        max_values: RecordBatch,
+        min_values: &RecordBatch,
+        max_values: &RecordBatch,
     ) -> Result<Self> {
         use arrow::row::*;
 
@@ -423,7 +419,7 @@ pub async fn get_statistics_with_limit(
 /// A new file group with summary statistics attached
 pub fn compute_file_group_statistics(
     file_group: FileGroup,
-    file_schema: SchemaRef,
+    file_schema: &SchemaRef,
     collect_stats: bool,
 ) -> Result<FileGroup> {
     if !collect_stats {
@@ -434,7 +430,7 @@ pub fn compute_file_group_statistics(
         let stats = file.statistics.as_ref()?;
         Some(stats.as_ref())
     });
-    let statistics = Statistics::try_merge_iter(file_group_stats, &file_schema)?;
+    let statistics = Statistics::try_merge_iter(file_group_stats, file_schema)?;
 
     Ok(file_group.with_statistics(Arc::new(statistics)))
 }
@@ -458,18 +454,14 @@ pub fn compute_file_group_statistics(
 /// * The summary statistics across all file groups, aka all files summary statistics
 pub fn compute_all_files_statistics(
     file_groups: Vec<FileGroup>,
-    table_schema: SchemaRef,
+    table_schema: &SchemaRef,
     collect_stats: bool,
     inexact_stats: bool,
 ) -> Result<(Vec<FileGroup>, Statistics)> {
     let file_groups_with_stats = file_groups
         .into_iter()
         .map(|file_group| {
-            compute_file_group_statistics(
-                file_group,
-                Arc::clone(&table_schema),
-                collect_stats,
-            )
+            compute_file_group_statistics(file_group, table_schema, collect_stats)
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -479,7 +471,7 @@ pub fn compute_all_files_statistics(
         .filter_map(|file_group| file_group.file_statistics(None));
 
     let mut statistics =
-        Statistics::try_merge_iter(file_groups_statistics, &table_schema)?;
+        Statistics::try_merge_iter(file_groups_statistics, table_schema)?;
 
     if inexact_stats {
         statistics = statistics.to_inexact()
