@@ -26,7 +26,7 @@ mod tests {
     use datafusion::catalog::TableFunctionImpl;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
-
+    use datafusion_execution::TaskContextProvider;
     use datafusion_ffi::tests::utils::get_module;
 
     /// This test validates that we can load an external module and use a scalar
@@ -36,15 +36,17 @@ mod tests {
     async fn test_user_defined_table_function() -> Result<()> {
         let module = get_module()?;
 
+        let ctx = Arc::new(SessionContext::default());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+
         let ffi_table_func = module
             .create_table_function()
             .ok_or(DataFusionError::NotImplemented(
             "External table function provider failed to implement create_table_function"
                 .to_string(),
-        ))?();
+        ))?(task_ctx_provider.into());
         let foreign_table_func: Arc<dyn TableFunctionImpl> = ffi_table_func.into();
 
-        let ctx = SessionContext::default();
         ctx.register_udtf("my_range", foreign_table_func);
 
         let result = ctx

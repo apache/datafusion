@@ -70,14 +70,18 @@ pub struct ForeignLibraryModule {
         extern "C" fn(FFI_TaskContextProvider) -> FFI_CatalogProviderList,
 
     /// Constructs the table provider
-    pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,
+    pub create_table: extern "C" fn(
+        synchronous: bool,
+        task_ctx_provider: FFI_TaskContextProvider,
+    ) -> FFI_TableProvider,
 
     /// Create a scalar UDF
     pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
-    pub create_table_function: extern "C" fn() -> FFI_TableFunction,
+    pub create_table_function:
+        extern "C" fn(FFI_TaskContextProvider) -> FFI_TableFunction,
 
     /// Create an aggregate UDAF using sum
     pub create_sum_udaf: extern "C" fn() -> FFI_AggregateUDF,
@@ -118,10 +122,13 @@ pub fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
 
 /// Here we only wish to create a simple table provider as an example.
 /// We create an in-memory table and convert it to it's FFI counterpart.
-extern "C" fn construct_table_provider(synchronous: bool) -> FFI_TableProvider {
+extern "C" fn construct_table_provider(
+    synchronous: bool,
+    task_ctx_provider: FFI_TaskContextProvider,
+) -> FFI_TableProvider {
     match synchronous {
-        true => create_sync_table_provider(),
-        false => create_async_table_provider(),
+        true => create_sync_table_provider(task_ctx_provider),
+        false => create_async_table_provider(task_ctx_provider),
     }
 }
 

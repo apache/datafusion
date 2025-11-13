@@ -125,11 +125,12 @@ unsafe extern "C" fn table_fn_wrapper(
     name: RString,
 ) -> FfiFuture<RResult<ROption<FFI_TableProvider>, RString>> {
     let runtime = provider.runtime();
+    let task_ctx_provider = provider.task_ctx_provider.clone();
     let provider = Arc::clone(provider.inner());
 
     async move {
         let table = rresult_return!(provider.table(name.as_str()).await)
-            .map(|t| FFI_TableProvider::new(t, true, runtime))
+            .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_provider))
             .into();
 
         RResult::ROk(table)
@@ -143,12 +144,13 @@ unsafe extern "C" fn register_table_fn_wrapper(
     table: FFI_TableProvider,
 ) -> RResult<ROption<FFI_TableProvider>, RString> {
     let runtime = provider.runtime();
+    let task_ctx_provider = provider.task_ctx_provider.clone();
     let provider = provider.inner();
 
     let table = Arc::new(ForeignTableProvider(table));
 
     let returned_table = rresult_return!(provider.register_table(name.into(), table))
-        .map(|t| FFI_TableProvider::new(t, true, runtime));
+        .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_provider));
 
     RResult::ROk(returned_table.into())
 }
@@ -158,10 +160,11 @@ unsafe extern "C" fn deregister_table_fn_wrapper(
     name: RString,
 ) -> RResult<ROption<FFI_TableProvider>, RString> {
     let runtime = provider.runtime();
+    let task_ctx_provider = provider.task_ctx_provider.clone();
     let provider = provider.inner();
 
     let returned_table = rresult_return!(provider.deregister_table(name.as_str()))
-        .map(|t| FFI_TableProvider::new(t, true, runtime));
+        .map(|t| FFI_TableProvider::new(t, true, runtime, task_ctx_provider));
 
     RResult::ROk(returned_table.into())
 }
@@ -308,7 +311,12 @@ impl SchemaProvider for ForeignSchemaProvider {
         unsafe {
             let ffi_table = match table.as_any().downcast_ref::<ForeignTableProvider>() {
                 Some(t) => t.0.clone(),
-                None => FFI_TableProvider::new(table, true, None),
+                None => FFI_TableProvider::new(
+                    table,
+                    true,
+                    None,
+                    self.0.task_ctx_provider.clone(),
+                ),
             };
 
             let returned_provider: Option<FFI_TableProvider> =

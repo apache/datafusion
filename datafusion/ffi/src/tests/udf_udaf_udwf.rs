@@ -28,6 +28,7 @@ use datafusion::{
     logical_expr::{AggregateUDF, ScalarUDF, WindowUDF},
 };
 
+use crate::execution::FFI_TaskContextProvider;
 use std::sync::Arc;
 
 pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
@@ -42,10 +43,12 @@ pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
     udf.into()
 }
 
-pub(crate) extern "C" fn create_ffi_table_func() -> FFI_TableFunction {
+pub(crate) extern "C" fn create_ffi_table_func(
+    task_ctx_provider: FFI_TaskContextProvider,
+) -> FFI_TableFunction {
     let udtf: Arc<dyn TableFunctionImpl> = Arc::new(RangeFunc {});
 
-    FFI_TableFunction::new(udtf, None)
+    FFI_TableFunction::new(udtf, None, task_ctx_provider)
 }
 
 pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
