@@ -22,12 +22,12 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{
-    NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction,
+use datafusion_expr::{
+    expr,
+    expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
+    planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
+    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
 };
-use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
-use datafusion_expr::SortExpr;
-use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
