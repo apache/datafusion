@@ -61,7 +61,7 @@ mod tests {
             module
                 .create_catalog_list()
                 .ok_or(DataFusionError::NotImplemented(
-                    "External catalog provider failed to implement create_catalog"
+                    "External catalog provider failed to implement create_catalog_list"
                         .to_string(),
                 ))?();
         let foreign_catalog_list: ForeignCatalogProviderList = (&ffi_catalog_list).into();

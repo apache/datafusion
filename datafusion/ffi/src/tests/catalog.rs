@@ -31,11 +31,10 @@ use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion::catalog::{CatalogProviderList, MemoryCatalogProviderList};
 use datafusion::{
     catalog::{
-        CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider,
-        TableProvider,
+        CatalogProvider, CatalogProviderList, MemoryCatalogProvider,
+        MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
     },
     common::exec_err,
     datasource::MemTable,
@@ -223,7 +222,7 @@ impl CatalogProviderList for FixedCatalogProviderList {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         if !["blue", "red", "green", "yellow"].contains(&name.as_str()) {
-            log::warn!("FixedCatalogProviderList only provides four schemas: blue, red, green, yellow");
+            log::warn!("FixedCatalogProviderList only provides four catalogs: blue, red, green, yellow");
             return None;
         }
 

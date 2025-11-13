@@ -45,8 +45,8 @@ pub struct FFI_CatalogProviderList {
     pub catalog:
         unsafe extern "C" fn(&Self, name: RString) -> ROption<FFI_CatalogProvider>,
 
-    /// Used to create a clone on the provider of the execution plan. This should
-    /// only need to be called by the receiver of the plan.
+    /// Used to create a clone on the provider. This should only need to be called
+    /// by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
 
     /// Release the memory of the private data when it is no longer being used.
@@ -170,7 +170,7 @@ impl FFI_CatalogProviderList {
 /// This wrapper struct exists on the receiver side of the FFI interface, so it has
 /// no guarantees about being able to access the data in `private_data`. Any functions
 /// defined on this struct must only use the stable functions provided in
-/// FFI_CatalogProviderList to interact with the foreign table provider.
+/// FFI_CatalogProviderList to interact with the foreign catalog provider list.
 #[derive(Debug)]
 pub struct ForeignCatalogProviderList(FFI_CatalogProviderList);
 
