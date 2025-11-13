@@ -612,6 +612,8 @@ with data as (
     union all
     select 5 id, 1 as f, 1 as b
     union all
+    select 5 id, 2 as f, 2 as b
+    union all
     select 6 id, 'nan'::float as f, 'nan'::float as b
 )
 select id, corr(f, b)

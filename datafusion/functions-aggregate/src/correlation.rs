@@ -428,10 +428,8 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             let sum_xx = self.sum_xx[i];
             let sum_yy = self.sum_yy[i];
 
-            // Check for NaN in the sums BEFORE checking count
             // If BOTH sum_x AND sum_y are NaN, then both input values are NaN → return NaN
             // If only ONE of them is NaN, then only one input value is NaN → return NULL
-            // This takes precedence over the count < 2 check
             if sum_x.is_nan() && sum_y.is_nan() {
                 // Both inputs are NaN → return NaN
                 values.push(f64::NAN);
