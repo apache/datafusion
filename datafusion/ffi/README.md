@@ -119,8 +119,8 @@ it would not have knowledge of anything registered afterward.
 The `FFI_TaskContextProvider` is built from a trait that provides a method
 to get the current `TaskContext`. `FFI_TaskContextProvider` only holds a
 `Weak` reference to the `TaskContextProvider`, because otherwise we could
-create a circular dependency at runtime. It is imperative that if you use 
-these methods that your accessor  remains valid for the lifetime of the
+create a circular dependency at runtime. It is imperative that if you use
+these methods that your provider remains valid for the lifetime of the
 calls. The `FFI_TaskContextProvider` is implemented on `SessionContext`
 and it is easy to implement on an struct that implements `Session`.
 
