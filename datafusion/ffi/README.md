@@ -154,6 +154,48 @@ comparing the `library_marker_id` of this object to the `primary` program, we
 determine it is local code. This means it is safe to access the underlying
 private data.
 
+## Testing Coverage
+
+Since this library contains a large amount of `unsafe` code, it is important
+to ensure proper test coverage. To generate a coverage report, you can use
+[tarpaulin] as follows. It is necessary to use the `integration-tests` feature
+in order to properly generate coverage.
+
+```shell
+cargo tarpaulin --package datafusion-ffi --tests --features integration-tests --out Html
+```
+
+While it is not normally required to check Rust code for memory leaks, this
+crate does manual memory management due to the FFI boundary. You can test for
+leaks using the generated unit tests. How you run these checks differs depending
+on your OS.
+
+### Linux
+
+On Linux, you can install `cargo-valgrind`
+
+```shell
+cargo valgrind test --features integration-tests -p datafusion-ffi
+```
+
+### MacOS
+
+You can find the generated binaries for your unit tests by running `cargo test`.
+
+```shell
+cargo test --features integration-tests -p datafusion-ffi --no-run
+```
+
+This should generate output that shows the path to the test binaries. Then
+you can run commands such as the following. The specific paths of the tests
+will vary.
+
+```shell
+leaks --atExit -- target/debug/deps/datafusion_ffi-e77a2604a85a8afe
+leaks --atExit -- target/debug/deps/ffi_integration-e91b7127a59b71a7
+# ...
+```
+
 [apache datafusion]: https://datafusion.apache.org/
 [api docs]: http://docs.rs/datafusion-ffi/latest
 [rust abi]: https://doc.rust-lang.org/reference/abi.html
@@ -163,3 +205,4 @@ private data.
 [bindgen]: https://crates.io/crates/bindgen
 [`datafusion-python`]: https://datafusion.apache.org/python/
 [datafusion-contrib]: https://github.com/datafusion-contrib
+[tarpaulin]: https://crates.io/crates/cargo-tarpaulin
