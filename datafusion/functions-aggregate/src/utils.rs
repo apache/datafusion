@@ -17,8 +17,9 @@
 
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{downcast_array, Array, Float32Array, Float64Array};
 use arrow::datatypes::Schema;
+use arrow::{array::RecordBatch, datatypes::DataType};
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -44,7 +45,7 @@ pub(crate) fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarVal
 pub(crate) fn validate_percentile_expr(
     expr: &Arc<dyn PhysicalExpr>,
     fn_name: &str,
-) -> Result<f64> {
+) -> Result<Vec<f64>> {
     let scalar_value = get_scalar_value(expr).map_err(|_e| {
         DataFusionError::Plan(format!(
             "Percentile value for '{fn_name}' must be a literal"
@@ -52,8 +53,55 @@ pub(crate) fn validate_percentile_expr(
     })?;
 
     let percentile = match scalar_value {
-        ScalarValue::Float32(Some(value)) => value as f64,
-        ScalarValue::Float64(Some(value)) => value,
+        ScalarValue::Float32(Some(value)) => vec![value as f64],
+        ScalarValue::Float64(Some(value)) => vec![value],
+        ScalarValue::List(val) => {
+            let list  = val.as_ref();
+            if list.len() != 1 {
+                return plan_err!(
+                    "Percentile values for '{fn_name}' must be a single list literal"
+                );
+            }
+
+            let values = list.value(0); 
+            let result: Vec<f64> = match values.data_type() {
+                DataType::Float64 => {
+                    let arr: Float64Array = downcast_array(values.as_ref());
+                    (0..arr.len())
+                        .map(|i| {
+                            if arr.is_null(i) {
+                                plan_err!(
+                                    "Percentile values for '{fn_name}' must be non-null floats"
+                                )
+                            } else {
+                                Ok(arr.value(i))
+                            }
+                        })
+                        .collect::<Result<_>>()?
+                }
+                DataType::Float32 => {
+                    let arr: Float32Array = downcast_array(values.as_ref());
+                    (0..arr.len())
+                        .map(|i| {
+                            if arr.is_null(i) {
+                                plan_err!(
+                                    "Percentile values for '{fn_name}' must be non-null floats"
+                                )
+                            } else {
+                                Ok(arr.value(i) as f64)
+                            }
+                        })
+                        .collect::<Result<_>>()?
+                }
+                _ => {
+                    return plan_err!(
+                        "Percentile values for '{fn_name}' must be Float32 or Float64 literals"
+                    );
+                }
+            };
+
+            return Ok(result);
+        },
         sv => {
             return plan_err!(
                 "Percentile value for '{fn_name}' must be Float32 or Float64 literal (got data type {})",
@@ -62,11 +110,13 @@ pub(crate) fn validate_percentile_expr(
         }
     };
 
-    // Ensure the percentile is between 0 and 1.
-    if !(0.0..=1.0).contains(&percentile) {
-        return plan_err!(
-            "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
-        );
+    // Ensure each percentile is between 0 and 1.
+    for &p in &percentile {
+        if !(0.0..=1.0).contains(&p) {
+            return plan_err!(
+                "Percentile value must be between 0.0 and 1.0 inclusive, {p} is invalid"
+            );
+        }
     }
     Ok(percentile)
 }

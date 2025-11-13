@@ -20,7 +20,8 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrowNumericType, BooleanArray, ListArray, PrimitiveArray, PrimitiveBuilder,
+    ArrowNumericType, ArrowPrimitiveType, BooleanArray, ListArray, PrimitiveArray,
+    PrimitiveBuilder,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -141,10 +142,17 @@ impl Default for PercentileCont {
 impl PercentileCont {
     pub fn new() -> Self {
         let mut variants = Vec::with_capacity(NUMERICS.len());
-        // Accept any numeric value paired with a float64 percentile
+
+        let list_f64 =
+            DataType::List(Arc::new(Field::new("item", DataType::Float64, true)));
+
         for num in NUMERICS {
+            // Accept any numeric value paired with a float64 percentile
             variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
+            //Accept any numeric value paired with a list of float64 percentiles
+            variants.push(TypeSignature::Exact(vec![num.clone(), list_f64.clone()]));
         }
+
         Self {
             signature: Signature::one_of(variants, Volatility::Immutable)
                 .with_parameter_names(vec!["expr".to_string(), "percentile".to_string()])
@@ -154,7 +162,7 @@ impl PercentileCont {
     }
 
     fn create_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
+        let percentiles = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
         let is_descending = args
             .order_bys
@@ -162,10 +170,10 @@ impl PercentileCont {
             .map(|sort_expr| sort_expr.options.descending)
             .unwrap_or(false);
 
-        let percentile = if is_descending {
-            1.0 - percentile
+        let percentiles = if is_descending {
+            percentiles.iter().map(|&p| 1.0 - p).collect()
         } else {
-            percentile
+            percentiles
         };
 
         macro_rules! helper {
@@ -174,13 +182,13 @@ impl PercentileCont {
                     Ok(Box::new(DistinctPercentileContAccumulator::<$t> {
                         data_type: $dt.clone(),
                         distinct_values: HashSet::new(),
-                        percentile,
+                        percentiles,
                     }))
                 } else {
                     Ok(Box::new(PercentileContAccumulator::<$t> {
                         data_type: $dt.clone(),
                         all_values: vec![],
-                        percentile,
+                        percentiles,
                     }))
                 }
             };
@@ -230,20 +238,27 @@ impl AggregateUDFImpl for PercentileCont {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
+        let value_type = &arg_types[0];
+
+        if !value_type.is_numeric() {
             return plan_err!("percentile_cont requires numeric input types");
         }
+
+        let percentile_type = &arg_types[1];
+
         // PERCENTILE_CONT performs linear interpolation and should return a float type
         // For integer inputs, return Float64 (matching PostgreSQL/DuckDB behavior)
         // For float inputs, preserve the float type
-        match &arg_types[0] {
+        // For float list inputs, return a list of the appropriate float type
+
+        let elem_type = match value_type {
             DataType::Float16 | DataType::Float32 | DataType::Float64 => {
-                Ok(arg_types[0].clone())
+                value_type.clone()
             }
             DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => Ok(arg_types[0].clone()),
+            | DataType::Decimal256(_, _) => value_type.clone(),
             DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
@@ -251,12 +266,29 @@ impl AggregateUDFImpl for PercentileCont {
             | DataType::Int8
             | DataType::Int16
             | DataType::Int32
-            | DataType::Int64 => Ok(DataType::Float64),
-            // Shouldn't happen due to signature check, but just in case
-            dt => plan_err!(
-                "percentile_cont does not support input type {}, must be numeric",
-                dt
-            ),
+            | DataType::Int64 => DataType::Float64,
+            dt => {
+                return plan_err!(
+                    "percentile_cont does not support input type {}, must be numeric",
+                    dt
+                )
+            }
+        };
+
+        match percentile_type {
+            DataType::List(field) => {
+                if !field.data_type().is_numeric() {
+                    return plan_err!(
+                        "percentile_cont percentile list must be numeric, got {}",
+                        field.data_type()
+                    );
+                }
+
+                Ok(DataType::List(Arc::new(Field::new(
+                    "item", elem_type, true,
+                ))))
+            }
+            _ => Ok(elem_type),
         }
     }
 
@@ -311,7 +343,7 @@ impl AggregateUDFImpl for PercentileCont {
             );
         }
 
-        let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
+        let percentiles = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
         let is_descending = args
             .order_bys
@@ -319,16 +351,17 @@ impl AggregateUDFImpl for PercentileCont {
             .map(|sort_expr| sort_expr.options.descending)
             .unwrap_or(false);
 
-        let percentile = if is_descending {
-            1.0 - percentile
+        let percentiles = if is_descending {
+            percentiles.iter().map(|&p| 1.0 - p).collect()
         } else {
-            percentile
+            percentiles
         };
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
                 Ok(Box::new(PercentileContGroupsAccumulator::<$t>::new(
-                    $dt, percentile,
+                    $dt,
+                    percentiles,
                 )))
             };
         }
@@ -381,15 +414,15 @@ impl AggregateUDFImpl for PercentileCont {
 struct PercentileContAccumulator<T: ArrowNumericType> {
     data_type: DataType,
     all_values: Vec<T::Native>,
-    percentile: f64,
+    percentiles: Vec<f64>,
 }
 
 impl<T: ArrowNumericType> Debug for PercentileContAccumulator<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PercentileContAccumulator({}, percentile={})",
-            self.data_type, self.percentile
+            "PercentileContAccumulator({}, percentile={:?})",
+            self.data_type, self.percentiles
         )
     }
 }
@@ -444,8 +477,22 @@ impl<T: ArrowNumericType> Accumulator for PercentileContAccumulator<T> {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let d = std::mem::take(&mut self.all_values);
-        let value = calculate_percentile::<T>(d, self.percentile);
-        ScalarValue::new_primitive::<T>(value, &self.data_type)
+        let values = calculate_percentiles::<T>(d, &self.percentiles);
+
+        // Convert Vec<Option<T::Native>> -> Vec<ScalarValue>
+        let mut scalars: Vec<ScalarValue> = Vec::with_capacity(values.len());
+        for v in &values {
+            scalars.push(ScalarValue::new_primitive::<T>(*v, &self.data_type)?);
+        }
+
+        if self.percentiles.len() > 1 {
+            return Ok(ScalarValue::List(ScalarValue::new_list(
+                &scalars,
+                &self.data_type,
+                true,
+            )));
+        }
+        ScalarValue::new_primitive::<T>(values[0], &self.data_type)
     }
 
     fn size(&self) -> usize {
@@ -463,15 +510,15 @@ impl<T: ArrowNumericType> Accumulator for PercentileContAccumulator<T> {
 struct PercentileContGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,
     group_values: Vec<Vec<T::Native>>,
-    percentile: f64,
+    percentiles: Vec<f64>,
 }
 
 impl<T: ArrowNumericType + Send> PercentileContGroupsAccumulator<T> {
-    pub fn new(data_type: DataType, percentile: f64) -> Self {
+    pub fn new(data_type: DataType, percentiles: Vec<f64>) -> Self {
         Self {
             data_type,
             group_values: Vec::new(),
-            percentile,
+            percentiles,
         }
     }
 }
@@ -581,8 +628,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
         for values in emit_group_values {
-            let value = calculate_percentile::<T>(values, self.percentile);
-            evaluate_result_builder.append_option(value);
+            let value = calculate_percentiles::<T>(values, &self.percentiles);
+            evaluate_result_builder.append_option(value[0]);
         }
 
         Ok(Arc::new(evaluate_result_builder.finish()))
@@ -667,15 +714,15 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
 struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
     data_type: DataType,
     distinct_values: HashSet<Hashable<T::Native>>,
-    percentile: f64,
+    percentiles: Vec<f64>,
 }
 
 impl<T: ArrowNumericType> Debug for DistinctPercentileContAccumulator<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "DistinctPercentileContAccumulator({}, percentile={})",
-            self.data_type, self.percentile
+            "DistinctPercentileContAccumulator({}, percentile={:?})",
+            self.data_type, self.percentiles
         )
     }
 }
@@ -727,12 +774,29 @@ impl<T: ArrowNumericType> Accumulator for DistinctPercentileContAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
-        let value = calculate_percentile::<T>(d, self.percentile);
-        ScalarValue::new_primitive::<T>(value, &self.data_type)
+        let d: Vec<<T as ArrowPrimitiveType>::Native> =
+            std::mem::take(&mut self.distinct_values)
+                .into_iter()
+                .map(|v| v.0)
+                .collect();
+
+        let values: Vec<Option<<T as ArrowPrimitiveType>::Native>> =
+            calculate_percentiles::<T>(d, &self.percentiles);
+
+        // Convert Vec<Option<T::Native>> -> Vec<ScalarValue>
+        let mut scalars: Vec<ScalarValue> = Vec::with_capacity(values.len());
+        for v in &values {
+            scalars.push(ScalarValue::new_primitive::<T>(*v, &self.data_type)?);
+        }
+
+        if self.percentiles.len() > 1 {
+            return Ok(ScalarValue::List(ScalarValue::new_list(
+                &scalars,
+                &self.data_type,
+                true,
+            )));
+        }
+        ScalarValue::new_primitive::<T>(values[0], &self.data_type)
     }
 
     fn size(&self) -> usize {
@@ -747,69 +811,82 @@ impl<T: ArrowNumericType> Accumulator for DistinctPercentileContAccumulator<T> {
 /// For percentile p and n values:
 /// - If p * (n-1) is an integer, return the value at that position
 /// - Otherwise, interpolate between the two closest values
-fn calculate_percentile<T: ArrowNumericType>(
+fn calculate_percentiles<T: ArrowNumericType>(
     mut values: Vec<T::Native>,
-    percentile: f64,
-) -> Option<T::Native> {
+    percentiles: &[f64],
+) -> Vec<Option<T::Native>> {
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
     let len = values.len();
     if len == 0 {
-        None
+        vec![None; percentiles.len()]
     } else if len == 1 {
-        Some(values[0])
-    } else if percentile == 0.0 {
+        vec![Some(values[0]); percentiles.len()]
+    } else if percentiles[0] == 0.0 {
         // Get minimum value
-        Some(
-            *values
-                .iter()
-                .min_by(|a, b| cmp(a, b))
-                .expect("we checked for len > 0 a few lines above"),
-        )
-    } else if percentile == 1.0 {
-        // Get maximum value
-        Some(
-            *values
-                .iter()
-                .max_by(|a, b| cmp(a, b))
-                .expect("we checked for len > 0 a few lines above"),
-        )
-    } else {
-        // Calculate the index using the formula: p * (n - 1)
-        let index = percentile * ((len - 1) as f64);
-        let lower_index = index.floor() as usize;
-        let upper_index = index.ceil() as usize;
-
-        if lower_index == upper_index {
-            // Exact index, return the value at that position
-            let (_, value, _) = values.select_nth_unstable_by(lower_index, cmp);
-            Some(*value)
-        } else {
-            // Need to interpolate between two values
-            // First, partition at lower_index to get the lower value
-            let (_, lower_value, _) = values.select_nth_unstable_by(lower_index, cmp);
-            let lower_value = *lower_value;
-
-            // Then partition at upper_index to get the upper value
-            let (_, upper_value, _) = values.select_nth_unstable_by(upper_index, cmp);
-            let upper_value = *upper_value;
-
-            // Linear interpolation using wrapping arithmetic
-            // We use wrapping operations here (matching the approach in median.rs) because:
-            // 1. Both values come from the input data, so diff is bounded by the value range
-            // 2. fraction is between 0 and 1, and INTERPOLATION_PRECISION is small enough
-            //    to prevent overflow when combined with typical numeric ranges
-            // 3. The result is guaranteed to be between lower_value and upper_value
-            // 4. For floating-point types, wrapping ops behave the same as standard ops
-            let fraction = index - (lower_index as f64);
-            let diff = upper_value.sub_wrapping(lower_value);
-            let interpolated = lower_value.add_wrapping(
-                diff.mul_wrapping(T::Native::usize_as(
-                    (fraction * INTERPOLATION_PRECISION as f64) as usize,
-                ))
-                .div_wrapping(T::Native::usize_as(INTERPOLATION_PRECISION)),
+        vec![
+            Some(
+                *values
+                    .iter()
+                    .min_by(|a, b| cmp(a, b))
+                    .expect("we checked for len > 0 a few lines above"),
             );
-            Some(interpolated)
-        }
+            percentiles.len()
+        ]
+    } else if percentiles[0] == 1.0 {
+        // Get maximum value
+        vec![
+            Some(
+                *values
+                    .iter()
+                    .max_by(|a, b| cmp(a, b))
+                    .expect("we checked for len > 0 a few lines above"),
+            );
+            percentiles.len()
+        ]
+    } else {
+        percentiles
+            .iter()
+            .map(|percentile| {
+                // Calculate the index using the formula: p * (n - 1)
+                let index = percentile * ((len - 1) as f64);
+                let lower_index = index.floor() as usize;
+                let upper_index = index.ceil() as usize;
+
+                if lower_index == upper_index {
+                    // Exact index, return the value at that position
+                    let (_, value, _) = values.select_nth_unstable_by(lower_index, cmp);
+                    Some(*value)
+                } else {
+                    // Need to interpolate between two values
+                    // First, partition at lower_index to get the lower value
+                    let (_, lower_value, _) =
+                        values.select_nth_unstable_by(lower_index, cmp);
+                    let lower_value = *lower_value;
+
+                    // Then partition at upper_index to get the upper value
+                    let (_, upper_value, _) =
+                        values.select_nth_unstable_by(upper_index, cmp);
+                    let upper_value = *upper_value;
+
+                    // Linear interpolation using wrapping arithmetic
+                    // We use wrapping operations here (matching the approach in median.rs) because:
+                    // 1. Both values come from the input data, so diff is bounded by the value range
+                    // 2. fraction is between 0 and 1, and INTERPOLATION_PRECISION is small enough
+                    //    to prevent overflow when combined with typical numeric ranges
+                    // 3. The result is guaranteed to be between lower_value and upper_value
+                    // 4. For floating-point types, wrapping ops behave the same as standard ops
+                    let fraction = index - (lower_index as f64);
+                    let diff = upper_value.sub_wrapping(lower_value);
+                    let interpolated = lower_value.add_wrapping(
+                        diff.mul_wrapping(T::Native::usize_as(
+                            (fraction * INTERPOLATION_PRECISION as f64) as usize,
+                        ))
+                        .div_wrapping(T::Native::usize_as(INTERPOLATION_PRECISION)),
+                    );
+                    Some(interpolated)
+                }
+            })
+            .collect()
     }
 }
