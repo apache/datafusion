@@ -196,14 +196,23 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let n = self.covar.get_count();
-        if n < 2 {
-            return Ok(ScalarValue::Float64(None));
-        }
-
         let covar = self.covar.evaluate()?;
         let stddev1 = self.stddev1.evaluate()?;
         let stddev2 = self.stddev2.evaluate()?;
+
+        // First check if we have NaN values by examining the internal state
+        // This handles the case where both inputs are NaN even with count=1
+        let mean1 = self.covar.get_mean1();
+        let mean2 = self.covar.get_mean2();
+
+        // If both means are NaN, then both input columns contain only NaN values
+        if mean1.is_nan() && mean2.is_nan() {
+            return Ok(ScalarValue::Float64(Some(f64::NAN)));
+        }
+        let n = self.covar.get_count();
+        if mean1.is_nan() || mean2.is_nan() || n < 2 {
+            return Ok(ScalarValue::Float64(None));
+        }
 
         if let ScalarValue::Float64(Some(c)) = covar {
             if let ScalarValue::Float64(Some(s1)) = stddev1 {

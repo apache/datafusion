@@ -597,7 +597,7 @@ from data
 ----
 1
 
-# correlation_query_with_nans_f32
+# group correlation_query_with_nans_f32
 query IR
 with data as (
     select 1 id, 1 as f, 'nan'::float as b
@@ -627,6 +627,16 @@ order by id
 4 NULL
 5 NaN
 6 NaN
+
+# correlation_query_with_nans_f32
+query RR
+with data as (
+    select 'nan'::float as f, 'nan'::float as b
+)
+select corr(f, b), corr('nan'::float, 'nan'::float)
+from data
+----
+NaN NaN
 
 # correlation_query_with_nans_f64
 query IR
