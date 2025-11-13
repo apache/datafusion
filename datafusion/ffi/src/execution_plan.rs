@@ -29,9 +29,10 @@ use datafusion::{
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 use tokio::runtime::Handle;
 
+use crate::execution::FFI_TaskContextProvider;
 use crate::{
     df_result, plan_properties::FFI_PlanProperties,
-    record_batch_stream::FFI_RecordBatchStream, rresult,
+    record_batch_stream::FFI_RecordBatchStream, rresult, rresult_return,
 };
 
 /// A stable struct for sharing a [`ExecutionPlan`] across FFI boundaries.
@@ -55,6 +56,10 @@ pub struct FFI_ExecutionPlan {
         partition: usize,
     ) -> RResult<FFI_RecordBatchStream, RString>,
 
+    /// Provider for TaskContext to be used during protobuf serialization
+    /// and deserialization.
+    pub task_ctx_provider: FFI_TaskContextProvider,
+
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
@@ -76,7 +81,6 @@ unsafe impl Sync for FFI_ExecutionPlan {}
 
 pub struct ExecutionPlanPrivateData {
     pub plan: Arc<dyn ExecutionPlan>,
-    pub context: Arc<TaskContext>,
     pub runtime: Option<Handle>,
 }
 
@@ -96,16 +100,20 @@ unsafe extern "C" fn properties_fn_wrapper(
 unsafe extern "C" fn children_fn_wrapper(
     plan: &FFI_ExecutionPlan,
 ) -> RVec<FFI_ExecutionPlan> {
+    let task_ctx_provider = &plan.task_ctx_provider;
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
-    let ctx = &(*private_data).context;
     let runtime = &(*private_data).runtime;
 
     let children: Vec<_> = plan
         .children()
         .into_iter()
         .map(|child| {
-            FFI_ExecutionPlan::new(Arc::clone(child), Arc::clone(ctx), runtime.clone())
+            FFI_ExecutionPlan::new(
+                Arc::clone(child),
+                task_ctx_provider.clone(),
+                runtime.clone(),
+            )
         })
         .collect();
 
@@ -116,13 +124,13 @@ unsafe extern "C" fn execute_fn_wrapper(
     plan: &FFI_ExecutionPlan,
     partition: usize,
 ) -> RResult<FFI_RecordBatchStream, RString> {
+    let ctx = rresult_return!(<Arc<TaskContext>>::try_from(&plan.task_ctx_provider));
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
-    let ctx = &(*private_data).context;
     let runtime = (*private_data).runtime.clone();
 
     rresult!(plan
-        .execute(partition, Arc::clone(ctx))
+        .execute(partition, ctx)
         .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime)))
 }
 
@@ -141,7 +149,7 @@ unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_Execution
 
     FFI_ExecutionPlan::new(
         Arc::clone(&plan_data.plan),
-        Arc::clone(&plan_data.context),
+        plan.task_ctx_provider.clone(),
         plan_data.runtime.clone(),
     )
 }
@@ -156,20 +164,18 @@ impl FFI_ExecutionPlan {
     /// This function is called on the provider's side.
     pub fn new(
         plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
         runtime: Option<Handle>,
     ) -> Self {
-        let private_data = Box::new(ExecutionPlanPrivateData {
-            plan,
-            context,
-            runtime,
-        });
+        let task_ctx_provider = task_ctx_provider.into();
+        let private_data = Box::new(ExecutionPlanPrivateData { plan, runtime });
 
         Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
             name: name_fn_wrapper,
             execute: execute_fn_wrapper,
+            task_ctx_provider,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -307,6 +313,7 @@ mod tests {
         },
         prelude::SessionContext,
     };
+    use datafusion_execution::TaskContextProvider;
 
     #[derive(Debug)]
     pub struct EmptyExec {
@@ -382,12 +389,12 @@ mod tests {
     fn test_round_trip_ffi_execution_plan() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-        let ctx = SessionContext::new();
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
 
         let original_plan = Arc::new(EmptyExec::new(schema));
         let original_name = original_plan.name().to_string();
 
-        let mut local_plan = FFI_ExecutionPlan::new(original_plan, ctx.task_ctx(), None);
+        let mut local_plan = FFI_ExecutionPlan::new(original_plan, ctx, None);
         local_plan.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_plan: Arc<dyn ExecutionPlan> = (&local_plan).try_into()?;
@@ -411,16 +418,17 @@ mod tests {
     fn test_ffi_execution_plan_children() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-        let ctx = SessionContext::new();
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
 
         // Version 1: Adding child to the foreign plan
         let child_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let mut child_local = FFI_ExecutionPlan::new(child_plan, ctx.task_ctx(), None);
+        let mut child_local = FFI_ExecutionPlan::new(child_plan, Arc::clone(&ctx), None);
         child_local.library_marker_id = crate::mock_foreign_marker_id;
         let child_foreign = <Arc<dyn ExecutionPlan>>::try_from(&child_local)?;
 
         let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let mut parent_local = FFI_ExecutionPlan::new(parent_plan, ctx.task_ctx(), None);
+        let mut parent_local =
+            FFI_ExecutionPlan::new(parent_plan, Arc::clone(&ctx), None);
         parent_local.library_marker_id = crate::mock_foreign_marker_id;
         let parent_foreign = <Arc<dyn ExecutionPlan>>::try_from(&parent_local)?;
 
@@ -432,13 +440,14 @@ mod tests {
 
         // Version 2: Adding child to the local plan
         let child_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let mut child_local = FFI_ExecutionPlan::new(child_plan, ctx.task_ctx(), None);
+        let mut child_local = FFI_ExecutionPlan::new(child_plan, Arc::clone(&ctx), None);
         child_local.library_marker_id = crate::mock_foreign_marker_id;
         let child_foreign = <Arc<dyn ExecutionPlan>>::try_from(&child_local)?;
 
         let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let parent_plan = parent_plan.with_new_children(vec![child_foreign])?;
-        let mut parent_local = FFI_ExecutionPlan::new(parent_plan, ctx.task_ctx(), None);
+        let mut parent_local =
+            FFI_ExecutionPlan::new(parent_plan, Arc::clone(&ctx), None);
         parent_local.library_marker_id = crate::mock_foreign_marker_id;
         let parent_foreign = <Arc<dyn ExecutionPlan>>::try_from(&parent_local)?;
 
@@ -451,11 +460,11 @@ mod tests {
     fn test_ffi_execution_plan_local_bypass() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-        let ctx = SessionContext::new();
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
 
         let plan = Arc::new(EmptyExec::new(schema));
 
-        let mut ffi_plan = FFI_ExecutionPlan::new(plan, ctx.task_ctx(), None);
+        let mut ffi_plan = FFI_ExecutionPlan::new(plan, ctx, None);
 
         // Verify local libraries can be downcast to their original
         let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into().unwrap();
