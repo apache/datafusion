@@ -34,8 +34,7 @@ use arrow::{
 use arrow::array::ArrowNativeTypeOp;
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, DataFusionError, HashSet, Result,
-    ScalarValue,
+    internal_datafusion_err, internal_err, plan_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -48,7 +47,7 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
@@ -173,7 +172,7 @@ impl PercentileCont {
                 if args.is_distinct {
                     Ok(Box::new(DistinctPercentileContAccumulator::<$t> {
                         data_type: $dt.clone(),
-                        distinct_values: HashSet::new(),
+                        distinct_values: GenericDistinctBuffer::new($dt),
                         percentile,
                     }))
                 } else {
@@ -356,10 +355,6 @@ impl AggregateUDFImpl for PercentileCont {
                 args.name, input_dt,
             ))),
         }
-    }
-
-    fn supports_null_handling_clause(&self) -> bool {
-        false
     }
 
     fn supports_within_group_clause(&self) -> bool {
@@ -657,77 +652,28 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
     }
 }
 
-/// The distinct percentile_cont accumulator accumulates the raw input values
-/// using a HashSet to eliminate duplicates.
-///
-/// The intermediate state is represented as a List of scalar values updated by
-/// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
-/// in the final evaluation step so that we avoid expensive conversions and
-/// allocations during `update_batch`.
+#[derive(Debug)]
 struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
+    distinct_values: GenericDistinctBuffer<T>,
     data_type: DataType,
-    distinct_values: HashSet<Hashable<T::Native>>,
     percentile: f64,
 }
 
-impl<T: ArrowNumericType> Debug for DistinctPercentileContAccumulator<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "DistinctPercentileContAccumulator({}, percentile={})",
-            self.data_type, self.percentile
-        )
-    }
-}
-
-impl<T: ArrowNumericType> Accumulator for DistinctPercentileContAccumulator<T> {
+impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumulator<T> {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let all_values = self
-            .distinct_values
-            .iter()
-            .map(|x| ScalarValue::new_primitive::<T>(Some(x.0), &self.data_type))
-            .collect::<Result<Vec<_>>>()?;
-
-        let arr = ScalarValue::new_list_nullable(&all_values, &self.data_type);
-        Ok(vec![ScalarValue::List(arr)])
+        self.distinct_values.state()
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        // Cast to target type if needed (e.g., integer to Float64)
-        let values = if values[0].data_type() != &self.data_type {
-            arrow::compute::cast(&values[0], &self.data_type)?
-        } else {
-            Arc::clone(&values[0])
-        };
-
-        let array = values.as_primitive::<T>();
-        match array.nulls().filter(|x| x.null_count() > 0) {
-            Some(n) => {
-                for idx in n.valid_indices() {
-                    self.distinct_values.insert(Hashable(array.value(idx)));
-                }
-            }
-            None => array.values().iter().for_each(|x| {
-                self.distinct_values.insert(Hashable(*x));
-            }),
-        }
-        Ok(())
+        self.distinct_values.update_batch(values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let array = states[0].as_list::<i32>();
-        for v in array.iter().flatten() {
-            self.update_batch(&[v])?
-        }
-        Ok(())
+        self.distinct_values.merge_batch(states)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values)
+        let d = std::mem::take(&mut self.distinct_values.values)
             .into_iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
@@ -736,7 +682,7 @@ impl<T: ArrowNumericType> Accumulator for DistinctPercentileContAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.distinct_values.capacity() * size_of::<T::Native>()
+        size_of_val(self) + self.distinct_values.size()
     }
 }
 

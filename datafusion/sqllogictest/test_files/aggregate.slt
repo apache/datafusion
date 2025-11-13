@@ -501,6 +501,12 @@ SELECT bit_xor(distinct c5 % 2) FROM aggregate_test_100
 ----
 -2
 
+# edge case for null accumulator state fields
+query ???I
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL), approx_distinct(NULL) from aggregate_test_100
+----
+NULL NULL NULL 0
+
 # csv_query_covariance_1
 query R
 SELECT covar_pop(c2, c12) FROM aggregate_test_100
@@ -848,6 +854,13 @@ SELECT approx_median(distinct col_i8) FROM median_table
 statement error DataFusion error: This feature is not implemented: APPROX_MEDIAN\(DISTINCT\) aggregations are not available
 SELECT approx_median(col_i8), approx_median(distinct col_i8) FROM median_table
 
+# null handling clauses not supported
+query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS are not permitted for median
+SELECT median(c2) IGNORE NULLS FROM aggregate_test_100
+
+query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS are not permitted for median
+SELECT median(c2) RESPECT NULLS FROM aggregate_test_100
+
 # median_i16
 query I
 SELECT median(col_i16) FROM median_table
@@ -1190,10 +1203,9 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
-10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -7144,10 +7156,15 @@ statement ok
 drop table employee_csv;
 
 # test null literal handling in supported aggregate functions
-query I??III?T
+query I??????T
 select count(null), min(null), max(null), bit_and(NULL), bit_or(NULL), bit_xor(NULL), nth_value(NULL, 1), string_agg(NULL, ',');
 ----
 0 NULL NULL NULL NULL NULL NULL NULL
+
+query TTT
+SELECT arrow_typeof(bit_and(NULL)), arrow_typeof(bit_or(NULL)), arrow_typeof(bit_xor(NULL))
+----
+Null Null Null
 
 statement ok
 create table having_test(v1 int, v2 int)
@@ -7180,10 +7197,9 @@ physical_plan
 02)--FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
 03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
 04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query error

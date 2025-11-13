@@ -20,15 +20,15 @@
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
 use std::any::Any;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
+use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
-use arrow::ipc::reader::FileReader;
+use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{root_as_message, CompressionType};
 use datafusion_common::error::Result;
@@ -62,7 +62,9 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use object_store::{
+    path::Path, GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore,
+};
 use tokio::io::AsyncWriteExt;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
@@ -72,8 +74,8 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// If the buffered Arrow data exceeds this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
+/// Factory struct used to create [`ArrowFormat`]
 #[derive(Default, Debug)]
-/// Factory struct used to create [ArrowFormat]
 pub struct ArrowFormatFactory;
 
 impl ArrowFormatFactory {
@@ -108,7 +110,7 @@ impl GetExt for ArrowFormatFactory {
     }
 }
 
-/// Arrow `FileFormat` implementation.
+/// Arrow [`FileFormat`] implementation.
 #[derive(Default, Debug)]
 pub struct ArrowFormat;
 
@@ -151,12 +153,23 @@ impl FileFormat for ArrowFormat {
             let schema = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
-                    let reader = FileReader::try_new(&mut file, None)?;
-                    reader.schema()
+                    match FileReader::try_new(&mut file, None) {
+                        Ok(reader) => reader.schema(),
+                        Err(file_error) => {
+                            // not in the file format, but FileReader read some bytes
+                            // while trying to parse the file and so we need to rewind
+                            // it to the beginning of the file
+                            file.seek(SeekFrom::Start(0))?;
+                            match StreamReader::try_new(&mut file, None) {
+                                Ok(reader) => reader.schema(),
+                                Err(stream_error) => {
+                                    return Err(internal_datafusion_err!("Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"));
+                                }
+                            }
+                        }
+                    }
                 }
-                GetResultPayload::Stream(stream) => {
-                    infer_schema_from_file_stream(stream).await?
-                }
+                GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
             };
             schemas.push(schema.as_ref().clone());
         }
@@ -176,14 +189,33 @@ impl FileFormat for ArrowFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         conf: FileScanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let object_store = state.runtime_env().object_store(&conf.object_store_url)?;
+        let object_location = &conf
+            .file_groups
+            .first()
+            .ok_or_else(|| internal_datafusion_err!("No files found in file group"))?
+            .files()
+            .first()
+            .ok_or_else(|| internal_datafusion_err!("No files found in file group"))?
+            .object_meta
+            .location;
+
         let table_schema = TableSchema::new(
             Arc::clone(conf.file_schema()),
             conf.table_partition_cols().clone(),
         );
-        let source = Arc::new(ArrowSource::new(table_schema));
+
+        let source: Arc<dyn FileSource> =
+            match is_object_in_arrow_ipc_file_format(object_store, object_location).await
+            {
+                Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
+                Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema)),
+                Err(e) => Err(e)?,
+            };
+
         let config = FileScanConfigBuilder::from(conf)
             .with_source(source)
             .build();
@@ -208,11 +240,11 @@ impl FileFormat for ArrowFormat {
     }
 
     fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
-        Arc::new(ArrowSource::new(table_schema))
+        Arc::new(ArrowSource::new_file_source(table_schema))
     }
 }
 
-/// Implements [`FileSink`] for writing to arrow_ipc files
+/// Implements [`FileSink`] for Arrow IPC files
 struct ArrowFileSink {
     config: FileSinkConfig,
 }
@@ -349,92 +381,158 @@ impl DataSink for ArrowFileSink {
     }
 }
 
+// Custom implementation of inferring schema. Should eventually be moved upstream to arrow-rs.
+// See <https://github.com/apache/arrow-rs/issues/5021>
+
 const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
-/// Custom implementation of inferring schema. Should eventually be moved upstream to arrow-rs.
-/// See <https://github.com/apache/arrow-rs/issues/5021>
-async fn infer_schema_from_file_stream(
+async fn infer_stream_schema(
     mut stream: BoxStream<'static, object_store::Result<Bytes>>,
 ) -> Result<SchemaRef> {
-    // Expected format:
-    // <magic number "ARROW1"> - 6 bytes
-    // <empty padding bytes [to 8 byte boundary]> - 2 bytes
-    // <continuation: 0xFFFFFFFF> - 4 bytes, not present below v0.15.0
-    // <metadata_size: int32> - 4 bytes
-    // <metadata_flatbuffer: bytes>
-    // <rest of file bytes>
+    // IPC streaming format.
+    // See https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+    //
+    //   <SCHEMA>
+    //   <DICTIONARY 0>
+    //   ...
+    //   <DICTIONARY k - 1>
+    //   <RECORD BATCH 0>
+    //   ...
+    //   <DICTIONARY x DELTA>
+    //   ...
+    //   <DICTIONARY y DELTA>
+    //   ...
+    //   <RECORD BATCH n - 1>
+    //   <EOS [optional]: 0xFFFFFFFF 0x00000000>
 
-    // So in first read we need at least all known sized sections,
-    // which is 6 + 2 + 4 + 4 = 16 bytes.
-    let bytes = collect_at_least_n_bytes(&mut stream, 16, None).await?;
+    // The streaming format is made up of a sequence of encapsulated messages.
+    // See https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format
+    //
+    //   <continuation: 0xFFFFFFFF>  (added in v0.15.0)
+    //   <metadata_size: int32>
+    //   <metadata_flatbuffer: bytes>
+    //   <padding>
+    //   <message body>
+    //
+    // The first message is the schema.
 
-    // Files should start with these magic bytes
-    if bytes[0..6] != ARROW_MAGIC {
+    // IPC file format is a wrapper around the streaming format with indexing information.
+    // See https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
+    //
+    //   <magic number "ARROW1">
+    //   <empty padding bytes [to 8 byte boundary]>
+    //   <STREAMING FORMAT with EOS>
+    //   <FOOTER>
+    //   <FOOTER SIZE: int32>
+    //   <magic number "ARROW1">
+
+    // For the purposes of this function, the arrow "preamble" is the magic number, padding,
+    // and the continuation marker. 16 bytes covers the preamble and metadata length
+    // no matter which version or format is used.
+    let bytes = extend_bytes_to_n_length_from_stream(vec![], 16, &mut stream).await?;
+
+    // The preamble length is everything before the metadata length
+    let preamble_len = if bytes[0..6] == ARROW_MAGIC {
+        // File format starts with magic number "ARROW1"
+        if bytes[8..12] == CONTINUATION_MARKER {
+            // Continuation marker was added in v0.15.0
+            12
+        } else {
+            // File format before v0.15.0
+            8
+        }
+    } else if bytes[0..4] == CONTINUATION_MARKER {
+        // Stream format after v0.15.0 starts with continuation marker
+        4
+    } else {
+        // Stream format before v0.15.0 does not have a preamble
+        0
+    };
+
+    let meta_len_bytes: [u8; 4] = bytes[preamble_len..preamble_len + 4]
+        .try_into()
+        .map_err(|err| {
+            ArrowError::ParseError(format!(
+                "Unable to read IPC message metadata length: {err:?}"
+            ))
+        })?;
+
+    let meta_len = i32::from_le_bytes([
+        meta_len_bytes[0],
+        meta_len_bytes[1],
+        meta_len_bytes[2],
+        meta_len_bytes[3],
+    ]);
+
+    if meta_len < 0 {
         return Err(ArrowError::ParseError(
-            "Arrow file does not contain correct header".to_string(),
-        ))?;
+            "IPC message metadata length is negative".to_string(),
+        )
+        .into());
     }
 
-    // Since continuation marker bytes added in later versions
-    let (meta_len, rest_of_bytes_start_index) = if bytes[8..12] == CONTINUATION_MARKER {
-        (&bytes[12..16], 16)
-    } else {
-        (&bytes[8..12], 12)
-    };
+    let bytes = extend_bytes_to_n_length_from_stream(
+        bytes,
+        preamble_len + 4 + (meta_len as usize),
+        &mut stream,
+    )
+    .await?;
 
-    let meta_len = [meta_len[0], meta_len[1], meta_len[2], meta_len[3]];
-    let meta_len = i32::from_le_bytes(meta_len);
-
-    // Read bytes for Schema message
-    let block_data = if bytes[rest_of_bytes_start_index..].len() < meta_len as usize {
-        // Need to read more bytes to decode Message
-        let mut block_data = Vec::with_capacity(meta_len as usize);
-        // In case we had some spare bytes in our initial read chunk
-        block_data.extend_from_slice(&bytes[rest_of_bytes_start_index..]);
-        let size_to_read = meta_len as usize - block_data.len();
-        let block_data =
-            collect_at_least_n_bytes(&mut stream, size_to_read, Some(block_data)).await?;
-        Cow::Owned(block_data)
-    } else {
-        // Already have the bytes we need
-        let end_index = meta_len as usize + rest_of_bytes_start_index;
-        let block_data = &bytes[rest_of_bytes_start_index..end_index];
-        Cow::Borrowed(block_data)
-    };
-
-    // Decode Schema message
-    let message = root_as_message(&block_data).map_err(|err| {
-        ArrowError::ParseError(format!("Unable to read IPC message as metadata: {err:?}"))
+    let message = root_as_message(&bytes[preamble_len + 4..]).map_err(|err| {
+        ArrowError::ParseError(format!("Unable to read IPC message metadata: {err:?}"))
     })?;
-    let ipc_schema = message.header_as_schema().ok_or_else(|| {
-        ArrowError::IpcError("Unable to read IPC message as schema".to_string())
+    let fb_schema = message.header_as_schema().ok_or_else(|| {
+        ArrowError::IpcError("Unable to read IPC message schema".to_string())
     })?;
-    let schema = fb_to_schema(ipc_schema);
+    let schema = fb_to_schema(fb_schema);
 
     Ok(Arc::new(schema))
 }
 
-async fn collect_at_least_n_bytes(
-    stream: &mut BoxStream<'static, object_store::Result<Bytes>>,
+async fn extend_bytes_to_n_length_from_stream(
+    bytes: Vec<u8>,
     n: usize,
-    extend_from: Option<Vec<u8>>,
+    stream: &mut BoxStream<'static, object_store::Result<Bytes>>,
 ) -> Result<Vec<u8>> {
-    let mut buf = extend_from.unwrap_or_else(|| Vec::with_capacity(n));
-    // If extending existing buffer then ensure we read n additional bytes
-    let n = n + buf.len();
-    while let Some(bytes) = stream.next().await.transpose()? {
-        buf.extend_from_slice(&bytes);
+    if bytes.len() >= n {
+        return Ok(bytes);
+    }
+
+    let mut buf = bytes;
+
+    while let Some(b) = stream.next().await.transpose()? {
+        buf.extend_from_slice(&b);
+
         if buf.len() >= n {
             break;
         }
     }
+
     if buf.len() < n {
         return Err(ArrowError::ParseError(
             "Unexpected end of byte stream for Arrow IPC file".to_string(),
-        ))?;
+        )
+        .into());
     }
+
     Ok(buf)
+}
+
+async fn is_object_in_arrow_ipc_file_format(
+    store: Arc<dyn ObjectStore>,
+    object_location: &Path,
+) -> Result<bool> {
+    let get_opts = GetOptions {
+        range: Some(GetRange::Bounded(0..6)),
+        ..Default::default()
+    };
+    let bytes = store
+        .get_opts(object_location, get_opts)
+        .await?
+        .bytes()
+        .await?;
+    Ok(bytes.len() >= 6 && bytes[0..6] == ARROW_MAGIC)
 }
 
 #[cfg(test)]
@@ -529,79 +627,142 @@ mod tests {
 
     #[tokio::test]
     async fn test_infer_schema_stream() -> Result<()> {
-        let mut bytes = std::fs::read("tests/data/example.arrow")?;
-        bytes.truncate(bytes.len() - 20); // mangle end to show we don't need to read whole file
-        let location = Path::parse("example.arrow")?;
-        let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        in_memory_store.put(&location, bytes.into()).await?;
+        for file in ["example.arrow", "example_stream.arrow"] {
+            let mut bytes = std::fs::read(format!("tests/data/{file}"))?;
+            bytes.truncate(bytes.len() - 20); // mangle end to show we don't need to read whole file
+            let location = Path::parse(file)?;
+            let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            in_memory_store.put(&location, bytes.into()).await?;
 
-        let state = MockSession::new();
-        let object_meta = ObjectMeta {
-            location,
-            last_modified: DateTime::default(),
-            size: u64::MAX,
-            e_tag: None,
-            version: None,
-        };
+            let state = MockSession::new();
+            let object_meta = ObjectMeta {
+                location,
+                last_modified: DateTime::default(),
+                size: u64::MAX,
+                e_tag: None,
+                version: None,
+            };
 
-        let arrow_format = ArrowFormat {};
-        let expected = vec!["f0: Int64", "f1: Utf8", "f2: Boolean"];
+            let arrow_format = ArrowFormat {};
+            let expected = vec!["f0: Int64", "f1: Utf8", "f2: Boolean"];
 
-        // Test chunk sizes where too small so we keep having to read more bytes
-        // And when large enough that first read contains all we need
-        for chunk_size in [7, 3000] {
-            let store = Arc::new(ChunkedStore::new(in_memory_store.clone(), chunk_size));
-            let inferred_schema = arrow_format
+            // Test chunk sizes where too small so we keep having to read more bytes
+            // And when large enough that first read contains all we need
+            for chunk_size in [7, 3000] {
+                let store =
+                    Arc::new(ChunkedStore::new(in_memory_store.clone(), chunk_size));
+                let inferred_schema = arrow_format
+                    .infer_schema(
+                        &state,
+                        &(store.clone() as Arc<dyn ObjectStore>),
+                        std::slice::from_ref(&object_meta),
+                    )
+                    .await?;
+                let actual_fields = inferred_schema
+                    .fields()
+                    .iter()
+                    .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+                    .collect::<Vec<_>>();
+                assert_eq!(expected, actual_fields);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_short_stream() -> Result<()> {
+        for file in ["example.arrow", "example_stream.arrow"] {
+            let mut bytes = std::fs::read(format!("tests/data/{file}"))?;
+            bytes.truncate(20); // should cause error that file shorter than expected
+            let location = Path::parse(file)?;
+            let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            in_memory_store.put(&location, bytes.into()).await?;
+
+            let state = MockSession::new();
+            let object_meta = ObjectMeta {
+                location,
+                last_modified: DateTime::default(),
+                size: u64::MAX,
+                e_tag: None,
+                version: None,
+            };
+
+            let arrow_format = ArrowFormat {};
+
+            let store = Arc::new(ChunkedStore::new(in_memory_store.clone(), 7));
+            let err = arrow_format
                 .infer_schema(
                     &state,
                     &(store.clone() as Arc<dyn ObjectStore>),
                     std::slice::from_ref(&object_meta),
                 )
-                .await?;
-            let actual_fields = inferred_schema
-                .fields()
-                .iter()
-                .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
-                .collect::<Vec<_>>();
-            assert_eq!(expected, actual_fields);
+                .await;
+
+            assert!(err.is_err());
+            assert_eq!( "Arrow error: Parser error: Unexpected end of byte stream for Arrow IPC file", err.unwrap_err().to_string().lines().next().unwrap());
         }
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_infer_schema_short_stream() -> Result<()> {
-        let mut bytes = std::fs::read("tests/data/example.arrow")?;
-        bytes.truncate(20); // should cause error that file shorter than expected
-        let location = Path::parse("example.arrow")?;
-        let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        in_memory_store.put(&location, bytes.into()).await?;
+    async fn test_format_detection_file_format() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test.arrow");
 
-        let state = MockSession::new();
-        let object_meta = ObjectMeta {
-            location,
-            last_modified: DateTime::default(),
-            size: u64::MAX,
-            e_tag: None,
-            version: None,
-        };
+        let file_bytes = std::fs::read("tests/data/example.arrow")?;
+        store.put(&path, file_bytes.into()).await?;
 
-        let arrow_format = ArrowFormat {};
+        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+        assert!(is_file, "Should detect file format");
+        Ok(())
+    }
 
-        let store = Arc::new(ChunkedStore::new(in_memory_store.clone(), 7));
-        let err = arrow_format
-            .infer_schema(
-                &state,
-                &(store.clone() as Arc<dyn ObjectStore>),
-                std::slice::from_ref(&object_meta),
-            )
-            .await;
+    #[tokio::test]
+    async fn test_format_detection_stream_format() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test_stream.arrow");
 
-        assert!(err.is_err());
-        assert_eq!(
-            "Arrow error: Parser error: Unexpected end of byte stream for Arrow IPC file",
-            err.unwrap_err().to_string().lines().next().unwrap()
+        let stream_bytes = std::fs::read("tests/data/example_stream.arrow")?;
+        store.put(&path, stream_bytes.into()).await?;
+
+        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+
+        assert!(!is_file, "Should detect stream format (not file)");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_format_detection_corrupted_file() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("corrupted.arrow");
+
+        store
+            .put(&path, Bytes::from(vec![0x43, 0x4f, 0x52, 0x41]).into())
+            .await?;
+
+        let is_file = is_object_in_arrow_ipc_file_format(store.clone(), &path).await?;
+
+        assert!(
+            !is_file,
+            "Corrupted file should not be detected as file format"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_format_detection_empty_file() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("empty.arrow");
+
+        store.put(&path, Bytes::new().into()).await?;
+
+        let result = is_object_in_arrow_ipc_file_format(store.clone(), &path).await;
+
+        // currently errors because it tries to read 0..6 from an empty file
+        assert!(result.is_err(), "Empty file should error");
 
         Ok(())
     }

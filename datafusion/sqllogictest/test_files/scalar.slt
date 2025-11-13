@@ -1775,7 +1775,7 @@ CREATE TABLE test(
 (-14, -14, -14.5, -14.5),
 (NULL, NULL, NULL, NULL);
 
-query IRRRIR rowsort
+query IIRRIR rowsort
 SELECT power(i32, exp_i) as power_i32,
        power(i64, exp_f) as power_i64,
        pow(f32, exp_i) as power_f32,
