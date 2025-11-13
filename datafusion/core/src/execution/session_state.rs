@@ -286,6 +286,12 @@ impl Session for SessionState {
     }
 }
 
+impl datafusion_execution::TaskContextProvider for SessionState {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        SessionState::task_ctx(self)
+    }
+}
+
 impl SessionState {
     pub(crate) fn resolve_table_ref(
         &self,
