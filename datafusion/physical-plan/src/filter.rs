@@ -703,7 +703,7 @@ impl FilterExecMetrics {
 
 impl FilterExecStream {
     fn flush_remaining_batches(
-        self: &mut Self,
+        &mut self,
     ) -> Poll<Option<std::result::Result<RecordBatch, DataFusionError>>> {
         // Flush any remaining buffered batch
         match self.batch_coalescer.finish() {
