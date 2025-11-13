@@ -360,7 +360,7 @@ impl DisplayAs for FilterExec {
                 };
                 let fetch = self
                     .fetch
-                    .map_or("".to_string(), |f| format!(", fetch={}", f));
+                    .map_or_else(|| "".to_string(), |f| format!(", fetch={f}"));
                 write!(
                     f,
                     "FilterExec: {}{}{}",
@@ -713,7 +713,7 @@ impl FilterExecStream {
                     Ok(batch)
                 }))
             }
-            Err(e) => Poll::Ready(Some(Err(e.into()))),
+            Err(e) => Poll::Ready(Some(Err(e))),
         }
     }
 }
@@ -779,7 +779,7 @@ impl Stream for FilterExecStream {
                                 Ok(filter_array) => {
                                     self.metrics.selectivity.add_total(batch.num_rows());
                                     // TODO: support push_batch_with_filter in LimitedBatchCoalescer
-                                    let batch = filter_record_batch(&batch, &filter_array)?;
+                                    let batch = filter_record_batch(&batch, filter_array)?;
                                     let state = self.batch_coalescer.push_batch(batch)?;
                                     Ok(state)
                                 }
