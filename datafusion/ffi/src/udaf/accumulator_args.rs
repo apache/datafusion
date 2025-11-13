@@ -202,8 +202,8 @@ mod tests {
             exprs: &[col("a", &schema)?],
         };
         let orig_str = format!("{orig_args:?}");
-        let task_ctx_accessor =
-            Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_accessor = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
         let ffi_args = FFI_AccumulatorArgs::try_new(orig_args, task_ctx_accessor)?;
         let foreign_args: ForeignAccumulatorArgs = ffi_args.try_into()?;

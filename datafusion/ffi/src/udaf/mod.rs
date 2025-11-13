@@ -678,9 +678,9 @@ mod tests {
 
     fn create_test_foreign_udaf(
         original_udaf: impl AggregateUDFImpl + 'static,
+        ctx: &Arc<dyn TaskContextProvider>,
     ) -> Result<AggregateUDF> {
         let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
-        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
 
         let mut local_udaf = FFI_AggregateUDF::new(Arc::clone(&original_udaf), ctx);
         local_udaf.library_marker_id = crate::mock_foreign_marker_id;
@@ -710,8 +710,9 @@ mod tests {
 
     #[test]
     fn test_foreign_udaf_aliases() -> Result<()> {
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
         let foreign_udaf =
-            create_test_foreign_udaf(Sum::new())?.with_aliases(["my_function"]);
+            create_test_foreign_udaf(Sum::new(), &ctx)?.with_aliases(["my_function"]);
 
         let return_field =
             foreign_udaf
@@ -723,7 +724,8 @@ mod tests {
 
     #[test]
     fn test_foreign_udaf_accumulator() -> Result<()> {
-        let foreign_udaf = create_test_foreign_udaf(Sum::new())?;
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let foreign_udaf = create_test_foreign_udaf(Sum::new(), &ctx)?;
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
         let acc_args = AccumulatorArgs {
@@ -774,8 +776,10 @@ mod tests {
 
     #[test]
     fn test_beneficial_ordering() -> Result<()> {
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
         let foreign_udaf = create_test_foreign_udaf(
             datafusion::functions_aggregate::first_last::FirstValue::new(),
+            &ctx,
         )?;
 
         let foreign_udaf = foreign_udaf.with_beneficial_ordering(true)?.unwrap();
@@ -801,7 +805,8 @@ mod tests {
 
     #[test]
     fn test_sliding_accumulator() -> Result<()> {
-        let foreign_udaf = create_test_foreign_udaf(Sum::new())?;
+        let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+        let foreign_udaf = create_test_foreign_udaf(Sum::new(), &ctx)?;
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
         // Note: sum distinct is only support Int64 until now
