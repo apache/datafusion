@@ -380,7 +380,7 @@ impl EquivalenceProperties {
         right: Arc<dyn PhysicalExpr>,
     ) -> Result<()> {
         // Add equal expressions to the state:
-        if self.eq_group.add_equal_conditions(Arc::clone(&left), right) {
+        if self.eq_group.add_equal_conditions(left, right) {
             self.update_oeq_cache()?;
         }
         self.update_oeq_cache()?;

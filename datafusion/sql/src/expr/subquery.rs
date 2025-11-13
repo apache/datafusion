@@ -74,7 +74,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         self.validate_single_column(
             &sub_plan,
-            spans.clone(),
+            &spans,
             "Too many columns! The subquery should only return one column",
             "Select only one column in the subquery",
         )?;
@@ -116,7 +116,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         self.validate_single_column(
             &sub_plan,
-            spans.clone(),
+            &spans,
             "Too many columns! The subquery should only return one column",
             "Select only one column in the subquery",
         )?;
@@ -131,7 +131,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn validate_single_column(
         &self,
         sub_plan: &LogicalPlan,
-        spans: Spans,
+        spans: &Spans,
         error_message: &str,
         help_message: &str,
     ) -> Result<()> {
@@ -148,7 +148,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn build_multi_column_diagnostic(
         &self,
-        spans: Spans,
+        spans: &Spans,
         error_message: &str,
         help_message: &str,
     ) -> Diagnostic {

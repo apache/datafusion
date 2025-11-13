@@ -467,9 +467,8 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
-        /// according to this time zone, and then extract the hour
-        pub time_zone: String, default = "+00:00".into()
+        /// Some functions, e.g. `now` return timestamps in this time zone
+        pub time_zone: Option<String>, default = None
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
@@ -517,6 +516,23 @@ config_namespace! {
         /// and sorted in a single RecordBatch rather than sorted in
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
+
+        /// Maximum size in bytes for individual spill files before rotating to a new file.
+        ///
+        /// When operators spill data to disk (e.g., RepartitionExec), they write
+        /// multiple batches to the same file until this size limit is reached, then rotate
+        /// to a new file. This reduces syscall overhead compared to one-file-per-batch
+        /// while preventing files from growing too large.
+        ///
+        /// A larger value reduces file creation overhead but may hold more disk space.
+        /// A smaller value creates more files but allows finer-grained space reclamation
+        /// as files can be deleted once fully consumed.
+        ///
+        /// Now only `RepartitionExec` supports this spill file rotation feature, other spilling operators
+        /// may create spill files larger than the limit.
+        ///
+        /// Default: 128 MB
+        pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
 
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
@@ -590,6 +606,29 @@ config_namespace! {
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+
+        /// Whether to enable ANSI SQL mode.
+        ///
+        /// The flag is experimental and relevant only for DataFusion Spark built-in functions
+        ///
+        /// When `enable_ansi_mode` is set to `true`, the query engine follows ANSI SQL
+        /// semantics for expressions, casting, and error handling. This means:
+        /// - **Strict type coercion rules:** implicit casts between incompatible types are disallowed.
+        /// - **Standard SQL arithmetic behavior:** operations such as division by zero,
+        ///   numeric overflow, or invalid casts raise runtime errors rather than returning
+        ///   `NULL` or adjusted values.
+        /// - **Consistent ANSI behavior** for string concatenation, comparisons, and `NULL` handling.
+        ///
+        /// When `enable_ansi_mode` is `false` (the default), the engine uses a more permissive,
+        /// non-ANSI mode designed for user convenience and backward compatibility. In this mode:
+        /// - Implicit casts between types are allowed (e.g., string to integer when possible).
+        /// - Arithmetic operations are more lenient — for example, `abs()` on the minimum
+        ///   representable integer value returns the input value instead of raising overflow.
+        /// - Division by zero or invalid casts may return `NULL` instead of failing.
+        ///
+        /// # Default
+        /// `false` — ANSI SQL mode is disabled by default.
+        pub enable_ansi_mode: bool, default = false
     }
 }
 
@@ -1108,6 +1147,15 @@ pub struct ConfigOptions {
 }
 
 impl ConfigField for ConfigOptions {
+    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+        self.catalog.visit(v, "datafusion.catalog", "");
+        self.execution.visit(v, "datafusion.execution", "");
+        self.optimizer.visit(v, "datafusion.optimizer", "");
+        self.explain.visit(v, "datafusion.explain", "");
+        self.sql_parser.visit(v, "datafusion.sql_parser", "");
+        self.format.visit(v, "datafusion.format", "");
+    }
+
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
@@ -1120,15 +1168,6 @@ impl ConfigField for ConfigOptions {
             "format" => self.format.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
-    }
-
-    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
-        self.catalog.visit(v, "datafusion.catalog", "");
-        self.execution.visit(v, "datafusion.execution", "");
-        self.optimizer.visit(v, "datafusion.optimizer", "");
-        self.explain.visit(v, "datafusion.explain", "");
-        self.sql_parser.visit(v, "datafusion.sql_parser", "");
-        self.format.visit(v, "datafusion.format", "");
     }
 }
 

@@ -627,7 +627,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Joins the the indexed row of left data with the current probe batch.
+    /// Joins the indexed row of left data with the current probe batch.
     /// If all the results are produced, the state is set to fetch new probe batch.
     fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let right_batch = self.state.try_as_record_batch()?;
@@ -650,7 +650,6 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                         self.left_index += 1;
                     }
 
-                    self.join_metrics.output_batches.add(1);
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }

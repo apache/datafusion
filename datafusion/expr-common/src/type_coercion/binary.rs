@@ -838,6 +838,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     }
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, true))
+        .or_else(|| ree_comparison_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| list_coercion(lhs_type, rhs_type))
@@ -867,6 +868,7 @@ pub fn comparison_coercion_numeric(
     }
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_comparison_coercion_numeric(lhs_type, rhs_type, true))
+        .or_else(|| ree_comparison_coercion_numeric(lhs_type, rhs_type, true))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion_as_numeric(lhs_type, rhs_type))
@@ -1423,6 +1425,73 @@ fn dictionary_comparison_coercion_numeric(
     )
 }
 
+/// Coercion rules for RunEndEncoded: the type that both lhs and rhs
+/// can be casted to for the purpose of a computation.
+///
+/// Not all operators support REE, if `preserve_ree` is true
+/// REE will be preserved if possible
+///
+/// The `coerce_fn` parameter determines which comparison coercion function to use
+/// for comparing the REE value types.
+fn ree_comparison_coercion_generic(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_ree: bool,
+    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (RunEndEncoded(_, lhs_values_field), RunEndEncoded(_, rhs_values_field)) => {
+            coerce_fn(lhs_values_field.data_type(), rhs_values_field.data_type())
+        }
+        (ree @ RunEndEncoded(_, values_field), other_type)
+        | (other_type, ree @ RunEndEncoded(_, values_field))
+            if preserve_ree && values_field.data_type() == other_type =>
+        {
+            Some(ree.clone())
+        }
+        (RunEndEncoded(_, values_field), _) => {
+            coerce_fn(values_field.data_type(), rhs_type)
+        }
+        (_, RunEndEncoded(_, values_field)) => {
+            coerce_fn(lhs_type, values_field.data_type())
+        }
+        _ => None,
+    }
+}
+
+/// Coercion rules for RunEndEncoded: the type that both lhs and rhs
+/// can be casted to for the purpose of a computation.
+///
+/// Not all operators support REE, if `preserve_ree` is true
+/// REE will be preserved if possible
+fn ree_comparison_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_ree: bool,
+) -> Option<DataType> {
+    ree_comparison_coercion_generic(lhs_type, rhs_type, preserve_ree, comparison_coercion)
+}
+
+/// Coercion rules for RunEndEncoded with numeric preference: similar to
+/// [`ree_comparison_coercion`] but uses [`comparison_coercion_numeric`]
+/// which prefers numeric types over strings when both are present.
+///
+/// This is used by [`comparison_coercion_numeric`] to maintain consistent
+/// numeric-preferring semantics when dealing with REE types.
+fn ree_comparison_coercion_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_ree: bool,
+) -> Option<DataType> {
+    ree_comparison_coercion_generic(
+        lhs_type,
+        rhs_type,
+        preserve_ree,
+        comparison_coercion_numeric,
+    )
+}
+
 /// Coercion rules for string concat.
 /// This is a union of string coercion rules and specified rules:
 /// 1. At least one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
@@ -1601,12 +1670,13 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 }
 
 /// Coercion rules for like operations.
-/// This is a union of string coercion rules and dictionary coercion rules
+/// This is a union of string coercion rules, dictionary coercion rules, and REE coercion rules
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
+        .or_else(|| ree_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
