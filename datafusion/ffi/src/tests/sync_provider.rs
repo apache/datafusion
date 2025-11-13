@@ -17,12 +17,14 @@
 
 use std::sync::Arc;
 
+use super::{create_record_batch, create_test_schema};
+use crate::execution::FFI_TaskContextProvider;
 use crate::table_provider::FFI_TableProvider;
 use datafusion::datasource::MemTable;
 
-use super::{create_record_batch, create_test_schema};
-
-pub(crate) fn create_sync_table_provider() -> FFI_TableProvider {
+pub(crate) fn create_sync_table_provider(
+    task_ctx_provider: FFI_TaskContextProvider,
+) -> FFI_TableProvider {
     let schema = create_test_schema();
 
     // It is useful to create these as multiple record batches
@@ -35,5 +37,5 @@ pub(crate) fn create_sync_table_provider() -> FFI_TableProvider {
 
     let table_provider = MemTable::try_new(schema, vec![batches]).unwrap();
 
-    FFI_TableProvider::new(Arc::new(table_provider), true, None)
+    FFI_TableProvider::new(Arc::new(table_provider), true, None, task_ctx_provider)
 }

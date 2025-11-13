@@ -27,6 +27,8 @@
 
 use std::{any::Any, fmt::Debug, sync::Arc};
 
+use super::create_record_batch;
+use crate::execution::FFI_TaskContextProvider;
 use crate::table_provider::FFI_TableProvider;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
@@ -45,8 +47,6 @@ use tokio::{
     runtime::Handle,
     sync::{broadcast, mpsc},
 };
-
-use super::create_record_batch;
 
 #[derive(Debug)]
 pub struct AsyncTableProvider {
@@ -277,7 +277,14 @@ impl Stream for AsyncTestRecordBatchStream {
     }
 }
 
-pub(crate) fn create_async_table_provider() -> FFI_TableProvider {
+pub(crate) fn create_async_table_provider(
+    task_ctx_provider: FFI_TaskContextProvider,
+) -> FFI_TableProvider {
     let (table_provider, tokio_rt) = start_async_provider();
-    FFI_TableProvider::new(Arc::new(table_provider), true, Some(tokio_rt))
+    FFI_TableProvider::new(
+        Arc::new(table_provider),
+        true,
+        Some(tokio_rt),
+        task_ctx_provider,
+    )
 }

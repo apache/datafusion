@@ -22,6 +22,7 @@ mod tests {
     use datafusion::catalog::TableProvider;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextProvider;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
@@ -32,19 +33,20 @@ mod tests {
     async fn test_table_provider(synchronous: bool) -> Result<()> {
         let table_provider_module = get_module()?;
 
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+
         // By calling the code below, the table provided will be created within
         // the module's code.
         let ffi_table_provider = table_provider_module.create_table().ok_or(
             DataFusionError::NotImplemented(
                 "External table provider failed to implement create_table".to_string(),
             ),
-        )?(synchronous);
+        )?(synchronous, task_ctx_provider.into());
 
         // In order to access the table provider within this executable, we need to
         // turn it into a `ForeignTableProvider`.
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_table_provider).into();
-
-        let ctx = SessionContext::new();
 
         // Display the data to show the full cycle works.
         ctx.register_table("external_table", foreign_table_provider)?;
