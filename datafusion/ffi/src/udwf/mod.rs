@@ -394,7 +394,7 @@ impl From<&FFI_SortOptions> for SortOptions {
 #[cfg(feature = "integration-tests")]
 mod tests {
     use crate::tests::create_record_batch;
-    use crate::udwf::FFI_WindowUDF;
+    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
     use arrow::array::{create_array, ArrayRef};
     use datafusion::functions_window::lead_lag::{lag_udwf, WindowShift};
     use datafusion::logical_expr::expr::Sort;
@@ -456,6 +456,30 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].column(1), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udwf_local_bypass() -> datafusion_common::Result<()> {
+        let original_udwf = Arc::new(WindowUDF::from(WindowShift::lag()));
+
+        let mut ffi_udwf = FFI_WindowUDF::from(original_udwf);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).try_into()?;
+        assert!(foreign_udwf
+            .as_any()
+            .downcast_ref::<WindowShift>()
+            .is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).try_into()?;
+        assert!(foreign_udwf
+            .as_any()
+            .downcast_ref::<ForeignWindowUDF>()
+            .is_some());
 
         Ok(())
     }

@@ -334,4 +334,54 @@ impl PartitionEvaluator for ForeignPartitionEvaluator {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use crate::udwf::partition_evaluator::{
+        FFI_PartitionEvaluator, ForeignPartitionEvaluator,
+    };
+    use arrow::array::ArrayRef;
+    use datafusion::logical_expr::PartitionEvaluator;
+
+    #[derive(Debug)]
+    struct TestPartitionEvaluator {}
+
+    impl PartitionEvaluator for TestPartitionEvaluator {
+        fn evaluate_all(
+            &mut self,
+            values: &[ArrayRef],
+            _num_rows: usize,
+        ) -> datafusion_common::Result<ArrayRef> {
+            Ok(values[0].to_owned())
+        }
+    }
+
+    #[test]
+    fn test_ffi_partition_evaluator_local_bypass_inner() -> datafusion_common::Result<()>
+    {
+        let original_accum = TestPartitionEvaluator {};
+        let boxed_accum: Box<dyn PartitionEvaluator> = Box::new(original_accum);
+
+        let ffi_accum: FFI_PartitionEvaluator = boxed_accum.into();
+
+        // Verify local libraries can be downcast to their original
+        let foreign_accum: Box<dyn PartitionEvaluator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn PartitionEvaluator
+                as *const TestPartitionEvaluator);
+            assert!(!concrete.uses_window_frame());
+        }
+
+        // Verify different library markers generate foreign accumulator
+        let original_accum = TestPartitionEvaluator {};
+        let boxed_accum: Box<dyn PartitionEvaluator> = Box::new(original_accum);
+        let mut ffi_accum: FFI_PartitionEvaluator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_accum: Box<dyn PartitionEvaluator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn PartitionEvaluator
+                as *const ForeignPartitionEvaluator);
+            assert!(!concrete.uses_window_frame());
+        }
+
+        Ok(())
+    }
+}
