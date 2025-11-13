@@ -21,7 +21,10 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, Date32Array};
 use arrow::datatypes::{DataType, Date32Type};
 use chrono::{Datelike, Duration, NaiveDate};
-use datafusion_common::{exec_datafusion_err, internal_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, exec_datafusion_err, internal_err,
+    DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -65,10 +68,12 @@ impl ScalarUDFImpl for SparkLastDay {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
-            return internal_err!(
-                "Spark `last_day` function requires 1 argument, got {}",
-                args.len()
+            assert_eq_or_internal_err!(
+                args.len(),
+                1,
+                "Spark `last_day` function requires 1 argument"
             );
+            unreachable!()
         };
         match arg {
             ColumnarValue::Scalar(ScalarValue::Date32(days)) => {
