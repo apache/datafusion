@@ -63,7 +63,7 @@ pub(crate) fn validate_percentile_expr(
                 );
             }
 
-            let values = list.value(0); 
+            let values = list.value(0);
             let result: Vec<f64> = match values.data_type() {
                 DataType::Float64 => {
                     let arr: Float64Array = downcast_array(values.as_ref());
