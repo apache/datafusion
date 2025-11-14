@@ -348,8 +348,7 @@ impl ExecutionPlan for DataSourceExec {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
                 // Re-compute properties since we have new filters which will impact equivalence info
-                new_node.cache =
-                    Self::compute_properties(Arc::clone(&new_node.data_source));
+                new_node.cache = Self::compute_properties(&new_node.data_source);
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -371,7 +370,7 @@ impl DataSourceExec {
 
     // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&data_source));
+        let cache = Self::compute_properties(&data_source);
         Self { data_source, cache }
     }
 
@@ -381,7 +380,7 @@ impl DataSourceExec {
     }
 
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(Arc::clone(&data_source));
+        self.cache = Self::compute_properties(&data_source);
         self.data_source = data_source;
         self
     }
@@ -398,7 +397,7 @@ impl DataSourceExec {
         self
     }
 
-    fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
+    fn compute_properties(data_source: &Arc<dyn DataSource>) -> PlanProperties {
         PlanProperties::new(
             data_source.eq_properties(),
             data_source.output_partitioning(),
