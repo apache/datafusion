@@ -22,7 +22,7 @@ use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -247,7 +247,8 @@ impl ColumnarValue {
                         Some(array_len)
                     } else {
                         return internal_err!(
-                            "Arguments has mixed length. Expected length: {array_len}, found length: {}", a.len()
+                            "Arguments has mixed length. Expected length: {array_len}, found length: {}",
+                            a.len()
                         );
                     }
                 }
