@@ -709,9 +709,20 @@ impl Stream for GroupedHashAggregateStream {
                                 break 'reading_input;
                             }
 
-                            self.emit_early_if_necessary()?;
 
-                            self.switch_to_skip_aggregation()?;
+                            // Check if we should switch to skip aggregation mode
+                            if let Some(new_state) = self.switch_to_skip_aggregation()? {
+                                timer.done();
+                                self.exec_state = new_state;
+                                break 'reading_input;
+                            }
+
+                            // Check if we need to emit early due to memory pressure
+                            if let Some(new_state) = self.emit_early_if_necessary()? {
+                                timer.done();
+                                self.exec_state = new_state;
+                                break 'reading_input;
+                            }
 
                             timer.done();
                         }
@@ -1096,7 +1107,9 @@ impl GroupedHashAggregateStream {
     /// Emit if the used memory exceeds the target for partial aggregation.
     /// Currently only [`GroupOrdering::None`] is supported for early emitting.
     /// TODO: support group_ordering for early emitting
-    fn emit_early_if_necessary(&mut self) -> Result<()> {
+    ///
+    /// Returns `Some(ExecutionState)` if the state should be changed, None otherwise.
+    fn emit_early_if_necessary(&mut self) -> Result<Option<ExecutionState>> {
         if self.group_values.len() >= self.batch_size
             && matches!(self.group_ordering, GroupOrdering::None)
             && self.update_memory_reservation().is_err()
@@ -1104,10 +1117,10 @@ impl GroupedHashAggregateStream {
             assert_eq!(self.mode, AggregateMode::Partial);
             let n = self.group_values.len() / self.batch_size * self.batch_size;
             if let Some(batch) = self.emit(EmitTo::First(n), false)? {
-                self.exec_state = ExecutionState::ProducingOutput(batch);
+                return Ok(Some(ExecutionState::ProducingOutput(batch)));
             };
         }
-        Ok(())
+        Ok(None)
     }
 
     /// At this point, all the inputs are read and there are some spills.
@@ -1190,16 +1203,18 @@ impl GroupedHashAggregateStream {
     /// skipped, forces stream to produce currently accumulated output.
     ///
     /// Notice: It should only be called in Partial aggregation
-    fn switch_to_skip_aggregation(&mut self) -> Result<()> {
+    ///
+    /// Returns `Some(ExecutionState)` if the state should be changed, None otherwise.
+    fn switch_to_skip_aggregation(&mut self) -> Result<Option<ExecutionState>> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
                 if let Some(batch) = self.emit(EmitTo::All, false)? {
-                    self.exec_state = ExecutionState::ProducingOutput(batch);
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
                 };
             }
         }
 
-        Ok(())
+        Ok(None)
     }
 
     /// Returns true if the aggregation probe indicates that aggregation
@@ -1255,7 +1270,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
-        // This test specifically reproduces the double emission race condition
+        // Fix for https://github.com/apache/datafusion/issues/18701
+        // This test specifically proves that we have fixed double emission race condition
         // where emit_early_if_necessary() and switch_to_skip_aggregation()
         // both emit in the same loop iteration, causing data loss
 
@@ -1349,32 +1365,9 @@ mod tests {
             total_output_groups += batch.num_rows();
         }
 
-        // With the race condition bug:
-        // 1. emit_early_if_necessary() emits first batch_size groups (1024)
-        // 2. switch_to_skip_aggregation() immediately overwrites with remaining groups (100)
-        // 3. The 1024 groups from step 1 are LOST!
-        // 4. Only 100 groups are returned instead of 1124
-
-        println!(
-            "Double emission race condition test: Expected {} groups, got {} groups",
-            num_groups, total_output_groups
-        );
-
-        if total_output_groups < num_groups / 2 {
-            println!(
-                "🐛 BUG REPRODUCED! Lost {} groups ({:.1}% loss) - this indicates the double emission race condition",
-                num_groups - total_output_groups,
-                (1.0 - total_output_groups as f64 / num_groups as f64) * 100.0
-            );
-        }
-
-        // This test documents the expected behavior vs actual buggy behavior
-        // TODO: Once fixed, this assertion should pass
         assert_eq!(
             total_output_groups, num_groups,
-            "Double emission race condition detected! emit_early_if_necessary() result \
-             was overwritten by switch_to_skip_aggregation(). Expected {} groups, got {} groups",
-            num_groups, total_output_groups
+            "Unexpected number of groups",
         );
 
         Ok(())
