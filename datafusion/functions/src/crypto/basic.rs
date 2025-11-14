@@ -17,17 +17,18 @@
 
 //! "crypto" DataFusion functions
 
-use arrow::array::{Array, ArrayRef, BinaryArray, BinaryArrayType};
-use arrow::array::{AsArray, StringViewArray};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BinaryArray, BinaryArrayType, StringViewArray,
+};
 use arrow::datatypes::DataType;
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
 use datafusion_common::cast::as_binary_array;
 
 use arrow::compute::StringArrayType;
-use datafusion_common::internal_err;
 use datafusion_common::{
-    exec_err, plan_err, utils::take_function_args, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, plan_err, utils::take_function_args, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use md5::Md5;

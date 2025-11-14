@@ -107,7 +107,8 @@ impl ScalarUDFImpl for DigestFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        digest(&args.args)
+        let [data, digest_algorithm] = take_function_args(self.name(), &args.args)?;
+        digest(data, digest_algorithm)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -115,11 +116,13 @@ impl ScalarUDFImpl for DigestFunc {
     }
 }
 
-/// Digest computes a binary hash of the given data, accepts Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
-/// Second argument is the algorithm to use.
-/// Standard algorithms are md5, sha1, sha224, sha256, sha384 and sha512.
-fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [data, digest_algorithm] = take_function_args("digest", args)?;
+/// Compute binary hash of the given `data` (String or Binary array), according
+/// to the specified `digest_algorithm`. See [`DigestAlgorithm`] for supported
+/// algorithms.
+fn digest(
+    data: &ColumnarValue,
+    digest_algorithm: &ColumnarValue,
+) -> Result<ColumnarValue> {
     let digest_algorithm = match digest_algorithm {
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(Some(method)) => method.parse::<DigestAlgorithm>(),
