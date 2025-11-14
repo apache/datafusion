@@ -16,3 +16,4 @@
 // under the License.
 
 pub mod logical_extension_codec;
+pub mod physical_extension_codec;
