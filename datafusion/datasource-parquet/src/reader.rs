@@ -208,14 +208,14 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             inner = inner.with_footer_size_hint(hint)
         };
 
-        Ok(Box::new(CachedParquetFileReader {
-            store: Arc::clone(&self.store),
-            inner,
+        Ok(Box::new(CachedParquetFileReader::new(
             file_metrics,
+            Arc::clone(&self.store),
+            inner,
             partitioned_file,
-            metadata_cache: Arc::clone(&self.metadata_cache),
+            Arc::clone(&self.metadata_cache),
             metadata_size_hint,
-        }))
+        )))
     }
 }
 
@@ -229,6 +229,26 @@ pub struct CachedParquetFileReader {
     partitioned_file: PartitionedFile,
     metadata_cache: Arc<dyn FileMetadataCache>,
     metadata_size_hint: Option<usize>,
+}
+
+impl CachedParquetFileReader {
+    pub fn new(
+        file_metrics: ParquetFileMetrics,
+        store: Arc<dyn ObjectStore>,
+        inner: ParquetObjectReader,
+        partitioned_file: PartitionedFile,
+        metadata_cache: Arc<dyn FileMetadataCache>,
+        metadata_size_hint: Option<usize>,
+    ) -> Self {
+        Self {
+            file_metrics,
+            store,
+            inner,
+            partitioned_file,
+            metadata_cache,
+            metadata_size_hint,
+        }
+    }
 }
 
 impl AsyncFileReader for CachedParquetFileReader {

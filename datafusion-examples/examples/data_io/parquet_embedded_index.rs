@@ -136,6 +136,31 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 
+/// Store a custom index inside a Parquet file and use it to speed up queries
+pub async fn parquet_embedded_index() -> Result<()> {
+    // 1. Create temp dir and write 3 Parquet files with different category sets
+    let tmp = TempDir::new()?;
+    let dir = tmp.path();
+    write_file_with_index(&dir.join("a.parquet"), &["foo", "bar", "foo"])?;
+    write_file_with_index(&dir.join("b.parquet"), &["baz", "qux"])?;
+    write_file_with_index(&dir.join("c.parquet"), &["foo", "quux", "quux"])?;
+
+    // 2. Register our custom TableProvider
+    let field = Field::new("category", DataType::Utf8, false);
+    let schema_ref = Arc::new(Schema::new(vec![field]));
+    let provider = Arc::new(DistinctIndexTable::try_new(dir, schema_ref.clone())?);
+
+    let ctx = SessionContext::new();
+    ctx.register_table("t", provider)?;
+
+    // 3. Run a query: only files containing 'foo' get scanned. The rest are pruned.
+    // based on the distinct index.
+    let df = ctx.sql("SELECT * FROM t WHERE category = 'foo'").await?;
+    df.show().await?;
+
+    Ok(())
+}
+
 /// An index of distinct values for a single column
 ///
 /// In this example the index is a simple set of strings, but in a real
@@ -451,29 +476,4 @@ impl TableProvider for DistinctIndexTable {
         // Mark as inexact since pruning is file‑granular
         Ok(vec![TableProviderFilterPushDown::Inexact; fs.len()])
     }
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    // 1. Create temp dir and write 3 Parquet files with different category sets
-    let tmp = TempDir::new()?;
-    let dir = tmp.path();
-    write_file_with_index(&dir.join("a.parquet"), &["foo", "bar", "foo"])?;
-    write_file_with_index(&dir.join("b.parquet"), &["baz", "qux"])?;
-    write_file_with_index(&dir.join("c.parquet"), &["foo", "quux", "quux"])?;
-
-    // 2. Register our custom TableProvider
-    let field = Field::new("category", DataType::Utf8, false);
-    let schema_ref = Arc::new(Schema::new(vec![field]));
-    let provider = Arc::new(DistinctIndexTable::try_new(dir, schema_ref.clone())?);
-
-    let ctx = SessionContext::new();
-    ctx.register_table("t", provider)?;
-
-    // 3. Run a query: only files containing 'foo' get scanned. The rest are pruned.
-    // based on the distinct index.
-    let df = ctx.sql("SELECT * FROM t WHERE category = 'foo'").await?;
-    df.show().await?;
-
-    Ok(())
 }

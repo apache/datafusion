@@ -22,7 +22,7 @@ use super::{
     rewrite::TableAliasRewriter, Unparser,
 };
 use datafusion_common::{
-    internal_err,
+    assert_eq_or_internal_err, internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Column, DataFusionError, Result, ScalarValue,
 };
@@ -520,12 +520,12 @@ pub(crate) fn sqlite_from_unixtime_to_sql(
     unparser: &Unparser,
     from_unixtime_args: &[Expr],
 ) -> Result<Option<ast::Expr>> {
-    if from_unixtime_args.len() != 1 {
-        return internal_err!(
-            "from_unixtime for SQLite expects 1 argument, found {}",
-            from_unixtime_args.len()
-        );
-    }
+    assert_eq_or_internal_err!(
+        from_unixtime_args.len(),
+        1,
+        "from_unixtime for SQLite expects 1 argument, found {}",
+        from_unixtime_args.len()
+    );
 
     Ok(Some(unparser.scalar_function_to_sql(
         "datetime",
@@ -547,12 +547,12 @@ pub(crate) fn sqlite_date_trunc_to_sql(
     unparser: &Unparser,
     date_trunc_args: &[Expr],
 ) -> Result<Option<ast::Expr>> {
-    if date_trunc_args.len() != 2 {
-        return internal_err!(
-            "date_trunc for SQLite expects 2 arguments, found {}",
-            date_trunc_args.len()
-        );
-    }
+    assert_eq_or_internal_err!(
+        date_trunc_args.len(),
+        2,
+        "date_trunc for SQLite expects 2 arguments, found {}",
+        date_trunc_args.len()
+    );
 
     if let Expr::Literal(ScalarValue::Utf8(Some(unit)), _) = &date_trunc_args[0] {
         let format = match unit.to_lowercase().as_str() {

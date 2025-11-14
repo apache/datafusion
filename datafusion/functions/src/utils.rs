@@ -17,9 +17,9 @@
 
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
@@ -134,8 +134,8 @@ pub fn calculate_binary_math<L, R, O, F>(
     fun: F,
 ) -> Result<Arc<PrimitiveArray<O>>>
 where
-    R: ArrowPrimitiveType,
     L: ArrowPrimitiveType,
+    R: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
     R::Native: TryFrom<ScalarValue>,
@@ -144,14 +144,20 @@ where
     let right = right.cast_to(&R::DATA_TYPE, None)?;
     let result = match right {
         ColumnarValue::Scalar(scalar) => {
-            let right = R::Native::try_from(scalar.clone()).map_err(|_| {
-                DataFusionError::NotImplemented(format!(
-                    "Cannot convert scalar value {} to {}",
-                    &scalar,
-                    R::DATA_TYPE
-                ))
-            })?;
-            left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
+            if scalar.is_null() {
+                // Null scalar is castable to any numeric, creating a non-null expression.
+                // Provide null array explicitly to make result null
+                PrimitiveArray::<O>::new_null(1)
+            } else {
+                let right = R::Native::try_from(scalar.clone()).map_err(|_| {
+                    DataFusionError::NotImplemented(format!(
+                        "Cannot convert scalar value {} to {}",
+                        &scalar,
+                        R::DATA_TYPE
+                    ))
+                })?;
+                left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
+            }
         }
         ColumnarValue::Array(right) => {
             let right = right.as_primitive::<R>();
@@ -159,6 +165,40 @@ where
         }
     };
     Ok(Arc::new(result) as _)
+}
+
+/// Computes a binary math function for input arrays using a specified function
+/// and apply rescaling to given precision and scale.
+/// Generic types:
+/// - `L`: Left array decimal type
+/// - `R`: Right array primitive type
+/// - `O`: Output array decimal type
+/// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+pub fn calculate_binary_decimal_math<L, R, O, F>(
+    left: &dyn Array,
+    right: &ColumnarValue,
+    fun: F,
+    precision: u8,
+    scale: i8,
+) -> Result<Arc<PrimitiveArray<O>>>
+where
+    L: DecimalType,
+    R: ArrowPrimitiveType,
+    O: DecimalType,
+    F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
+    R::Native: TryFrom<ScalarValue>,
+{
+    let result_array = calculate_binary_math::<L, R, O, F>(left, right, fun)?;
+    if scale < 0 {
+        not_impl_err!("Negative scale is not supported for power for decimal types")
+    } else {
+        Ok(Arc::new(
+            result_array
+                .as_ref()
+                .clone()
+                .with_precision_and_scale(precision, scale)?,
+        ))
+    }
 }
 
 /// Converts Decimal128 components (value and scale) to an unscaled i128

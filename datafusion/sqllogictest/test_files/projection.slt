@@ -276,7 +276,6 @@ logical_plan
 03)----TableScan: t1 projection=[a], partial_filters=[t1.a > Int64(1)]
 physical_plan
 01)ProjectionExec: expr=[]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: a@0 > 1
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection/17513.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 > 1, pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 > 1, required_guarantees=[]
+02)--FilterExec: a@0 > 1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection/17513.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 > 1, pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 > 1, required_guarantees=[]

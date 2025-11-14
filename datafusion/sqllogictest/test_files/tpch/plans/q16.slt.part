@@ -87,13 +87,11 @@ physical_plan
 20)--------------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey], file_type=csv, has_header=false
 21)----------------------------------CoalesceBatchesExec: target_batch_size=8192
 22)------------------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-23)--------------------------------------CoalesceBatchesExec: target_batch_size=8192
-24)----------------------------------------FilterExec: p_brand@1 != Brand#45 AND p_type@2 NOT LIKE MEDIUM POLISHED% AND p_size@3 IN (SET) ([49, 14, 23, 45, 19, 3, 36, 9])
-25)------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-26)--------------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_brand, p_type, p_size], file_type=csv, has_header=false
-27)--------------------------CoalesceBatchesExec: target_batch_size=8192
-28)----------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
-29)------------------------------CoalesceBatchesExec: target_batch_size=8192
-30)--------------------------------FilterExec: s_comment@1 LIKE %Customer%Complaints%, projection=[s_suppkey@0]
-31)----------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-32)------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_comment], file_type=csv, has_header=false
+23)--------------------------------------FilterExec: p_brand@1 != Brand#45 AND p_type@2 NOT LIKE MEDIUM POLISHED% AND p_size@3 IN (SET) ([49, 14, 23, 45, 19, 3, 36, 9])
+24)----------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+25)------------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_brand, p_type, p_size], file_type=csv, has_header=false
+26)--------------------------CoalesceBatchesExec: target_batch_size=8192
+27)----------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
+28)------------------------------FilterExec: s_comment@1 LIKE %Customer%Complaints%, projection=[s_suppkey@0]
+29)--------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+30)----------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_comment], file_type=csv, has_header=false

@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 
 use super::*;
-use datafusion::assert_batches_eq;
 use datafusion_common::{metadata::ScalarAndMetadata, ParamValues, ScalarValue};
 use insta::assert_snapshot;
 
@@ -343,26 +342,20 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
         ]))
         .unwrap();
 
-    // df_with_params_replaced.schema() is not correct here
-    // https://github.com/apache/datafusion/issues/18102
-    let batches = df_with_params_replaced.clone().collect().await.unwrap();
-    let schema = batches[0].schema();
-
+    let schema = df_with_params_replaced.schema();
     assert_eq!(schema.field(0).data_type(), &DataType::UInt32);
     assert_eq!(schema.field(0).metadata(), &metadata1);
     assert_eq!(schema.field(1).data_type(), &DataType::Utf8);
     assert_eq!(schema.field(1).metadata(), &metadata2);
 
-    assert_batches_eq!(
-        [
-            "+----+-----+",
-            "| $1 | $2  |",
-            "+----+-----+",
-            "| 1  | two |",
-            "+----+-----+",
-        ],
-        &batches
-    );
+    let batches = df_with_params_replaced.collect().await.unwrap();
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +----+-----+
+    | $1 | $2  |
+    +----+-----+
+    | 1  | two |
+    +----+-----+
+    ");
 
     Ok(())
 }

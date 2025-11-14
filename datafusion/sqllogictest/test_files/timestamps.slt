@@ -45,6 +45,9 @@ create table ts_data_millis as select arrow_cast(ts / 1000000, 'Timestamp(Millis
 statement ok
 create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
 
+statement ok
+create table ts_data_micros_kolkata as select arrow_cast(ts / 1000, 'Timestamp(Microsecond, Some("Asia/Kolkata"))') as ts, value from ts_data;
+
 
 ##########
 ## Current date Tests
@@ -1874,27 +1877,6 @@ true false true true
 
 
 ##########
-## Common timestamp data
-##########
-
-statement ok
-drop table ts_data
-
-statement ok
-drop table ts_data_nanos
-
-statement ok
-drop table ts_data_micros
-
-statement ok
-drop table ts_data_millis
-
-statement ok
-drop table ts_data_secs
-
-
-
-##########
 ## Timezone impact on scalar functions
 #
 # server time = +07
@@ -3703,3 +3685,34 @@ SELECT
 FROM (SELECT CAST('2005-09-10 13:31:00 +02:00' AS timestamp with time zone) AS a)
 ----
 Timestamp(ns, "+00") 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z
+
+query P
+SELECT
+    date_trunc('millisecond', ts)
+FROM ts_data_micros_kolkata
+----
+2020-09-08T19:12:29.190+05:30
+2020-09-08T18:12:29.190+05:30
+2020-09-08T17:12:29.190+05:30
+
+##########
+## Common timestamp data
+##########
+
+statement ok
+drop table ts_data
+
+statement ok
+drop table ts_data_nanos
+
+statement ok
+drop table ts_data_micros
+
+statement ok
+drop table ts_data_millis
+
+statement ok
+drop table ts_data_secs
+
+statement ok
+drop table ts_data_micros_kolkata
