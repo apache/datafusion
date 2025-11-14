@@ -33,6 +33,8 @@ use substrait::proto::expression::{
     window_function::bound as SubstraitBound, window_function::bound::Kind as BoundKind,
 };
 
+const SUBSTRAIT_BOUNDS_TYPE_GROUPS: i32 = 3;
+
 pub async fn from_window_function(
     consumer: &impl SubstraitConsumer,
     window: &WindowFunction,
@@ -66,19 +68,23 @@ pub async fn from_window_function(
     let mut order_by =
         from_substrait_sorts(consumer, &window.sorts, input_schema).await?;
 
-    let bound_units = match BoundsType::try_from(window.bounds_type).map_err(|e| {
-        plan_datafusion_err!("Invalid bound type {}: {e}", window.bounds_type)
-    })? {
-        BoundsType::Rows => WindowFrameUnits::Rows,
-        BoundsType::Range => WindowFrameUnits::Range,
-        BoundsType::Unspecified => {
-            // If the plan does not specify the bounds type, then we use a simple logic to determine the units
-            // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
-            // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
-            if order_by.is_empty() {
-                WindowFrameUnits::Rows
-            } else {
-                WindowFrameUnits::Range
+    let bound_units = if window.bounds_type == SUBSTRAIT_BOUNDS_TYPE_GROUPS {
+        WindowFrameUnits::Groups
+    } else {
+        match BoundsType::try_from(window.bounds_type).map_err(|e| {
+            plan_datafusion_err!("Invalid bound type {}: {e}", window.bounds_type)
+        })? {
+            BoundsType::Rows => WindowFrameUnits::Rows,
+            BoundsType::Range => WindowFrameUnits::Range,
+            BoundsType::Unspecified => {
+                // If the plan does not specify the bounds type, then we use a simple logic to determine the units
+                // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
+                // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
+                if order_by.is_empty() {
+                    WindowFrameUnits::Rows
+                } else {
+                    WindowFrameUnits::Range
+                }
             }
         }
     };
