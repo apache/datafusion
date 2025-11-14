@@ -240,7 +240,6 @@ impl Optimizer {
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
-            // Must be after PropagateEmptyRelation
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
