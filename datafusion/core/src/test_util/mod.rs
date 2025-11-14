@@ -25,6 +25,7 @@ pub mod csv;
 use futures::Stream;
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -294,7 +295,7 @@ struct CacheNode {
 
 impl UserDefinedLogicalNodeCore for CacheNode {
     fn name(&self) -> &str {
-        "CachNode"
+        "CacheNode"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -309,7 +310,7 @@ impl UserDefinedLogicalNodeCore for CacheNode {
         vec![]
     }
 
-    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "CacheNode")
     }
 
@@ -329,10 +330,7 @@ impl UserDefinedLogicalNodeCore for CacheNode {
 struct TestCacheProducer {}
 
 impl CacheProducer for TestCacheProducer {
-    fn create(
-        &self,
-        plan: LogicalPlan,
-    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+    fn create(&self, plan: LogicalPlan) -> Result<Arc<dyn UserDefinedLogicalNode>> {
         Ok(Arc::new(CacheNode { input: plan }))
     }
 }
