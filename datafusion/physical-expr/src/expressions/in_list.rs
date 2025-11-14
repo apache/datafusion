@@ -25,7 +25,6 @@ use std::sync::Arc;
 use crate::physical_expr::physical_exprs_bag_equal;
 use crate::PhysicalExpr;
 
-use super::comparator::make_comparator;
 use arrow::array::*;
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
@@ -126,7 +125,7 @@ impl ArrayHashSet {
                     let contains = self
                         .map
                         .raw_entry()
-                        .from_hash(hash, |idx| cmp.compare(i, *idx).is_eq())
+                        .from_hash(hash, |idx| cmp(i, *idx).is_eq())
                         .is_some();
 
                     match contains {
@@ -165,7 +164,7 @@ fn make_hash_set(array: &dyn Array) -> Result<ArrayHashSet> {
             let hash = hashes[idx];
             if let RawEntryMut::Vacant(v) = map
                 .raw_entry_mut()
-                .from_hash(hash, |x| cmp.compare(*x, idx).is_eq())
+                .from_hash(hash, |x| cmp(*x, idx).is_eq())
             {
                 v.insert_with_hasher(hash, idx, (), |x| hashes[*x]);
             }
@@ -381,7 +380,7 @@ impl PhysicalExpr for InListExpr {
                                         if value.is_null(i) || array.is_null(i) {
                                             return None;
                                         }
-                                        Some(cmp.compare(i, i).is_eq())
+                                        Some(cmp(i, i).is_eq())
                                     })
                                     .collect::<BooleanArray>()
                             }
@@ -404,7 +403,7 @@ impl PhysicalExpr for InListExpr {
                                             if value.is_null(i) {
                                                 None
                                             } else {
-                                                Some(cmp.compare(i, 0).is_eq())
+                                                Some(cmp(i, 0).is_eq())
                                             }
                                         })
                                         .collect::<BooleanArray>()

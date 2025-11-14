@@ -23,7 +23,6 @@ mod case;
 mod cast;
 mod cast_column;
 mod column;
-mod comparator;
 mod dynamic_filters;
 mod in_list;
 mod is_not_null;
