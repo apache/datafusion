@@ -278,7 +278,7 @@ impl TableReference {
     /// identifier, normalizing `s` to lowercase.
     /// See docs on [`TableReference`] for more details.
     pub fn parse_str(s: &str) -> Self {
-        Self::parse_str_normalized(s, false)
+        Self::parse_str_normalized(s, true)
     }
 
     /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
@@ -329,6 +329,26 @@ impl TableReference {
                 schema,
                 table,
             } => vec![catalog.to_string(), schema.to_string(), table.to_string()],
+        }
+    }
+
+    /// Will ignore case for all [TableReference] identifiers
+    pub fn to_ignore_case(&self) -> Self {
+        match self {
+            TableReference::Bare { table } => Self::bare(table.to_ascii_lowercase()),
+            TableReference::Partial { schema, table } => {
+                Self::partial(schema.to_ascii_lowercase(), table.to_ascii_lowercase())
+            }
+
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => Self::full(
+                catalog.to_ascii_lowercase(),
+                schema.to_ascii_lowercase(),
+                table.to_ascii_lowercase(),
+            ),
         }
     }
 }

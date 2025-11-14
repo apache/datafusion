@@ -416,12 +416,12 @@ mod test {
 
     #[test]
     fn normalize_cols() {
-        let expr = col("a") + col("b") + col("c");
+        let expr = col("A") + col("b") + col("c");
 
         // Schemas with some matching and some non matching cols
         let schema_a = make_schema_with_empty_metadata(
             vec![Some("tableA".into()), Some("tableA".into())],
-            vec!["a", "aa"],
+            vec!["A", "aa"],
         );
         let schema_c = make_schema_with_empty_metadata(
             vec![Some("tableC".into()), Some("tableC".into())],
@@ -442,7 +442,7 @@ mod test {
                 .unwrap();
         assert_eq!(
             normalized_expr,
-            col("tableA.a") + col("tableB.b") + col("tableC.c")
+            col("tableA.A") + col("tableB.b") + col("tableC.c")
         );
     }
 

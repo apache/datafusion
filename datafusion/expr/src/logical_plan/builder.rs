@@ -2222,13 +2222,13 @@ mod tests {
                 .unwrap();
         assert_snapshot!(plan.schema().as_ref(), @"fields:[employee_csv.id, employee_csv.first_name, employee_csv.last_name, employee_csv.state, employee_csv.salary], metadata:{}");
 
-        // Note scan of "EMPLOYEE_CSV" is treated as a SQL identifier
-        // (and thus normalized to "employee"csv") as well
+        // Identifiers should be normalized at parsing time
+        // if explicitly set to uppercase it should be preserved
         let projection = None;
         let plan =
             LogicalPlanBuilder::scan("EMPLOYEE_CSV", table_source(&schema), projection)
                 .unwrap();
-        assert_snapshot!(plan.schema().as_ref(), @"fields:[employee_csv.id, employee_csv.first_name, employee_csv.last_name, employee_csv.state, employee_csv.salary], metadata:{}");
+        assert_snapshot!(plan.schema().as_ref(), @"fields:[EMPLOYEE_CSV.id, EMPLOYEE_CSV.first_name, EMPLOYEE_CSV.last_name, EMPLOYEE_CSV.state, EMPLOYEE_CSV.salary], metadata:{}");
     }
 
     #[test]

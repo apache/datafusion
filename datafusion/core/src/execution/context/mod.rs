@@ -1607,11 +1607,28 @@ impl SessionContext {
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref: TableReference = table_ref.into();
+        let table_ref = self.table_ref_ident_normalization(table_ref);
+
         let table = table_ref.table().to_owned();
         self.state
             .read()
             .schema_for_ref(table_ref)?
             .register_table(table, provider)
+    }
+    // Normalize table ident (convert ident to lowercase)
+    fn table_ref_ident_normalization(&self, table_ref: TableReference) -> TableReference {
+        let normalize = self
+            .state()
+            .config()
+            .options()
+            .sql_parser
+            .enable_ident_normalization;
+
+        if normalize {
+            table_ref.to_ignore_case()
+        } else {
+            table_ref
+        }
     }
 
     /// Deregisters the given table.
@@ -1622,6 +1639,8 @@ impl SessionContext {
         table_ref: impl Into<TableReference>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
+        let table_ref = self.table_ref_ident_normalization(table_ref);
+
         let table = table_ref.table().to_owned();
         self.state
             .read()
@@ -1632,6 +1651,8 @@ impl SessionContext {
     /// Return `true` if the specified table exists in the schema provider.
     pub fn table_exist(&self, table_ref: impl Into<TableReference>) -> Result<bool> {
         let table_ref: TableReference = table_ref.into();
+        let table_ref = self.table_ref_ident_normalization(table_ref);
+
         let table = table_ref.table();
         let table_ref = table_ref.clone();
         Ok(self
@@ -1650,6 +1671,8 @@ impl SessionContext {
     /// [`register_table`]: SessionContext::register_table
     pub async fn table(&self, table_ref: impl Into<TableReference>) -> Result<DataFrame> {
         let table_ref: TableReference = table_ref.into();
+        let table_ref = self.table_ref_ident_normalization(table_ref);
+
         let provider = self.table_provider(table_ref.clone()).await?;
         let plan = LogicalPlanBuilder::scan(
             table_ref,
@@ -2453,6 +2476,87 @@ mod tests {
         // option on ctx.
         // some systems like datafusion ballista relies on stable session_id
         assert_eq!(ctx.session_id(), ctx.enable_url_table().session_id());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_table_name_normalization_disabled() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.sql("SET datafusion.sql_parser.enable_ident_normalization=false")
+            .await?;
+
+        ctx.register_csv(
+            "UPPERCASE_TABLE",
+            "tests/tpch-csv/customer.csv",
+            Default::default(),
+        )
+        .await?;
+
+        let result = plan_and_collect(
+            &ctx,
+            format!("select c_name from UPPERCASE_TABLE limit 3").as_str(),
+        )
+        .await?;
+
+        let actual = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
+        assert_snapshot!(actual, @r"
+        +--------------------+
+        | c_name             |
+        +--------------------+
+        | Customer#000000002 |
+        | Customer#000000003 |
+        | Customer#000000004 |
+        +--------------------+
+        ");
+
+        assert!(!ctx.table_exist("uppercase_table")?);
+        assert!(ctx.table_exist("UPPERCASE_TABLE")?);
+
+        assert!(ctx.deregister_table("uppercase_table")?.is_none());
+        assert!(ctx.deregister_table("UPPERCASE_TABLE")?.is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_table_name_normalization_enabled() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.sql("SET datafusion.sql_parser.enable_ident_normalization=true")
+            .await?;
+
+        ctx.register_csv(
+            "UPPERCASE_TABLE",
+            "tests/tpch-csv/customer.csv",
+            Default::default(),
+        )
+        .await?;
+
+        let result = plan_and_collect(
+            &ctx,
+            format!("select c_name from uppercase_table limit 3").as_str(),
+        )
+        .await?;
+
+        let actual = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
+        assert_snapshot!(actual, @r"
+        +--------------------+
+        | c_name             |
+        +--------------------+
+        | Customer#000000002 |
+        | Customer#000000003 |
+        | Customer#000000004 |
+        +--------------------+
+        ");
+
+        assert!(ctx.table_exist("uppercase_table")?);
+        assert!(ctx.table_exist("UPPERCASE_TABLE")?);
+
+        assert!(ctx.deregister_table("uppercase_table")?.is_some());
+
         Ok(())
     }
 
