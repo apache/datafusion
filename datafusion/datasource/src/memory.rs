@@ -285,6 +285,7 @@ impl MemorySourceConfig {
     }
 
     /// Create a new execution plan from a list of constant values (`ValuesExec`)
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_as_values(
         schema: SchemaRef,
         data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
@@ -342,6 +343,7 @@ impl MemorySourceConfig {
     ///
     /// Errors if any of the batches don't match the provided schema, or if no
     /// batches are provided.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_from_batches(
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
@@ -945,10 +947,9 @@ mod tests {
             vec![lit(ScalarValue::Null)],
         ];
         let rows = data.len();
-        let values = MemorySourceConfig::try_new_as_values(
-            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
-            data,
-        )?;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)]));
+        let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
             values.partition_statistics(None)?,
