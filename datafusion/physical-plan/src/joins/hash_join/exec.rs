@@ -1460,7 +1460,7 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let left_values = evaluate_expressions_to_arrays(&on_left, &single_batch)?;
+    let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
     // Compute bounds for dynamic filter if enabled
     let bounds = match bounds_accumulators {
