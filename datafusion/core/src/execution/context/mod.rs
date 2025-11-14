@@ -468,6 +468,12 @@ impl SessionContext {
         self
     }
 
+    /// Register a [`CacheProducer`] to provide custom caching strategy
+    pub fn with_cache_producer(self, cache_producer: Arc<dyn CacheProducer>) -> Self {
+        self.state.write().set_cache_producer(cache_producer);
+        self
+    }
+
     /// Adds an optimizer rule to the end of the existing rules.
     ///
     /// See [`SessionState`] for more control of when the rule is applied.
@@ -1882,6 +1888,15 @@ pub enum RegisterFunction {
     Window(Arc<WindowUDF>),
     /// Table user defined function
     Table(String, Arc<dyn TableFunctionImpl>),
+}
+
+/// Interface for applying a custom caching strategy.
+/// Implement this trait and register via [`SessionState`]
+/// to create a custom logical node for caching.
+pub trait CacheProducer: Debug + Sync + Send {
+    /// Create a custom logical node for caching
+    /// given a logical plan (of DF to cache).
+    fn create(&self, plan: LogicalPlan) -> Result<Arc<dyn UserDefinedLogicalNode>>;
 }
 
 /// Default implementation of [SerializerRegistry] that throws unimplemented error

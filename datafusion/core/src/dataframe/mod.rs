@@ -56,6 +56,7 @@ use datafusion_common::{
     ScalarValue, SchemaError, TableReference, UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
+use datafusion_expr::Extension;
 use datafusion_expr::{
     case,
     dml::InsertOp,
@@ -2344,14 +2345,24 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        let context = SessionContext::new_with_state((*self.session_state).clone());
-        // The schema is consistent with the output
-        let plan = self.clone().create_physical_plan().await?;
-        let schema = plan.schema();
-        let task_ctx = Arc::new(self.task_ctx());
-        let partitions = collect_partitioned(plan, task_ctx).await?;
-        let mem_table = MemTable::try_new(schema, partitions)?;
-        context.read_table(Arc::new(mem_table))
+        if let Some(cache_producer) = self.session_state.cache_producer() {
+            let node = cache_producer.create(self.plan)?;
+            let plan = LogicalPlan::Extension(Extension { node });
+            Ok(Self {
+                session_state: self.session_state,
+                plan,
+                projection_requires_validation: self.projection_requires_validation,
+            })
+        } else {
+            let context = SessionContext::new_with_state((*self.session_state).clone());
+            // The schema is consistent with the output
+            let plan = self.clone().create_physical_plan().await?;
+            let schema = plan.schema();
+            let task_ctx = Arc::new(self.task_ctx());
+            let partitions = collect_partitioned(plan, task_ctx).await?;
+            let mem_table = MemTable::try_new(schema, partitions)?;
+            context.read_table(Arc::new(mem_table))
+        }
     }
 
     /// Apply an alias to the DataFrame.
