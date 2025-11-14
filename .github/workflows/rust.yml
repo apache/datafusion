@@ -275,7 +275,7 @@ jobs:
         - /usr/local:/host/usr/local
     steps:
       - name: Remove unnecessary preinstalled software
-      - run: |
+        run: |
           echo "Disk space before cleanup:"
           df -h
           # remove tool cache: about 8.5GB (github has host /opt/hostedtoolcache mounted as /__t)
