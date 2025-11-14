@@ -25,9 +25,8 @@ use arrow::error::ArrowError;
 use datafusion_common::cast::{
     as_date32_array, as_int16_array, as_int32_array, as_int8_array,
 };
-use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, DataFusionError, Result,
-};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -89,14 +88,7 @@ impl ScalarUDFImpl for SparkDateAdd {
 }
 
 fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [date_arg, days_arg] = args else {
-        assert_eq_or_internal_err!(
-            args.len(),
-            2,
-            "Spark `date_add` function requires 2 arguments"
-        );
-        unreachable!()
-    };
+    let [date_arg, days_arg] = take_function_args("date_add", args)?;
     let date_array = as_date32_array(date_arg)?;
     let result = match days_arg.data_type() {
         DataType::Int8 => {

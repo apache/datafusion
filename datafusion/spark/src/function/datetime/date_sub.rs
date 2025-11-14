@@ -25,9 +25,7 @@ use arrow::error::ArrowError;
 use datafusion_common::cast::{
     as_date32_array, as_int16_array, as_int32_array, as_int8_array,
 };
-use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, DataFusionError, Result,
-};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -84,12 +82,10 @@ impl ScalarUDFImpl for SparkDateSub {
 
 fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [date_arg, days_arg] = args else {
-        assert_eq_or_internal_err!(
-            args.len(),
-            2,
-            "Spark `date_sub` function requires 2 arguments"
+        return internal_err!(
+            "Spark `date_sub` function requires 2 arguments, got {}",
+            args.len()
         );
-        unreachable!()
     };
     let date_array = as_date32_array(date_arg)?;
     let result = match days_arg.data_type() {
@@ -130,12 +126,10 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
             )?
         }
         _ => {
-            assert_or_internal_err!(
-               matches!(days_arg.data_type(), DataType::Int8 | DataType::Int16 | DataType::Int32),
-               "Spark `date_sub` function: argument must be int8, int16, int32, got {:?}",
-               days_arg.data_type()
-           );
-            unreachable!()
+            return internal_err!(
+                "Spark `date_sub` function: argument must be int8, int16, int32, got {:?}",
+                days_arg.data_type()
+            );
         }
     };
     Ok(Arc::new(result))
