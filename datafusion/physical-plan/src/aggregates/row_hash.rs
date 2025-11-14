@@ -709,7 +709,6 @@ impl Stream for GroupedHashAggregateStream {
                                 break 'reading_input;
                             }
 
-
                             // Check if we should switch to skip aggregation mode
                             if let Some(new_state) = self.switch_to_skip_aggregation()? {
                                 timer.done();
@@ -1351,7 +1350,8 @@ mod tests {
         )?;
 
         // Execute and collect results
-        let mut stream = GroupedHashAggregateStream::new(&aggregate_exec, Arc::clone(&task_ctx), 0)?;
+        let mut stream =
+            GroupedHashAggregateStream::new(&aggregate_exec, Arc::clone(&task_ctx), 0)?;
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {
