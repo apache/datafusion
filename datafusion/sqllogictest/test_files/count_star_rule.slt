@@ -64,13 +64,12 @@ logical_plan
 04)------TableScan: t1 projection=[a]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, count(Int64(1))@1 as cnt]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: count(Int64(1))@1 > 0
-04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--FilterExec: count(Int64(1))@1 > 0
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 1;

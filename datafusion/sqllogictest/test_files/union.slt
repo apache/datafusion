@@ -513,16 +513,15 @@ physical_plan
 09)----------------CoalesceBatchesExec: target_batch_size=2
 10)------------------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
 11)--------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-12)----------------------CoalesceBatchesExec: target_batch_size=2
-13)------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
-14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-15)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
-16)----ProjectionExec: expr=[1 as cnt]
-17)------PlaceholderRowExec
-18)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
-19)------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-20)--------ProjectionExec: expr=[1 as c1]
-21)----------PlaceholderRowExec
+12)----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
+13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
+15)----ProjectionExec: expr=[1 as cnt]
+16)------PlaceholderRowExec
+17)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
+18)------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+19)--------ProjectionExec: expr=[1 as c1]
+20)----------PlaceholderRowExec
 
 
 ########
@@ -834,14 +833,12 @@ logical_plan
 physical_plan
 01)CoalescePartitionsExec
 02)--UnionExec
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------FilterExec: c1@0 = a
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true
-07)----CoalesceBatchesExec: target_batch_size=2
-08)------FilterExec: c1@0 = a
-09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true
+03)----FilterExec: c1@0 = a
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true
+06)----FilterExec: c1@0 = a
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true
 
 # Clean up after the test
 statement ok

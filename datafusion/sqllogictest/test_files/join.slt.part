@@ -936,10 +936,9 @@ logical_plan
 06)----TableScan: department projection=[dept_name]
 physical_plan
 01)CrossJoinExec
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: name@1 = Alice OR name@1 = Bob
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)--DataSourceExec: partitions=1, partition_sizes=[1]
+02)--FilterExec: name@1 = Alice OR name@1 = Bob
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # expect no row for Carol
 query ITT
@@ -984,15 +983,13 @@ logical_plan
 07)------SubqueryAlias: d
 08)--------TableScan: department projection=[emp_id, dept_name]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: dept_name@2 != Engineering AND name@1 = Alice OR name@1 != Alice AND name@1 = Carol
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: name@1 = Alice OR name@1 != Alice AND name@1 = Carol
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
-09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: dept_name@2 != Engineering AND name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
+05)--------FilterExec: name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITT
 SELECT e.emp_id, e.name, d.dept_name
@@ -1386,9 +1383,8 @@ physical_plan
 10)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 11)------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
 12)--------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
-13)----------------CoalesceBatchesExec: target_batch_size=8192
-14)------------------FilterExec: y@1 = x@0
-15)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+13)----------------FilterExec: y@1 = x@0
+14)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table pairs;
