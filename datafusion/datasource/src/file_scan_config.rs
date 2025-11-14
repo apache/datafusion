@@ -1146,9 +1146,10 @@ impl PartitionColumnProjector {
     // to the right positions as deduced from `projected_schema`
     // - `file_batch`: batch read from the file, with internal projection applied
     // - `partition_values`: the list of partition values, one for each partition column
+    #[expect(clippy::needless_pass_by_value)]
     pub fn project(
         &mut self,
-        file_batch: &RecordBatch,
+        file_batch: RecordBatch,
         partition_values: &[ScalarValue],
     ) -> Result<RecordBatch> {
         let expected_cols =
@@ -1673,7 +1674,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                &file_batch,
+                file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -1701,7 +1702,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                &file_batch,
+                file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -1731,7 +1732,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                &file_batch,
+                file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -1759,7 +1760,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                &file_batch,
+                file_batch,
                 &[
                     ScalarValue::from("2021"),
                     ScalarValue::from("10"),
