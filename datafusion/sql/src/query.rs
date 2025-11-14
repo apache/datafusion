@@ -65,15 +65,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let set_expr = *body;
-        let order_by_for_select = order_by.clone();
-        let limit_clause_for_select = limit_clause.clone();
         let plan = match set_expr {
             SetExpr::Select(mut select) => {
                 let select_into = select.into.take();
+                let plan = self
+                    .select_to_plan(*select, order_by.clone(), planner_context)?;
                 let plan =
-                    self.select_to_plan(*select, order_by_for_select, planner_context)?;
-                let plan =
-                    self.limit(plan, limit_clause_for_select, planner_context)?;
+                    self.limit(plan, limit_clause.clone(), planner_context)?;
                 // Process the `SELECT INTO` after `LIMIT`.
                 self.select_into(plan, select_into)
             }
