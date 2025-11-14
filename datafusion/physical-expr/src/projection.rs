@@ -22,6 +22,7 @@ use crate::expressions::Column;
 use crate::utils::collect_columns;
 use crate::PhysicalExpr;
 
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -46,6 +47,14 @@ pub struct ProjectionExpr {
     /// The name of the output column for use an output schema.
     pub alias: String,
 }
+
+impl PartialEq for ProjectionExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr) && self.alias == other.alias
+    }
+}
+
+impl Eq for ProjectionExpr {}
 
 impl std::fmt::Display for ProjectionExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -99,7 +108,7 @@ impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
 /// This struct encapsulates multiple `ProjectionExpr` instances,
 /// representing a complete projection operation and provides
 /// methods to manipulate and analyze the projection as a whole.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionExprs {
     exprs: Vec<ProjectionExpr>,
 }
@@ -192,7 +201,7 @@ impl ProjectionExprs {
     /// assert_eq!(projection_with_dups.as_ref()[1].alias, "a"); // duplicate
     /// assert_eq!(projection_with_dups.as_ref()[2].alias, "b");
     /// ```
-    pub fn from_indices(indices: &[usize], schema: &SchemaRef) -> Self {
+    pub fn from_indices(indices: &[usize], schema: &Schema) -> Self {
         let projection_exprs = indices.iter().map(|&i| {
             let field = schema.field(i);
             ProjectionExpr {
@@ -396,6 +405,35 @@ impl ProjectionExprs {
         ))
     }
 
+    /// Project a RecordBatch.
+    ///
+    /// This function accepts a pre-computed output schema instead of calling [`ProjectionExprs::project_schema`]
+    /// so that repeated calls do not have schema projection overhead.
+    pub fn project_batch(
+        &self,
+        batch: &RecordBatch,
+        output_schema: SchemaRef,
+    ) -> Result<RecordBatch> {
+        let arrays = self
+            .exprs
+            .iter()
+            .map(|expr| {
+                expr.expr
+                    .evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        if arrays.is_empty() {
+            let options =
+                RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            RecordBatch::try_new_with_options(output_schema, arrays, &options)
+                .map_err(Into::into)
+        } else {
+            RecordBatch::try_new(output_schema, arrays).map_err(Into::into)
+        }
+    }
+
     /// Project statistics according to this projection.
     /// For example, for a projection `SELECT a AS x, b + 1 AS y`, where `a` is at index 0 and `b` is at index 1,
     /// if the input statistics has column statistics for columns `a`, `b`, and `c`, the output statistics would have column statistics for columns `x` and `y`.
@@ -545,7 +583,13 @@ pub fn update_expr(
         })
         .data()?;
 
-    Ok((state == RewriteState::RewrittenValid).then_some(new_expr))
+    match state {
+        RewriteState::RewrittenInvalid => Ok(None),
+        // Both Unchanged and RewrittenValid are valid:
+        // - Unchanged means no columns to rewrite (e.g., literals)
+        // - RewrittenValid means columns were successfully rewritten
+        RewriteState::Unchanged | RewriteState::RewrittenValid => Ok(Some(new_expr)),
+    }
 }
 
 /// Stores target expressions, along with their indices, that associate with a
@@ -2007,6 +2051,94 @@ pub(crate) mod tests {
             err_msg.contains("Internal error: Column index 5 out of bounds for projected expressions of length 2"),
             "Unexpected error message: {err_msg}",
         );
+    }
+
+    #[test]
+    fn test_merge_empty_projection_with_literal() -> Result<()> {
+        // This test reproduces the issue from roundtrip_empty_projection test
+        // Query like: SELECT 1 FROM table
+        // where the file scan needs no columns (empty projection)
+        // but we project a literal on top
+
+        // Empty base projection (no columns needed from file)
+        let base_projection = ProjectionExprs::new(vec![]);
+
+        // Top projection with a literal expression: SELECT 1
+        let top_projection = ProjectionExprs::new(vec![ProjectionExpr {
+            expr: Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+            alias: "Int64(1)".to_string(),
+        }]);
+
+        // This should succeed - literals don't reference columns so they should
+        // pass through unchanged when merged with an empty projection
+        let merged = base_projection.try_merge(&top_projection)?;
+        assert_snapshot!(format!("{merged}"), @"Projection[1 AS Int64(1)]");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_with_literal() -> Result<()> {
+        // Test that update_expr correctly handles expressions without column references
+        let literal_expr: Arc<dyn PhysicalExpr> =
+            Arc::new(Literal::new(ScalarValue::Int64(Some(42))));
+        let empty_projection: Vec<ProjectionExpr> = vec![];
+
+        // Updating a literal with an empty projection should return the literal unchanged
+        let result = update_expr(&literal_expr, &empty_projection, true)?;
+        assert!(result.is_some(), "Literal expression should be valid");
+
+        let result_expr = result.unwrap();
+        assert_eq!(
+            result_expr
+                .as_any()
+                .downcast_ref::<Literal>()
+                .unwrap()
+                .value(),
+            &ScalarValue::Int64(Some(42))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_with_complex_literal_expr() -> Result<()> {
+        // Test update_expr with an expression containing both literals and a column
+        // This tests the case where we have: literal + column
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
+            Operator::Plus,
+            Arc::new(Column::new("x", 0)),
+        ));
+
+        // Base projection that maps column 0 to a different expression
+        let base_projection = vec![ProjectionExpr {
+            expr: Arc::new(Column::new("a", 5)),
+            alias: "x".to_string(),
+        }];
+
+        // The expression should be updated: 10 + x@0 becomes 10 + a@5
+        let result = update_expr(&expr, &base_projection, true)?;
+        assert!(result.is_some(), "Expression should be valid");
+
+        let result_expr = result.unwrap();
+        let binary = result_expr
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .expect("Should be a BinaryExpr");
+
+        // Left side should still be the literal
+        assert!(binary.left().as_any().downcast_ref::<Literal>().is_some());
+
+        // Right side should be updated to reference column at index 5
+        let right_col = binary
+            .right()
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("Right should be a Column");
+        assert_eq!(right_col.index(), 5);
+
+        Ok(())
     }
 
     #[test]
