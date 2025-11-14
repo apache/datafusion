@@ -54,13 +54,14 @@ impl OptimizerRule for EliminateNestedUnion {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
+        match plan.clone() {
             LogicalPlan::Union(Union { inputs, schema }) => {
                 let inputs = inputs
                     .into_iter()
                     .flat_map(extract_plans_from_union)
                     .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
                     .collect::<Result<Vec<_>>>()?;
+
                 Ok(Transformed::yes(LogicalPlan::Union(Union {
                     inputs: inputs.into_iter().map(Arc::new).collect_vec(),
                     schema,
@@ -94,7 +95,7 @@ impl OptimizerRule for EliminateNestedUnion {
 }
 
 fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
-    match Arc::unwrap_or_clone(plan) {
+    match Arc::unwrap_or_clone(plan.clone()) {
         LogicalPlan::Union(Union { inputs, .. }) => inputs
             .into_iter()
             .map(Arc::unwrap_or_clone)
@@ -104,15 +105,23 @@ fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
             input,
             schema,
             ..
-        }) => match Arc::unwrap_or_clone(input) {
+        }) => match Arc::unwrap_or_clone(input.clone()) {
             LogicalPlan::Union(Union { inputs, .. }) => inputs
                 .into_iter()
                 .map(Arc::unwrap_or_clone)
+                .map(|plan| {
+                    LogicalPlan::Projection(
+                        Projection::try_new_with_schema(
+                            expr.clone(),
+                            Arc::new(plan),
+                            schema.clone(),
+                        )
+                        .unwrap(),
+                    )
+                })
                 .collect::<Vec<_>>(),
 
-            plan => vec![LogicalPlan::Projection(
-                Projection::try_new_with_schema(expr, Arc::new(plan), schema).unwrap(),
-            )],
+            _ => vec![Arc::unwrap_or_clone(plan)],
         },
         plan => vec![plan],
     }
@@ -124,13 +133,6 @@ fn extract_plan_from_distinct(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         plan => Arc::new(plan),
     }
 }
-
-// fn extract_plan_from_projection(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
-//     match Arc::unwrap_or_clone(plan) {
-//         LogicalPlan::Distinct(Distinct::All(plan)) => plan,
-//         plan => Arc::new(plan),
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
