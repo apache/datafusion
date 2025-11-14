@@ -90,17 +90,15 @@ physical_plan
 14)--------------------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(c_custkey@0, o_custkey@0)], projection=[c_phone@1, c_acctbal@2]
 15)----------------------------CoalesceBatchesExec: target_batch_size=8192
 16)------------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
-17)--------------------------------CoalesceBatchesExec: target_batch_size=8192
-18)----------------------------------FilterExec: substr(c_phone@1, 1, 2) IN ([13, 31, 23, 29, 30, 18, 17])
-19)------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-20)--------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_phone, c_acctbal], file_type=csv, has_header=false
-21)----------------------------CoalesceBatchesExec: target_batch_size=8192
-22)------------------------------RepartitionExec: partitioning=Hash([o_custkey@0], 4), input_partitions=4
-23)--------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_custkey], file_type=csv, has_header=false
-24)--------------------AggregateExec: mode=Final, gby=[], aggr=[avg(customer.c_acctbal)]
-25)----------------------CoalescePartitionsExec
-26)------------------------AggregateExec: mode=Partial, gby=[], aggr=[avg(customer.c_acctbal)]
-27)--------------------------CoalesceBatchesExec: target_batch_size=8192
-28)----------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND substr(c_phone@0, 1, 2) IN ([13, 31, 23, 29, 30, 18, 17]), projection=[c_acctbal@1]
-29)------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-30)--------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_phone, c_acctbal], file_type=csv, has_header=false
+17)--------------------------------FilterExec: substr(c_phone@1, 1, 2) IN ([13, 31, 23, 29, 30, 18, 17])
+18)----------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+19)------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_phone, c_acctbal], file_type=csv, has_header=false
+20)----------------------------CoalesceBatchesExec: target_batch_size=8192
+21)------------------------------RepartitionExec: partitioning=Hash([o_custkey@0], 4), input_partitions=4
+22)--------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_custkey], file_type=csv, has_header=false
+23)--------------------AggregateExec: mode=Final, gby=[], aggr=[avg(customer.c_acctbal)]
+24)----------------------CoalescePartitionsExec
+25)------------------------AggregateExec: mode=Partial, gby=[], aggr=[avg(customer.c_acctbal)]
+26)--------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND substr(c_phone@0, 1, 2) IN ([13, 31, 23, 29, 30, 18, 17]), projection=[c_acctbal@1]
+27)----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+28)------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_phone, c_acctbal], file_type=csv, has_header=false

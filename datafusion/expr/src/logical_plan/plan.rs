@@ -3484,7 +3484,7 @@ impl Aggregate {
     ///
     /// This method should only be called when you are absolutely sure that the schema being
     /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
