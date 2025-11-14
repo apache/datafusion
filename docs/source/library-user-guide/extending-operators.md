@@ -33,7 +33,7 @@ fn rewrite(
   &self,
   plan: LogicalPlan,
   _config: &dyn OptimizerConfig,
-) -> Result<Transformed<LogicalPlan>> {
+) -> Result<Transformed> {
     // Attempts to rewrite a logical plan to a uwheel-based plan that either provides
     // plan-time aggregates or skips execution based on min/max pruning.
     if let Some(rewritten) = self.try_rewrite(&plan) {
@@ -44,7 +44,7 @@ fn rewrite(
 }
 
 // Converts a uwheel aggregate result to a TableScan with a MemTable as source
-fn agg_to_table_scan(result: f64, schema: SchemaRef) -> Result<LogicalPlan> {
+fn agg_to_table_scan(result: f64, schema: SchemaRef) -> Result {
   let data = Float64Array::from(vec![result]);
   let record_batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(data)])?;
   let df_schema = Arc::new(DFSchema::try_from(schema.clone())?);
@@ -57,87 +57,35 @@ To get a deeper dive into the usage of the µWheel project, visit the [blog post
 
 ## Example 2: TopK Operator
 
-This example demonstrates creating a custom TopK operator that optimizes "find the top K elements" queries.
+This example demonstrates creating a custom TopK operator that optimizes queries like "find the top 3 customers by revenue". Instead of fully sorting the input and discarding all but the top K elements, the TopK operator maintains only the K largest elements in memory, significantly reducing memory usage.
 
-### Background
+### Overview
 
-A "Top K" node is a common query optimization used for queries like "find the top 3 customers by revenue".
+Creating a custom operator in DataFusion requires implementing four key components that work together:
 
-**Example SQL:**
-```sql
-CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT)
-  STORED AS CSV location 'tests/data/customer.csv';
-
-SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
-```
-
-**Naive Plan:**
-The standard approach fully sorts the input before discarding everything except the top 3 elements.
-
-**Optimized TopK Plan:**
-Instead of sorting everything, we maintain only the top K elements in memory, significantly reducing buffer requirements.
+1. **Logical Plan Node** (`TopKPlanNode`) - Represents the TopK operation in the logical plan
+2. **Optimizer Rule** (`TopKOptimizerRule`) - Detects `LIMIT(SORT(...))` patterns and replaces them with TopK
+3. **Physical Planner** (`TopKPlanner`) - Converts the logical TopK node into a physical execution plan
+4. **Physical Execution** (`TopKExec`) - Executes the TopK algorithm on actual data
 
 ### Implementation
 
-The TopK implementation consists of several key components:
-
-#### 1. TopKPlanNode - The Logical Plan Node
-```rust,ignore
-#[derive(PartialEq, Eq, PartialOrd, Hash)]
-struct TopKPlanNode {
-    k: usize,
-    input: LogicalPlan,
-    expr: SortExpr,
-}
-impl UserDefinedLogicalNodeCore for TopKPlanNode {
-    fn name(&self) -> &str {
-        "TopK"
-    }
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![&self.input]
-    }
-    fn schema(&self) -> &DFSchemaRef {
-        self.input.schema()
-    }
-    fn expressions(&self) -> Vec<Expr> {
-        vec![self.expr.expr.clone()]
-    }
-    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TopK: k={}", self.k)
-    }
-    fn with_exprs_and_inputs(
-        &self,
-        mut exprs: Vec<Expr>,
-        mut inputs: Vec<LogicalPlan>,
-    ) -> Result<Self> {
-        Ok(Self {
-            k: self.k,
-            input: inputs.swap_remove(0),
-            expr: self.expr.with_expr(exprs.swap_remove(0)),
-        })
-    }
-}
-```
-
-#### 2. TopKOptimizerRule - Rewrites Plans
+The optimizer rule identifies queries with a `LIMIT` clause applied to a `SORT` operation. When this pattern is detected, it replaces the combination with a single `TopK` node:
 ```rust,ignore
 impl OptimizerRule for TopKOptimizerRule {
     fn rewrite(
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>> {
-        // Look for pattern: Limit -> Sort and replace with TopK
+    ) -> Result<Transformed> {
+        // Match on LIMIT -> SORT pattern
         let LogicalPlan::Limit(ref limit) = plan else {
-            return Ok(Transformed::no(plan));
-        };
-
-        let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
             return Ok(Transformed::no(plan));
         };
 
         if let LogicalPlan::Sort(Sort { ref expr, ref input, .. }) = limit.input.as_ref() {
             if expr.len() == 1 {
+                // Replace with TopK extension node
                 return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                     node: Arc::new(TopKPlanNode {
                         k: fetch,
@@ -153,62 +101,62 @@ impl OptimizerRule for TopKOptimizerRule {
 }
 ```
 
-#### 3. TopKPlanner - Creates Physical Plan
+The logical plan node implements `UserDefinedLogicalNodeCore` to define how TopK fits into DataFusion's plan structure:
 ```rust,ignore
-#[async_trait]
+impl UserDefinedLogicalNodeCore for TopKPlanNode {
+    fn name(&self) -> &str {
+        "TopK"
+    }
+
+    fn inputs(&self) -> Vec {
+        vec![&self.input]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        self.input.schema()
+    }
+
+    fn expressions(&self) -> Vec {
+        vec![self.expr.expr.clone()]
+    }
+
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "TopK: k={}", self.k)
+    }
+}
+```
+
+The physical planner bridges the logical and physical representations by implementing `ExtensionPlanner`:
+```rust,ignore
 impl ExtensionPlanner for TopKPlanner {
     async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        physical_inputs: &[Arc],
         _session_state: &SessionState,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(
-            if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
-                Some(Arc::new(TopKExec::new(
-                    physical_inputs[0].clone(),
-                    topk_node.k,
-                )))
-            } else {
-                None
-            },
-        )
+    ) -> Result<Option<Arc>> {
+        // Convert TopKPlanNode to TopKExec
+        if let Some(topk_node) = node.as_any().downcast_ref::() {
+            Ok(Some(Arc::new(TopKExec::new(
+                physical_inputs[0].clone(),
+                topk_node.k,
+            ))))
+        } else {
+            Ok(None)
+        }
     }
 }
 ```
 
-#### 4. TopKExec - Physical Execution
-```rust,ignore
-struct TopKExec {
-    input: Arc<dyn ExecutionPlan>,
-    k: usize,
-    cache: PlanProperties,
-}
-impl ExecutionPlan for TopKExec {
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(TopKReader {
-            input: self.input.execute(partition, context)?,
-            k: self.k,
-            done: false,
-            state: BTreeMap::new(),
-        }))
-    }
-}
-```
+Finally, the physical execution plan implements the actual TopK algorithm, maintaining only the K largest elements as it processes the input stream.
 
 ### Usage
 
-To use the TopK operator in your queries:
+To register the TopK operator with DataFusion:
 ```rust,ignore
-let config = SessionConfig::new().with_target_partitions(48);
 let state = SessionStateBuilder::new()
-    .with_config(config)
     .with_query_planner(Arc::new(TopKQueryPlanner {}))
     .with_optimizer_rule(Arc::new(TopKOptimizerRule::default()))
     .build();
@@ -216,4 +164,5 @@ let state = SessionStateBuilder::new()
 let ctx = SessionContext::new_with_state(state);
 ```
 
-For the complete implementation, see `datafusion/core/tests/user_defined/user_defined_plan.rs`.
+For the complete implementation including the physical execution details, see `datafusion/core/tests/user_defined/user_defined_plan.rs`.
+```
