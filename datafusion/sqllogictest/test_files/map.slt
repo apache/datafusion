@@ -113,9 +113,8 @@ logical_plan
 01)Filter: table_with_map.int_field > Int64(0)
 02)--TableScan: table_with_map projection=[int_field, map_field]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: int_field@0 > 0
-03)----DataSourceExec: partitions=1, partition_sizes=[0]
+01)FilterExec: int_field@0 > 0
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
 drop table table_with_map;
