@@ -28,7 +28,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
+    assert_eq_or_internal_err, assert_or_internal_err, internal_err, plan_err,
+    qualified_name, Column, DFSchema, DataFusionError, Result,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -1135,12 +1136,13 @@ impl OptimizerRule for PushDownFilter {
                 let supported_filters = scan
                     .source
                     .supports_filters_pushdown(non_volatile_filters.as_slice())?;
-                if non_volatile_filters.len() != supported_filters.len() {
-                    return internal_err!(
-                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                        supported_filters.len(),
-                        non_volatile_filters.len());
-                }
+                assert_eq_or_internal_err!(
+                    non_volatile_filters.len(),
+                    supported_filters.len(),
+                    "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                    supported_filters.len(),
+                    non_volatile_filters.len()
+                );
 
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
                 let zip = non_volatile_filters.into_iter().zip(supported_filters);
@@ -1361,18 +1363,15 @@ fn insert_below(
 ) -> Result<Transformed<LogicalPlan>> {
     let mut new_child = Some(new_child);
     let transformed_plan = plan.map_children(|_child| {
-        if let Some(new_child) = new_child.take() {
-            Ok(Transformed::yes(new_child))
-        } else {
-            // already took the new child
-            internal_err!("node had more than one input")
-        }
+        assert_or_internal_err!(new_child.is_some(), "node had more than one input");
+        let Some(new_child) = new_child.take() else {
+            unreachable!("checked Some via assert_or_internal_err!");
+        };
+        Ok(Transformed::yes(new_child))
     })?;
 
     // make sure we did the actual replacement
-    if new_child.is_some() {
-        return internal_err!("node had no  inputs");
-    }
+    assert_or_internal_err!(new_child.is_none(), "node had no  inputs");
 
     Ok(transformed_plan)
 }
