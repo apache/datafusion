@@ -1680,7 +1680,7 @@ pub fn update_hash(
     hash_map: &mut dyn JoinHashMapType,
     offset: usize,
     random_state: &RandomState,
-    hashes_buffer: &mut Vec<u64>,
+    hashes_buffer: &mut [u64],
     deleted_offset: usize,
     fifo_hashmap: bool,
 ) -> Result<()> {
