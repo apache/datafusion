@@ -301,7 +301,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion::physical_plan::Partitioning;

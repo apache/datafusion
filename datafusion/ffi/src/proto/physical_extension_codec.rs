@@ -404,3 +404,298 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
         Ok(())
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::execution_plan::tests::EmptyExec;
+    use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::exec_err;
+    use datafusion_execution::{TaskContext, TaskContextProvider};
+    use datafusion_expr::ptr_eq::arc_ptr_eq;
+    use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF, WindowUDFImpl};
+    use datafusion_functions::math::abs::AbsFunc;
+    use datafusion_functions_aggregate::sum::Sum;
+    use datafusion_functions_window::rank::{Rank, RankType};
+    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    pub(crate) struct TestExtensionCodec;
+
+    impl TestExtensionCodec {
+        pub(crate) const MAGIC_NUMBER: u8 = 127;
+    }
+
+    impl PhysicalExtensionCodec for TestExtensionCodec {
+        fn try_decode(
+            &self,
+            buf: &[u8],
+            _inputs: &[Arc<dyn ExecutionPlan>],
+            _ctx: &TaskContext,
+        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+            if buf[0] != Self::MAGIC_NUMBER {
+                return exec_err!(
+                    "TestExtensionCodec input buffer does not start with magic number"
+                );
+            }
+
+            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
+                return exec_err!("TestExtensionCodec unable to decode udf");
+            }
+
+            Ok(create_test_exec())
+        }
+
+        fn try_encode(
+            &self,
+            node: Arc<dyn ExecutionPlan>,
+            buf: &mut Vec<u8>,
+        ) -> datafusion_common::Result<()> {
+            buf.push(Self::MAGIC_NUMBER);
+
+            let Some(_) = node.as_any().downcast_ref::<EmptyExec>() else {
+                return exec_err!("TestExtensionCodec only expects EmptyExec");
+            };
+
+            buf.push(Self::MAGIC_NUMBER);
+
+            Ok(())
+        }
+
+        fn try_decode_udf(
+            &self,
+            _name: &str,
+            buf: &[u8],
+        ) -> datafusion_common::Result<Arc<ScalarUDF>> {
+            if buf[0] != Self::MAGIC_NUMBER {
+                return exec_err!(
+                    "TestExtensionCodec input buffer does not start with magic number"
+                );
+            }
+
+            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
+                return exec_err!("TestExtensionCodec unable to decode udf");
+            }
+
+            Ok(Arc::new(ScalarUDF::from(AbsFunc::new())))
+        }
+
+        fn try_encode_udf(
+            &self,
+            node: &ScalarUDF,
+            buf: &mut Vec<u8>,
+        ) -> datafusion_common::Result<()> {
+            buf.push(Self::MAGIC_NUMBER);
+
+            let udf = node.inner();
+            if !udf.as_any().is::<AbsFunc>() {
+                return exec_err!("TestExtensionCodec only expects Abs UDF");
+            };
+
+            buf.push(Self::MAGIC_NUMBER);
+
+            Ok(())
+        }
+
+        fn try_decode_udaf(
+            &self,
+            _name: &str,
+            buf: &[u8],
+        ) -> datafusion_common::Result<Arc<AggregateUDF>> {
+            if buf[0] != Self::MAGIC_NUMBER {
+                return exec_err!(
+                    "TestExtensionCodec input buffer does not start with magic number"
+                );
+            }
+
+            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
+                return exec_err!("TestExtensionCodec unable to decode udaf");
+            }
+
+            Ok(Arc::new(AggregateUDF::from(Sum::new())))
+        }
+
+        fn try_encode_udaf(
+            &self,
+            node: &AggregateUDF,
+            buf: &mut Vec<u8>,
+        ) -> datafusion_common::Result<()> {
+            buf.push(Self::MAGIC_NUMBER);
+
+            let udf = node.inner();
+            let Some(_udf) = udf.as_any().downcast_ref::<Sum>() else {
+                return exec_err!("TestExtensionCodec only expects Sum UDAF");
+            };
+
+            buf.push(Self::MAGIC_NUMBER);
+
+            Ok(())
+        }
+
+        fn try_decode_udwf(
+            &self,
+            _name: &str,
+            buf: &[u8],
+        ) -> datafusion_common::Result<Arc<WindowUDF>> {
+            if buf[0] != Self::MAGIC_NUMBER {
+                return exec_err!(
+                    "TestExtensionCodec input buffer does not start with magic number"
+                );
+            }
+
+            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
+                return exec_err!("TestExtensionCodec unable to decode udwf");
+            }
+
+            Ok(Arc::new(WindowUDF::from(Rank::new(
+                "my_rank".to_owned(),
+                RankType::Basic,
+            ))))
+        }
+
+        fn try_encode_udwf(
+            &self,
+            node: &WindowUDF,
+            buf: &mut Vec<u8>,
+        ) -> datafusion_common::Result<()> {
+            buf.push(Self::MAGIC_NUMBER);
+
+            let udf = node.inner();
+            let Some(udf) = udf.as_any().downcast_ref::<Rank>() else {
+                return exec_err!("TestExtensionCodec only expects Rank UDWF");
+            };
+
+            if udf.name() != "my_rank" {
+                return exec_err!("TestExtensionCodec only expects my_rank UDWF name");
+            }
+
+            buf.push(Self::MAGIC_NUMBER);
+
+            Ok(())
+        }
+    }
+
+    fn create_test_exec() -> Arc<dyn ExecutionPlan> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+        Arc::new(EmptyExec::new(schema)) as Arc<dyn ExecutionPlan>
+    }
+
+    #[test]
+    fn roundtrip_ffi_physical_extension_codec_exec_plan() -> datafusion_common::Result<()>
+    {
+        let codec = Arc::new(TestExtensionCodec {});
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+
+        let mut ffi_codec =
+            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
+
+        let exec = create_test_exec();
+        let input_execs = [create_test_exec()];
+        let mut bytes = Vec::new();
+        foreign_codec.try_encode(Arc::clone(&exec), &mut bytes)?;
+
+        let returned_exec =
+            foreign_codec.try_decode(&bytes, &input_execs, ctx.task_ctx().as_ref())?;
+
+        assert!(returned_exec.as_any().is::<EmptyExec>());
+
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrip_ffi_physical_extension_codec_udf() -> datafusion_common::Result<()> {
+        let codec = Arc::new(TestExtensionCodec {});
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+
+        let mut ffi_codec =
+            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
+
+        let udf = Arc::new(ScalarUDF::from(AbsFunc::new()));
+        let mut bytes = Vec::new();
+        foreign_codec.try_encode_udf(udf.as_ref(), &mut bytes)?;
+
+        let returned_udf = foreign_codec.try_decode_udf(udf.name(), &bytes)?;
+
+        assert!(returned_udf.inner().as_any().is::<AbsFunc>());
+
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrip_ffi_physical_extension_codec_udaf() -> datafusion_common::Result<()> {
+        let codec = Arc::new(TestExtensionCodec {});
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+
+        let mut ffi_codec =
+            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
+
+        let udf = Arc::new(AggregateUDF::from(Sum::new()));
+        let mut bytes = Vec::new();
+        foreign_codec.try_encode_udaf(udf.as_ref(), &mut bytes)?;
+
+        let returned_udf = foreign_codec.try_decode_udaf(udf.name(), &bytes)?;
+
+        assert!(returned_udf.inner().as_any().is::<Sum>());
+
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrip_ffi_physical_extension_codec_udwf() -> datafusion_common::Result<()> {
+        let codec = Arc::new(TestExtensionCodec {});
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+
+        let mut ffi_codec =
+            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
+
+        let udf = Arc::new(WindowUDF::from(Rank::new(
+            "my_rank".to_owned(),
+            RankType::Basic,
+        )));
+        let mut bytes = Vec::new();
+        foreign_codec.try_encode_udwf(udf.as_ref(), &mut bytes)?;
+
+        let returned_udf = foreign_codec.try_decode_udwf(udf.name(), &bytes)?;
+
+        assert!(returned_udf.inner().as_any().is::<Rank>());
+
+        Ok(())
+    }
+
+    #[test]
+    fn ffi_physical_extension_codec_local_bypass() {
+        let codec =
+            Arc::new(TestExtensionCodec {}) as Arc<dyn PhysicalExtensionCodec + Send>;
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+
+        let mut ffi_codec =
+            FFI_PhysicalExtensionCodec::new(Arc::clone(&codec), None, task_ctx_provider);
+
+        let codec = codec as Arc<dyn PhysicalExtensionCodec>;
+        // Verify local libraries can be downcast to their original
+        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
+        assert!(arc_ptr_eq(&foreign_codec, &codec));
+
+        // Verify different library markers generate foreign providers
+        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
+        assert!(!arc_ptr_eq(&foreign_codec, &codec));
+    }
+}
