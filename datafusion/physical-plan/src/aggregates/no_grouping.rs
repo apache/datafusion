@@ -25,7 +25,7 @@ use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_datafusion_err, Result, ScalarValue};
+use datafusion_common::{internal_datafusion_err, internal_err, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{lit, BinaryExpr};
@@ -88,12 +88,13 @@ impl AggregateStreamInner {
     ///   --> dynamic filter PhysicalExpr: (c1 < 10) OR (c1>100) OR (c2 < 20)
     ///
     /// # Errors
-    /// Returns internal errors if the dynamic filter is not enabled
+    /// Returns internal errors if the dynamic filter is not enabled, or other
+    /// invariant check fails.
     fn build_dynamic_filter_from_accumulator_bounds(
         &self,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let Some(filter_state) = self.agg_dyn_filter_state.as_ref() else {
-            return Ok(lit(true));
+            return internal_err!("`build_dynamic_filter_from_accumulator_bounds()` is only called when dynamic filter is enabled");
         };
 
         let mut predicates: Vec<Arc<dyn PhysicalExpr>> =
@@ -316,19 +317,20 @@ impl AggregateStream {
                     Some(Ok(batch)) => {
                         let result = {
                             let elapsed_compute = this.baseline_metrics.elapsed_compute();
-                            let timer = elapsed_compute.timer();
-                            let result = aggregate_batch(
+                            let _timer = elapsed_compute.timer(); // Stops on drop
+                            aggregate_batch(
                                 &this.mode,
                                 batch,
                                 &mut this.accumulators,
                                 &this.aggregate_expressions,
                                 &this.filter_expressions,
-                            );
-                            timer.done();
-                            result
+                            )
                         };
 
-                        let _ = this.maybe_update_dyn_filter();
+                        let result = result.and_then(|allocated| {
+                            this.maybe_update_dyn_filter()?;
+                            Ok(allocated)
+                        });
 
                         // allocate memory
                         // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with

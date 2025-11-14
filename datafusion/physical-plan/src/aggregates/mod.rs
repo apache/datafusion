@@ -919,8 +919,7 @@ impl AggregateExec {
     /// - If yes, init one inside `AggregateExec`'s `dynamic_filter` field.
     /// - If not supported, `self.dynamic_filter` should be kept `None`
     fn init_dynamic_filter(&mut self) {
-        if (!self.group_by.is_single()) || (!matches!(self.mode, AggregateMode::Partial))
-        {
+        if (!self.group_by.is_empty()) || (!matches!(self.mode, AggregateMode::Partial)) {
             debug_assert!(
                 self.dynamic_filter.is_none(),
                 "The current operator node does not support dynamic filter"
