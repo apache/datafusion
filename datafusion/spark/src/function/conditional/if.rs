@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{assert_or_internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::{
     binary::try_type_union_resolution, simplify::ExprSimplifyResult, when, ColumnarValue,
     Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -80,8 +80,7 @@ impl ScalarUDFImpl for SparkIf {
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        assert_or_internal_err!(false, "if should have been simplified to case");
-        unreachable!()
+        internal_err!("if should have been simplified to case")
     }
 
     fn simplify(
