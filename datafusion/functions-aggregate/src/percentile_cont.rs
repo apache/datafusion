@@ -818,75 +818,89 @@ fn calculate_percentiles<T: ArrowNumericType>(
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
     let len = values.len();
+
+    // Fast path for empty and single-element arrays
     if len == 0 {
-        vec![None; percentiles.len()]
+        return vec![None; percentiles.len()];
     } else if len == 1 {
-        vec![Some(values[0]); percentiles.len()]
-    } else if percentiles[0] == 0.0 {
-        // Get minimum value
-        vec![
-            Some(
-                *values
-                    .iter()
-                    .min_by(|a, b| cmp(a, b))
-                    .expect("we checked for len > 0 a few lines above"),
-            );
-            percentiles.len()
-        ]
-    } else if percentiles[0] == 1.0 {
-        // Get maximum value
-        vec![
-            Some(
-                *values
-                    .iter()
-                    .max_by(|a, b| cmp(a, b))
-                    .expect("we checked for len > 0 a few lines above"),
-            );
-            percentiles.len()
-        ]
+        return vec![Some(values[0]); percentiles.len()];
+    }
+
+    // handle special cases for single percentile requests
+    if percentiles.len() == 1 {
+        if percentiles[0] == 0.0 {
+            // Get minimum value
+            return vec![
+                Some(
+                    *values
+                        .iter()
+                        .min_by(|a, b| cmp(a, b))
+                        .expect("we checked for len > 0 a few lines above"),
+                );
+                percentiles.len()
+            ];
+        } else if percentiles[0] == 1.0 {
+            // Get maximum value
+            return vec![
+                Some(
+                    *values
+                        .iter()
+                        .max_by(|a, b| cmp(a, b))
+                        .expect("we checked for len > 0 a few lines above"),
+                );
+                percentiles.len()
+            ];
+        }
+    }
+
+    // After special-case handling, a single value is treated as a 1-element array for uniform processing.
+    let sorted_values = {
+        values.sort_by(cmp);
+        values
+    };
+
+    percentiles
+        .iter()
+        .map(|percentile| extract_percentile::<T>(&sorted_values, len, percentile))
+        .collect::<Vec<Option<<T as ArrowPrimitiveType>::Native>>>()
+}
+
+fn extract_percentile<T: ArrowNumericType>(
+    values: &Vec<<T as ArrowPrimitiveType>::Native>,
+    len: usize,
+    percentile: &f64,
+) -> Option<<T as ArrowPrimitiveType>::Native> {
+    // Calculate the index using the formula: p * (n - 1)
+    let index = percentile * ((len - 1) as f64);
+    let lower_index = index.floor() as usize;
+    let upper_index = index.ceil() as usize;
+
+    if lower_index == upper_index {
+        // Exact index, return the value at that position
+        values.get(lower_index).copied()
     } else {
-        percentiles
-            .iter()
-            .map(|percentile| {
-                // Calculate the index using the formula: p * (n - 1)
-                let index = percentile * ((len - 1) as f64);
-                let lower_index = index.floor() as usize;
-                let upper_index = index.ceil() as usize;
+        // Need to interpolate between two values
+        // First, partition at lower_index to get the lower value
+        let lower_value = values.get(lower_index)?;
 
-                if lower_index == upper_index {
-                    // Exact index, return the value at that position
-                    let (_, value, _) = values.select_nth_unstable_by(lower_index, cmp);
-                    Some(*value)
-                } else {
-                    // Need to interpolate between two values
-                    // First, partition at lower_index to get the lower value
-                    let (_, lower_value, _) =
-                        values.select_nth_unstable_by(lower_index, cmp);
-                    let lower_value = *lower_value;
+        // Then partition at upper_index to get the upper value
+        let upper_value = values.get(upper_index)?;
 
-                    // Then partition at upper_index to get the upper value
-                    let (_, upper_value, _) =
-                        values.select_nth_unstable_by(upper_index, cmp);
-                    let upper_value = *upper_value;
-
-                    // Linear interpolation using wrapping arithmetic
-                    // We use wrapping operations here (matching the approach in median.rs) because:
-                    // 1. Both values come from the input data, so diff is bounded by the value range
-                    // 2. fraction is between 0 and 1, and INTERPOLATION_PRECISION is small enough
-                    //    to prevent overflow when combined with typical numeric ranges
-                    // 3. The result is guaranteed to be between lower_value and upper_value
-                    // 4. For floating-point types, wrapping ops behave the same as standard ops
-                    let fraction = index - (lower_index as f64);
-                    let diff = upper_value.sub_wrapping(lower_value);
-                    let interpolated = lower_value.add_wrapping(
-                        diff.mul_wrapping(T::Native::usize_as(
-                            (fraction * INTERPOLATION_PRECISION as f64) as usize,
-                        ))
-                        .div_wrapping(T::Native::usize_as(INTERPOLATION_PRECISION)),
-                    );
-                    Some(interpolated)
-                }
-            })
-            .collect()
+        // Linear interpolation using wrapping arithmetic
+        // We use wrapping operations here (matching the approach in median.rs) because:
+        // 1. Both values come from the input data, so diff is bounded by the value range
+        // 2. fraction is between 0 and 1, and INTERPOLATION_PRECISION is small enough
+        //    to prevent overflow when combined with typical numeric ranges
+        // 3. The result is guaranteed to be between lower_value and upper_value
+        // 4. For floating-point types, wrapping ops behave the same as standard ops
+        let fraction = index - (lower_index as f64);
+        let diff = upper_value.sub_wrapping(*lower_value);
+        let interpolated = lower_value.add_wrapping(
+            diff.mul_wrapping(T::Native::usize_as(
+                (fraction * INTERPOLATION_PRECISION as f64) as usize,
+            ))
+            .div_wrapping(T::Native::usize_as(INTERPOLATION_PRECISION)),
+        );
+        Some(interpolated)
     }
 }
