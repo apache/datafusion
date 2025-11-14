@@ -293,6 +293,42 @@ impl Default for SessionContext {
     }
 }
 
+/// A trait for converting types into `TableReference` with optional identifier normalization.
+/// This allows methods to accept both string types (which need parsing with normalization settings)
+/// and existing `TableReference` instances (which are already parsed).
+pub trait ResolveTableReference {
+    /// Resolves this type into a `TableReference`, using `normalize` to determine
+    /// whether identifiers should be converted to lowercase.
+    fn resolve(self, normalize: bool) -> TableReference;
+}
+
+impl ResolveTableReference for TableReference {
+    fn resolve(self, _normalize: bool) -> TableReference {
+        // Already a TableReference, return as-is
+        self
+    }
+}
+
+impl<'a> ResolveTableReference for &'a str {
+    fn resolve(self, normalize: bool) -> TableReference {
+        // Parse the string, inverting normalize because parse_str_normalized
+        // uses ignore_case=true to mean "don't normalize"
+        TableReference::parse_str_normalized(self, !normalize)
+    }
+}
+
+impl<'a> ResolveTableReference for &'a String {
+    fn resolve(self, normalize: bool) -> TableReference {
+        TableReference::parse_str_normalized(self, !normalize)
+    }
+}
+
+impl ResolveTableReference for String {
+    fn resolve(self, normalize: bool) -> TableReference {
+        TableReference::parse_str_normalized(&self, !normalize)
+    }
+}
+
 impl SessionContext {
     /// Creates a new `SessionContext` using the default [`SessionConfig`].
     pub fn new() -> Self {
@@ -557,6 +593,12 @@ impl SessionContext {
             .options()
             .sql_parser
             .enable_ident_normalization
+    }
+
+    /// Parse a table reference respecting the session's `enable_ident_normalization` setting.
+    /// This is a helper method used internally by table registration and lookup methods.
+    fn resolve_table_ref<T: ResolveTableReference>(&self, table_ref: T) -> TableReference {
+        table_ref.resolve(self.enable_ident_normalization())
     }
 
     /// Return a copied version of config for this Session
@@ -1185,10 +1227,10 @@ impl SessionContext {
 
     async fn find_and_deregister(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl ResolveTableReference,
         table_type: TableType,
     ) -> Result<bool> {
-        let table_ref = table_ref.into();
+        let table_ref = self.resolve_table_ref(table_ref);
         let table = table_ref.table().to_owned();
         let maybe_schema = {
             let state = self.state.read();
@@ -1504,7 +1546,7 @@ impl SessionContext {
     /// [`ObjectStore`]: object_store::ObjectStore
     pub async fn register_listing_table(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl ResolveTableReference,
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
@@ -1603,10 +1645,10 @@ impl SessionContext {
     /// already exists" error.
     pub fn register_table(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl ResolveTableReference,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        let table_ref: TableReference = table_ref.into();
+        let table_ref = self.resolve_table_ref(table_ref);
         let table = table_ref.table().to_owned();
         self.state
             .read()
@@ -1619,9 +1661,9 @@ impl SessionContext {
     /// Returns the registered provider, if any
     pub fn deregister_table(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl ResolveTableReference,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        let table_ref = table_ref.into();
+        let table_ref = self.resolve_table_ref(table_ref);
         let table = table_ref.table().to_owned();
         self.state
             .read()
@@ -1630,8 +1672,8 @@ impl SessionContext {
     }
 
     /// Return `true` if the specified table exists in the schema provider.
-    pub fn table_exist(&self, table_ref: impl Into<TableReference>) -> Result<bool> {
-        let table_ref: TableReference = table_ref.into();
+    pub fn table_exist(&self, table_ref: impl ResolveTableReference) -> Result<bool> {
+        let table_ref = self.resolve_table_ref(table_ref);
         let table = table_ref.table();
         let table_ref = table_ref.clone();
         Ok(self
@@ -1648,8 +1690,8 @@ impl SessionContext {
     /// provided reference.
     ///
     /// [`register_table`]: SessionContext::register_table
-    pub async fn table(&self, table_ref: impl Into<TableReference>) -> Result<DataFrame> {
-        let table_ref: TableReference = table_ref.into();
+    pub async fn table(&self, table_ref: impl ResolveTableReference) -> Result<DataFrame> {
+        let table_ref = self.resolve_table_ref(table_ref);
         let provider = self.table_provider(table_ref.clone()).await?;
         let plan = LogicalPlanBuilder::scan(
             table_ref,
@@ -1677,9 +1719,9 @@ impl SessionContext {
     /// Return a [`TableProvider`] for the specified table.
     pub async fn table_provider(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl ResolveTableReference,
     ) -> Result<Arc<dyn TableProvider>> {
-        let table_ref = table_ref.into();
+        let table_ref = self.resolve_table_ref(table_ref);
         let table = table_ref.table().to_string();
         let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(&table).await? {

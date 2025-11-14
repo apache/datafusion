@@ -17,7 +17,6 @@
 
 use super::super::options::{AvroReadOptions, ReadOptions};
 use super::{DataFilePaths, DataFrame, Result, SessionContext};
-use datafusion_common::TableReference;
 use std::sync::Arc;
 
 impl SessionContext {
@@ -35,11 +34,11 @@ impl SessionContext {
         self._read_type(table_paths, options).await
     }
 
-    /// Registers an Avro file as a table that can be referenced from
-    /// SQL statements executed against this context.
+    /// Registers an Avro file as a table that can be referenced from SQL
+    /// statements executed against this context.
     pub async fn register_avro(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl super::ResolveTableReference,
         table_path: impl AsRef<str>,
         options: AvroReadOptions<'_>,
     ) -> Result<()> {

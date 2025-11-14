@@ -21,7 +21,6 @@ use super::super::options::{ParquetReadOptions, ReadOptions};
 use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};
 use datafusion_datasource_parquet::plan_to_parquet;
 
-use datafusion_common::TableReference;
 use parquet::file::properties::WriterProperties;
 
 impl SessionContext {
@@ -65,7 +64,7 @@ impl SessionContext {
     /// [`read_parquet`]: Self::read_parquet
     pub async fn register_parquet(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl super::ResolveTableReference,
         table_path: impl AsRef<str>,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {

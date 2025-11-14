@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::TableReference;
 use datafusion_datasource_json::source::plan_to_json;
 use std::sync::Arc;
 
@@ -37,11 +36,11 @@ impl SessionContext {
         self._read_type(table_paths, options).await
     }
 
-    /// Registers a JSON file as a table that it can be referenced
-    /// from SQL statements executed against this context.
+    /// Registers a JSON file as a table that can be referenced from SQL
+    /// statements executed against this context.
     pub async fn register_json(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl super::ResolveTableReference,
         table_path: impl AsRef<str>,
         options: NdJsonReadOptions<'_>,
     ) -> Result<()> {

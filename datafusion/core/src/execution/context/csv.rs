@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::TableReference;
 use datafusion_datasource_csv::source::plan_to_csv;
 use std::sync::Arc;
 
@@ -62,7 +61,7 @@ impl SessionContext {
     /// statements executed against this context.
     pub async fn register_csv(
         &self,
-        table_ref: impl Into<TableReference>,
+        table_ref: impl super::ResolveTableReference,
         table_path: impl AsRef<str>,
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
