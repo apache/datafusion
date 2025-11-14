@@ -79,10 +79,6 @@ pub struct FFI_PhysicalExtensionCodec {
     try_encode_udwf:
         unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> RResult<RVec<u8>, RString>,
 
-    /// Provider for TaskContext to be used during protobuf serialization
-    /// and deserialization.
-    pub task_ctx_provider: FFI_TaskContextProvider,
-
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
@@ -127,7 +123,7 @@ unsafe extern "C" fn try_decode_fn_wrapper(
     buf: RSlice<u8>,
     inputs: RVec<FFI_ExecutionPlan>,
 ) -> RResult<FFI_ExecutionPlan, RString> {
-    let task_ctx_provider = codec.task_ctx_provider.clone();
+    let task_ctx_provider = FFI_TaskContextProvider::empty();
     let task_ctx: Arc<TaskContext> = rresult_return!((&task_ctx_provider).try_into());
     let codec = codec.inner();
     let inputs = inputs
@@ -187,7 +183,7 @@ unsafe extern "C" fn try_decode_udaf_fn_wrapper(
     name: RStr,
     buf: RSlice<u8>,
 ) -> RResult<FFI_AggregateUDF, RString> {
-    let task_ctx_provider = codec.task_ctx_provider.clone();
+    let task_ctx_provider = FFI_TaskContextProvider::empty();
     let codec = codec.inner();
     let udaf = rresult_return!(codec.try_decode_udaf(name.into(), buf.as_ref()));
     let udaf = FFI_AggregateUDF::new(udaf, task_ctx_provider);
@@ -214,7 +210,7 @@ unsafe extern "C" fn try_decode_udwf_fn_wrapper(
     name: RStr,
     buf: RSlice<u8>,
 ) -> RResult<FFI_WindowUDF, RString> {
-    let task_ctx_provider = codec.task_ctx_provider.clone();
+    let task_ctx_provider = FFI_TaskContextProvider::empty();
     let codec = codec.inner();
     let udwf = rresult_return!(codec.try_decode_udwf(name.into(), buf.as_ref()));
     let udwf = FFI_WindowUDF::new(udwf, task_ctx_provider);
@@ -248,7 +244,7 @@ unsafe extern "C" fn clone_fn_wrapper(
     let old_codec = Arc::clone(codec.inner());
     let runtime = codec.runtime().clone();
 
-    FFI_PhysicalExtensionCodec::new(old_codec, runtime, codec.task_ctx_provider.clone())
+    FFI_PhysicalExtensionCodec::new(old_codec, runtime)
 }
 
 impl Drop for FFI_PhysicalExtensionCodec {
@@ -262,9 +258,7 @@ impl FFI_PhysicalExtensionCodec {
     pub fn new(
         provider: Arc<dyn PhysicalExtensionCodec + Send>,
         runtime: Option<Handle>,
-        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
-        let task_ctx_provider = task_ctx_provider.into();
         let private_data =
             Box::new(PhysicalExtensionCodecPrivateData { provider, runtime });
 
@@ -278,7 +272,6 @@ impl FFI_PhysicalExtensionCodec {
             try_decode_udwf: try_decode_udwf_fn_wrapper,
             try_encode_udwf: try_encode_udwf_fn_wrapper,
 
-            task_ctx_provider,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: crate::version,
@@ -327,7 +320,7 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
             .map(|plan| {
                 FFI_ExecutionPlan::new(
                     Arc::clone(plan),
-                    self.0.task_ctx_provider.clone(),
+                    FFI_TaskContextProvider::empty(),
                     None,
                 )
             })
@@ -341,7 +334,7 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        let plan = FFI_ExecutionPlan::new(node, self.0.task_ctx_provider.clone(), None);
+        let plan = FFI_ExecutionPlan::new(node, FFI_TaskContextProvider::empty(), None);
         let bytes = df_result!(unsafe { (self.0.try_encode)(&self.0, plan) })?;
 
         buf.extend(bytes);
@@ -377,7 +370,7 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         let node = Arc::new(node.clone());
-        let node = FFI_AggregateUDF::new(node, self.0.task_ctx_provider.clone());
+        let node = FFI_AggregateUDF::new(node, FFI_TaskContextProvider::empty());
         let bytes = df_result!(unsafe { (self.0.try_encode_udaf)(&self.0, node) })?;
 
         buf.extend(bytes);
@@ -396,7 +389,7 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
         let node = Arc::new(node.clone());
-        let node = FFI_WindowUDF::new(node, self.0.task_ctx_provider.clone());
+        let node = FFI_WindowUDF::new(node, FFI_TaskContextProvider::empty());
         let bytes = df_result!(unsafe { (self.0.try_encode_udwf)(&self.0, node) })?;
 
         buf.extend(bytes);
@@ -412,7 +405,7 @@ pub(crate) mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::prelude::SessionContext;
     use datafusion_common::exec_err;
-    use datafusion_execution::{TaskContext, TaskContextProvider};
+    use datafusion_execution::TaskContext;
     use datafusion_expr::ptr_eq::arc_ptr_eq;
     use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF, WindowUDFImpl};
     use datafusion_functions::math::abs::AbsFunc;
@@ -589,10 +582,8 @@ pub(crate) mod tests {
     {
         let codec = Arc::new(TestExtensionCodec {});
         let ctx = Arc::new(SessionContext::new());
-        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
-        let mut ffi_codec =
-            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        let mut ffi_codec = FFI_PhysicalExtensionCodec::new(codec, None);
         ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
 
@@ -612,11 +603,8 @@ pub(crate) mod tests {
     #[test]
     fn roundtrip_ffi_physical_extension_codec_udf() -> datafusion_common::Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
-        let ctx = Arc::new(SessionContext::new());
-        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
-        let mut ffi_codec =
-            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        let mut ffi_codec = FFI_PhysicalExtensionCodec::new(codec, None);
         ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
 
@@ -634,11 +622,8 @@ pub(crate) mod tests {
     #[test]
     fn roundtrip_ffi_physical_extension_codec_udaf() -> datafusion_common::Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
-        let ctx = Arc::new(SessionContext::new());
-        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
-        let mut ffi_codec =
-            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        let mut ffi_codec = FFI_PhysicalExtensionCodec::new(codec, None);
         ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
 
@@ -656,11 +641,8 @@ pub(crate) mod tests {
     #[test]
     fn roundtrip_ffi_physical_extension_codec_udwf() -> datafusion_common::Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
-        let ctx = Arc::new(SessionContext::new());
-        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
-        let mut ffi_codec =
-            FFI_PhysicalExtensionCodec::new(codec, None, task_ctx_provider);
+        let mut ffi_codec = FFI_PhysicalExtensionCodec::new(codec, None);
         ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
 
@@ -682,11 +664,8 @@ pub(crate) mod tests {
     fn ffi_physical_extension_codec_local_bypass() {
         let codec =
             Arc::new(TestExtensionCodec {}) as Arc<dyn PhysicalExtensionCodec + Send>;
-        let ctx = Arc::new(SessionContext::new());
-        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
 
-        let mut ffi_codec =
-            FFI_PhysicalExtensionCodec::new(Arc::clone(&codec), None, task_ctx_provider);
+        let mut ffi_codec = FFI_PhysicalExtensionCodec::new(Arc::clone(&codec), None);
 
         let codec = codec as Arc<dyn PhysicalExtensionCodec>;
         // Verify local libraries can be downcast to their original

@@ -16,15 +16,14 @@
 // under the License.
 
 use std::ffi::c_void;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
+use crate::execution::task_ctx::FFI_TaskContext;
+use crate::{df_result, rresult};
 use abi_stable::std_types::{RResult, RString};
 use abi_stable::StableAbi;
 use datafusion_common::{exec_datafusion_err, DataFusionError};
 use datafusion_execution::{TaskContext, TaskContextProvider};
-
-use crate::execution::task_ctx::FFI_TaskContext;
-use crate::{df_result, rresult};
 
 /// Struct for accessing the [`TaskContext`]. This method contains a weak
 /// reference, so there are no guarantees that the [`TaskContext`] remains
@@ -150,5 +149,28 @@ impl TryFrom<&FFI_TaskContextProvider> for Arc<TaskContext> {
                 .map(Into::into)
                 .map(Arc::new)
         }
+    }
+}
+
+static GLOBAL_EMPTY_PROVIDER: OnceLock<Arc<dyn TaskContextProvider + Send + Sync>> =
+    OnceLock::new();
+
+pub(crate) struct EmtpyTaskContextProvider {}
+
+impl TaskContextProvider for EmtpyTaskContextProvider {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        Arc::new(TaskContext::default())
+    }
+}
+
+impl FFI_TaskContextProvider {
+    pub fn empty() -> Self {
+        let provider = GLOBAL_EMPTY_PROVIDER.get_or_init(|| {
+            Arc::new(EmtpyTaskContextProvider {})
+                as Arc<dyn TaskContextProvider + Send + Sync>
+        });
+
+        let provider = Arc::clone(provider) as Arc<dyn TaskContextProvider>;
+        provider.into()
     }
 }
