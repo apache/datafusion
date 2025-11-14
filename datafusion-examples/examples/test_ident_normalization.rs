@@ -34,8 +34,7 @@ async fn main() -> Result<()> {
 
     println!("Testing identifier normalization fix...\n");
 
-    // Test 1: With normalization disabled
-    println!("=== Test 1: enable_ident_normalization=false ===");
+    println!("Test 1: enable_ident_normalization=false");
     let ctx = SessionContext::new();
 
     ctx.sql("SET datafusion.sql_parser.enable_ident_normalization=false")
@@ -51,28 +50,26 @@ async fn main() -> Result<()> {
     match ctx.sql("SELECT * FROM DATA").await {
         Ok(df) => {
             df.show().await?;
-            println!("✅ SUCCESS: Found table 'DATA' with normalization disabled");
+            println!("Found table 'DATA' with normalization disabled");
         }
         Err(e) => {
-            println!("❌ FAILED: {}", e);
+            println!("Error: {e}");
             std::fs::remove_file("data.csv").ok();
             return Err(e);
         }
     }
 
-    // Test 2: Verify lowercase doesn't work (should fail as expected)
-    println!("\n=== Test 2: Querying lowercase 'data' (should fail) ===");
+    println!("\nQuerying lowercase 'data' (should fail)");
     match ctx.sql("SELECT * FROM data").await {
         Ok(_) => {
-            println!("⚠️  UNEXPECTED: Found table 'data' (should have failed)");
+            println!("Found table 'data' (should have failed)");
         }
         Err(e) => {
-            println!("✅ EXPECTED: Table 'data' not found: {}", e);
+            println!("Table 'data' not found: {e}");
         }
     }
 
-    // Test 3: With normalization enabled (default behavior)
-    println!("\n=== Test 3: enable_ident_normalization=true (default) ===");
+    println!("\nEnable_ident_normalization=true (default)");
     let ctx2 = SessionContext::new();
 
     println!("Registering table as 'DATA' (uppercase)...");
@@ -83,10 +80,10 @@ async fn main() -> Result<()> {
     match ctx2.sql("SELECT * FROM DATA").await {
         Ok(df) => {
             df.show().await?;
-            println!("✅ SUCCESS: Found normalized table");
+            println!("Found normalized table");
         }
         Err(e) => {
-            println!("❌ FAILED: {}", e);
+            println!("Error: {e}");
         }
     }
 
@@ -94,16 +91,16 @@ async fn main() -> Result<()> {
     match ctx2.sql("SELECT * FROM data").await {
         Ok(df) => {
             df.show().await?;
-            println!("✅ SUCCESS: Found normalized table with lowercase query");
+            println!("Found normalized table with lowercase query");
         }
         Err(e) => {
-            println!("❌ FAILED: {}", e);
+            println!("Error: {e}");
         }
     }
 
     // Clean up
     std::fs::remove_file("data.csv").ok();
 
-    println!("\n=== All tests completed successfully! ===");
+    println!("\nAll tests completed successfully!");
     Ok(())
 }
