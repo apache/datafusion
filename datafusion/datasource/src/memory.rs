@@ -29,7 +29,10 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
+use datafusion_common::{
+    assert_or_internal_err, plan_err, project_schema, DataFusionError, Result,
+    ScalarValue,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::utils::collect_columns;
@@ -438,12 +441,11 @@ impl MemorySourceConfig {
                     .map(|field| field.name() != col.name())
                     .unwrap_or(true)
             });
-        if let Some(col) = ambiguous_column {
-            return internal_err!(
-                "Column {:?} is not found in the original schema of the MemorySourceConfig",
-                col
-            );
-        }
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the MemorySourceConfig",
+            ambiguous_column.as_ref().unwrap()
+        );
 
         // If there is a projection on the source, we also need to project orderings
         if self.projection.is_some() {
