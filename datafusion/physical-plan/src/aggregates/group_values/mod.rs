@@ -86,7 +86,7 @@ mod null_builder;
 /// Each distinct group in a hash aggregation is identified by a unique group id
 /// (usize) which is assigned by instances of this trait. Group ids are
 /// continuous without gaps, starting from 0.
-pub(crate) trait GroupValues: Send {
+pub trait GroupValues: Send {
     /// Calculates the group id for each input row of `cols`, assigning new
     /// group ids as necessary.
     ///
@@ -129,7 +129,7 @@ pub(crate) trait GroupValues: Send {
 ///
 /// [`GroupColumn`]:  crate::aggregates::group_values::multi_group_by::GroupColumn
 ///
-pub(crate) fn new_group_values(
+pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
