@@ -672,16 +672,14 @@ physical_plan
 02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)], filter=p_brand@1 = Brand#12 AND l_quantity@0 >= Some(100),15,2 AND l_quantity@0 <= Some(1100),15,2 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND l_quantity@0 >= Some(1000),15,2 AND l_quantity@0 <= Some(2000),15,2 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND l_quantity@0 >= Some(2000),15,2 AND l_quantity@0 <= Some(3000),15,2 AND p_size@2 <= 15, projection=[l_partkey@0]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------FilterExec: l_quantity@1 >= Some(100),15,2 AND l_quantity@1 <= Some(1100),15,2 OR l_quantity@1 >= Some(1000),15,2 AND l_quantity@1 <= Some(2000),15,2 OR l_quantity@1 >= Some(2000),15,2 AND l_quantity@1 <= Some(3000),15,2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_quantity], file_type=csv, has_header=true
-09)----CoalesceBatchesExec: target_batch_size=8192
-10)------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-11)--------CoalesceBatchesExec: target_batch_size=8192
-12)----------FilterExec: (p_brand@1 = Brand#12 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND p_size@2 <= 15) AND p_size@2 >= 1
-13)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-14)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand, p_size], file_type=csv, has_header=true
+05)--------FilterExec: l_quantity@1 >= Some(100),15,2 AND l_quantity@1 <= Some(1100),15,2 OR l_quantity@1 >= Some(1000),15,2 AND l_quantity@1 <= Some(2000),15,2 OR l_quantity@1 >= Some(2000),15,2 AND l_quantity@1 <= Some(3000),15,2
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_quantity], file_type=csv, has_header=true
+08)----CoalesceBatchesExec: target_batch_size=8192
+09)------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
+10)--------FilterExec: (p_brand@1 = Brand#12 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND p_size@2 <= 15) AND p_size@2 >= 1
+11)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand, p_size], file_type=csv, has_header=true
 
 ########
 # TPCH Q19 - Pull predicates to inner join (simplified)
@@ -771,10 +769,9 @@ physical_plan
 10)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], file_type=csv, has_header=true
 11)------------CoalesceBatchesExec: target_batch_size=8192
 12)--------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-13)----------------CoalesceBatchesExec: target_batch_size=8192
-14)------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
-15)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-16)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
+13)----------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
+14)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
 
 # Simplification of a binary operator with a NULL value
 
@@ -804,9 +801,8 @@ logical_plan
 01)Filter: t.x < Int32(5) AND Boolean(NULL)
 02)--TableScan: t projection=[x]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: x@0 < 5 AND NULL
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: x@0 < 5 AND NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x < 5 OR (10 * NULL < x);
@@ -815,9 +811,8 @@ logical_plan
 01)Filter: t.x < Int32(5) OR Boolean(NULL)
 02)--TableScan: t projection=[x]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: x@0 < 5 OR NULL
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: x@0 < 5 OR NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -846,9 +841,8 @@ logical_plan
 01)Filter: t.x = Int32(5)
 02)--TableScan: t projection=[x]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: x@0 = 5
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: x@0 = 5
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);

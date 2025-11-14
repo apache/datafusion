@@ -1440,10 +1440,9 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
 physical_plan
 01)SortPreservingMergeExec: [b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: a@1 = 0
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+02)--FilterExec: a@1 = 0
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1461,10 +1460,9 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
 01)SortPreservingMergeExec: [c@3 ASC NULLS LAST]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: a@1 = 0 AND b@2 = 0
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+02)--FilterExec: a@1 = 0 AND b@2 = 0
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1482,10 +1480,9 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
 01)SortPreservingMergeExec: [b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: a@1 = 0 AND b@2 = 0
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+02)--FilterExec: a@1 = 0 AND b@2 = 0
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1503,10 +1500,9 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
 01)SortPreservingMergeExec: [a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: a@1 = 0 AND b@2 = 0
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+02)--FilterExec: a@1 = 0 AND b@2 = 0
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is when filter contains or
@@ -1525,10 +1521,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 02)--SortExec: expr=[c@3 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------FilterExec: a@1 = 0 OR b@2 = 0
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+03)----FilterExec: a@1 = 0 OR b@2 = 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # When ordering lost during projection, we shouldn't keep the SortExec.
 # in the final physical plan.
@@ -1573,10 +1568,9 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a]
 physical_plan
 01)SortPreservingMergeExec: [CAST(round(CAST(b@2 AS Float64)) AS Int32) ASC NULLS LAST]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: CAST(round(CAST(b@2 AS Float64)) AS Int32) = a@1
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+02)--FilterExec: CAST(round(CAST(b@2 AS Float64)) AS Int32) = a@1
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 
 statement ok
