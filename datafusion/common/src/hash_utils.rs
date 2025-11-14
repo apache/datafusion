@@ -52,7 +52,7 @@ thread_local! {
     /// The buffer is reused across calls and truncated if it exceeds MAX_BUFFER_SIZE.
     /// Defaults to a capacity of 8192 u64 elements which is the default batch size.
     /// This corresponds to 64KB of memory.
-    static HASH_BUFFER: RefCell<Vec<u64>> = RefCell::new(Vec::with_capacity(8192));
+    static HASH_BUFFER: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Creates hashes for the given arrays using a thread-local buffer, then calls the provided callback
