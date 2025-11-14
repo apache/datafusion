@@ -40,9 +40,7 @@ use datafusion::{
 /// 3. [`query_parquet_demo`]: Query a parquet file using the parsed_sql_expr from a DataFrame.
 ///
 /// 4. [`round_trip_parse_sql_expr_demo`]: Parse a SQL text and convert it back to SQL using [`Unparser`].
-
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn parse_sql_expr() -> Result<()> {
     // See how to evaluate expressions
     simple_session_context_parse_sql_expr_demo()?;
     simple_dataframe_parse_sql_expr_demo().await?;

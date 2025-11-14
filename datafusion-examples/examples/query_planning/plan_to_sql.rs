@@ -62,9 +62,7 @@ use std::sync::Arc;
 /// 6. [`unparse_my_logical_plan_as_statement`]: Create a custom logical plan and unparse it as a statement.
 ///
 /// 7. [`unparse_my_logical_plan_as_subquery`]: Create a custom logical plan and unparse it as a subquery.
-
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn plan_to_sql_examples() -> Result<()> {
     // See how to evaluate expressions
     simple_expr_to_sql_demo()?;
     simple_expr_to_pretty_sql_demo()?;
