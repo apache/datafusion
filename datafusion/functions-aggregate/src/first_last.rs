@@ -302,6 +302,10 @@ impl AggregateUDFImpl for FirstValue {
         ReversedUDAF::Reversed(last_value_udaf())
     }
 
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -1125,6 +1129,10 @@ impl AggregateUDFImpl for LastValue {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Reversed(first_value_udaf())
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
     }
 
     fn documentation(&self) -> Option<&Documentation> {
