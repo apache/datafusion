@@ -34,7 +34,7 @@ statement error DataFusion error: SQL error: ParserError
 PREPARE AS SELECT id, age  FROM person WHERE age = $foo;
 
 # param following a non-number, $foo, not supported
-statement error Invalid placeholder, not a number: \$foo
+statement error Unknown placeholder: \$foo
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo;
 
 # not specify table hence cannot specify columns

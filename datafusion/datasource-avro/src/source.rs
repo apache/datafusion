@@ -61,9 +61,9 @@ impl AvroSource {
     fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
         AvroReader::try_new(
             reader,
-            Arc::clone(self.table_schema.file_schema()),
+            &Arc::clone(self.table_schema.file_schema()),
             self.batch_size.expect("Batch size must set before open"),
-            self.projection.clone(),
+            self.projection.clone().as_ref(),
         )
     }
 }

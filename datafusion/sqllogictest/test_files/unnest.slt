@@ -511,7 +511,7 @@ x y [30, 40, 50]
 query error DataFusion error: type_coercion\ncaused by\nThis feature is not implemented: Unnest should be rewritten to LogicalPlan::Unnest before type coercion
 select sum(unnest(generate_series(1,10)));
 
-query error DataFusion error: Internal error: unnest on struct can only be applied at the root level of select expression
+query error DataFusion error: Internal error: Assertion failed: struct_allowed: unnest on struct can only be applied at the root level of select expression
 select arrow_typeof(unnest(column5)) from unnest_table;
 
 query T
@@ -799,7 +799,7 @@ query error DataFusion error: Error during planning: Column in SELECT must be in
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
 
 # TODO: this query should work. see issue: https://github.com/apache/datafusion/issues/12794
-query error DataFusion error: Internal error: unnest on struct can only be applied at the root level of select expression
+query error DataFusion error: Internal error: Assertion failed: struct_allowed: unnest on struct can only be applied at the root level of select expression
 select unnest(column1) c1 from nested_unnest_table
 
 query II??I??

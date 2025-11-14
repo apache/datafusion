@@ -245,6 +245,46 @@ impl ScalarUDFImpl for GetFieldFunc {
             Ok(ColumnarValue::Array(data))
         }
 
+        fn process_map_with_nested_key(
+            array: Arc<dyn Array>,
+            key_array: Arc<dyn Array>,
+        ) -> Result<ColumnarValue> {
+            let map_array = as_map_array(array.as_ref())?;
+
+            let comparator = make_comparator(
+                map_array.keys().as_ref(),
+                key_array.as_ref(),
+                SortOptions::default(),
+            )?;
+
+            let original_data = map_array.entries().column(1).to_data();
+            let capacity = Capacities::Array(original_data.len());
+            let mut mutable =
+                MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+            for entry in 0..map_array.len() {
+                let start = map_array.value_offsets()[entry] as usize;
+                let end = map_array.value_offsets()[entry + 1] as usize;
+
+                let mut found_match = false;
+                for i in start..end {
+                    if comparator(i, 0).is_eq() {
+                        mutable.extend(0, i, i + 1);
+                        found_match = true;
+                        break;
+                    }
+                }
+
+                if !found_match {
+                    mutable.extend_nulls(1);
+                }
+            }
+
+            let data = mutable.freeze();
+            let data = make_array(data);
+            Ok(ColumnarValue::Array(data))
+        }
+
         match (array.data_type(), name) {
             (DataType::Map(_, _), ScalarValue::List(arr)) => {
                 let key_array: Arc<dyn Array> = arr;
@@ -256,7 +296,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Map(_, _), other) => {
                 let data_type = other.data_type();
                 if data_type.is_nested() {
-                    exec_err!("unsupported type {} for map access", data_type)
+                    process_map_with_nested_key(array, other.to_array()?)
                 } else {
                     process_map_array(array, other.to_array()?)
                 }
