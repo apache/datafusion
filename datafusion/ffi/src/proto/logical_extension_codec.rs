@@ -21,7 +21,9 @@ use std::sync::Arc;
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContextProvider;
 use crate::table_provider::FFI_TableProvider;
+use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
+use crate::udwf::FFI_WindowUDF;
 use crate::{df_result, rresult_return};
 use abi_stable::std_types::{RResult, RSlice, RStr, RString, RVec};
 use abi_stable::StableAbi;
@@ -33,7 +35,8 @@ use datafusion_common::{not_impl_err, TableReference};
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
-    AggregateUDF, Extension, LogicalPlan, ScalarUDF, ScalarUDFImpl, WindowUDF,
+    AggregateUDF, AggregateUDFImpl, Extension, LogicalPlan, ScalarUDF, ScalarUDFImpl,
+    WindowUDF, WindowUDFImpl,
 };
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use tokio::runtime::Handle;
@@ -66,22 +69,24 @@ pub struct FFI_LogicalExtensionCodec {
     try_encode_udf:
         unsafe extern "C" fn(&Self, node: FFI_ScalarUDF) -> RResult<RVec<u8>, RString>,
 
-    // fn try_decode_udaf(&self, name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
-    // todo!()
-    // }
-    //
-    // fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
-    // todo!()
-    // }
-    //
-    // fn try_decode_udwf(&self, name: &str, _buf: &[u8]) -> Result<Arc<WindowUDF>> {
-    // todo!()
-    // }
-    //
-    // fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()> {
-    // todo!()
-    // }
-    //
+    try_decode_udaf: unsafe extern "C" fn(
+        &Self,
+        name: RStr,
+        buf: RSlice<u8>,
+    ) -> RResult<FFI_AggregateUDF, RString>,
+
+    try_encode_udaf:
+        unsafe extern "C" fn(&Self, node: FFI_AggregateUDF) -> RResult<RVec<u8>, RString>,
+
+    try_decode_udwf: unsafe extern "C" fn(
+        &Self,
+        name: RStr,
+        buf: RSlice<u8>,
+    ) -> RResult<FFI_WindowUDF, RString>,
+
+    try_encode_udwf:
+        unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> RResult<RVec<u8>, RString>,
+
     /// Provider for TaskContext to be used during protobuf serialization
     /// and deserialization.
     pub task_ctx_provider: FFI_TaskContextProvider,
@@ -199,6 +204,60 @@ unsafe extern "C" fn try_encode_udf_fn_wrapper(
     RResult::ROk(bytes.into())
 }
 
+unsafe extern "C" fn try_decode_udaf_fn_wrapper(
+    codec: &FFI_LogicalExtensionCodec,
+    name: RStr,
+    buf: RSlice<u8>,
+) -> RResult<FFI_AggregateUDF, RString> {
+    let task_ctx_provider = codec.task_ctx_provider.clone();
+    let codec = codec.inner();
+    let udaf = rresult_return!(codec.try_decode_udaf(name.into(), buf.as_ref()));
+    let udaf = FFI_AggregateUDF::new(udaf, task_ctx_provider);
+
+    RResult::ROk(udaf)
+}
+
+unsafe extern "C" fn try_encode_udaf_fn_wrapper(
+    codec: &FFI_LogicalExtensionCodec,
+    node: FFI_AggregateUDF,
+) -> RResult<RVec<u8>, RString> {
+    let codec = codec.inner();
+    let udaf: Arc<dyn AggregateUDFImpl> = rresult_return!((&node).try_into());
+    let udaf = AggregateUDF::new_from_shared_impl(udaf);
+
+    let mut bytes = Vec::new();
+    rresult_return!(codec.try_encode_udaf(&udaf, &mut bytes));
+
+    RResult::ROk(bytes.into())
+}
+
+unsafe extern "C" fn try_decode_udwf_fn_wrapper(
+    codec: &FFI_LogicalExtensionCodec,
+    name: RStr,
+    buf: RSlice<u8>,
+) -> RResult<FFI_WindowUDF, RString> {
+    let task_ctx_provider = codec.task_ctx_provider.clone();
+    let codec = codec.inner();
+    let udwf = rresult_return!(codec.try_decode_udwf(name.into(), buf.as_ref()));
+    let udwf = FFI_WindowUDF::new(udwf, task_ctx_provider);
+
+    RResult::ROk(udwf)
+}
+
+unsafe extern "C" fn try_encode_udwf_fn_wrapper(
+    codec: &FFI_LogicalExtensionCodec,
+    node: FFI_WindowUDF,
+) -> RResult<RVec<u8>, RString> {
+    let codec = codec.inner();
+    let udwf: Arc<dyn WindowUDFImpl> = rresult_return!((&node).try_into());
+    let udwf = WindowUDF::new_from_shared_impl(udwf);
+
+    let mut bytes = Vec::new();
+    rresult_return!(codec.try_encode_udwf(&udwf, &mut bytes));
+
+    RResult::ROk(bytes.into())
+}
+
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_LogicalExtensionCodec) {
     let private_data =
         Box::from_raw(provider.private_data as *mut LogicalExtensionCodecPrivateData);
@@ -236,11 +295,15 @@ impl FFI_LogicalExtensionCodec {
             try_encode_table_provider: try_encode_table_provider_fn_wrapper,
             try_decode_udf: try_decode_udf_fn_wrapper,
             try_encode_udf: try_encode_udf_fn_wrapper,
+            try_decode_udaf: try_decode_udaf_fn_wrapper,
+            try_encode_udaf: try_encode_udaf_fn_wrapper,
+            try_decode_udwf: try_decode_udwf_fn_wrapper,
+            try_encode_udwf: try_encode_udwf_fn_wrapper,
 
             task_ctx_provider,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            version: super::version,
+            version: crate::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
         }
@@ -345,27 +408,59 @@ impl LogicalExtensionCodec for ForeignLogicalExtensionCodec {
         not_impl_err!("FFI does not support encode_file_format")
     }
 
-    fn try_decode_udf(&self, _name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        todo!()
+    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        let udf = unsafe {
+            df_result!((self.0.try_decode_udf)(&self.0, name.into(), buf.into()))
+        }?;
+        let udf: Arc<dyn ScalarUDFImpl> = (&udf).try_into()?;
+
+        Ok(Arc::new(ScalarUDF::new_from_shared_impl(udf)))
     }
 
-    fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
-        todo!()
+    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let node = FFI_ScalarUDF::from(Arc::new(node.clone()));
+        let bytes = df_result!(unsafe { (self.0.try_encode_udf)(&self.0, node) })?;
+
+        buf.extend(bytes);
+
+        Ok(())
     }
 
-    fn try_decode_udaf(&self, _name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
-        todo!()
+    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        let udaf = unsafe {
+            df_result!((self.0.try_decode_udaf)(&self.0, name.into(), buf.into()))
+        }?;
+        let udaf: Arc<dyn AggregateUDFImpl> = (&udaf).try_into()?;
+
+        Ok(Arc::new(AggregateUDF::new_from_shared_impl(udaf)))
     }
 
-    fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
-        todo!()
+    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let node = Arc::new(node.clone());
+        let node = FFI_AggregateUDF::new(node, self.0.task_ctx_provider.clone());
+        let bytes = df_result!(unsafe { (self.0.try_encode_udaf)(&self.0, node) })?;
+
+        buf.extend(bytes);
+
+        Ok(())
     }
 
-    fn try_decode_udwf(&self, _name: &str, _buf: &[u8]) -> Result<Arc<WindowUDF>> {
-        todo!()
+    fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
+        let udwf = unsafe {
+            df_result!((self.0.try_decode_udwf)(&self.0, name.into(), buf.into()))
+        }?;
+        let udwf: Arc<dyn WindowUDFImpl> = (&udwf).try_into()?;
+
+        Ok(Arc::new(WindowUDF::new_from_shared_impl(udwf)))
     }
 
-    fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()> {
-        todo!()
+    fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let node = Arc::new(node.clone());
+        let node = FFI_WindowUDF::new(node, self.0.task_ctx_provider.clone());
+        let bytes = df_result!(unsafe { (self.0.try_encode_udwf)(&self.0, node) })?;
+
+        buf.extend(bytes);
+
+        Ok(())
     }
 }

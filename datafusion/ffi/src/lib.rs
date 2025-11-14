@@ -31,6 +31,7 @@ pub mod execution;
 pub mod execution_plan;
 pub mod insert_op;
 pub mod plan_properties;
+pub mod proto;
 pub mod record_batch_stream;
 pub mod schema_provider;
 pub mod session;
@@ -43,7 +44,6 @@ pub mod udwf;
 pub mod util;
 pub mod volatility;
 
-mod extension_codec;
 #[cfg(feature = "integration-tests")]
 pub mod tests;
 
