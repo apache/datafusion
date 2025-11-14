@@ -36,6 +36,7 @@ use crate::dataframe::DataFrame;
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
+use crate::execution::context::CacheProducer;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{CsvReadOptions, SessionContext};
@@ -45,7 +46,10 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::TableReference;
-use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
+use datafusion_expr::{
+    CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType,
+    UserDefinedLogicalNodeCore,
+};
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -281,4 +285,62 @@ impl RecordBatchStream for BoundedStream {
     fn schema(&self) -> SchemaRef {
         self.record_batch.schema()
     }
+}
+
+#[derive(Hash, Eq, PartialEq, PartialOrd, Debug)]
+struct CacheNode {
+    input: LogicalPlan,
+}
+
+impl UserDefinedLogicalNodeCore for CacheNode {
+    fn name(&self) -> &str {
+        "CachNode"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+
+    fn schema(&self) -> &datafusion_common::DFSchemaRef {
+        self.input.schema()
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "CacheNode")
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        assert_eq!(inputs.len(), 1, "input size inconsistent");
+        Ok(Self {
+            input: inputs[0].clone(),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct TestCacheProducer {}
+
+impl CacheProducer for TestCacheProducer {
+    fn create(
+        &self,
+        plan: LogicalPlan,
+    ) -> Result<Arc<dyn datafusion_expr::UserDefinedLogicalNode>> {
+        Ok(Arc::new(CacheNode { input: plan }))
+    }
+}
+
+/// Create a test table registered to a session context with an associated cache producer
+pub async fn test_table_with_cache_producer() -> Result<DataFrame> {
+    let ctx = SessionContext::new().with_cache_producer(Arc::new(TestCacheProducer {}));
+    let name = "aggregate_test_100";
+    register_aggregate_csv(&ctx, name).await?;
+    ctx.table(name).await
 }

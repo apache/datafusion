@@ -53,7 +53,7 @@ use url::Url;
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{CacheProducer, SessionContext};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
 use datafusion::prelude::{
@@ -61,7 +61,7 @@ use datafusion::prelude::{
 };
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
-    test_table_with_name,
+    test_table_with_cache_producer, test_table_with_name,
 };
 use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
@@ -78,8 +78,9 @@ use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
     scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
-    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType,
+    UserDefinedLogicalNodeCore, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::Column;
@@ -2335,6 +2336,29 @@ async fn cache_test() -> Result<()> {
 
     assert_eq!(&df_results, &cached_df_results);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn cache_producer_test() -> Result<()> {
+    let df = test_table_with_cache_producer()
+        .await?
+        .select_columns(&["c2", "c3"])?
+        .limit(0, Some(1))?
+        .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
+
+    let cached_df = df.clone().cache().await?;
+
+    assert_snapshot!(
+        cached_df.clone().into_optimized_plan().unwrap(),
+        @r###"
+    CacheNode
+      Projection: aggregate_test_100.c2, aggregate_test_100.c3, CAST(CAST(aggregate_test_100.c2 AS Int64) + CAST(aggregate_test_100.c3 AS Int64) AS Int64) AS sum
+        Projection: aggregate_test_100.c2, aggregate_test_100.c3
+          Limit: skip=0, fetch=1
+            TableScan: aggregate_test_100, fetch=1
+    "###
+    );
     Ok(())
 }
 
