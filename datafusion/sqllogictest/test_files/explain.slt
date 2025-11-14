@@ -43,10 +43,9 @@ logical_plan
 02)--Filter: aggregate_test_100.c2 > Int8(10)
 03)----TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: c2@1 > 10, projection=[c1@0]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], file_type=csv, has_header=true
+01)FilterExec: c2@1 > 10, projection=[c1@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], file_type=csv, has_header=true
 
 # explain_csv_exec_scan_config
 
