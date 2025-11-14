@@ -44,7 +44,7 @@ impl OptimizeUnions {
 
 impl OptimizerRule for OptimizeUnions {
     fn name(&self) -> &str {
-        "eliminate_nested_union"
+        "optimize_unions"
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
