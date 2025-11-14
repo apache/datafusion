@@ -407,6 +407,25 @@
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code><a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
 <p>You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/18566">status of the <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code> release here</a></p>
+<section id="planner-now-requires-explicit-opt-in-for-within-group-syntax">
+<h3>Planner now requires explicit opt-in for WITHIN GROUP syntax<a class="headerlink" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax" title="Link to this heading">#</a></h3>
+<p>The SQL planner now enforces the aggregate UDF contract more strictly: the
+<code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span> <span class="pre">(ORDER</span> <span class="pre">BY</span> <span class="pre">...)</span></code> syntax is accepted only if the aggregate UDAF
+explicitly advertises support by returning <code class="docutils literal notranslate"><span class="pre">true</span></code> from
+<code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_within_group_clause()</span></code>.</p>
+<p>Previously the planner forwarded a <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code> clause to order-sensitive
+aggregates even when they did not implement ordered-set semantics, which could
+cause queries such as <code class="docutils literal notranslate"><span class="pre">SUM(x)</span> <span class="pre">WITHIN</span> <span class="pre">GROUP</span> <span class="pre">(ORDER</span> <span class="pre">BY</span> <span class="pre">x)</span></code> to plan successfully.
+This behavior was too permissive and has been changed to match PostgreSQL and
+the documented semantics.</p>
+<p>Migration: If your UDAF intentionally implements ordered-set semantics and
+wants to accept the <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code> SQL syntax, update your implementation to
+return <code class="docutils literal notranslate"><span class="pre">true</span></code> from <code class="docutils literal notranslate"><span class="pre">supports_within_group_clause()</span></code> and handle the ordering
+semantics in your accumulator implementation. If your UDAF is merely
+order-sensitive (but not an ordered-set aggregate), do not advertise
+<code class="docutils literal notranslate"><span class="pre">supports_within_group_clause()</span></code> and clients should use alternative function
+signatures (for example, explicit ordering as a function argument) instead.</p>
+</section>
 <section id="aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false">
 <h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false" title="Link to this heading">#</a></h3>
 <p>This method specifies whether an aggregate function allows <code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code>/<code class="docutils literal notranslate"><span class="pre">RESPECT</span> <span class="pre">NULLS</span></code>
@@ -1661,6 +1680,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax">Planner now requires explicit opt-in for WITHIN GROUP syntax</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code></a></li>
 </ul>
 </li>

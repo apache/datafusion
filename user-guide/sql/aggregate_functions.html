@@ -429,6 +429,31 @@ dev/update_function_docs.sh file for updating surrounding text.
 </div>
 <p>Note: When no rows pass the filter, <code class="docutils literal notranslate"><span class="pre">COUNT</span></code> returns <code class="docutils literal notranslate"><span class="pre">0</span></code> while <code class="docutils literal notranslate"><span class="pre">SUM</span></code>/<code class="docutils literal notranslate"><span class="pre">AVG</span></code>/<code class="docutils literal notranslate"><span class="pre">MIN</span></code>/<code class="docutils literal notranslate"><span class="pre">MAX</span></code> return <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.</p>
 </section>
+<section id="within-group-ordered-set-aggregates">
+<h2>WITHIN GROUP / Ordered-set aggregates<a class="headerlink" href="#within-group-ordered-set-aggregates" title="Link to this heading">#</a></h2>
+<p>Some aggregate functions accept the SQL <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span> <span class="pre">(ORDER</span> <span class="pre">BY</span> <span class="pre">...)</span></code> clause to specify the ordering the
+aggregate relies on. In DataFusion this is opt-in: only aggregate functions whose implementation returns
+<code class="docutils literal notranslate"><span class="pre">true</span></code> from <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_within_group_clause()</span></code> accept the <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code> clause. Attempting to
+use <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code> with a regular aggregate (for example, <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">SUM(x)</span> <span class="pre">WITHIN</span> <span class="pre">GROUP</span> <span class="pre">(ORDER</span> <span class="pre">BY</span> <span class="pre">x)</span></code>) will fail
+during planning with an error: “WITHIN GROUP is only supported for ordered-set aggregate functions”.</p>
+<p>Currently, the built-in aggregate functions that support <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code> are:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">percentile_cont</span></code> — exact percentile aggregate (also available as <code class="docutils literal notranslate"><span class="pre">percentile_cont(column,</span> <span class="pre">percentile)</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code> — approximate percentile using the t-digest algorithm</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code> — approximate weighted percentile using the t-digest algorithm</p></li>
+</ul>
+<p>Note: rank-like functions such as <code class="docutils literal notranslate"><span class="pre">rank()</span></code>, <code class="docutils literal notranslate"><span class="pre">dense_rank()</span></code>, and <code class="docutils literal notranslate"><span class="pre">percent_rank()</span></code> are window functions and
+use the <code class="docutils literal notranslate"><span class="pre">OVER</span> <span class="pre">(...)</span></code> clause; they are not ordered-set aggregates that accept <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code> in DataFusion.</p>
+<p>Example (ordered-set aggregate):</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">percentile_cont</span><span class="p">(</span><span class="mi">0</span><span class="p">.</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">value</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Example (invalid usage — planner will error):</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- This will fail: SUM is not an ordered-set aggregate</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="general-functions">
 <h2>General Functions<a class="headerlink" href="#general-functions" title="Link to this heading">#</a></h2>
 <ul class="simple">
@@ -1671,6 +1696,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#filter-clause">Filter clause</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#within-group-ordered-set-aggregates">WITHIN GROUP / Ordered-set aggregates</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#general-functions">General Functions</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-agg"><code class="docutils literal notranslate"><span class="pre">array_agg</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#arguments">Arguments</a></li>
