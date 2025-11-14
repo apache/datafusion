@@ -129,6 +129,16 @@ CREATE TABLE group_median_table_nullable (
 # Error tests
 #######
 
+statement error DataFusion error: Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
+SELECT SUM(c2) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+
+# WITHIN GROUP rejected for non-ordered-set UDAF
+# MIN does not implement ordered-set semantics (`supports_within_group_clause()`),
+# so the planner should reject the WITHIN GROUP syntax.
+statement error DataFusion error: Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
+SELECT MIN(c) WITHIN GROUP (ORDER BY c) FROM (VALUES (1),(2)) as t(c);
+
+
 # https://github.com/apache/datafusion/issues/3353
 statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
@@ -7867,17 +7877,15 @@ VALUES
 ----
 x 1
 
-query ?
+query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-----
-[a, a, c, d]
 
-query ?
+
+query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(DISTINCT a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-----
-[a, c, d]
+
 
 query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
 SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)

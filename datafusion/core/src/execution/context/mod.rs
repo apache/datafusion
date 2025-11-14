@@ -1054,18 +1054,18 @@ impl SessionContext {
             } else if allow_missing {
                 return self.return_empty_dataframe();
             } else {
-                return self.schema_doesnt_exist_err(name);
+                return self.schema_doesnt_exist_err(&name);
             }
         };
         let dereg = catalog.deregister_schema(name.schema_name(), cascade)?;
         match (dereg, allow_missing) {
             (None, true) => self.return_empty_dataframe(),
-            (None, false) => self.schema_doesnt_exist_err(name),
+            (None, false) => self.schema_doesnt_exist_err(&name),
             (Some(_), _) => self.return_empty_dataframe(),
         }
     }
 
-    fn schema_doesnt_exist_err(&self, schemaref: SchemaReference) -> Result<DataFrame> {
+    fn schema_doesnt_exist_err(&self, schemaref: &SchemaReference) -> Result<DataFrame> {
         exec_err!("Schema '{schemaref}' doesn't exist.")
     }
 
