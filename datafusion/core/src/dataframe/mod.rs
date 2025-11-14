@@ -2403,7 +2403,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn fill_null(
         &self,
         value: ScalarValue,
