@@ -498,7 +498,7 @@ impl DefaultPhysicalPlanner {
                 output_schema,
             }) => {
                 let output_schema = Arc::clone(output_schema.inner());
-                self.plan_describe(Arc::clone(schema), output_schema)?
+                self.plan_describe(&Arc::clone(schema), output_schema)?
             }
 
             // 1 Child
@@ -2246,6 +2246,7 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
+    #[allow(clippy::needless_pass_by_value)]
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -2280,7 +2281,7 @@ impl DefaultPhysicalPlanner {
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
             OptimizationInvariantChecker::new(optimizer)
-                .check(&new_plan, before_schema)?;
+                .check(&new_plan, &before_schema)?;
 
             debug!(
                 "Optimized physical plan by {}:\n{}\n",
@@ -2313,7 +2314,7 @@ impl DefaultPhysicalPlanner {
     // return an record_batch which describes a table's schema.
     fn plan_describe(
         &self,
-        table_schema: Arc<Schema>,
+        table_schema: &Arc<Schema>,
         output_schema: Arc<Schema>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut column_names = StringBuilder::new();
@@ -2516,10 +2517,10 @@ impl<'a> OptimizationInvariantChecker<'a> {
     pub fn check(
         &mut self,
         plan: &Arc<dyn ExecutionPlan>,
-        previous_schema: Arc<Schema>,
+        previous_schema: &Arc<Schema>,
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
-        if self.rule.schema_check() && plan.schema() != previous_schema {
+        if self.rule.schema_check() && plan.schema() != *previous_schema {
             internal_err!("PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
                 self.rule.name(),
                 previous_schema,
@@ -3709,20 +3710,20 @@ digraph {
 
         // Test: check should pass with same schema
         let equal_schema = ok_plan.schema();
-        OptimizationInvariantChecker::new(&rule).check(&ok_plan, equal_schema)?;
+        OptimizationInvariantChecker::new(&rule).check(&ok_plan, &equal_schema)?;
 
         // Test: should fail with schema changed
         let different_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&ok_plan, different_schema)
+            .check(&ok_plan, &different_schema)
             .unwrap_err();
         assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
 
         // Test: should fail when extension node fails it's own invariant check
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&failing_node, ok_plan.schema())
+            .check(&failing_node, &ok_plan.schema())
             .unwrap_err();
         assert!(expected_err
             .to_string()
@@ -3735,7 +3736,7 @@ digraph {
             Arc::clone(&child),
         ])?;
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&invalid_plan, ok_plan.schema())
+            .check(&invalid_plan, &ok_plan.schema())
             .unwrap_err();
         assert!(expected_err
             .to_string()
