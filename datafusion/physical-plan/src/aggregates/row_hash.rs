@@ -710,6 +710,8 @@ impl Stream for GroupedHashAggregateStream {
                             }
 
                             // Check if we should switch to skip aggregation mode
+                            // It's important that we do this before we early emit since we've
+                            // already updated the probe.
                             if let Some(new_state) = self.switch_to_skip_aggregation()? {
                                 timer.done();
                                 self.exec_state = new_state;
