@@ -48,7 +48,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::{
-    CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType,
+    CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
 use std::pin::Pin;
