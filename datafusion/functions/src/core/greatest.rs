@@ -21,7 +21,9 @@ use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::cmp;
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
-use datafusion_common::{assert_or_internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -113,8 +115,9 @@ impl GreatestLeastOperator for GreatestFunc {
 
         let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
-        assert_or_internal_err!(
-            lhs.len() == rhs.len(),
+        assert_eq_or_internal_err!(
+            lhs.len(),
+            rhs.len(),
             "All arrays should have the same length for greatest comparison"
         );
 
