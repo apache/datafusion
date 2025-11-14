@@ -599,25 +599,16 @@ from data
 
 # group correlation_query_with_nans_f32
 query IR
-with data as (
-    select 1 id, 1 as f, 'nan'::float as b
-    union all
-    select 2 id, 'nan'::float as f, 1 as b
-    union all
-    select 3 id, 'nan'::float as f, null as b
-    union all
-    select 4 id, null as f, 'nan'::float as b
-    union all
-    select 5 id, 'nan'::float as f, 'nan'::float as b
-    union all
-    select 5 id, 1 as f, 1 as b
-    union all
-    select 5 id, 2 as f, 2 as b
-    union all
-    select 6 id, 'nan'::float as f, 'nan'::float as b
-)
 select id, corr(f, b)
-from data
+from values
+    (1, 1, 'nan'::float),
+    (2, 'nan'::float, 1),
+    (3, 'nan'::float, null),
+    (4, null, 'nan'::float),
+    (5, 'nan'::float, 'nan'::float),
+    (5, 1, 1),
+    (5, 2, 2),
+    (6, 'nan'::float, 'nan'::float) t(id, f, b)
 group by id
 order by id
 ----
@@ -640,23 +631,16 @@ NaN NaN
 
 # group correlation_query_with_nans_f64
 query IR
-with data as (
-    select 1 id, 1 as f, 'nan'::double as b
-    union all
-    select 2 id, 'nan'::double as f, 1 as b
-    union all
-    select 3 id, 'nan'::double as f, null as b
-    union all
-    select 4 id, null as f, 'nan'::double as b
-    union all
-    select 5 id, 'nan'::double as f, 'nan'::double as b
-    union all
-    select 5 id, 1 as f, 1 as b
-    union all
-    select 6 id, 'nan'::double as f, 'nan'::double as b
-)
 select id, corr(f, b)
-from data
+from values
+    (1, 1, 'nan'::double),
+    (2, 'nan'::double, 1),
+    (3, 'nan'::double, null),
+    (4, null, 'nan'::float),
+    (5, 'nan'::double, 'nan'::double),
+    (5, 1, 1),
+    (5, 2, 2),
+    (6, 'nan'::double, 'nan'::double) t(id, f, b)
 group by id
 order by id
 ----
