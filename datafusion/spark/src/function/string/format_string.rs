@@ -304,7 +304,7 @@ impl<'a> Formatter<'a> {
                         return exec_err!("No previous argument to reference");
                     };
                     let (spec, rest) =
-                        take_conversion_specifier(rest, p, &arg_types[p - 1].clone())?;
+                        take_conversion_specifier(rest, p, &arg_types[p - 1])?;
                     res.push(FormatElement::Format(spec));
                     rem = rest;
                     continue;
@@ -335,7 +335,7 @@ impl<'a> Formatter<'a> {
                 let (spec, rest) = take_conversion_specifier(
                     rest,
                     current_argument_index,
-                    &arg_types[current_argument_index - 1].clone(),
+                    &arg_types[current_argument_index - 1],
                 )
                 .map_err(|e| exec_datafusion_err!("{:?}, format string: {:?}", e, fmt))?;
                 res.push(FormatElement::Format(spec));
