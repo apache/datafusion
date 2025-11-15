@@ -1275,4 +1275,104 @@ mod tests {
             "Expected ~10ms total, got {new_recorded} ns",
         );
     }
+
+    #[test]
+    fn test_human_readable_metric_formatting() {
+        // Test Count formatting with various sizes
+        let small_count = Count::new();
+        small_count.add(42);
+        assert_eq!(
+            MetricValue::OutputRows(small_count.clone()).to_string(),
+            "42"
+        );
+
+        let thousand_count = Count::new();
+        thousand_count.add(10_100);
+        assert_eq!(
+            MetricValue::OutputRows(thousand_count.clone()).to_string(),
+            "10.10 K"
+        );
+
+        let million_count = Count::new();
+        million_count.add(1_532_000);
+        assert_eq!(
+            MetricValue::SpilledRows(million_count.clone()).to_string(),
+            "1.53 M"
+        );
+
+        let billion_count = Count::new();
+        billion_count.add(2_500_000_000);
+        assert_eq!(
+            MetricValue::OutputBatches(billion_count.clone()).to_string(),
+            "2.50 B"
+        );
+
+        // Test Time formatting with various durations
+        let micros_time = Time::new();
+        micros_time.add_duration(Duration::from_nanos(1_234));
+        assert_eq!(
+            MetricValue::ElapsedCompute(micros_time.clone()).to_string(),
+            "1.23µs"
+        );
+
+        let millis_time = Time::new();
+        millis_time.add_duration(Duration::from_nanos(11_295_377));
+        assert_eq!(
+            MetricValue::ElapsedCompute(millis_time.clone()).to_string(),
+            "11.30ms"
+        );
+
+        let seconds_time = Time::new();
+        seconds_time.add_duration(Duration::from_nanos(1_234_567_890));
+        assert_eq!(
+            MetricValue::ElapsedCompute(seconds_time.clone()).to_string(),
+            "1.23s"
+        );
+
+        // Test CurrentMemoryUsage formatting (should use size, not count)
+        let mem_gauge = Gauge::new();
+        mem_gauge.add(100 * MB as usize);
+        assert_eq!(
+            MetricValue::CurrentMemoryUsage(mem_gauge.clone()).to_string(),
+            "100.0 MB"
+        );
+
+        // Test custom Gauge formatting (should use count)
+        let custom_gauge = Gauge::new();
+        custom_gauge.add(50_000);
+        assert_eq!(
+            MetricValue::Gauge {
+                name: "custom".into(),
+                gauge: custom_gauge.clone()
+            }
+            .to_string(),
+            "50.00 K"
+        );
+
+        // Test PruningMetrics formatting
+        let pruning = PruningMetrics::new();
+        pruning.add_matched(500_000);
+        pruning.add_pruned(500_000);
+        assert_eq!(
+            MetricValue::PruningMetrics {
+                name: "test_pruning".into(),
+                pruning_metrics: pruning.clone()
+            }
+            .to_string(),
+            "1.00 M total → 500.0 K matched"
+        );
+
+        // Test RatioMetrics formatting
+        let ratio = RatioMetrics::new();
+        ratio.add_part(250_000);
+        ratio.add_total(1_000_000);
+        assert_eq!(
+            MetricValue::Ratio {
+                name: "test_ratio".into(),
+                ratio_metrics: ratio.clone()
+            }
+            .to_string(),
+            "25% (250.0 K/1.00 M)"
+        );
+    }
 }
