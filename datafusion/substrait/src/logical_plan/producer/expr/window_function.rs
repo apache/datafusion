@@ -17,12 +17,13 @@
 
 use crate::logical_plan::producer::utils::substrait_sort_field;
 use crate::logical_plan::producer::SubstraitProducer;
+use crate::logical_plan::BoundsTypeExt;
 use datafusion::common::{DFSchemaRef, ScalarValue};
 use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use substrait::proto::expression::window_function::bound as SubstraitBound;
 use substrait::proto::expression::window_function::bound::Kind as BoundKind;
-use substrait::proto::expression::window_function::{Bound, BoundsType};
+use substrait::proto::expression::window_function::Bound;
 use substrait::proto::expression::RexType;
 use substrait::proto::expression::WindowFunction as SubstraitWindowFunction;
 use substrait::proto::function_argument::ArgType;
@@ -78,16 +79,13 @@ pub fn from_window_function(
     ))
 }
 
-/// Groups variant value from Substrait spec (not yet in generated protobuf enum)
-const SUBSTRAIT_BOUNDS_TYPE_GROUPS: i32 = 3;
-
 fn make_substrait_window_function(
     function_reference: u32,
     arguments: Vec<FunctionArgument>,
     partitions: Vec<Expression>,
     sorts: Vec<SortField>,
     bounds: (Bound, Bound),
-    bounds_type: i32,
+    bounds_type: BoundsTypeExt,
 ) -> Expression {
     #[allow(deprecated)]
     Expression {
@@ -103,18 +101,18 @@ fn make_substrait_window_function(
             lower_bound: Some(bounds.0),
             upper_bound: Some(bounds.1),
             args: vec![],
-            bounds_type,
+            bounds_type: bounds_type.to_i32(),
         })),
     }
 }
 
 fn to_substrait_bound_type(
     window_frame: &WindowFrame,
-) -> datafusion::common::Result<i32> {
+) -> datafusion::common::Result<BoundsTypeExt> {
     let bounds_type = match window_frame.units {
-        WindowFrameUnits::Rows => BoundsType::Rows as i32, // ROWS
-        WindowFrameUnits::Range => BoundsType::Range as i32, // RANGE
-        WindowFrameUnits::Groups => SUBSTRAIT_BOUNDS_TYPE_GROUPS, // GROUPS
+        WindowFrameUnits::Rows => BoundsTypeExt::Rows,
+        WindowFrameUnits::Range => BoundsTypeExt::Range,
+        WindowFrameUnits::Groups => BoundsTypeExt::Groups,
     };
     Ok(bounds_type)
 }

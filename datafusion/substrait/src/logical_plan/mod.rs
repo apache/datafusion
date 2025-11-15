@@ -15,5 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod bounds_type;
 pub mod consumer;
 pub mod producer;
+
+pub(crate) use bounds_type::BoundsTypeExt;

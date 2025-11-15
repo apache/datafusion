@@ -19,59 +19,16 @@ use crate::logical_plan::consumer::{
     from_substrait_func_args, from_substrait_rex_vec, from_substrait_sorts,
     substrait_fun_name, SubstraitConsumer,
 };
-use datafusion::common::{
-    not_impl_err, plan_datafusion_err, plan_err, substrait_err, DFSchema, ScalarValue,
-};
+use crate::logical_plan::BoundsTypeExt;
+use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::WindowFunctionParams;
-use datafusion::logical_expr::{
-    expr, Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
-};
-use substrait::proto::expression::window_function::{Bound, BoundsType};
+use datafusion::logical_expr::{expr, Expr, WindowFrameBound, WindowFunctionDefinition};
+use substrait::proto::expression::window_function::Bound;
 use substrait::proto::expression::WindowFunction;
 use substrait::proto::expression::{
     window_function::bound as SubstraitBound, window_function::bound::Kind as BoundKind,
 };
-
-/// Extended BoundsType that includes Groups variant (value 3 in Substrait spec)
-/// which is not yet present in the generated protobuf enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BoundsTypeExt {
-    Rows,
-    Range,
-    Groups,
-    Unspecified,
-}
-
-impl BoundsTypeExt {
-    fn from_i32(value: i32) -> datafusion::common::Result<Self> {
-        match value {
-            v if v == BoundsType::Rows as i32 => Ok(BoundsTypeExt::Rows),
-            v if v == BoundsType::Range as i32 => Ok(BoundsTypeExt::Range),
-            3 => Ok(BoundsTypeExt::Groups), // Groups variant from Substrait spec
-            v if v == BoundsType::Unspecified as i32 => Ok(BoundsTypeExt::Unspecified),
-            _ => Err(plan_datafusion_err!("Invalid bound type: {}", value)),
-        }
-    }
-
-    fn to_window_frame_units(self, order_by_empty: bool) -> WindowFrameUnits {
-        match self {
-            BoundsTypeExt::Rows => WindowFrameUnits::Rows,
-            BoundsTypeExt::Range => WindowFrameUnits::Range,
-            BoundsTypeExt::Groups => WindowFrameUnits::Groups,
-            BoundsTypeExt::Unspecified => {
-                // If the plan does not specify the bounds type, then we use a simple logic to determine the units
-                // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
-                // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
-                if order_by_empty {
-                    WindowFrameUnits::Rows
-                } else {
-                    WindowFrameUnits::Range
-                }
-            }
-        }
-    }
-}
 
 pub async fn from_window_function(
     consumer: &impl SubstraitConsumer,
