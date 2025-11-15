@@ -2435,7 +2435,7 @@ impl protobuf::PhysicalPlanNode {
         let agg = exec
             .aggr_expr()
             .iter()
-            .map(|expr| serialize_physical_aggr_expr(&expr.to_owned(), extension_codec))
+            .map(|expr| serialize_physical_aggr_expr(expr.to_owned(), extension_codec))
             .collect::<Result<Vec<_>>>()?;
 
         let agg_names = exec
