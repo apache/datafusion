@@ -22,11 +22,15 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{
-    as_binary_array, as_binary_view_array, as_large_binary_array,
+    as_binary_array, as_binary_view_array, as_fixed_size_binary_array,
+    as_large_binary_array,
 };
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::types::{logical_string, NativeType};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 use sha1::{Digest, Sha1};
@@ -47,7 +51,14 @@ impl Default for SparkSha1 {
 impl SparkSha1 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Binary,
+                    vec![TypeSignatureClass::Native(logical_string())],
+                    NativeType::Binary,
+                )],
+                Volatility::Immutable,
+            ),
             aliases: vec!["sha".to_string()],
         }
     }
@@ -77,24 +88,6 @@ impl ScalarUDFImpl for SparkSha1 {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_sha1, vec![])(&args.args)
     }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!(
-                "`sha1` function requires 1 argument, got {}",
-                arg_types.len()
-            );
-        }
-        match arg_types[0] {
-            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-                Ok(vec![arg_types[0].clone()])
-            }
-            DataType::Utf8 | DataType::Utf8View => Ok(vec![DataType::Binary]),
-            DataType::LargeUtf8 => Ok(vec![DataType::LargeBinary]),
-            DataType::Null => Ok(vec![DataType::Binary]),
-            _ => exec_err!("`sha1` function does not support type {}", arg_types[0]),
-        }
-    }
 }
 
 fn spark_sha1_digest(value: &[u8]) -> String {
@@ -102,7 +95,6 @@ fn spark_sha1_digest(value: &[u8]) -> String {
     let mut s = String::with_capacity(result.len() * 2);
     #[allow(deprecated)]
     for b in result.as_slice() {
-        #[allow(clippy::unwrap_used)]
         write!(&mut s, "{b:02x}").unwrap();
     }
     s
@@ -116,14 +108,10 @@ fn spark_sha1_impl<'a>(input: impl Iterator<Item = Option<&'a [u8]>>) -> ArrayRe
 }
 
 fn spark_sha1(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [input] = args else {
-        return internal_err!(
-            "Spark `sha1` function requires 1 argument, got {}",
-            args.len()
-        );
-    };
+    let [input] = take_function_args("sha1", args)?;
 
     match input.data_type() {
+        DataType::Null => Ok(Arc::new(StringArray::new_null(input.len()))),
         DataType::Binary => {
             let input = as_binary_array(input)?;
             Ok(spark_sha1_impl(input.iter()))
@@ -136,11 +124,12 @@ fn spark_sha1(args: &[ArrayRef]) -> Result<ArrayRef> {
             let input = as_binary_view_array(input)?;
             Ok(spark_sha1_impl(input.iter()))
         }
-        _ => {
-            exec_err!(
-                "Spark `sha1` function: argument must be binary or large binary, got {:?}",
-                input.data_type()
-            )
+        DataType::FixedSizeBinary(_) => {
+            let input = as_fixed_size_binary_array(input)?;
+            Ok(spark_sha1_impl(input.iter()))
+        }
+        dt => {
+            internal_err!("Unsupported data type for sha1: {dt}")
         }
     }
 }
