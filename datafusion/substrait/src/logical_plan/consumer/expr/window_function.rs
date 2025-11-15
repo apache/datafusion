@@ -33,7 +33,45 @@ use substrait::proto::expression::{
     window_function::bound as SubstraitBound, window_function::bound::Kind as BoundKind,
 };
 
-const SUBSTRAIT_BOUNDS_TYPE_GROUPS: i32 = 3;
+/// Extended BoundsType that includes Groups variant (value 3 in Substrait spec)
+/// which is not yet present in the generated protobuf enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundsTypeExt {
+    Rows,
+    Range,
+    Groups,
+    Unspecified,
+}
+
+impl BoundsTypeExt {
+    fn from_i32(value: i32) -> datafusion::common::Result<Self> {
+        match value {
+            v if v == BoundsType::Rows as i32 => Ok(BoundsTypeExt::Rows),
+            v if v == BoundsType::Range as i32 => Ok(BoundsTypeExt::Range),
+            3 => Ok(BoundsTypeExt::Groups), // Groups variant from Substrait spec
+            v if v == BoundsType::Unspecified as i32 => Ok(BoundsTypeExt::Unspecified),
+            _ => Err(plan_datafusion_err!("Invalid bound type: {}", value)),
+        }
+    }
+
+    fn to_window_frame_units(self, order_by_empty: bool) -> WindowFrameUnits {
+        match self {
+            BoundsTypeExt::Rows => WindowFrameUnits::Rows,
+            BoundsTypeExt::Range => WindowFrameUnits::Range,
+            BoundsTypeExt::Groups => WindowFrameUnits::Groups,
+            BoundsTypeExt::Unspecified => {
+                // If the plan does not specify the bounds type, then we use a simple logic to determine the units
+                // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
+                // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
+                if order_by_empty {
+                    WindowFrameUnits::Rows
+                } else {
+                    WindowFrameUnits::Range
+                }
+            }
+        }
+    }
+}
 
 pub async fn from_window_function(
     consumer: &impl SubstraitConsumer,
@@ -68,26 +106,8 @@ pub async fn from_window_function(
     let mut order_by =
         from_substrait_sorts(consumer, &window.sorts, input_schema).await?;
 
-    let bound_units = if window.bounds_type == SUBSTRAIT_BOUNDS_TYPE_GROUPS {
-        WindowFrameUnits::Groups
-    } else {
-        match BoundsType::try_from(window.bounds_type).map_err(|e| {
-            plan_datafusion_err!("Invalid bound type {}: {e}", window.bounds_type)
-        })? {
-            BoundsType::Rows => WindowFrameUnits::Rows,
-            BoundsType::Range => WindowFrameUnits::Range,
-            BoundsType::Unspecified => {
-                // If the plan does not specify the bounds type, then we use a simple logic to determine the units
-                // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
-                // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
-                if order_by.is_empty() {
-                    WindowFrameUnits::Rows
-                } else {
-                    WindowFrameUnits::Range
-                }
-            }
-        }
-    };
+    let bounds_type_ext = BoundsTypeExt::from_i32(window.bounds_type)?;
+    let bound_units = bounds_type_ext.to_window_frame_units(order_by.is_empty());
     let window_frame = datafusion::logical_expr::WindowFrame::new_bounds(
         bound_units,
         from_substrait_bound(&window.lower_bound, true)?,

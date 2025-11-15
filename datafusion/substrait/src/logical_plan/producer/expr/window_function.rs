@@ -78,6 +78,7 @@ pub fn from_window_function(
     ))
 }
 
+/// Groups variant value from Substrait spec (not yet in generated protobuf enum)
 const SUBSTRAIT_BOUNDS_TYPE_GROUPS: i32 = 3;
 
 fn make_substrait_window_function(
