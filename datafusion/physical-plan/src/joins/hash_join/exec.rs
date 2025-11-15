@@ -1409,7 +1409,7 @@ async fn collect_left_input(
 
     // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
     // `u64` indice variant
-    // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
+    // it will be then converted to Arc below for sharing with SharedBuildAccumulator (when hash map pushdown optimization is enabled)
     let mut hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
         let estimated_hashtable_size =
             estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;
