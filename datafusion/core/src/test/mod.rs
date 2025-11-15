@@ -87,11 +87,13 @@ pub fn scan_partitioned_csv(
     let schema = aggr_test_schema();
     let filename = "aggregate_test_100.csv";
     let path = format!("{}/csv", arrow_test_data());
+    let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
+
     let file_groups = partitioned_file_groups(
         path.as_str(),
         filename,
         partitions,
-        Arc::new(CsvFormat::default()),
+        &csv_format,
         FileCompressionType::UNCOMPRESSED,
         work_dir,
     )?;
@@ -114,7 +116,7 @@ pub fn partitioned_file_groups(
     path: &str,
     filename: &str,
     partitions: usize,
-    file_format: Arc<dyn FileFormat>,
+    file_format: &Arc<dyn FileFormat>,
     file_compression_type: FileCompressionType,
     work_dir: &Path,
 ) -> Result<Vec<FileGroup>> {
@@ -198,7 +200,7 @@ pub fn partitioned_file_groups(
         .collect::<Vec<_>>())
 }
 
-pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
+pub fn assert_fields_eq(plan: &LogicalPlan, expected: &[&str]) {
     let actual: Vec<String> = plan
         .schema()
         .fields()

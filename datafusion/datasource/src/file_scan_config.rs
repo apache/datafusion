@@ -581,7 +581,8 @@ impl DataSource for FileScanConfig {
         if let Some(filter) = self.file_source.filter() {
             // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
             // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
-            match Self::add_filter_equivalence_info(filter, &mut eq_properties, &schema) {
+            match Self::add_filter_equivalence_info(&filter, &mut eq_properties, &schema)
+            {
                 Ok(()) => {}
                 Err(e) => {
                     warn!("Failed to add filter equivalence info: {e}");
@@ -782,12 +783,12 @@ impl FileScanConfig {
     }
 
     fn add_filter_equivalence_info(
-        filter: Arc<dyn PhysicalExpr>,
+        filter: &Arc<dyn PhysicalExpr>,
         eq_properties: &mut EquivalenceProperties,
         schema: &Schema,
     ) -> Result<()> {
         // Gather valid equality pairs from the filter expression
-        let equal_pairs = split_conjunction(&filter).into_iter().filter_map(|expr| {
+        let equal_pairs = split_conjunction(filter).into_iter().filter_map(|expr| {
             // Ignore any binary expressions that reference non-existent columns in the current schema
             // (e.g. due to unnecessary projections being removed)
             reassign_expr_columns(Arc::clone(expr), schema)
@@ -1145,6 +1146,7 @@ impl PartitionColumnProjector {
     // to the right positions as deduced from `projected_schema`
     // - `file_batch`: batch read from the file, with internal projection applied
     // - `partition_values`: the list of partition values, one for each partition column
+    #[expect(clippy::needless_pass_by_value)]
     pub fn project(
         &mut self,
         file_batch: RecordBatch,
