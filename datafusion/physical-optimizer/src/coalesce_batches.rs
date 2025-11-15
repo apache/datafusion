@@ -18,7 +18,7 @@
 //! CoalesceBatches optimizer that groups batches together rows
 //! in bigger batches to avoid overhead with small batches
 
-use crate::PhysicalOptimizerRule;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 
 use std::sync::Arc;
 
@@ -46,11 +46,12 @@ impl CoalesceBatches {
     }
 }
 impl PhysicalOptimizerRule for CoalesceBatches {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.config_options();
         if !config.execution.coalesce_batches {
             return Ok(plan);
         }
