@@ -684,7 +684,6 @@ impl Stream for GroupedHashAggregateStream {
                             // Do the grouping
                             self.group_aggregate_batch(batch)?;
 
-
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
                             assert!(!self.input_done);
