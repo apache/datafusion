@@ -40,9 +40,8 @@ physical_plan
 02)--UnnestExec
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------ProjectionExec: expr=[column2@0 as __unnest_placeholder(v.column2)]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------FilterExec: column1@0 = 2, projection=[column2@1]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------FilterExec: column1@0 = 2, projection=[column2@1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
@@ -56,12 +55,11 @@ explain select uc2 from (select unnest(column2) as uc2, column1 from v) where uc
 ----
 physical_plan
 01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------UnnestExec
-06)----------ProjectionExec: expr=[column2@0 as __unnest_placeholder(v.column2)]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column2@0 as __unnest_placeholder(v.column2)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
@@ -75,14 +73,12 @@ explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v
 ----
 physical_plan
 01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2, column1@1 as column1]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
-04)------UnnestExec
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
-07)------------CoalesceBatchesExec: target_batch_size=8192
-08)--------------FilterExec: column1@0 = 2
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
+03)----UnnestExec
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+06)----------FilterExec: column1@0 = 2
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 OR column1 = 2;
@@ -97,12 +93,11 @@ explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v
 ----
 physical_plan
 01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2, column1@1 as column1]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3 OR column1@1 = 2
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------UnnestExec
-06)----------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3 OR column1@1 = 2
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table v;
@@ -121,12 +116,11 @@ explain select * from (select column1, unnest(column2) as o from d) where o['a']
 ----
 physical_plan
 01)ProjectionExec: expr=[column1@0 as column1, __unnest_placeholder(d.column2,depth=1)@1 as o]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: get_field(__unnest_placeholder(d.column2,depth=1)@1, a) = 1
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------UnnestExec
-06)----------ProjectionExec: expr=[column1@0 as column1, column2@1 as __unnest_placeholder(d.column2)]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--FilterExec: get_field(__unnest_placeholder(d.column2,depth=1)@1, a) = 1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column1@0 as column1, column2@1 as __unnest_placeholder(d.column2)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table d;
@@ -143,12 +137,11 @@ query TT
 explain select * from (select unnest(column1) from d) where "__unnest_placeholder(d.column1).b" > 5;
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: __unnest_placeholder(d.column1).b@1 > 5
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------UnnestExec
-05)--------ProjectionExec: expr=[column1@0 as __unnest_placeholder(d.column1)]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: __unnest_placeholder(d.column1).b@1 > 5
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----UnnestExec
+04)------ProjectionExec: expr=[column1@0 as __unnest_placeholder(d.column1)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table d;
