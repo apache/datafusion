@@ -111,10 +111,7 @@ pub fn apply_cmp_for_nested(
                 | Operator::IsDistinctFrom
                 | Operator::IsNotDistinctFrom
         ) && left_data_type.equals_datatype(&right_data_type),
-        "invalid operator or data type mismatch for nested data, op {} left {}, right {}",
-        op,
-        left_data_type,
-        right_data_type
+        "invalid operator or data type mismatch for nested data, op {op} left {left_data_type}, right {right_data_type}",
     );
 
     apply(lhs, rhs, |l, r| {
