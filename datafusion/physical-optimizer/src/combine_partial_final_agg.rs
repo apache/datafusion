@@ -51,7 +51,6 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _config = context.config_options();
         plan.transform_down(|plan| {
             // Check if the plan is AggregateExec
             let Some(agg_exec) = plan.as_any().downcast_ref::<AggregateExec>() else {

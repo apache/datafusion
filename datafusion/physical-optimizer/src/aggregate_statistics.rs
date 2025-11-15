@@ -47,7 +47,6 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _config = context.config_options();
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
                 .as_any()

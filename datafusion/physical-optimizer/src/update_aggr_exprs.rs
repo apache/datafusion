@@ -74,7 +74,6 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _config = context.config_options();
         plan.transform_up(|plan| {
             if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
                 // Final stage implementations do not rely on ordering -- those

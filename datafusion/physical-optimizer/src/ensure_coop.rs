@@ -66,7 +66,6 @@ impl PhysicalOptimizerRule for EnsureCooperative {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _config = context.config_options();
         plan.transform_up(|plan| {
             let is_leaf = plan.children().is_empty();
             let is_exchange = plan.properties().evaluation_type == EvaluationType::Eager;

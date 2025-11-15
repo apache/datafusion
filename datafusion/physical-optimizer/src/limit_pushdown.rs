@@ -64,7 +64,6 @@ impl PhysicalOptimizerRule for LimitPushdown {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _config = context.config_options();
         let global_state = GlobalRequirements {
             fetch: None,
             skip: 0,
