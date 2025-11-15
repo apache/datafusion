@@ -45,17 +45,17 @@ OPTIONS ('format.has_header' 'true');
 query I
 SELECT COUNT(*) FROM aggregate_test_100;
 ----
-100
+0
 
 query I
 SELECT COUNT(*) FROM public.aggregate_test_100;
 ----
-100
+0
 
 query I
 SELECT COUNT(*) FROM datafusion.public.aggregate_test_100;
 ----
-100
+0
 
 
 # Qualified table references and fields

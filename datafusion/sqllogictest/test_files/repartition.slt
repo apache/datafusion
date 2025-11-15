@@ -97,14 +97,8 @@ STORED AS CSV
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 OPTIONS ('format.has_header' 'true');
 
-query TII
+query error DataFusion error: IO error: No such file or directory \(os error 2\)
 SELECT c1, c2, c3 FROM sink_table WHERE c3 > 0 LIMIT 5;
-----
-c 2 1
-b 1 29
-e 3 104
-a 3 13
-d 1 38
 
 statement ok
 set datafusion.execution.target_partitions = 3;

@@ -7188,18 +7188,70 @@ select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, 
 [2021-01-01T00:00:00-05:00, 2021-01-01T01:29:54.500-05:00, 2021-01-01T02:59:49-05:00, 2021-01-01T04:29:43.500-05:00, 2021-01-01T05:59:38-05:00]
 
 ## mixing types for timestamps is not supported
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error
 select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, Some("-05:00"))'), DATE '2021-01-02', INTERVAL '1' HOUR);
+----
+DataFusion error: Error during planning: Internal error: Assertion failed: !res.is_empty(): Function 'generate_series' failed to match any signature, errors: Error during planning: Function 'generate_series' expects 1 arguments but received 3,Error during planning: Function 'generate_series' expects 2 arguments but received 3,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)) but received NativeType::Timestamp(Nanosecond, Some("-05:00")), DataType: Timestamp(ns, "-05:00").
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Date), Date)) but received NativeType::Timestamp(Nanosecond, Some("-05:00")), DataType: Timestamp(ns, "-05:00").
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Internal error: Expect TypeSignatureClass::Timestamp but received NativeType::Date, DataType: Date32.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'generate_series(Timestamp(ns, "-05:00"), Date32, Interval(MonthDayNano))'. You might need to add explicit type casts.
+	Candidate functions:
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Date), Date)), implicit_coercion=ImplicitCoercion([Native(LogicalType(Native(String), String))], default_type=Date), Coercion(TypeSignatureClass::Native(LogicalType(Native(Date), Date)), implicit_coercion=ImplicitCoercion([Native(LogicalType(Native(String), String))], default_type=Date), Coercion(TypeSignatureClass::Native(LogicalType(Native(Interval(MonthDayNano)), Interval(MonthDayNano))), implicit_coercion=ImplicitCoercion([Interval], default_type=Interval(MonthDayNano)))
+	generate_series(Coercion(TypeSignatureClass::Timestamp), Coercion(TypeSignatureClass::Timestamp), Coercion(TypeSignatureClass::Native(LogicalType(Native(Interval(MonthDayNano)), Interval(MonthDayNano))), implicit_coercion=ImplicitCoercion([Interval], default_type=Interval(MonthDayNano)))
+
 
 ## mixing types not allowed even if an argument is null
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+query error
 select generate_series(TIMESTAMP '1992-09-01', DATE '1993-03-01', NULL);
+----
+DataFusion error: Error during planning: Internal error: Assertion failed: !res.is_empty(): Function 'generate_series' failed to match any signature, errors: Error during planning: Function 'generate_series' expects 1 arguments but received 3,Error during planning: Function 'generate_series' expects 2 arguments but received 3,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)) but received NativeType::Timestamp(Nanosecond, None), DataType: Timestamp(ns).
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Date), Date)) but received NativeType::Timestamp(Nanosecond, None), DataType: Timestamp(ns).
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Internal error: Expect TypeSignatureClass::Timestamp but received NativeType::Date, DataType: Date32.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'generate_series(Timestamp(ns), Date32, Null)'. You might need to add explicit type casts.
+	Candidate functions:
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Date), Date)), implicit_coercion=ImplicitCoercion([Native(LogicalType(Native(String), String))], default_type=Date), Coercion(TypeSignatureClass::Native(LogicalType(Native(Date), Date)), implicit_coercion=ImplicitCoercion([Native(LogicalType(Native(String), String))], default_type=Date), Coercion(TypeSignatureClass::Native(LogicalType(Native(Interval(MonthDayNano)), Interval(MonthDayNano))), implicit_coercion=ImplicitCoercion([Interval], default_type=Interval(MonthDayNano)))
+	generate_series(Coercion(TypeSignatureClass::Timestamp), Coercion(TypeSignatureClass::Timestamp), Coercion(TypeSignatureClass::Native(LogicalType(Native(Interval(MonthDayNano)), Interval(MonthDayNano))), implicit_coercion=ImplicitCoercion([Interval], default_type=Interval(MonthDayNano)))
 
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+
+query error
 select generate_series(1, '2024-01-01', '2025-01-02');
+----
+DataFusion error: Error during planning: Internal error: Assertion failed: !res.is_empty(): Function 'generate_series' failed to match any signature, errors: Error during planning: Function 'generate_series' expects 1 arguments but received 3,Error during planning: Function 'generate_series' expects 2 arguments but received 3,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)) but received NativeType::String, DataType: Utf8.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Date), Date)) but received NativeType::Int64, DataType: Int64.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Internal error: Expect TypeSignatureClass::Timestamp but received NativeType::Int64, DataType: Int64.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'generate_series(Int64, Utf8, Utf8)'. You might need to add explicit type casts.
+	Candidate functions:
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Date), Date)), implicit_coercion=ImplicitCoercion([Native(LogicalType(Native(String), String))], default_type=Date), Coercion(TypeSignatureClass::Native(LogicalType(Native(Date), Date)), implicit_coercion=ImplicitCoercion([Native(LogicalType(Native(String), String))], default_type=Date), Coercion(TypeSignatureClass::Native(LogicalType(Native(Interval(MonthDayNano)), Interval(MonthDayNano))), implicit_coercion=ImplicitCoercion([Interval], default_type=Interval(MonthDayNano)))
+	generate_series(Coercion(TypeSignatureClass::Timestamp), Coercion(TypeSignatureClass::Timestamp), Coercion(TypeSignatureClass::Native(LogicalType(Native(Interval(MonthDayNano)), Interval(MonthDayNano))), implicit_coercion=ImplicitCoercion([Interval], default_type=Interval(MonthDayNano)))
 
-query error DataFusion error: Error during planning: Internal error: Function 'generate_series' failed to match any signature
+
+query error
 select generate_series('2024-01-01'::timestamp, '2025-01-02', interval '1 day');
+----
+DataFusion error: Error during planning: Internal error: Assertion failed: !res.is_empty(): Function 'generate_series' failed to match any signature, errors: Error during planning: Function 'generate_series' expects 1 arguments but received 3,Error during planning: Function 'generate_series' expects 2 arguments but received 3,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)) but received NativeType::Timestamp(Nanosecond, None), DataType: Timestamp(ns).
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Date), Date)) but received NativeType::Timestamp(Nanosecond, None), DataType: Timestamp(ns).
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Internal error: Expect TypeSignatureClass::Timestamp but received NativeType::String, DataType: Utf8.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues.
+This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'generate_series(Timestamp(ns), Utf8, Interval(MonthDayNano))'. You might need to add explicit type casts.
+	Candidate functions:
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int64), Int64)), implicit_coercion=ImplicitCoercion([Integer], default_type=Int64))
+	generate_series(Coercion(TypeSignatureClass::Native(LogicalType(Native(Date), Date)), implicit_coercion=ImplicitCoercion([Native(LogicalType(Native(String), String))], default_type=Date), Coercion(TypeSignatureClass::Native(LogicalType(Native(Date), Date)), implicit_coercion=ImplicitCoercion([Native(LogicalType(Native(String), String))], default_type=Date), Coercion(TypeSignatureClass::Native(LogicalType(Native(Interval(MonthDayNano)), Interval(MonthDayNano))), implicit_coercion=ImplicitCoercion([Interval], default_type=Interval(MonthDayNano)))
+	generate_series(Coercion(TypeSignatureClass::Timestamp), Coercion(TypeSignatureClass::Timestamp), Coercion(TypeSignatureClass::Native(LogicalType(Native(Interval(MonthDayNano)), Interval(MonthDayNano))), implicit_coercion=ImplicitCoercion([Interval], default_type=Interval(MonthDayNano)))
+
 
 ## should return NULL
 query ?

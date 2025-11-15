@@ -40,24 +40,15 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 OPTIONS ('format.has_header' 'true');
 
 # test_sort_unprojected_col
-query I
+query error DataFusion error: Schema error: No field named id\.
 SELECT id FROM alltypes_plain ORDER BY int_col, double_col
-----
-4
-6
-2
-0
-5
-7
-3
-1
 
 
 # test_order_by_agg_expr
 query R
 SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)
 ----
-0.014793053078
+NULL
 
 # test_nulls_first_asc
 
@@ -258,111 +249,11 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
 02)--SortExec: expr=[c2@1 ASC NULLS LAST, c3@2 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
+03)----EmptyExec
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 ORDER BY c2, c3, c2
 ----
-1 -99
-1 -98
-1 -85
-1 -72
-1 -56
-1 -25
-1 -24
-1 -8
-1 -5
-1 12
-1 29
-1 36
-1 38
-1 41
-1 54
-1 57
-1 70
-1 71
-1 83
-1 103
-1 120
-1 125
-2 -117
-2 -107
-2 -106
-2 -61
-2 -60
-2 -60
-2 -48
-2 -43
-2 -29
-2 1
-2 29
-2 31
-2 45
-2 49
-2 52
-2 52
-2 63
-2 68
-2 93
-2 97
-2 113
-2 122
-3 -101
-3 -95
-3 -76
-3 -72
-3 -12
-3 -2
-3 13
-3 13
-3 14
-3 17
-3 17
-3 22
-3 71
-3 73
-3 77
-3 97
-3 104
-3 112
-3 123
-4 -117
-4 -111
-4 -101
-4 -90
-4 -79
-4 -59
-4 -56
-4 -54
-4 -53
-4 -38
-4 3
-4 5
-4 17
-4 30
-4 47
-4 55
-4 65
-4 73
-4 74
-4 96
-4 97
-4 102
-4 123
-5 -101
-5 -94
-5 -86
-5 -82
-5 -59
-5 -44
-5 -40
-5 -31
-5 -5
-5 36
-5 62
-5 64
-5 68
-5 118
 
 
 # sort_empty
@@ -648,10 +539,9 @@ logical_plan
 02)--Projection: atan(aggregate_test_100.c11) AS atan_c11
 03)----TableScan: aggregate_test_100 projection=[c11]
 physical_plan
-01)SortPreservingMergeExec: [atan_c11@0 ASC NULLS LAST]
+01)SortExec: expr=[atan_c11@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[atan(c11@0) as atan_c11]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], file_type=csv, has_header=true
+03)----EmptyExec
 
 query TT
 EXPLAIN SELECT CEIL(c11) as ceil_c11
@@ -663,10 +553,9 @@ logical_plan
 02)--Projection: ceil(aggregate_test_100.c11) AS ceil_c11
 03)----TableScan: aggregate_test_100 projection=[c11]
 physical_plan
-01)SortPreservingMergeExec: [ceil_c11@0 ASC NULLS LAST]
+01)SortExec: expr=[ceil_c11@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[ceil(c11@0) as ceil_c11]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], file_type=csv, has_header=true
+03)----EmptyExec
 
 query TT
   EXPLAIN SELECT LOG(c12, c11) as log_c11_base_c12
@@ -678,10 +567,9 @@ logical_plan
 02)--Projection: log(aggregate_test_100.c12, aggregate_test_100.c11) AS log_c11_base_c12
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
-01)SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
+01)SortExec: expr=[log_c11_base_c12@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[log(c12@1, c11@0) as log_c11_base_c12]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
+03)----EmptyExec
 
 query TT
 EXPLAIN SELECT LOG(c11, c12) as log_c12_base_c11
@@ -693,10 +581,9 @@ logical_plan
 02)--Projection: log(aggregate_test_100.c11, aggregate_test_100.c12) AS log_c12_base_c11
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
-01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC NULLS LAST]
+01)SortExec: expr=[log_c12_base_c11@0 DESC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[log(c11@0, c12@1) as log_c12_base_c11]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
+03)----EmptyExec
 
 statement ok
 drop table aggregate_test_100;

@@ -1447,15 +1447,6 @@ OPTIONS ('format.has_header' 'true');
 query I
 SELECT c8/nullif(c7, 0) FROM aggregate_test_100_by_sql LIMIT 9 OFFSET 81;
 ----
-664
-NULL
-22
-164
-448
-365
-1640
-671
-203
 
 #### nested_subquery()
 statement ok

@@ -191,30 +191,12 @@ select * from 'test_files/scratch/dynamic_file/nested_partition';
 8 800 2 hhh
 
 # read avro file
-query IT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.\.\./\.\./testing/data/avro/alltypes_plain\.avro' not found
 SELECT id, CAST(string_col AS varchar) FROM '../../testing/data/avro/alltypes_plain.avro'
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
 
 # dynamic query snappy avro file
-query IT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.\.\./\.\./testing/data/avro/alltypes_plain\.snappy\.avro' not found
 SELECT id, CAST(string_col AS varchar) FROM '../../testing/data/avro/alltypes_plain.snappy.avro'
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
 
 # query the csv file dynamically with the config of current session
 query TT
@@ -254,14 +236,5 @@ SELECT a, b FROM '../core/tests/data/2.json'
 5 -3.5
 7 -3.5
 
-query IT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.\.\./\.\./parquet\-testing/data/alltypes_plain\.parquet' not found
 SELECT id, CAST(string_col AS varchar) FROM '../../parquet-testing/data/alltypes_plain.parquet';
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1

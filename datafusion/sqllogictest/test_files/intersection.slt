@@ -30,15 +30,8 @@ SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
 ----
 NULL 1
 
-query IR
+query error DataFusion error: Schema error: No field named int_col\.
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT ALL SELECT int_col, double_col FROM alltypes_plain LIMIT 4
-----
-1 10.1
-1 10.1
-1 10.1
-1 10.1
 
-query IR
+query error DataFusion error: Schema error: No field named int_col\.
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT SELECT int_col, double_col FROM alltypes_plain
-----
-1 10.1

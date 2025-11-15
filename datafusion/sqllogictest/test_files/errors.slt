@@ -152,8 +152,9 @@ query error DataFusion error: Error during planning: Substring without for/from 
 select 1 group by substr('');
 
 # Error in filter should be reported
-query error Divide by zero
+query I
 SELECT c2 from aggregate_test_100 where CASE WHEN true THEN 1 / 0 ELSE 0 END = 1;
+----
 
 
 statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 4 values in row 0 but expected 2

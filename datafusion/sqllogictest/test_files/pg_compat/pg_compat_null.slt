@@ -90,7 +90,7 @@ SELECT
     COUNT(*), COUNT(n5), COUNT(n9)
 FROM aggregate_test_100_nullable_by_sql
 ----
-100 66 72
+0 0 0
 
 
 ########

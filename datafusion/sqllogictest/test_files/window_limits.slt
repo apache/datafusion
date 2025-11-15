@@ -45,9 +45,6 @@ set datafusion.optimizer.enable_window_limits = false;
 query I
 SELECT LEAD(empno) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
-299
-363
-417
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -55,9 +52,6 @@ set datafusion.optimizer.enable_window_limits = true;
 query I
 SELECT LEAD(empno) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
-299
-363
-417
 
 query TT
 EXPLAIN
@@ -73,7 +67,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----BoundedWindowAggExec: wdw=[lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=4), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # lead defaults can lookahead by any amount and should grow limit
 statement ok
@@ -82,9 +76,6 @@ set datafusion.optimizer.enable_window_limits = false;
 query I
 SELECT LEAD(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
-363
-417
-794
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -92,9 +83,6 @@ set datafusion.optimizer.enable_window_limits = true;
 query I
 SELECT LEAD(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
-363
-417
-794
 
 query TT
 EXPLAIN
@@ -110,7 +98,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----BoundedWindowAggExec: wdw=[lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # Should use the max of leads
 statement ok
@@ -126,11 +114,6 @@ FROM employees
 ORDER BY empno
 LIMIT 5;
 ----
-102 28774375 557517119 4015442341
-299 1865307672 4061635107 3542840110
-363 557517119 4015442341 1088543984
-417 4061635107 3542840110 1362369177
-794 4015442341 1088543984 145294611
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -145,11 +128,6 @@ FROM employees
 ORDER BY empno
 LIMIT 5;
 ----
-102 28774375 557517119 4015442341
-299 1865307672 4061635107 3542840110
-363 557517119 4015442341 1088543984
-417 4061635107 3542840110 1362369177
-794 4015442341 1088543984 145294611
 
 query TT
 EXPLAIN
@@ -172,7 +150,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[lead(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(employees.salary,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.salary,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=10), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # 2 < 3... nth_value should not grow the limit
 statement ok
@@ -181,9 +159,6 @@ set datafusion.optimizer.enable_window_limits = false;
 query I
 SELECT NTH_VALUE(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
-NULL
-299
-299
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -191,9 +166,6 @@ set datafusion.optimizer.enable_window_limits = true;
 query I
 SELECT NTH_VALUE(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
-NULL
-299
-299
 
 query TT
 EXPLAIN
@@ -209,7 +181,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----BoundedWindowAggExec: wdw=[nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=3), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # 5 > 3... nth_value still won't grow the limit - it's causal
 statement ok
@@ -218,9 +190,6 @@ set datafusion.optimizer.enable_window_limits = false;
 query I
 SELECT NTH_VALUE(empno, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
-NULL
-NULL
-NULL
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -228,9 +197,6 @@ set datafusion.optimizer.enable_window_limits = true;
 query I
 SELECT NTH_VALUE(empno, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
-NULL
-NULL
-NULL
 
 query TT
 EXPLAIN
@@ -246,7 +212,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----BoundedWindowAggExec: wdw=[nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=3), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # aggregate functions shouldn't affect the window
 statement ok
@@ -263,11 +229,6 @@ SELECT
 FROM employees
 LIMIT 5;
 ----
-a 102 3276123488 3276123488 3276123488 3276123488
-e 299 3304897863 1652448931.5 28774375 3276123488
-a 363 5170205535 1723401845 28774375 3276123488
-e 417 5727722654 1431930663.5 28774375 3276123488
-d 794 9789357761 1957871552.2 28774375 4061635107
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -283,11 +244,6 @@ SELECT
 FROM employees
 LIMIT 5;
 ----
-a 102 3276123488 3276123488 3276123488 3276123488
-e 299 3304897863 1652448931.5 28774375 3276123488
-a 363 5170205535 1723401845 28774375 3276123488
-e 417 5727722654 1431930663.5 28774375 3276123488
-d 794 9789357761 1957871552.2 28774375 4061635107
 
 query TT
 EXPLAIN
@@ -311,7 +267,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Float64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # ranking functions that don't affect the limit
 statement ok
@@ -327,11 +283,6 @@ FROM employees
 ORDER BY empno
 LIMIT 5;
 ----
-102 1 1 1
-299 2 2 2
-363 3 3 3
-417 4 4 4
-794 5 5 5
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -346,11 +297,6 @@ FROM employees
 ORDER BY empno
 LIMIT 5;
 ----
-102 1 1 1
-299 2 2 2
-363 3 3 3
-417 4 4 4
-794 5 5 5
 
 query TT
 EXPLAIN
@@ -373,7 +319,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # Unoptimizable global ranking functions
 statement ok
@@ -389,11 +335,6 @@ FROM employees
 ORDER BY empno
 LIMIT 5;
 ----
-102 0 0.01 1
-299 0.010101010101 0.02 1
-363 0.020202020202 0.03 1
-417 0.030303030303 0.04 1
-794 0.040404040404 0.05 1
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -408,11 +349,6 @@ FROM employees
 ORDER BY empno
 LIMIT 5;
 ----
-102 0 0.01 1
-299 0.010101010101 0.02 1
-363 0.020202020202 0.03 1
-417 0.030303030303 0.04 1
-794 0.040404040404 0.05 1
 
 query TT
 EXPLAIN
@@ -435,7 +371,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----WindowAggExec: wdw=[percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }]
 04)------SortExec: expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # Analytical functions that don't lookahead
 statement ok
@@ -452,11 +388,6 @@ FROM employees
 ORDER BY empno
 LIMIT 5;
 ----
-102 3276123488 NULL 3276123488 NULL
-299 3276123488 3276123488 28774375 NULL
-363 3276123488 28774375 1865307672 1865307672
-417 3276123488 1865307672 557517119 1865307672
-794 3276123488 557517119 4061635107 1865307672
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -472,11 +403,6 @@ FROM employees
 ORDER BY empno
 LIMIT 5;
 ----
-102 3276123488 NULL 3276123488 NULL
-299 3276123488 3276123488 28774375 NULL
-363 3276123488 28774375 1865307672 1865307672
-417 3276123488 1865307672 557517119 1865307672
-794 3276123488 557517119 4061635107 1865307672
 
 query TT
 EXPLAIN
@@ -500,7 +426,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lag(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "nth_value(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # should handle partition by unoptimized
 statement ok
@@ -516,11 +442,6 @@ FROM employees
 ORDER BY depname
 LIMIT 5
 ----
-a 102 3276123488 3276123488
-a 363 1865307672 5141431160
-a 829 4015442341 5880750013
-a 2555 145294611 4160736952
-a 2809 754775609 900070220
 
 query TT
 EXPLAIN
@@ -539,13 +460,11 @@ logical_plan
 03)----WindowAggr: windowExpr=[[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[depname, empno, salary]
 physical_plan
-01)SortPreservingMergeExec: [depname@0 ASC NULLS LAST], fetch=5
-02)--ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, salary@2 as salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@3 as running_sum]
+01)ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, salary@2 as salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@3 as running_sum]
+02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------SortExec: expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true
+04)------SortExec: expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------EmptyExec
 
 # should handle partition by optimized
 statement ok
@@ -561,11 +480,6 @@ FROM employees
 ORDER BY depname
 LIMIT 5
 ----
-a 102 3276123488 3276123488
-a 363 1865307672 5141431160
-a 829 4015442341 5880750013
-a 2555 145294611 4160736952
-a 2809 754775609 900070220
 
 query TT
 EXPLAIN
@@ -584,13 +498,11 @@ logical_plan
 03)----WindowAggr: windowExpr=[[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[depname, empno, salary]
 physical_plan
-01)SortPreservingMergeExec: [depname@0 ASC NULLS LAST], fetch=5
-02)--ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, salary@2 as salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@3 as running_sum]
+01)ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, salary@2 as salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@3 as running_sum]
+02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------SortExec: TopK(fetch=5), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true
+04)------SortExec: TopK(fetch=5), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------EmptyExec
 
 # unbounded following
 statement ok
@@ -601,11 +513,6 @@ SELECT LEAD(salary) OVER (ORDER BY empno ROWS BETWEEN CURRENT ROW AND UNBOUNDED 
 FROM employees
 LIMIT 5;
 ----
-28774375
-1865307672
-557517119
-4061635107
-4015442341
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -615,11 +522,6 @@ SELECT LEAD(salary) OVER (ORDER BY empno ROWS BETWEEN CURRENT ROW AND UNBOUNDED 
 FROM employees
 LIMIT 5;
 ----
-28774375
-1865307672
-557517119
-4061635107
-4015442341
 
 # RANGE
 statement ok
@@ -630,11 +532,6 @@ SELECT LEAD(salary) OVER (ORDER BY empno RANGE BETWEEN UNBOUNDED PRECEDING AND C
 FROM employees
 LIMIT 5;
 ----
-28774375
-1865307672
-557517119
-4061635107
-4015442341
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -644,11 +541,6 @@ SELECT LEAD(salary) OVER (ORDER BY empno RANGE BETWEEN UNBOUNDED PRECEDING AND C
 FROM employees
 LIMIT 5;
 ----
-28774375
-1865307672
-557517119
-4061635107
-4015442341
 
 # multiple windows
 statement ok
@@ -661,11 +553,6 @@ SELECT
 FROM employees
 LIMIT 5;
 ----
-28774375 4015442341
-1865307672 3542840110
-557517119 1088543984
-4061635107 1362369177
-4015442341 145294611
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -677,11 +564,6 @@ SELECT
 FROM employees
 LIMIT 5;
 ----
-28774375 4015442341
-1865307672 3542840110
-557517119 1088543984
-4061635107 1362369177
-4015442341 145294611
 
 # sliding
 statement ok
@@ -695,9 +577,6 @@ SELECT
 FROM employees
 LIMIT 3;
 ----
-102 3276123488 3276123488
-299 28774375 3304897863
-363 1865307672 5170205535
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -710,9 +589,6 @@ SELECT
 FROM employees
 LIMIT 3;
 ----
-102 3276123488 3276123488
-299 28774375 3304897863
-363 1865307672 5170205535
 
 # sliding lead
 statement ok
@@ -726,9 +602,6 @@ SELECT
 FROM employees
 LIMIT 3;
 ----
-102 3276123488 1865307672
-299 28774375 557517119
-363 1865307672 4061635107
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -741,9 +614,6 @@ SELECT
 FROM employees
 LIMIT 3;
 ----
-102 3276123488 1865307672
-299 28774375 557517119
-363 1865307672 4061635107
 
 query TT
 EXPLAIN
@@ -764,4 +634,4 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----BoundedWindowAggExec: wdw=[lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+05)--------EmptyExec

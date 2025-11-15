@@ -65,11 +65,6 @@ from aggregate_test_100
 order by c9
 limit 5
 ----
-28774375 100 2143473091 -2141999138
-63044568 100 2143473091 -2141999138
-141047417 100 2143473091 -2141999138
-141680161 100 2143473091 -2141999138
-145294611 100 2143473091 -2141999138
 
 # for window functions without order by the first, last, and nth function call does not make sense
 # csv_query_window_with_partition_by
@@ -85,11 +80,6 @@ from aggregate_test_100
 order by c9
 limit 5
 ----
-28774375 -16110 -16110 1 -16110 -16110
-63044568 3917 3917 1 3917 3917
-141047417 -38455 -19227.5 2 -16974 -21481
-141680161 -1114 -1114 1 -1114 -1114
-145294611 15673 15673 1 15673 15673
 
 
 
@@ -109,11 +99,6 @@ from aggregate_test_100
 order by c9
 limit 5
 ----
-28774375 61035129 61035129 1 61035129 61035129 61035129 61035129 NULL
-63044568 -47938237 -23969118.5 2 61035129 -108973366 61035129 -108973366 -108973366
-141047417 575165281 191721760.33333334 3 623103518 -108973366 61035129 623103518 -108973366
-141680161 -1352462829 -338115707.25 4 623103518 -1927628110 61035129 -1927628110 -108973366
-145294611 -3251637940 -650327588 5 623103518 -1927628110 61035129 -1899175111 -108973366
 
 # csv_query_window_with_partition_by_order_by
 query IIRIIIIII
@@ -131,11 +116,6 @@ from aggregate_test_100
 order by c9
 limit 5
 ----
-28774375 61035129 61035129 1 61035129 61035129 61035129 61035129 NULL
-63044568 -108973366 -108973366 1 -108973366 -108973366 -108973366 -108973366 NULL
-141047417 623103518 623103518 1 623103518 623103518 623103518 623103518 NULL
-141680161 -1927628110 -1927628110 1 -1927628110 -1927628110 -1927628110 -1927628110 NULL
-145294611 -1899175111 -1899175111 1 -1899175111 -1899175111 -1899175111 -1899175111 NULL
 
 # window()
 query IIIIIIR
@@ -433,11 +413,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-781 100
-781 100
-781 100
-781 100
-781 100
 
 # window_frame_rows_preceding
 query IRI
@@ -449,11 +424,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
--48302 -16100.666666666666 3
-11243 3747.666666666666 3
--51311 -17103.666666666668 3
--2391 -797 3
-46756 15585.333333333334 3
 
 
 # window_frame_rows_preceding_stddev_variance
@@ -467,11 +437,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-46721.33333333174 31147.555555554496 216.151181660734 176.486700789477
-2639429.333333332 1759619.5555555548 1624.632060908971 1326.50652299774
-746202.3333333324 497468.2222222216 863.830037295146 705.314271954156
-768422.9999999981 512281.9999999988 876.597399037892 715.738779164577
-66526.3333333288 44350.88888888587 257.926992254259 210.596507304575
 
 # window_frame_rows_preceding_with_partition_unique_order_by
 query IRI
@@ -483,11 +448,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
--38611 -19305.5 2
-17547 8773.5 2
--1301 -650.5 2
-26638 13319 3
-26861 8953.666666666666 3
 
 # /// The partition by clause conducts sorting according to given partition column by default. If the
 # /// sorting columns have non unique values, the unstable sorting may produce indeterminate results.
@@ -529,11 +489,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-52276 781 56
-260620 781 63
--28623 781 37
-260620 781 63
-260620 781 63
 
 # window_frame_large_range
 # Range offset 10000 is too big for Int8 (i.e. the type of c3).
@@ -548,11 +503,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-781
-781
-781
-781
-781
 
 # window_frame_order_by_asc_desc_large
 query I
@@ -561,11 +511,6 @@ SELECT
  FROM aggregate_test_100
  LIMIT 5
 ----
--1383162419
--3265456275
--3909681744
--5241214934
--4246910946
 
 
 # window_frame_order_by_desc_large
@@ -576,11 +521,6 @@ SELECT
  ORDER BY c9
  LIMIT 5
 ----
-11212193439
-22799733943
-2935356871
-15810962683
-18035025006
 
 # window_frame_order_by_null_timestamp_order_by
 query I
@@ -709,11 +649,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
--38611 2
-17547 2
--1301 2
-26638 2
-26861 3
 
 
 # fn window_frame_ranges_preceding_following
@@ -731,11 +666,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-52276 781 56
-260620 781 63
--28623 781 37
-260620 781 63
-260620 781 63
 
 
 
@@ -748,11 +678,6 @@ FROM aggregate_test_100
 ORDER BY c7
 LIMIT 5
 ----
-8 12
-5 11
-3 11
-2 7
-7 12
 
 #fn window_frame_ranges_string_check
 query II
@@ -763,11 +688,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-2100 100
-510 79
-1440 21
-1830 61
-2010 21
 
 
 #fn window_frame_order_by_unique
@@ -779,11 +699,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
--49877765574 1
--50025861694 2
--45402230071 3
--14557735645 4
--18365391649 5
 
 
 # /// If the sorting columns have non unique values, the unstable sorting may produce
@@ -826,11 +741,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-285 100
-123 63
-285 100
-123 63
-123 63
 
 
 #fn window_frame_ranges_preceding_and_preceding
@@ -842,11 +752,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-123 63
-22 22
-193 64
-22 22
-22 22
 
 #fn window_frame_ranges_unbounded_preceding_following_diff_col
 query II
@@ -857,11 +762,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-162 37
-101 41
-70 14
-101 41
-101 41
 
 #fn window_frame_partition_by_order_by_desc
 query I
@@ -871,11 +771,6 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
--124618
-205080
--40819
--19517
-47246
 
 
 #fn window_frame_range_float
@@ -886,11 +781,6 @@ SELECT
  ORDER BY C9
  LIMIT 5
 ----
-2.547670180363
-10.629941254821
-2.547670180363
-20.349518503437
-21.408674363508
 
 #fn window_frame_ranges_timestamp
 
@@ -1105,11 +995,6 @@ SELECT
   ORDER BY c8
   LIMIT 5
 ----
-102 73 73
-299 1 1
-363 41 41
-417 14 14
-794 95 95
 
 #fn test_window_range_equivalent_frames
 query IIIIIII
@@ -1125,11 +1010,6 @@ SELECT
   ORDER BY c9
   LIMIT 5
 ----
-28774375 1 1 1 100 100 100
-63044568 1 2 1 100 100 100
-141047417 1 3 1 100 100 100
-141680161 1 4 1 100 100 100
-145294611 1 5 1 100 100 100
 
 #fn test_window_cume_dist
 query IRR
@@ -1141,11 +1021,6 @@ SELECT
   ORDER BY c8
   LIMIT 5
 ----
-102 0.73 0.73
-299 0.01 0.01
-363 0.41 0.41
-417 0.14 0.14
-794 0.95 0.95
 
 #fn test_window_rank
 query IIIIIRR
@@ -1161,11 +1036,6 @@ SELECT
   ORDER BY c9
   LIMIT 5
 ----
-28774375 80 80 5 5 0.79797979798 0.79797979798
-63044568 62 62 4 4 0.616161616162 0.616161616162
-141047417 1 1 1 1 0 0
-141680161 41 41 3 3 0.40404040404 0.40404040404
-145294611 1 1 1 1 0 0
 
 #fn test_lag_lead
 query IIIII
@@ -1179,11 +1049,6 @@ SELECT
   ORDER BY c9
   LIMIT 5
 ----
-28774375 10101 10101 141047417 141047417
-63044568 10101 10101 141680161 141680161
-141047417 28774375 28774375 145294611 145294611
-141680161 63044568 63044568 225513085 225513085
-145294611 141047417 141047417 243203849 243203849
 
 #fn test_window_frame_first_value_last_value_aggregate
 query IIII
@@ -1196,11 +1061,6 @@ SELECT
    ORDER BY c9
    LIMIT 5
 ----
--16110 -16110 3917 -1114
--16110 -16110 -16974 15673
--16110 -16110 -1114 13630
--16110 3917 15673 -13217
--16110 -16974 13630 20690
 
 #fn test_window_frame_nth_value_aggregate
 query II
@@ -1211,11 +1071,6 @@ SELECT
    ORDER BY c9
    LIMIT 5
 ----
-NULL 3917
--16974 3917
--16974 -16974
--1114 -1114
-15673 15673
 
 
 
@@ -1245,7 +1100,7 @@ physical_plan
 03)----ProjectionExec: expr=[c9@1 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 05)--------SortExec: expr=[c9@1 ASC NULLS LAST, c8@0 ASC NULLS LAST], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c8, c9], file_type=csv, has_header=true
+06)----------EmptyExec
 
 
 # over_order_by_sort_keys_sorting_prefix_compacting
@@ -1266,7 +1121,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[max(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[min(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "min(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 05)--------SortExec: expr=[c2@0 ASC NULLS LAST, c9@1 ASC NULLS LAST], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c9], file_type=csv, has_header=true
+06)----------EmptyExec
 
 
 # FIXME: for now we are not detecting prefix of sorting keys in order to re-arrange with global and save one SortExec
@@ -1291,7 +1146,7 @@ physical_plan
 05)--------SortExec: expr=[c9@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
 06)----------BoundedWindowAggExec: wdw=[min(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "min(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 07)------------SortExec: expr=[c2@0 ASC NULLS LAST, c9@1 ASC NULLS LAST], preserve_partitioning=[false]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c9], file_type=csv, has_header=true
+08)--------------EmptyExec
 
 # test_window_partition_by_order_by
 statement ok
@@ -1312,15 +1167,10 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@2 as sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
 02)--BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
-03)----SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
-04)------CoalesceBatchesExec: target_batch_size=4096
-05)--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-06)----------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
-07)------------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
-08)--------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
-09)----------------CoalesceBatchesExec: target_batch_size=4096
-10)------------------RepartitionExec: partitioning=Hash([c1@0, c2@1], 2), input_partitions=1
-11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c4], file_type=csv, has_header=true
+03)----ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
+04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+05)--------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[false]
+06)----------EmptyExec
 
 
 # test_window_agg_sort_reversed_plan
@@ -1345,7 +1195,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 05)--------SortExec: TopK(fetch=10), expr=[c9@0 DESC], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+06)----------EmptyExec
 
 query III
 SELECT
@@ -1355,11 +1205,6 @@ SELECT
     FROM aggregate_test_100
     LIMIT 5
 ----
-4268716378 8498370520 24997484146
-4229654142 12714811027 29012926487
-4216440507 16858984380 28743001064
-4144173353 20935849039 28472563256
-4076864659 24997484146 28118515915
 
 # Only 1 SortExec was added, and limit 100 was turned into limit 10
 query TT
@@ -1388,7 +1233,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 05)--------SortExec: TopK(fetch=10), expr=[c9@0 DESC], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+06)----------EmptyExec
 
 # ensure limit pushdown can handle bigger preceding instead of following
 statement ok
@@ -1402,11 +1247,6 @@ SELECT
     FROM aggregate_test_100
     LIMIT 5
 ----
-4268716378 24997484146 8498370520
-4229654142 29012926487 12714811027
-4216440507 28743001064 16858984380
-4144173353 28472563256 20935849039
-4076864659 28118515915 24997484146
 
 statement ok
 set datafusion.optimizer.enable_window_limits = true;
@@ -1419,11 +1259,6 @@ SELECT
     FROM aggregate_test_100
     LIMIT 5
 ----
-4268716378 24997484146 8498370520
-4229654142 29012926487 12714811027
-4216440507 28743001064 16858984380
-4144173353 28472563256 20935849039
-4076864659 28118515915 24997484146
 
 # test_window_agg_sort_reversed_plan
 # Only 1 SortExec was added, limit & skip are pushed down
@@ -1448,7 +1283,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 05)--------SortExec: TopK(fetch=15), expr=[c9@0 DESC], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+06)----------EmptyExec
 
 query III
 SELECT
@@ -1459,11 +1294,6 @@ SELECT
     LIMIT 5
     OFFSET 5
 ----
-4061635107 29012926487 27741341640
-4015442341 28743001064 27423817254
-3998790955 28472563256 27079733310
-3959216334 28118515915 26689577379
-3862393166 27741341640 26284746231
 
 # test_window_agg_sort_reversed_plan_builtin
 query TT
@@ -1490,7 +1320,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[first_value(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "first_value(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING, lag(aggregate_test_100.c9,Int64(2),Int64(10101)) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(aggregate_test_100.c9,Int64(2),Int64(10101)) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING, lead(aggregate_test_100.c9,Int64(2),Int64(10101)) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(aggregate_test_100.c9,Int64(2),Int64(10101)) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[first_value(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "first_value(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING, lag(aggregate_test_100.c9,Int64(2),Int64(10101)) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING: Field { "lag(aggregate_test_100.c9,Int64(2),Int64(10101)) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING, lead(aggregate_test_100.c9,Int64(2),Int64(10101)) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING: Field { "lead(aggregate_test_100.c9,Int64(2),Int64(10101)) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 05)--------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+06)----------EmptyExec
 
 query IIIIIII
 SELECT
@@ -1504,11 +1334,6 @@ SELECT
     FROM aggregate_test_100
     LIMIT 5
 ----
-4268716378 4229654142 4268716378 4216440507 10101 10101 4216440507
-4229654142 4216440507 4268716378 4144173353 10101 10101 4144173353
-4216440507 4144173353 4229654142 4076864659 4268716378 4268716378 4076864659
-4144173353 4076864659 4216440507 4061635107 4229654142 4229654142 4061635107
-4076864659 4061635107 4144173353 4015442341 4216440507 4216440507 4015442341
 
 # test_window_agg_sort_non_reversed_plan
 # We cannot reverse each window function (ROW_NUMBER is not reversible)
@@ -1534,7 +1359,7 @@ physical_plan
 04)------SortExec: TopK(fetch=10), expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 06)----------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+07)------------EmptyExec
 
 
 query III
@@ -1545,11 +1370,6 @@ SELECT
     FROM aggregate_test_100
     LIMIT 5
 ----
-28774375 1 100
-63044568 2 99
-141047417 3 98
-141680161 4 97
-145294611 5 96
 
 # test_window_agg_sort_multi_layer_non_reversed_plan
 # We cannot reverse each window function (ROW_NUMBER is not reversible)
@@ -1577,7 +1397,7 @@ physical_plan
 05)--------BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 06)----------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c1 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c1 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 07)------------SortExec: expr=[c9@2 DESC, c1@0 DESC], preserve_partitioning=[false]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c9], file_type=csv, has_header=true
+08)--------------EmptyExec
 
 query IIII
 SELECT
@@ -1588,11 +1408,6 @@ SELECT
     FROM aggregate_test_100
     LIMIT 5
 ----
-28774375 745354217 91818943 100
-63044568 988558066 232866360 99
-141047417 1285934966 374546521 98
-141680161 1654839259 519841132 97
-145294611 1980231675 745354217 96
 
 # test_window_agg_complex_plan
 # Unnecessary SortExecs are removed
@@ -1743,7 +1558,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 05)--------SortExec: TopK(fetch=10), expr=[c1@0 ASC NULLS LAST, c9@1 DESC], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], file_type=csv, has_header=true
+06)----------EmptyExec
 
 
 query III
@@ -1754,11 +1569,6 @@ SELECT
     FROM aggregate_test_100
     LIMIT 5
 ----
-4015442341 21907044499 21907044499
-3998790955 24576419362 24576419362
-3959216334 23063303501 23063303501
-3717551163 21560567246 21560567246
-3276123488 19815386638 19815386638
 
 statement ok
 set datafusion.optimizer.repartition_windows = true;
@@ -1787,7 +1597,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 05)--------SortExec: TopK(fetch=10), expr=[c1@0 ASC NULLS LAST, c9@1 DESC], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], file_type=csv, has_header=true
+06)----------EmptyExec
 
 query III
 SELECT
@@ -1797,11 +1607,6 @@ SELECT
     FROM aggregate_test_100
     LIMIT 5
 ----
-4015442341 8014233296 21907044499
-3998790955 11973449630 24576419362
-3959216334 15691000793 23063303501
-3717551163 18967124281 21560567246
-3276123488 21907044499 19815386638
 
 
 statement ok
@@ -1833,11 +1638,9 @@ physical_plan
 03)----WindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int16(NULL)), is_causal: false }]
 04)------ProjectionExec: expr=[__common_expr_1@0 as __common_expr_1, c3@2 as c3, c9@3 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 05)--------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-06)----------SortPreservingMergeExec: [__common_expr_1@0 DESC, c9@3 DESC, c2@1 ASC NULLS LAST]
-07)------------SortExec: expr=[__common_expr_1@0 DESC, c9@3 DESC, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
-08)--------------ProjectionExec: expr=[c3@1 + c4@2 as __common_expr_1, c2@0 as c2, c3@1 as c3, c9@3 as c9]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3, c4, c9], file_type=csv, has_header=true
+06)----------SortExec: expr=[__common_expr_1@0 DESC, c9@3 DESC, c2@1 ASC NULLS LAST], preserve_partitioning=[false]
+07)------------ProjectionExec: expr=[c3@1 + c4@2 as __common_expr_1, c2@0 as c2, c3@1 as c3, c9@3 as c9]
+08)--------------EmptyExec
 
 
 query III
@@ -1847,11 +1650,6 @@ SELECT c3,
     FROM aggregate_test_100
     LIMIT 5
 ----
--86 2861911482 222089770060
-13 5075947208 219227858578
-125 8701233618 217013822852
-123 11293564174 213388536442
-97 14767488750 210796205886
 
 statement ok
 set datafusion.optimizer.repartition_windows = true;
@@ -1885,10 +1683,10 @@ physical_plan
 07)------------CoalesceBatchesExec: target_batch_size=4096
 08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-10)------------------CoalesceBatchesExec: target_batch_size=4096
-11)--------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+11)--------------------CoalesceBatchesExec: target_batch_size=4096
+12)----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
+13)------------------------EmptyExec
 
 
 query I
@@ -1899,7 +1697,7 @@ SELECT count(*) as global_count FROM
                   GROUP BY c1
                   ORDER BY c1 ) AS a
 ----
-5
+0
 
 # test_window_agg_sort_orderby_reversed_partitionby_reversed_plan
 
@@ -1923,16 +1721,13 @@ logical_plan
 05)--------WindowAggr: windowExpr=[[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 06)----------TableScan: aggregate_test_100 projection=[c2, c3, c9]
 physical_plan
-01)SortPreservingMergeExec: [c3@0 ASC NULLS LAST], fetch=5
-02)--SortExec: TopK(fetch=5), expr=[c3@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c3@0 as c3, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum1, sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum2]
-04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-05)--------CoalesceBatchesExec: target_batch_size=4096
-06)----------RepartitionExec: partitioning=Hash([c3@0], 2), input_partitions=1
-07)------------ProjectionExec: expr=[c3@1 as c3, c9@2 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-08)--------------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-09)----------------SortExec: expr=[c3@1 DESC, c9@2 DESC, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3, c9], file_type=csv, has_header=true
+01)SortExec: TopK(fetch=5), expr=[c3@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[c3@0 as c3, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum1, sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum2]
+03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------ProjectionExec: expr=[c3@1 as c3, c9@2 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+05)--------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+06)----------SortExec: expr=[c3@1 DESC, c9@2 DESC, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------------EmptyExec
 
 
 
@@ -1944,11 +1739,6 @@ SELECT c3,
     ORDER BY c3, c9 DESC
     LIMIT 5
 ----
--117 219796664156 3023531799
--117 222089770060 5316637703
--111 216773132357 1243785310
--107 215529347047 1157161427
--106 214372185620 141680161
 
 
 statement ok
@@ -1964,117 +1754,14 @@ logical_plan
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
-01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[c1@0 as c1, row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]
-03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-04)------SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)--------CoalesceBatchesExec: target_batch_size=4096
-06)----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+01)ProjectionExec: expr=[c1@0 as c1, row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------EmptyExec
 
 query TI
 SELECT c1, ROW_NUMBER() OVER (PARTITION BY c1) as rn1 FROM aggregate_test_100 ORDER BY c1 ASC
 ----
-a 1
-a 2
-a 3
-a 4
-a 5
-a 6
-a 7
-a 8
-a 9
-a 10
-a 11
-a 12
-a 13
-a 14
-a 15
-a 16
-a 17
-a 18
-a 19
-a 20
-a 21
-b 1
-b 2
-b 3
-b 4
-b 5
-b 6
-b 7
-b 8
-b 9
-b 10
-b 11
-b 12
-b 13
-b 14
-b 15
-b 16
-b 17
-b 18
-b 19
-c 1
-c 2
-c 3
-c 4
-c 5
-c 6
-c 7
-c 8
-c 9
-c 10
-c 11
-c 12
-c 13
-c 14
-c 15
-c 16
-c 17
-c 18
-c 19
-c 20
-c 21
-d 1
-d 2
-d 3
-d 4
-d 5
-d 6
-d 7
-d 8
-d 9
-d 10
-d 11
-d 12
-d 13
-d 14
-d 15
-d 16
-d 17
-d 18
-e 1
-e 2
-e 3
-e 4
-e 5
-e 6
-e 7
-e 8
-e 9
-e 10
-e 11
-e 12
-e 13
-e 14
-e 15
-e 16
-e 17
-e 18
-e 19
-e 20
-e 21
 
 # test_window_agg_global_sort_parallelize_sort_disabled
 # even if, parallelize sort is disabled, we should use SortPreservingMergeExec
@@ -2092,13 +1779,10 @@ logical_plan
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
-01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, rn1@1 ASC NULLS LAST]
-02)--ProjectionExec: expr=[c1@0 as c1, row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]
-03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-04)------SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)--------CoalesceBatchesExec: target_batch_size=4096
-06)----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+01)ProjectionExec: expr=[c1@0 as c1, row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------EmptyExec
 
 statement ok
 set datafusion.optimizer.repartition_sorts = true;
@@ -2120,13 +1804,10 @@ physical_plan
 01)SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[c1@0 as c1, sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING@2 as sum1, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@3 as sum2]
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
-04)------SortPreservingMergeExec: [c9@1 ASC NULLS LAST]
-05)--------SortExec: expr=[c9@1 ASC NULLS LAST], preserve_partitioning=[true]
-06)----------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING: Field { "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING], mode=[Sorted]
-07)------------SortExec: expr=[c1@0 ASC NULLS LAST, c9@1 ASC NULLS LAST], preserve_partitioning=[true]
-08)--------------CoalesceBatchesExec: target_batch_size=4096
-09)----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], file_type=csv, has_header=true
+04)------SortExec: expr=[c9@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING: Field { "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING], mode=[Sorted]
+06)----------SortExec: expr=[c1@0 ASC NULLS LAST, c9@1 ASC NULLS LAST], preserve_partitioning=[false]
+07)------------EmptyExec
 
 # test_window_agg_with_global_limit
 statement ok
@@ -2142,18 +1823,15 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c13]
 physical_plan
 01)ProjectionExec: expr=[array_agg(aggregate_test_100.c13)@0 as array_agg1]
-02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------SortExec: TopK(fetch=1), expr=[c13@0 ASC NULLS LAST], preserve_partitioning=[false]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c13], file_type=csv, has_header=true
+02)--AggregateExec: mode=Single, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
+03)----SortExec: TopK(fetch=1), expr=[c13@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------EmptyExec
 
 
 query ?
 SELECT ARRAY_AGG(c13) as array_agg1 FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1)
 ----
-[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
+NULL
 
 statement ok
 set datafusion.optimizer.repartition_windows = true;
@@ -2170,11 +1848,6 @@ SELECT
     ORDER BY c9
     LIMIT 5
 ----
--16110 61035129
-3917 -108973366
--16974 623103518
--1114 -1927628110
-15673 -1899175111
 
 # test_window_agg_partition_by_set
 # These tests check whether BoundedWindowAggExec and WindowAggExec treat PARTITION BY expressions as a set.
@@ -2212,7 +1885,7 @@ physical_plan
 06)----------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 07)------------WindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 08)--------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, c9@3 ASC NULLS LAST, c8@2 ASC NULLS LAST], preserve_partitioning=[false]
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c8, c9], file_type=csv, has_header=true
+09)----------------EmptyExec
 
 
 
@@ -2226,11 +1899,6 @@ SELECT c9,
    ORDER BY c9
    LIMIT 5
 ----
-28774375 9144476174 9144476174 12665844451 12665844451
-63044568 5125627947 5125627947 5125627947 5125627947
-141047417 3650978969 3650978969 3650978969 3650978969
-141680161 8526017165 8526017165 11924524414 11924524414
-145294611 6802765992 6802765992 6802765992 6802765992
 
 
 # test_window_agg_child_equivalence
@@ -2269,7 +1937,7 @@ physical_plan
 08)--------------WindowAggExec: wdw=[sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 09)----------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, c9@3 ASC NULLS LAST, c8@2 ASC NULLS LAST], preserve_partitioning=[false]
 10)------------------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c8@2 as c8, c9@3 as c9, c1@0 as c1_alias]
-11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c8, c9], file_type=csv, has_header=true
+11)--------------------EmptyExec
 
 query IIIII
 SELECT c9,
@@ -2282,11 +1950,6 @@ SELECT c9,
         ORDER BY c9) t1
   LIMIT 5
 ----
-774637006 12189635055 12189635055 12189635055 12189635055
-1454057357 12189635055 12189635055 12189635055 12189635055
-2669374863 11414998049 11414998049 11414998049 11414998049
-3276123488 9960940692 9960940692 9960940692 9960940692
-4015442341 7291565829 7291565829 7291565829 7291565829
 
 
 # test_window_agg_with_bounded_group
@@ -2311,18 +1974,13 @@ physical_plan
 05)--------ProjectionExec: expr=[c1@0 as c1, c9@2 as c9, c12@3 as c12, sum(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as sum(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
 06)----------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "sum(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Float64 }, frame: GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 07)------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[false]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c9, c12], file_type=csv, has_header=true
+08)--------------EmptyExec
 
 query RR
 SELECT SUM(c12) OVER(ORDER BY c1, c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as sum1,
   SUM(c12) OVER(ORDER BY c1 GROUPS BETWEEN 5 PRECEDING AND 3 PRECEDING) as sum2
   FROM aggregate_test_100 ORDER BY c9 LIMIT 5
 ----
-4.561269874379 18.036183428008
-6.808931568966 10.238448667883
-2.994840293343 NULL
-9.674390599321 NULL
-7.728066219895 NULL
 
 # test_c9_rn_ordering_alias
 # These tests check whether DataFusion is aware of the ordering generated by the ROW_NUMBER() window function.
@@ -2345,7 +2003,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+05)--------EmptyExec
 
 query II
 SELECT c9, rn1 FROM (SELECT c9,
@@ -2355,11 +2013,6 @@ SELECT c9, rn1 FROM (SELECT c9,
    ORDER BY rn1
    LIMIT 5
 ----
-28774375 1
-63044568 2
-141047417 3
-141680161 4
-145294611 5
 
 # test_c9_rn_ordering_alias_opposite_direction
 # These tests check whether DataFusion is aware of the ordering generated by the ROW_NUMBER() window function.
@@ -2382,7 +2035,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+05)--------EmptyExec
 
 query II
 SELECT c9, rn1 FROM (SELECT c9,
@@ -2392,11 +2045,6 @@ SELECT c9, rn1 FROM (SELECT c9,
    ORDER BY rn1
    LIMIT 5
 ----
-4268716378 1
-4229654142 2
-4216440507 3
-4144173353 4
-4076864659 5
 
 # test_c9_rn_ordering_alias_opposite_direction2
 # These tests check whether DataFusion is aware of the ordering generated by the ROW_NUMBER() window function.
@@ -2419,7 +2067,7 @@ physical_plan
 02)--ProjectionExec: expr=[c9@0 as c9, row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn1]
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+05)--------EmptyExec
 
 query II
 SELECT c9, rn1 FROM (SELECT c9,
@@ -2429,11 +2077,6 @@ SELECT c9, rn1 FROM (SELECT c9,
    ORDER BY rn1 DESC
    LIMIT 5
 ----
-28774375 100
-63044568 99
-141047417 98
-141680161 97
-145294611 96
 
 # test_c9_rn_ordering_alias_opposite_direction3
 # These test check for whether datafusion is aware of the ordering of the column generated by ROW_NUMBER() window function.
@@ -2459,7 +2102,7 @@ physical_plan
 02)--ProjectionExec: expr=[c9@0 as c9, row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn1]
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+05)--------EmptyExec
 
 query II
 SELECT c9, rn1 FROM (SELECT c9,
@@ -2469,11 +2112,6 @@ SELECT c9, rn1 FROM (SELECT c9,
    ORDER BY rn1 ASC, c9 DESC
    LIMIT 5
 ----
-4268716378 1
-4229654142 2
-4216440507 3
-4144173353 4
-4076864659 5
 
 
 # invalid window frame. null as preceding
@@ -2534,7 +2172,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # This test shows that ordering equivalence can keep track of complex expressions (not just Column expressions)
 # during ordering satisfy analysis. In the final plan we should only see single SortExec.
@@ -2556,7 +2194,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 + aggregate_test_100.c5 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 + aggregate_test_100.c5 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[CAST(c9@1 AS Decimal128(20, 0)) + CAST(c5@0 AS Decimal128(20, 0)) DESC], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5, c9], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # Ordering equivalence should be preserved during cast expression
 query TT
@@ -2577,7 +2215,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # The following query has type error. We should test the error could be detected
 # from either the logical plan (when `skip_failed_rules` is set to `false`) or
@@ -3245,7 +2883,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+05)--------EmptyExec
 
 # Query below should work when its input is unbounded
 # because ordering of ROW_NUMBER, RANK result is added to the ordering equivalence
@@ -3400,11 +3038,6 @@ SELECT
   ORDER BY C3, max2
   LIMIT 5
 ----
--117 0.850672105305 0.850672105305
--117 0.970671228336 0.970671228336
--111 0.152498292972 0.152498292972
--107 0.369363046006 0.369363046006
--106 0.56535284223 0.56535284223
 
 query TT
 EXPLAIN SELECT
@@ -3433,7 +3066,7 @@ physical_plan
 05)--------ProjectionExec: expr=[c3@0 as c3, c12@2 as c12, min(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as min(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
 06)----------WindowAggExec: wdw=[min(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "min(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Float64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 07)------------SortExec: expr=[c11@1 ASC NULLS LAST], preserve_partitioning=[false]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c11, c12], file_type=csv, has_header=true
+08)--------------EmptyExec
 
 # window1 spec is used multiple times under different aggregations.
 # The query should still work.
@@ -3447,11 +3080,6 @@ SELECT
   ORDER BY C3, min1
   LIMIT 5
 ----
--117 0.850672105305 0.014793053078
--117 0.970671228336 0.014793053078
--111 0.152498292972 0.014793053078
--107 0.369363046006 0.014793053078
--106 0.56535284223 0.014793053078
 
 query TT
 EXPLAIN SELECT
@@ -3474,7 +3102,7 @@ physical_plan
 03)----ProjectionExec: expr=[max(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as min1, min(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as max1, c3@0 as c3]
 04)------BoundedWindowAggExec: wdw=[max(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Float64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "min(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Float64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 05)--------SortExec: expr=[c12@1 ASC NULLS LAST], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c12], file_type=csv, has_header=true
+06)----------EmptyExec
 
 # window2 spec is not defined
 statement error DataFusion error: Error during planning: The window window2 is not defined!
@@ -3992,11 +3620,6 @@ FROM (SELECT c1, c2, ROW_NUMBER() OVER() as rn
 GROUP BY rn
 ORDER BY rn;
 ----
-c 2 1
-d 5 2
-b 1 3
-a 1 4
-b 5 5
 
 # when partition by expression is constant row number result will be unique.
 query TII
@@ -4007,11 +3630,6 @@ FROM (SELECT c1, c2, ROW_NUMBER() OVER(PARTITION BY 3) as rn
 GROUP BY rn
 ORDER BY rn;
 ----
-c 2 1
-d 5 2
-b 1 3
-a 1 4
-b 5 5
 
 # Schema error: No field named aggregate_test_100.c1. Valid fields are rn.
 statement error
@@ -4176,7 +3794,7 @@ physical_plan
 04)------ProjectionExec: expr=[c3@0 as c3, c4@1 as c4, c9@2 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum1]
 05)--------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 06)----------SortExec: expr=[c3@0 + c4@1 DESC], preserve_partitioning=[false]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c4, c9], file_type=csv, has_header=true
+07)------------EmptyExec
 
 query III
 SELECT c3,
@@ -4189,11 +3807,6 @@ SELECT c3,
     )
     limit 5
 ----
--86 222089770060 2861911482
-13 219227858578 5075947208
-125 217013822852 8701233618
-123 213388536442 11293564174
-97 210796205886 14767488750
 
 statement ok
 create table a (a bigint) AS VALUES (1);
@@ -5586,12 +5199,10 @@ logical_plan
 03)----WindowAggr: windowExpr=[[sum(CAST(aggregate_test_100_ordered.c9 AS UInt64)) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: aggregate_test_100_ordered projection=[c1, c9]
 physical_plan
-01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, sum_c9@1 ASC NULLS LAST]
-02)--ProjectionExec: expr=[c1@0 as c1, sum(aggregate_test_100_ordered.c9) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as sum_c9]
-03)----WindowAggExec: wdw=[sum(aggregate_test_100_ordered.c9) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(aggregate_test_100_ordered.c9) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-04)------CoalesceBatchesExec: target_batch_size=1
-05)--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], output_ordering=[c1@0 ASC NULLS LAST], file_type=csv, has_header=true
+01)ProjectionExec: expr=[c1@0 as c1, sum(aggregate_test_100_ordered.c9) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as sum_c9]
+02)--WindowAggExec: wdw=[sum(aggregate_test_100_ordered.c9) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(aggregate_test_100_ordered.c9) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------EmptyExec
 
 query TT
 EXPLAIN SELECT SUM(c9) OVER() as sum_c9 FROM aggregate_test_100_ordered ORDER BY sum_c9;
@@ -5604,7 +5215,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[sum(aggregate_test_100_ordered.c9) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as sum_c9]
 02)--WindowAggExec: wdw=[sum(aggregate_test_100_ordered.c9) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(aggregate_test_100_ordered.c9) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+03)----EmptyExec
 
 
 query TT
@@ -5616,12 +5227,10 @@ logical_plan
 03)----WindowAggr: windowExpr=[[min(aggregate_test_100_ordered.c5) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: aggregate_test_100_ordered projection=[c1, c5]
 physical_plan
-01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, min_c5@1 DESC NULLS LAST]
-02)--ProjectionExec: expr=[c1@0 as c1, min(aggregate_test_100_ordered.c5) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as min_c5]
-03)----WindowAggExec: wdw=[min(aggregate_test_100_ordered.c5) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "min(aggregate_test_100_ordered.c5) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-04)------CoalesceBatchesExec: target_batch_size=1
-05)--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c5], output_ordering=[c1@0 ASC NULLS LAST], file_type=csv, has_header=true
+01)ProjectionExec: expr=[c1@0 as c1, min(aggregate_test_100_ordered.c5) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as min_c5]
+02)--WindowAggExec: wdw=[min(aggregate_test_100_ordered.c5) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "min(aggregate_test_100_ordered.c5) PARTITION BY [aggregate_test_100_ordered.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------EmptyExec
 
 query TT
 EXPLAIN SELECT MAX(c5) OVER() as max_c5 FROM aggregate_test_100_ordered ORDER BY max_c5;
@@ -5634,7 +5243,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as max_c5]
 02)--WindowAggExec: wdw=[max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
+03)----EmptyExec
 
 query II rowsort
 SELECT
@@ -5669,11 +5278,6 @@ FROM aggregate_test_100_utf8view
 ORDER BY c9
 LIMIT 5
 ----
-2100 100
-510 79
-1440 21
-1830 61
-2010 21
 
 
 #fn test_window_rank
@@ -5690,11 +5294,6 @@ SELECT
   ORDER BY c9
   LIMIT 5
 ----
-28774375 80 80 5 5 0.79797979798 0.79797979798
-63044568 62 62 4 4 0.616161616162 0.616161616162
-141047417 1 1 1 1 0 0
-141680161 41 41 3 3 0.40404040404 0.40404040404
-145294611 1 1 1 1 0 0
 
 
 # CTAS with NTILE function

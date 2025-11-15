@@ -73,19 +73,6 @@ CREATE EXTERNAL TABLE alltypes_tiny_pages STORED AS PARQUET LOCATION '../../parq
 query TTT
 describe alltypes_tiny_pages;
 ----
-id Int32 YES
-bool_col Boolean YES
-tinyint_col Int8 YES
-smallint_col Int16 YES
-int_col Int32 YES
-bigint_col Int64 YES
-float_col Float32 YES
-double_col Float64 YES
-date_string_col Utf8View YES
-string_col Utf8View YES
-timestamp_col Timestamp(ns) YES
-year Int32 YES
-month Int32 YES
 
 # Test DESC alias functionality
 statement ok

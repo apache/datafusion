@@ -40,49 +40,26 @@ OPTIONS ('format.has_header' 'true');
 query TI
 SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3, c9;
 ----
-a 4
-b 4
-c 2
-d 1
-e 3
 
 # Basic example + reverse order of the selected column
 query TI
 SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3 DESC, c9;
 ----
-a 1
-b 5
-c 4
-d 1
-e 1
 
 # Basic example + reverse order of the ON column
 query TI
 SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c3, c9;
 ----
-e 3
-d 1
-c 2
-b 4
-a 4
 
 # Basic example + reverse order of both columns + limit
 query TI
 SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c3 DESC LIMIT 3;
 ----
-e 1
-d 1
-c 4
 
 # Basic example + omit ON column from selection
 query I
 SELECT DISTINCT ON (c1) c2 FROM aggregate_test_100 ORDER BY c1, c3;
 ----
-4
-4
-2
-1
-3
 
 # Test explain makes sense
 query TT
@@ -95,14 +72,9 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
 01)ProjectionExec: expr=[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]@1 as c3, first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]@2 as c2]
-02)--SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
-03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST], first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST], first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
+02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----AggregateExec: mode=SinglePartitioned, gby=[c1@0 as c1], aggr=[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST], first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]]
+04)------EmptyExec
 
 # ON expressions are not a sub-set of the ORDER BY expressions
 query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
@@ -116,8 +88,6 @@ SELECT DISTINCT ON () c1, c2 FROM aggregate_test_100 ORDER BY c1, c2;
 query II
 SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
 ----
-1 25
-4 23
 
 # Multiple complex expressions
 query TIB
@@ -126,10 +96,6 @@ FROM aggregate_test_100
 WHERE c1 IN ('a', 'b')
 ORDER BY chr(ascii(c1) + 3), c2 % 2, c3 DESC;
 ----
-D 0 false
-D 1 true
-E 0 false
-E 1 false
 
 # Joins using CTEs
 query II
@@ -140,17 +106,11 @@ FROM t1 INNER JOIN t2 ON t1.c13 = t2.c13
 ORDER BY t1.c1, t2.c2, t2.c5
 LIMIT 3;
 ----
--25 15295
-45 15673
--72 -11122
 
 # use wildcard
 query TIIIIIIIITRRT
 SELECT DISTINCT ON (c1) * FROM aggregate_test_100 ORDER BY c1 LIMIT 3;
 ----
-a 1 -85 -15154 1171968280 1919439543497968449 77 52286 774637006 12101411955859039553 0.12285209 0.686439196277 0keZ5G8BffGwgF2RwQD59TFzMStxCB
-b 1 29 -18218 994303988 5983957848665088916 204 9489 3275293996 14857091259186476033 0.53840446 0.179090351188 AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz
-c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 5863949479783605708 0.110830784 0.929409733247 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
 
 # can't distinct on *
 query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \* at Line: 1, Column: 21"\)

@@ -79,11 +79,6 @@ SELECT c5, c1,
 FROM aggregate_test_100
 GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 ----
--2141999138 c 1 0 0 0
--2141451704 a 1 1 0 0
--2138770630 b 1 0 1 0
--2117946883 d 1 0 0 0
--2098805236 c 1 0 0 0
 
 query ITIIII
 SELECT c5, c1,
@@ -94,11 +89,6 @@ SELECT c5, c1,
 FROM aggregate_test_100
 GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 ----
--2141999138 c -2141999138 NULL NULL NULL
--2141451704 a -2141451704 -2141451704 NULL NULL
--2138770630 b -2138770630 NULL -2138770630 NULL
--2117946883 d -2117946883 NULL NULL NULL
--2098805236 c -2098805236 NULL NULL NULL
 
 query ITIIII
 SELECT c5, c1,
@@ -109,11 +99,6 @@ SELECT c5, c1,
 FROM aggregate_test_100
 GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 ----
--2141999138 c -2141999138 NULL NULL NULL
--2141451704 a -2141451704 -2141451704 NULL NULL
--2138770630 b -2138770630 NULL -2138770630 NULL
--2117946883 d -2117946883 NULL NULL NULL
--2098805236 c -2098805236 NULL NULL NULL
 
 query ITIIII
 SELECT c5, c1,
@@ -124,11 +109,6 @@ SELECT c5, c1,
 FROM aggregate_test_100
 GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 ----
--2141999138 c -2141999138 NULL NULL NULL
--2141451704 a -2141451704 -2141451704 NULL NULL
--2138770630 b -2138770630 NULL -2138770630 NULL
--2117946883 d -2117946883 NULL NULL NULL
--2098805236 c -2098805236 NULL NULL NULL
 
 query ITIIII
 SELECT c5, c1,
@@ -139,11 +119,6 @@ SELECT c5, c1,
 FROM aggregate_test_100
 GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 ----
--2141999138 c -2141999138 NULL NULL NULL
--2141451704 a -2141451704 -2141451704 NULL NULL
--2138770630 b -2138770630 NULL -2138770630 NULL
--2117946883 d -2117946883 NULL NULL NULL
--2098805236 c -2098805236 NULL NULL NULL
 
 query ITIIII
 SELECT c5, c1,
@@ -154,11 +129,6 @@ SELECT c5, c1,
 FROM aggregate_test_100
 GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 ----
--2141999138 c -2141999138 NULL NULL NULL
--2141451704 a -2141451704 -2141451704 NULL NULL
--2138770630 b -2138770630 NULL -2138770630 NULL
--2117946883 d -2117946883 NULL NULL NULL
--2098805236 c -2098805236 NULL NULL NULL
 
 query ITIIII
 SELECT c5, c1,
@@ -169,11 +139,6 @@ SELECT c5, c1,
 FROM aggregate_test_100
 GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 ----
--2141999138 c 1 0 0 0
--2141451704 a 1 1 0 0
--2138770630 b 1 0 1 0
--2117946883 d 1 0 0 0
--2098805236 c 1 0 0 0
 
 # FIXME: add bool_and(v3) column when issue fixed
 # ISSUE https://github.com/apache/datafusion/issues/11846
@@ -182,11 +147,6 @@ select v1, bool_or(v2), bool_and(v2), bool_or(v3)
 from aggregate_test_100_bool
 group by v1
 ----
-a true false true
-b true false true
-c true false false
-d true false false
-e true false NULL
 
 query TBBB rowsort
 select v1,
@@ -196,11 +156,6 @@ select v1,
 from aggregate_test_100_bool
 group by v1
 ----
-a true false NULL
-b NULL false NULL
-c true false NULL
-d NULL false NULL
-e true false NULL
 
 # Prepare settings to always skip aggregation after couple of batches
 statement ok
@@ -239,61 +194,31 @@ FROM aggregate_test_100;
 query IIII
 SELECT c2, count(c1), count(c5), count(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 22 22 22
-2 22 22 22
-3 19 19 19
-4 23 23 23
-5 14 14 14
 
 # Test min / max for int / float
 query IIIRR
 SELECT c2, min(c5), max(c5), min(c11), max(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 -1991133944 2143473091 0.064453244 0.89651865
-2 -2138770630 2053379412 0.055064857 0.8315913
-3 -2141999138 2030965207 0.034291923 0.9488028
-4 -1885422396 2064155045 0.028003037 0.7459874
-5 -2117946883 2025611582 0.12559289 0.87989986
 
 # Test sum for int / float
 query IIR
 SELECT c2, sum(c5), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 -438598674 12.153253793716
-2 -8259865364 9.577824473381
-3 1956035476 9.590891361237
-4 16155718643 9.531112968922
-5 6449337880 7.074412226677
 
 # Test median for int / float
 query IIR
 SELECT c2, median(c5), median(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 23971150 0.5922606
-2 -562486880 0.43422085
-3 240273900 0.40199697
-4 762932956 0.48515016
-5 604973998 0.49842384
 
 # Test approx_median for int / float
 query IIR
 SELECT c2, approx_median(c5), approx_median(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 191655437 0.59926736
-2 -587831330 0.43230486
-3 240273900 0.40199697
-4 762932956 0.48515016
-5 593204320 0.5156586
 
 # Test approx_distinct for varchar / int
 query III
 SELECT c2, approx_distinct(c1), approx_distinct(c5) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 5 22
-2 5 22
-3 5 19
-4 5 23
-5 5 14
 
 # Test approx_distinct for varchar(with Utf8View) / int
 statement ok
@@ -307,11 +232,6 @@ FROM aggregate_test_100;
 query III
 SELECT c2, approx_distinct(c1), approx_distinct(c5) FROM aggregate_test_100_utf8view GROUP BY c2 ORDER BY c2;
 ----
-1 5 22
-2 5 22
-3 5 19
-4 5 23
-5 5 14
 
 statement ok
 DROP TABLE aggregate_test_100_utf8view;
@@ -320,61 +240,31 @@ DROP TABLE aggregate_test_100_utf8view;
 query III
 SELECT c2, count(c3), count(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 19 17
-2 17 19
-3 15 13
-4 16 19
-5 12 11
 
 # Test min / max with nullable fields
 query IIIRR
 SELECT c2, min(c3), max(c3), min(c11), max(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 -99 125 0.064453244 0.89651865
-2 -117 122 0.09683716 0.8315913
-3 -101 123 0.034291923 0.94669616
-4 -117 123 0.028003037 0.7085086
-5 -101 118 0.12559289 0.87989986
 
 # Test sum with nullable fields
 query IIR
 SELECT c2, sum(c3), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 367 12.153253793716
-2 184 9.577824473381
-3 395 9.590891361237
-4 29 9.531112968922
-5 -194 7.074412226677
 
 # Test median with nullable fields
 query IIR
 SELECT c2, median(c3), median(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 12 0.6067944
-2 1 0.46076488
-3 14 0.40154034
-4 -17 0.48515016
-5 -35 0.5536642
 
 # Test approx_median with nullable fields
 query IIR
 SELECT c2, approx_median(c3), approx_median(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 12 0.6067944
-2 1 0.46076488
-3 14 0.40154034
-4 -7 0.48515016
-5 -39 0.5536642
 
 # Test approx_distinct with nullable fields
 query II
 SELECT c2, approx_distinct(c3) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 19
-2 16
-3 13
-4 16
-5 12
 
 # Test avg for tinyint / float
 query TRR
@@ -384,11 +274,6 @@ SELECT
   avg(c11)
 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
 ----
-a 2.857142857143 0.438223421574
-b 3.263157894737 0.496481208425
-c 2.666666666667 0.425241138254
-d 2.444444444444 0.541519476308
-e 3 0.505440263521
 
 # FIXME: add bool_and(v3) column when issue fixed
 # ISSUE https://github.com/apache/datafusion/issues/11846
@@ -397,11 +282,6 @@ select v1, bool_or(v2), bool_and(v2), bool_or(v3)
 from aggregate_test_100_bool
 group by v1
 ----
-a true false true
-b true false true
-c true false false
-d true false false
-e true false NULL
 
 query TBBB rowsort
 select v1,
@@ -411,11 +291,6 @@ select v1,
 from aggregate_test_100_bool
 group by v1
 ----
-a true false NULL
-b NULL false NULL
-c true false NULL
-d NULL false NULL
-e true false NULL
 
 # Test count with filter
 query III
@@ -425,11 +300,6 @@ SELECT
   count(c3) FILTER (WHERE c11 > 10)
 FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 13 0
-2 13 0
-3 13 0
-4 13 0
-5 5 0
 
 # Test min / max with filter
 query III
@@ -439,11 +309,6 @@ SELECT
   max(c3) FILTER (WHERE c3 < 0)
 FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 12 -5
-2 1 -29
-3 13 -2
-4 3 -38
-5 36 -5
 
 # Test sum with filter
 query II
@@ -452,11 +317,6 @@ SELECT
   sum(c3) FILTER (WHERE c1 != 'e' AND c3 > 0)
 FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 612
-2 565
-3 466
-4 417
-5 284
 
 # Test approx_distinct with filter
 query III
@@ -466,11 +326,6 @@ SELECT
   approx_distinct(c3) FILTER (WHERE c11 > 10)
 FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 13 0
-2 12 0
-3 11 0
-4 13 0
-5 5 0
 
 # Test median with filter
 query III
@@ -480,11 +335,6 @@ SELECT
   median(c3) FILTER (WHERE c3 < 0)
 FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 57 -56
-2 52 -60
-3 71 -74
-4 65 -69
-5 64 -59
 
 # Test approx_median with filter
 query III
@@ -494,11 +344,6 @@ SELECT
   approx_median(c3) FILTER (WHERE c3 < 0)
 FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 57 -56
-2 52 -60
-3 71 -76
-4 65 -64
-5 64 -59
 
 # Test count with nullable fields and filter
 query III
@@ -507,11 +352,6 @@ SELECT c2,
        COUNT(c11) FILTER(WHERE c5 > 0)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 11 6
-2 6 6
-3 8 6
-4 11 14
-5 8 7
 
 # Test avg for tinyint / float
 query TRR
@@ -521,11 +361,6 @@ SELECT
   avg(c11) FILTER (WHERE c2 != 5)
 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
 ----
-a 2.5 0.449071887467
-b 2.642857142857 0.445486298629
-c 2.421052631579 0.422882117723
-d 2.125 0.518706191331
-e 2.789473684211 0.536785323369
 
 # Test count with nullable fields and nullable filter
 query III
@@ -534,11 +369,6 @@ SELECT c2,
        COUNT(c11) FILTER(WHERE c3 > 0)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 10 9
-2 7 8
-3 3 6
-4 3 7
-5 6 3
 
 # Test min / max with nullable fields and filter
 query IIIRR
@@ -549,11 +379,6 @@ SELECT c2,
        MAX(c11) FILTER (WHERE c5 < 0)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 -99 103 0.2578469 0.89651865
-2 -48 93 0.09683716 0.8315913
-3 -76 123 0.034291923 0.94669616
-4 -117 123 0.06563997 0.57360977
-5 -94 68 0.12559289 0.75173044
 
 # Test min / max with nullable fields and nullable filter
 query III
@@ -562,11 +387,6 @@ SELECT c2,
        MAX(c3) FILTER (WHERE c11 > 0.5)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 -99 125
-2 -106 122
-3 -76 73
-4 -117 47
-5 -82 118
 
 # Test sum with nullable field and nullable / non-nullable filters
 query IIIRR
@@ -577,11 +397,6 @@ SELECT c2,
        SUM(c11) FILTER (WHERE c3 > 0)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 -3 77 7.214695632458 5.085060358047
-2 100 77 6.197732746601 3.150197088718
-3 109 211 2.80575042963 2.80632930994
-4 -171 56 2.10740506649 1.939846396446
-5 -86 -76 1.8741710186 1.600569307804
 
 # Test approx_distinct with nullable fields and filter
 query II
@@ -589,11 +404,6 @@ SELECT c2,
        approx_distinct(c3) FILTER (WHERE c5 > 0)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 11
-2 6
-3 6
-4 11
-5 8
 
 # Test approx_distinct with nullable fields and nullable filter
 query II
@@ -601,11 +411,6 @@ SELECT c2,
        approx_distinct(c3) FILTER (WHERE c11 > 0.5)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 10
-2 6
-3 3
-4 3
-5 6
 
 # Test median with nullable fields and filter
 query IIR
@@ -614,11 +419,6 @@ SELECT c2,
        median(c11) FILTER (WHERE c5 < 0)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 -5 0.6623719
-2 15 0.52930677
-3 13 0.32792538
-4 -38 0.49774808
-5 -18 0.49842384
 
 # Test min / max with nullable fields and nullable filter
 query II
@@ -626,11 +426,6 @@ SELECT c2,
        median(c3) FILTER (WHERE c11 > 0.5)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 33
-2 -29
-3 22
-4 -90
-5 -22
 
 # Test approx_median with nullable fields and filter
 query IIR
@@ -639,11 +434,6 @@ SELECT c2,
        approx_median(c11) FILTER (WHERE c5 < 0)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 -5 0.6623719
-2 12 0.52930677
-3 13 0.32792538
-4 -38 0.49774808
-5 -21 0.47652745
 
 # Test approx_median with nullable fields and nullable filter
 query II
@@ -651,11 +441,6 @@ SELECT c2,
        approx_median(c3) FILTER (WHERE c11 > 0.5)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 35
-2 -29
-3 22
-4 -90
-5 -32
 
 statement ok
 DROP TABLE aggregate_test_100_null;

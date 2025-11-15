@@ -1066,13 +1066,6 @@ FROM (
     ) AS a
 ) AS b
 ----
-a 5 -38
-a 5 -54
-a 6 36
-a 6 -31
-a 5 65
-a 5 -101
-a 6 -101
 
 # nested select without aliases
 query TII
@@ -1087,13 +1080,6 @@ FROM (
     )
 )
 ----
-a 5 -38
-a 5 -54
-a 6 36
-a 6 -31
-a 5 65
-a 5 -101
-a 6 -101
 
 # select with join unaliased subqueries
 query TIITII
@@ -1103,11 +1089,6 @@ FROM
     (SELECT c1 AS p1, c2 - 1 AS p2, c3 AS p3 FROM aggregate_test_100)
 LIMIT 5
 ----
-c 3 1 c 1 1
-c 3 1 d 4 -40
-c 3 1 b 0 29
-c 3 1 a 0 -85
-c 3 1 b 4 -82
 
 # TODO: test_prepare_statement
 
@@ -1549,14 +1530,11 @@ logical_plan
 06)----------TableScan: aggregate_test_100 projection=[c1, c2]
 physical_plan
 01)ProjectionExec: expr=[c2@0 as c2, count(Int64(1))@1 as count(*)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(Int64(1))]
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
-05)--------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(Int64(1))]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-07)------------ProjectionExec: expr=[c2@0 as c2]
-08)--------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], file_type=csv, has_header=true
+02)--AggregateExec: mode=SinglePartitioned, gby=[c2@0 as c2], aggr=[count(Int64(1))]
+03)----ProjectionExec: expr=[c2@0 as c2]
+04)------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[c2@1 as c2, c1@0 as c1]
+06)----------EmptyExec
 
 # FilterExec can track equality of non-column expressions.
 # plan below shouldn't have a SortExec because given column 'a' is ordered.

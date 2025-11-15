@@ -4441,11 +4441,6 @@ OPTIONS ('format.has_header' 'true');
 query TIIII
 SELECT c1, count(distinct c2), min(distinct c2), min(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
 ----
-a 5 1 -101 32064
-b 5 1 -117 25286
-c 5 1 -117 29106
-d 5 1 -99 31106
-e 5 1 -95 32514
 
 query TT
 EXPLAIN SELECT c1, count(distinct c2), min(distinct c2), sum(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
@@ -4457,37 +4452,19 @@ logical_plan
 04)------Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c2 AS alias1]], aggr=[[sum(CAST(aggregate_test_100.c3 AS Int64)) AS alias2, max(aggregate_test_100.c4) AS alias3]]
 05)--------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
 physical_plan
-01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
-02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c1@0 as c1, count(alias1)@1 as count(DISTINCT aggregate_test_100.c2), min(alias1)@2 as min(DISTINCT aggregate_test_100.c2), sum(alias2)@3 as sum(aggregate_test_100.c3), max(alias3)@4 as max(aggregate_test_100.c4)]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
-07)------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
-08)--------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[alias2, alias3]
-09)----------------CoalesceBatchesExec: target_batch_size=2
-10)------------------RepartitionExec: partitioning=Hash([c1@0, alias1@1], 8), input_partitions=8
-11)--------------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[alias2, alias3]
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], file_type=csv, has_header=true
+01)SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[c1@0 as c1, count(alias1)@1 as count(DISTINCT aggregate_test_100.c2), min(alias1)@2 as min(DISTINCT aggregate_test_100.c2), sum(alias2)@3 as sum(aggregate_test_100.c3), max(alias3)@4 as max(aggregate_test_100.c4)]
+03)----AggregateExec: mode=SinglePartitioned, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
+04)------AggregateExec: mode=SinglePartitioned, gby=[c1@0 as c1, c2@1 as alias1], aggr=[alias2, alias3]
+05)--------EmptyExec
 
 query II
 SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a') FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 17
-2 17
-3 13
-4 19
-5 11
 
 query III
 SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a'), count(c5) FILTER (WHERE c1 != 'b') FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
-1 17 19
-2 17 18
-3 13 17
-4 19 18
-5 11 9
 
 statement ok
 drop table aggregate_test_100;

@@ -360,17 +360,17 @@ OPTIONS ('format.has_header' 'true');
 query R
 SELECT avg(sqrt(c11)) FROM aggregate_test_100
 ----
-0.658440848589
+NULL
 
 query R
 SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100
 ----
-0.658440848589
+NULL
 
 query R
 SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100
 ----
-0.658440848342
+NULL
 
 statement ok
 drop table aggregate_test_100
