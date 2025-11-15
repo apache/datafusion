@@ -42,7 +42,7 @@ use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{CsvReadOptions, SessionContext};
 
-use crate::execution::SendableRecordBatchStream;
+use crate::execution::{SendableRecordBatchStream, SessionState};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
@@ -330,7 +330,11 @@ impl UserDefinedLogicalNodeCore for CacheNode {
 struct TestCacheProducer {}
 
 impl CacheProducer for TestCacheProducer {
-    fn create(&self, plan: LogicalPlan) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+    fn create(
+        &self,
+        plan: LogicalPlan,
+        _session_state: &SessionState,
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
         Ok(Arc::new(CacheNode { input: plan }))
     }
 }

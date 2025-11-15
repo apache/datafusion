@@ -1893,10 +1893,16 @@ pub enum RegisterFunction {
 /// Interface for applying a custom caching strategy.
 /// Implement this trait and register via [`SessionState`]
 /// to create a custom logical node for caching.
+/// Additionally, a custom [`ExtensionPlanner`]/[`QueryPlanner`]
+/// need to be implemented to handle plans containing such node.
 pub trait CacheProducer: Debug + Sync + Send {
     /// Create a custom logical node for caching
-    /// given a logical plan (of DF to cache).
-    fn create(&self, plan: LogicalPlan) -> Result<Arc<dyn UserDefinedLogicalNode>>;
+    /// given a logical plan (of DF to cache) and a session state.
+    fn create(
+        &self,
+        plan: LogicalPlan,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
 }
 
 /// Default implementation of [SerializerRegistry] that throws unimplemented error

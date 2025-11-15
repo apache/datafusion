@@ -2329,7 +2329,8 @@ impl DataFrame {
         })
     }
 
-    /// Cache DataFrame as a memory table.
+    /// Cache DataFrame as a memory table by default, or use
+    /// a [`CacheProducer`] if configured via [`SessionState`].
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -2346,7 +2347,7 @@ impl DataFrame {
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
         if let Some(cache_producer) = self.session_state.cache_producer() {
-            let node = cache_producer.create(self.plan)?;
+            let node = cache_producer.create(self.plan, self.session_state.as_ref())?;
             let plan = LogicalPlan::Extension(Extension { node });
             Ok(Self {
                 session_state: self.session_state,
