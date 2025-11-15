@@ -20,7 +20,9 @@ extern crate criterion;
 
 use criterion::{BenchmarkId, Criterion};
 use datafusion_expr::lit;
-use datafusion_functions_nested::expr_fn::{array_has, array_has_all, array_has_any, make_array};
+use datafusion_functions_nested::expr_fn::{
+    array_has, array_has_all, array_has_any, make_array,
+};
 use std::hint::black_box;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -54,9 +56,7 @@ fn bench_array_has(c: &mut Criterion, array_size: usize) {
             let list_array = make_array(array);
             let needle = lit(0_i64);
 
-            b.iter(|| {
-                black_box(array_has(list_array.clone(), needle.clone()))
-            })
+            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
         },
     );
 
@@ -69,9 +69,7 @@ fn bench_array_has(c: &mut Criterion, array_size: usize) {
             let list_array = make_array(array);
             let needle = lit((size - 1) as i64);
 
-            b.iter(|| {
-                black_box(array_has(list_array.clone(), needle.clone()))
-            })
+            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
         },
     );
 
@@ -84,9 +82,7 @@ fn bench_array_has(c: &mut Criterion, array_size: usize) {
             let list_array = make_array(array);
             let needle = lit(-1_i64); // Not in array
 
-            b.iter(|| {
-                black_box(array_has(list_array.clone(), needle.clone()))
-            })
+            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
         },
     );
 
@@ -105,9 +101,7 @@ fn bench_array_has_all(c: &mut Criterion, array_size: usize) {
             let list_array = make_array(array);
             let needle_array = make_array(vec![lit(0_i64), lit(1_i64), lit(2_i64)]);
 
-            b.iter(|| {
-                black_box(array_has_all(list_array.clone(), needle_array.clone()))
-            })
+            b.iter(|| black_box(array_has_all(list_array.clone(), needle_array.clone())))
         },
     );
 
@@ -122,9 +116,7 @@ fn bench_array_has_all(c: &mut Criterion, array_size: usize) {
             let needle = (0..needle_size).map(|i| lit(i as i64)).collect::<Vec<_>>();
             let needle_array = make_array(needle);
 
-            b.iter(|| {
-                black_box(array_has_all(list_array.clone(), needle_array.clone()))
-            })
+            b.iter(|| black_box(array_has_all(list_array.clone(), needle_array.clone())))
         },
     );
 
@@ -137,9 +129,7 @@ fn bench_array_has_all(c: &mut Criterion, array_size: usize) {
             let list_array = make_array(array);
             let needle_array = make_array(vec![lit(0_i64), lit(-1_i64)]); // -1 not in array
 
-            b.iter(|| {
-                black_box(array_has_all(list_array.clone(), needle_array.clone()))
-            })
+            b.iter(|| black_box(array_has_all(list_array.clone(), needle_array.clone())))
         },
     );
 
@@ -158,9 +148,7 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
             let list_array = make_array(array);
             let needle_array = make_array(vec![lit(0_i64), lit(-1_i64), lit(-2_i64)]);
 
-            b.iter(|| {
-                black_box(array_has_any(list_array.clone(), needle_array.clone()))
-            })
+            b.iter(|| black_box(array_has_any(list_array.clone(), needle_array.clone())))
         },
     );
 
@@ -173,9 +161,7 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
             let list_array = make_array(array);
             let needle_array = make_array(vec![lit(-1_i64), lit(-2_i64), lit(0_i64)]);
 
-            b.iter(|| {
-                black_box(array_has_any(list_array.clone(), needle_array.clone()))
-            })
+            b.iter(|| black_box(array_has_any(list_array.clone(), needle_array.clone())))
         },
     );
 
@@ -188,9 +174,7 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
             let list_array = make_array(array);
             let needle_array = make_array(vec![lit(-1_i64), lit(-2_i64), lit(-3_i64)]);
 
-            b.iter(|| {
-                black_box(array_has_any(list_array.clone(), needle_array.clone()))
-            })
+            b.iter(|| black_box(array_has_any(list_array.clone(), needle_array.clone())))
         },
     );
 
@@ -204,37 +188,25 @@ fn bench_array_has_strings(c: &mut Criterion) {
     let sizes = vec![10, 100, 1000];
 
     for &size in &sizes {
-        group.bench_with_input(
-            BenchmarkId::new("found", size),
-            &size,
-            |b, &size| {
-                let array = (0..size)
-                    .map(|i| lit(format!("TICKER{:04}", i)))
-                    .collect::<Vec<_>>();
-                let list_array = make_array(array);
-                let needle = lit("TICKER0050");
+        group.bench_with_input(BenchmarkId::new("found", size), &size, |b, &size| {
+            let array = (0..size)
+                .map(|i| lit(format!("TICKER{:04}", i)))
+                .collect::<Vec<_>>();
+            let list_array = make_array(array);
+            let needle = lit("TICKER0050");
 
-                b.iter(|| {
-                    black_box(array_has(list_array.clone(), needle.clone()))
-                })
-            },
-        );
+            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("not_found", size),
-            &size,
-            |b, &size| {
-                let array = (0..size)
-                    .map(|i| lit(format!("TICKER{:04}", i)))
-                    .collect::<Vec<_>>();
-                let list_array = make_array(array);
-                let needle = lit("NOTFOUND");
+        group.bench_with_input(BenchmarkId::new("not_found", size), &size, |b, &size| {
+            let array = (0..size)
+                .map(|i| lit(format!("TICKER{:04}", i)))
+                .collect::<Vec<_>>();
+            let list_array = make_array(array);
+            let needle = lit("NOTFOUND");
 
-                b.iter(|| {
-                    black_box(array_has(list_array.clone(), needle.clone()))
-                })
-            },
-        );
+            b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
+        });
     }
 
     group.finish();
@@ -310,10 +282,7 @@ fn bench_array_has_any_strings(c: &mut Criterion) {
                 let list_array = make_array(portfolio);
 
                 let mut checking = vec![lit("TICKER0000".to_string())];
-                checking.extend(
-                    (1..check_size)
-                        .map(|_| lit("NOTFOUND".to_string()))
-                );
+                checking.extend((1..check_size).map(|_| lit("NOTFOUND".to_string())));
                 let needle_array = make_array(checking);
 
                 b.iter(|| {
@@ -354,9 +323,7 @@ fn bench_array_has_edge_cases(c: &mut Criterion) {
         let list_array = make_array(vec![]);
         let needle = lit(1_i64);
 
-        b.iter(|| {
-            black_box(array_has(list_array.clone(), needle.clone()))
-        })
+        b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
     });
 
     // Single element array - found
@@ -364,9 +331,7 @@ fn bench_array_has_edge_cases(c: &mut Criterion) {
         let list_array = make_array(vec![lit(1_i64)]);
         let needle = lit(1_i64);
 
-        b.iter(|| {
-            black_box(array_has(list_array.clone(), needle.clone()))
-        })
+        b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
     });
 
     // Single element array - not found
@@ -374,9 +339,7 @@ fn bench_array_has_edge_cases(c: &mut Criterion) {
         let list_array = make_array(vec![lit(1_i64)]);
         let needle = lit(2_i64);
 
-        b.iter(|| {
-            black_box(array_has(list_array.clone(), needle.clone()))
-        })
+        b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
     });
 
     // Array with duplicates
@@ -385,9 +348,7 @@ fn bench_array_has_edge_cases(c: &mut Criterion) {
         let list_array = make_array(array);
         let needle = lit(1_i64);
 
-        b.iter(|| {
-            black_box(array_has(list_array.clone(), needle.clone()))
-        })
+        b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
     });
 
     // array_has_all: empty needle
@@ -396,9 +357,7 @@ fn bench_array_has_edge_cases(c: &mut Criterion) {
         let list_array = make_array(array);
         let needle_array = make_array(vec![]);
 
-        b.iter(|| {
-            black_box(array_has_all(list_array.clone(), needle_array.clone()))
-        })
+        b.iter(|| black_box(array_has_all(list_array.clone(), needle_array.clone())))
     });
 
     // array_has_any: empty needle
@@ -407,9 +366,7 @@ fn bench_array_has_edge_cases(c: &mut Criterion) {
         let list_array = make_array(array);
         let needle_array = make_array(vec![]);
 
-        b.iter(|| {
-            black_box(array_has_any(list_array.clone(), needle_array.clone()))
-        })
+        b.iter(|| black_box(array_has_any(list_array.clone(), needle_array.clone())))
     });
 
     group.finish();
