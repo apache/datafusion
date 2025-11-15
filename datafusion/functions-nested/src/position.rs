@@ -174,6 +174,7 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
 
     // if `start_from` index is out of bounds, return error
     for (arr, &from) in list_array.iter().zip(arr_from.iter()) {
+        // If `arr` is `None`: we will get null if we got null in the array, so we don't need to check
         assert_or_internal_err!(
             arr.is_none_or(|arr| from >= 0 && (from as usize) <= arr.len()),
             "start_from index out of bounds"
