@@ -190,7 +190,7 @@ fn bench_array_has_strings(c: &mut Criterion) {
     for &size in &sizes {
         group.bench_with_input(BenchmarkId::new("found", size), &size, |b, &size| {
             let array = (0..size)
-                .map(|i| lit(format!("TICKER{:04}", i)))
+                .map(|i| lit(format!("TICKER{i:04}")))
                 .collect::<Vec<_>>();
             let list_array = make_array(array);
             let needle = lit("TICKER0050");
@@ -200,7 +200,7 @@ fn bench_array_has_strings(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("not_found", size), &size, |b, &size| {
             let array = (0..size)
-                .map(|i| lit(format!("TICKER{:04}", i)))
+                .map(|i| lit(format!("TICKER{i:04}")))
                 .collect::<Vec<_>>();
             let list_array = make_array(array);
             let needle = lit("NOTFOUND");
@@ -225,12 +225,12 @@ fn bench_array_has_all_strings(c: &mut Criterion) {
             &check_size,
             |b, &check_size| {
                 let portfolio = (0..portfolio_size)
-                    .map(|i| lit(format!("TICKER{:04}", i)))
+                    .map(|i| lit(format!("TICKER{i:04}")))
                     .collect::<Vec<_>>();
                 let list_array = make_array(portfolio);
 
                 let checking = (0..check_size)
-                    .map(|i| lit(format!("TICKER{:04}", i)))
+                    .map(|i| lit(format!("TICKER{i:04}")))
                     .collect::<Vec<_>>();
                 let needle_array = make_array(checking);
 
@@ -245,12 +245,12 @@ fn bench_array_has_all_strings(c: &mut Criterion) {
             &check_size,
             |b, &check_size| {
                 let portfolio = (0..portfolio_size)
-                    .map(|i| lit(format!("TICKER{:04}", i)))
+                    .map(|i| lit(format!("TICKER{i:04}")))
                     .collect::<Vec<_>>();
                 let list_array = make_array(portfolio);
 
                 let mut checking = (0..check_size - 1)
-                    .map(|i| lit(format!("TICKER{:04}", i)))
+                    .map(|i| lit(format!("TICKER{i:04}")))
                     .collect::<Vec<_>>();
                 checking.push(lit("NOTFOUND".to_string()));
                 let needle_array = make_array(checking);
@@ -277,7 +277,7 @@ fn bench_array_has_any_strings(c: &mut Criterion) {
             &check_size,
             |b, &check_size| {
                 let portfolio = (0..portfolio_size)
-                    .map(|i| lit(format!("TICKER{:04}", i)))
+                    .map(|i| lit(format!("TICKER{i:04}")))
                     .collect::<Vec<_>>();
                 let list_array = make_array(portfolio);
 
@@ -296,12 +296,12 @@ fn bench_array_has_any_strings(c: &mut Criterion) {
             &check_size,
             |b, &check_size| {
                 let portfolio = (0..portfolio_size)
-                    .map(|i| lit(format!("TICKER{:04}", i)))
+                    .map(|i| lit(format!("TICKER{i:04}")))
                     .collect::<Vec<_>>();
                 let list_array = make_array(portfolio);
 
                 let checking = (0..check_size)
-                    .map(|i| lit(format!("NOTFOUND{}", i)))
+                    .map(|i| lit(format!("NOTFOUND{i}")))
                     .collect::<Vec<_>>();
                 let needle_array = make_array(checking);
 
