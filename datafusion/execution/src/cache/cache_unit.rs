@@ -542,7 +542,7 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = DefaultFilesMetadataCache::new(1024 * 1024);
+        let cache = DefaultFilesMetadataCache::new(1024 * 1024);
         assert!(cache.get(&object_meta).is_none());
 
         // put
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn test_default_file_metadata_cache_with_limit() {
-        let mut cache = DefaultFilesMetadataCache::new(1000);
+        let cache = DefaultFilesMetadataCache::new(1000);
         let (object_meta1, metadata1) = generate_test_metadata_with_size("1", 100);
         let (object_meta2, metadata2) = generate_test_metadata_with_size("2", 500);
         let (object_meta3, metadata3) = generate_test_metadata_with_size("3", 300);
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn test_default_file_metadata_cache_entries_info() {
-        let mut cache = DefaultFilesMetadataCache::new(1000);
+        let cache = DefaultFilesMetadataCache::new(1000);
         let (object_meta1, metadata1) = generate_test_metadata_with_size("1", 100);
         let (object_meta2, metadata2) = generate_test_metadata_with_size("2", 200);
         let (object_meta3, metadata3) = generate_test_metadata_with_size("3", 300);
