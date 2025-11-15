@@ -684,7 +684,6 @@ impl Stream for GroupedHashAggregateStream {
                             // Do the grouping
                             self.group_aggregate_batch(batch)?;
 
-                            self.update_skip_aggregation_probe(input_rows);
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -712,6 +711,7 @@ impl Stream for GroupedHashAggregateStream {
                             // Check if we should switch to skip aggregation mode
                             // It's important that we do this before we early emit since we've
                             // already updated the probe.
+                            self.update_skip_aggregation_probe(input_rows);
                             if let Some(new_state) = self.switch_to_skip_aggregation()? {
                                 timer.done();
                                 self.exec_state = new_state;
