@@ -87,7 +87,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
             .map(|x| x.1)
     }
 
-    fn remove(&mut self, k: &Path) -> Option<Arc<Statistics>> {
+    fn remove(&self, k: &Path) -> Option<Arc<Statistics>> {
         self.statistics.remove(k).map(|x| x.1 .1)
     }
 
@@ -151,7 +151,7 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
         panic!("Not supported DefaultListFilesCache put_with_extra")
     }
 
-    fn remove(&mut self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn remove(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
         self.statistics.remove(k).map(|x| x.1)
     }
 
@@ -399,7 +399,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for DefaultFilesMetadataCa
         self.put(key, value)
     }
 
-    fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
+    fn remove(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
         let mut state = self.state.lock().unwrap();
         state.remove(k)
     }
