@@ -257,8 +257,7 @@ fn shrink_boundaries(
 
     assert_or_internal_err!(
         (0.0..=1.0).contains(&selectivity),
-        "Selectivity is out of limit: {}",
-        selectivity
+        "Selectivity is out of limit: {selectivity}",
     );
 
     Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))

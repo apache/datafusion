@@ -629,8 +629,7 @@ impl ProjectionMapping {
                     let matching_name = matching_field.name();
                     assert_or_internal_err!(
                         col.name() == matching_name,
-                        "Input field name {} does not match with the projection expression {}",
-                        matching_name,
+                        "Input field name {matching_name} does not match with the projection expression {}",
                         col.name()
                     );
                     let matching_column = Column::new(matching_name, idx);
