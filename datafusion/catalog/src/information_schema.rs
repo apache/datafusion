@@ -245,7 +245,7 @@ impl InformationSchemaConfig {
                     name,
                     "FUNCTION",
                     Self::is_deterministic(udf.signature()),
-                    return_type,
+                    return_type.as_ref(),
                     "SCALAR",
                     udf.documentation().map(|d| d.description.to_string()),
                     udf.documentation().map(|d| d.syntax_example.to_string()),
@@ -265,7 +265,7 @@ impl InformationSchemaConfig {
                     name,
                     "FUNCTION",
                     Self::is_deterministic(udaf.signature()),
-                    return_type,
+                    return_type.as_ref(),
                     "AGGREGATE",
                     udaf.documentation().map(|d| d.description.to_string()),
                     udaf.documentation().map(|d| d.syntax_example.to_string()),
@@ -285,7 +285,7 @@ impl InformationSchemaConfig {
                     name,
                     "FUNCTION",
                     Self::is_deterministic(udwf.signature()),
-                    return_type,
+                    return_type.as_ref(),
                     "WINDOW",
                     udwf.documentation().map(|d| d.description.to_string()),
                     udwf.documentation().map(|d| d.syntax_example.to_string()),
@@ -418,11 +418,11 @@ fn get_udf_args_and_return_types(
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
                 let return_type = udf
                     .return_type(&arg_types)
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .ok();
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, return_type)
             })
@@ -445,10 +445,10 @@ fn get_udaf_args_and_return_types(
                 let return_type = udaf
                     .return_type(&arg_types)
                     .ok()
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)));
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)));
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, return_type)
             })
@@ -470,7 +470,7 @@ fn get_udwf_args_and_return_types(
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, None)
             })
@@ -479,7 +479,7 @@ fn get_udwf_args_and_return_types(
 }
 
 #[inline]
-fn remove_native_type_prefix(native_type: NativeType) -> String {
+fn remove_native_type_prefix(native_type: &NativeType) -> String {
     format!("{native_type}")
 }
 
@@ -679,7 +679,7 @@ impl InformationSchemaViewBuilder {
         catalog_name: impl AsRef<str>,
         schema_name: impl AsRef<str>,
         table_name: impl AsRef<str>,
-        definition: Option<impl AsRef<str>>,
+        definition: Option<&(impl AsRef<str> + ?Sized)>,
     ) {
         // Note: append_value is actually infallible.
         self.catalog_names.append_value(catalog_name.as_ref());
@@ -1164,7 +1164,7 @@ impl InformationSchemaRoutinesBuilder {
         routine_name: impl AsRef<str>,
         routine_type: impl AsRef<str>,
         is_deterministic: bool,
-        data_type: Option<impl AsRef<str>>,
+        data_type: Option<&impl AsRef<str>>,
         function_type: impl AsRef<str>,
         description: Option<impl AsRef<str>>,
         syntax_example: Option<impl AsRef<str>>,
@@ -1298,7 +1298,7 @@ impl InformationSchemaParametersBuilder {
         specific_name: impl AsRef<str>,
         ordinal_position: u64,
         parameter_mode: impl AsRef<str>,
-        parameter_name: Option<impl AsRef<str>>,
+        parameter_name: Option<&(impl AsRef<str> + ?Sized)>,
         data_type: impl AsRef<str>,
         parameter_default: Option<impl AsRef<str>>,
         is_variadic: bool,

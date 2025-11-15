@@ -84,9 +84,6 @@ physical_plan
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/aggregate_repartition/dim.csv]]}, projection=[env], file_type=csv, has_header=true
 
 # Test 2: EXPLAIN query for Parquet table with GROUP BY
-# This plan differs from the one above and includes two consecutive repartitions — one round-robin and one hash —
-# which seems unnecessary. We may want to align it with the previous plan (push the round robin down or remove the round robin), or, if the input file is small,
-# avoid repartitioning altogether. A single partition should suffice for a single-step aggregate as the plan after this.
 
 query TT
 EXPLAIN SELECT env, count(*) FROM dim_parquet GROUP BY env;

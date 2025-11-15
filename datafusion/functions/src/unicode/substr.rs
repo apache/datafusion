@@ -27,9 +27,13 @@ use arrow::array::{
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::types::{
+    logical_int32, logical_int64, logical_string, NativeType,
+};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -44,7 +48,7 @@ use datafusion_macros::user_doc;
 | substr(Utf8("datafusion"),Int64(5),Int64(3)) |
 +----------------------------------------------+
 | fus                                          |
-+----------------------------------------------+ 
++----------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
     argument(
@@ -70,14 +74,30 @@ impl Default for SubstrFunc {
 
 impl SubstrFunc {
     pub fn new() -> Self {
+        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let int64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![TypeSignatureClass::Native(logical_int32())],
+            NativeType::Int64,
+        );
         Self {
-            signature: Signature::user_defined(Volatility::Immutable)
-                .with_parameter_names(vec![
-                    "str".to_string(),
-                    "start_pos".to_string(),
-                    "length".to_string(),
-                ])
-                .expect("valid parameter names"),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![string.clone(), int64.clone()]),
+                    TypeSignature::Coercible(vec![
+                        string.clone(),
+                        int64.clone(),
+                        int64.clone(),
+                    ]),
+                ],
+                Volatility::Immutable,
+            )
+            .with_parameter_names(vec![
+                "str".to_string(),
+                "start_pos".to_string(),
+                "length".to_string(),
+            ])
+            .expect("valid parameter names"),
             aliases: vec![String::from("substring")],
         }
     }
@@ -110,72 +130,6 @@ impl ScalarUDFImpl for SubstrFunc {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() < 2 || arg_types.len() > 3 {
-            return plan_err!(
-                "The {} function requires 2 or 3 arguments, but got {}.",
-                self.name(),
-                arg_types.len()
-            );
-        }
-        let first_data_type = match &arg_types[0] {
-            DataType::Null => Ok(DataType::Utf8),
-            DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(arg_types[0].clone()),
-            DataType::Dictionary(key_type, value_type) => {
-                if key_type.is_integer() {
-                    match value_type.as_ref() {
-                        DataType::Null => Ok(DataType::Utf8),
-                        DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(*value_type.clone()),
-                        _ => plan_err!(
-                                "The first argument of the {} function can only be a string, but got {:?}.",
-                                self.name(),
-                                arg_types[0]
-                        ),
-                    }
-                } else {
-                    plan_err!(
-                        "The first argument of the {} function can only be a string, but got {:?}.",
-                        self.name(),
-                        arg_types[0]
-                    )
-                }
-            }
-            _ => plan_err!(
-                "The first argument of the {} function can only be a string, but got {:?}.",
-                self.name(),
-                arg_types[0]
-            )
-        }?;
-
-        if ![DataType::Int64, DataType::Int32, DataType::Null].contains(&arg_types[1]) {
-            return plan_err!(
-                "The second argument of the {} function can only be an integer, but got {:?}.",
-                self.name(),
-                arg_types[1]
-            );
-        }
-
-        if arg_types.len() == 3
-            && ![DataType::Int64, DataType::Int32, DataType::Null].contains(&arg_types[2])
-        {
-            return plan_err!(
-                "The third argument of the {} function can only be an integer, but got {:?}.",
-                self.name(),
-                arg_types[2]
-            );
-        }
-
-        if arg_types.len() == 2 {
-            Ok(vec![first_data_type.to_owned(), DataType::Int64])
-        } else {
-            Ok(vec![
-                first_data_type.to_owned(),
-                DataType::Int64,
-                DataType::Int64,
-            ])
-        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {

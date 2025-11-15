@@ -53,8 +53,7 @@ const ENCRYPTION_FACTORY_ID: &str = "example.mock_kms_encryption";
 /// which is not a secure way to store encryption keys.
 /// For production use, it is recommended to use a key-management service (KMS) to encrypt
 /// data encryption keys.
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn parquet_encrypted_with_kms() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Register an `EncryptionFactory` implementation to be used for Parquet encryption

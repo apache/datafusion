@@ -26,19 +26,21 @@ use datafusion_expr::{
 use std::any::Any;
 use std::sync::Arc;
 
-/// <https://spark.apache.org/docs/latest/api/sql/index.html#expm1>
+static CSC_FUNCTION_NAME: &str = "csc";
+
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#csc>
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkExpm1 {
+pub struct SparkCsc {
     signature: Signature,
 }
 
-impl Default for SparkExpm1 {
+impl Default for SparkCsc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkExpm1 {
+impl SparkCsc {
     pub fn new() -> Self {
         Self {
             signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
@@ -46,13 +48,13 @@ impl SparkExpm1 {
     }
 }
 
-impl ScalarUDFImpl for SparkExpm1 {
+impl ScalarUDFImpl for SparkCsc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "expm1"
+        CSC_FUNCTION_NAME
     }
 
     fn signature(&self) -> &Signature {
@@ -64,29 +66,32 @@ impl ScalarUDFImpl for SparkExpm1 {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [arg] = take_function_args(self.name(), args.args)?;
-        match arg {
-            ColumnarValue::Scalar(ScalarValue::Float64(value)) => Ok(
-                ColumnarValue::Scalar(ScalarValue::Float64(value.map(|x| x.exp_m1()))),
-            ),
-            ColumnarValue::Array(array) => match array.data_type() {
-                DataType::Float64 => Ok(ColumnarValue::Array(Arc::new(
-                    array
-                        .as_primitive::<Float64Type>()
-                        .unary::<_, Float64Type>(|x| x.exp_m1()),
-                )
-                    as ArrayRef)),
-                other => Err(unsupported_data_type_exec_err(
-                    "expm1",
-                    format!("{}", DataType::Float64).as_str(),
-                    other,
-                )),
-            },
+        let [arg] = take_function_args(self.name(), &args.args)?;
+        spark_csc(arg)
+    }
+}
+
+fn spark_csc(arg: &ColumnarValue) -> Result<ColumnarValue> {
+    match arg {
+        ColumnarValue::Scalar(ScalarValue::Float64(value)) => Ok(ColumnarValue::Scalar(
+            ScalarValue::Float64(value.map(|x| 1.0 / x.sin())),
+        )),
+        ColumnarValue::Array(array) => match array.data_type() {
+            DataType::Float64 => Ok(ColumnarValue::Array(Arc::new(
+                array
+                    .as_primitive::<Float64Type>()
+                    .unary::<_, Float64Type>(|x| 1.0 / x.sin()),
+            ) as ArrayRef)),
             other => Err(unsupported_data_type_exec_err(
-                "expm1",
+                CSC_FUNCTION_NAME,
                 format!("{}", DataType::Float64).as_str(),
-                &other.data_type(),
+                other,
             )),
-        }
+        },
+        other => Err(unsupported_data_type_exec_err(
+            CSC_FUNCTION_NAME,
+            format!("{}", DataType::Float64).as_str(),
+            &other.data_type(),
+        )),
     }
 }

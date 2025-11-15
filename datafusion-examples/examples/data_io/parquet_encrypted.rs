@@ -25,8 +25,8 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use std::sync::Arc;
 use tempfile::TempDir;
 
-#[tokio::main]
-async fn main() -> datafusion::common::Result<()> {
+/// Read and write encrypted Parquet files using DataFusion
+pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
     // The SessionContext is the main high level API for interacting with DataFusion
     let ctx = SessionContext::new();
 
