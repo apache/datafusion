@@ -169,6 +169,15 @@ To generate the changelog, set the `GITHUB_TOKEN` environment variable and then 
 providing two commit ids or tags followed by the version number of the release being created. For example,
 to generate a change log of all changes between the `50.3.0` tag and `branch-51`, in preparation for release `51.0.0`:
 
+> [!NOTE]
+>
+> If you see errors such as the following, it is likely due to not setting
+> the `GITHUB_TOKEN` environment variable.
+>
+> ```
+> Request GET ... failed with 403: rate limit exceeded
+> ```
+
 ```shell
 export GITHUB_TOKEN=<your-token-here>
 ./dev/release/generate-changelog.py 50.3.0 branch-51 51.0.0 > dev/changelog/51.0.0.md
