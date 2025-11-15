@@ -796,6 +796,15 @@ impl Stream for GroupedHashAggregateStream {
                         }
                         None => {
                             // inner is done, switching to `Done` state
+                            // Sanity check: when switching from SkippingAggregation to Done,
+                            // all groups should have already been emitted
+                            if !self.group_values.is_empty() {
+                                return Poll::Ready(Some(internal_err!(
+                                    "Switching from SkippingAggregation to Done with {} groups still in hash table. \
+                                    This is a bug - all groups should have been emitted before skip aggregation started.",
+                                    self.group_values.len()
+                                )));
+                            }
                             self.exec_state = ExecutionState::Done;
                         }
                     }
@@ -843,6 +852,13 @@ impl Stream for GroupedHashAggregateStream {
                 }
 
                 ExecutionState::Done => {
+                    // Sanity check: all groups should have been emitted by now
+                    if !self.group_values.is_empty() {
+                        return Poll::Ready(Some(internal_err!(
+                            "AggregateStream was in Done state with {} groups left in hash table. \
+                            This is a bug - all groups should have been emitted before entering Done state.",
+                            self.group_values.len())));
+                    }
                     // release the memory reservation since sending back output batch itself needs
                     // some memory reservation, so make some room for it.
                     self.clear_all();
