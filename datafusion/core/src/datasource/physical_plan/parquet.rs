@@ -163,7 +163,7 @@ mod tests {
 
             let mut source = ParquetSource::new(table_schema);
             if let Some(predicate) = predicate {
-                source = source.with_predicate(&predicate);
+                source = source.with_predicate(predicate);
             }
 
             if self.pushdown_predicate {

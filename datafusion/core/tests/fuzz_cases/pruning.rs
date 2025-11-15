@@ -276,7 +276,7 @@ async fn execute_with_predicate(
     ctx: &SessionContext,
 ) -> Vec<String> {
     let parquet_source = if prune_stats {
-        ParquetSource::new(schema.clone()).with_predicate(&predicate)
+        ParquetSource::new(schema.clone()).with_predicate(predicate.clone())
     } else {
         ParquetSource::new(schema.clone())
     };

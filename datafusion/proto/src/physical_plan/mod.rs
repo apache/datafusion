@@ -714,7 +714,7 @@ impl protobuf::PhysicalPlanNode {
                 ParquetSource::new(table_schema).with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
-                source = source.with_predicate(&predicate);
+                source = source.with_predicate(predicate);
             }
             let base_config = parse_protobuf_file_scan_config(
                 base_conf,

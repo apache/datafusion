@@ -887,7 +887,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let file_source = Arc::new(
         ParquetSource::new(Arc::clone(&file_schema))
             .with_table_parquet_options(options)
-            .with_predicate(&(predicate as Arc<dyn PhysicalExpr>)),
+            .with_predicate(predicate),
     );
 
     let scan_config =
@@ -947,7 +947,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
 
     let file_source = Arc::new(
         ParquetSource::new(Arc::clone(&file_schema))
-            .with_predicate(&(custom_predicate_expr as Arc<dyn PhysicalExpr>)),
+            .with_predicate(custom_predicate_expr),
     );
 
     let scan_config =

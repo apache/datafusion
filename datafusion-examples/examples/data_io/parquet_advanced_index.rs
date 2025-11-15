@@ -494,7 +494,7 @@ impl TableProvider for IndexTableProvider {
             ParquetSource::new(schema.clone())
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
-                .with_predicate(&predicate)
+                .with_predicate(predicate)
                 // provide the factory to create parquet reader without re-reading metadata
                 .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );

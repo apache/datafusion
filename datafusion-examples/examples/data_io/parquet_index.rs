@@ -242,7 +242,7 @@ impl TableProvider for IndexTableProvider {
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
         let source =
-            Arc::new(ParquetSource::new(self.schema()).with_predicate(&predicate));
+            Arc::new(ParquetSource::new(self.schema()).with_predicate(predicate));
         let mut file_scan_config_builder =
             FileScanConfigBuilder::new(object_store_url, source)
                 .with_projection_indices(projection.cloned())

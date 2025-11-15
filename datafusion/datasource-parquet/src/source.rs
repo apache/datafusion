@@ -105,7 +105,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// # let predicate = lit(true);
 /// let source = Arc::new(
 ///     ParquetSource::new(Arc::clone(&file_schema))
-///         .with_predicate(&predicate)
+///         .with_predicate(predicate)
 /// );
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
 /// let config = FileScanConfigBuilder::new(object_store_url, source)
@@ -334,9 +334,10 @@ impl ParquetSource {
     }
 
     /// Set predicate information
-    pub fn with_predicate(&self, predicate: &Arc<dyn PhysicalExpr>) -> Self {
+    #[expect(clippy::needless_pass_by_value)]
+    pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
-        conf.predicate = Some(Arc::clone(predicate));
+        conf.predicate = Some(Arc::clone(&predicate));
         conf
     }
 
@@ -804,7 +805,7 @@ mod tests {
         let predicate = lit(true);
 
         let parquet_source =
-            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(&predicate);
+            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
         // same value. but filter() call Arc::clone internally
         assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
     }

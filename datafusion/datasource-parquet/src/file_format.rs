@@ -1072,11 +1072,12 @@ pub async fn fetch_statistics(
     since = "50.0.0",
     note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
-    table_schema: &SchemaRef,
+    table_schema: SchemaRef,
 ) -> Result<Statistics> {
-    DFParquetMetadata::statistics_from_parquet_metadata(metadata, table_schema)
+    DFParquetMetadata::statistics_from_parquet_metadata(metadata, &table_schema)
 }
 
 /// Implements [`DataSink`] for writing to a parquet file.
@@ -1500,10 +1501,9 @@ fn spawn_parquet_parallel_serialization_task(
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
-    parallel_options: &ParallelParquetWriterOptions,
+    parallel_options: Arc<ParallelParquetWriterOptions>,
     pool: Arc<dyn MemoryPool>,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
-    let parallel_options = parallel_options.clone();
     SpawnedTask::spawn(async move {
         let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
         let max_row_group_rows = writer_props.max_row_group_size();
@@ -1672,7 +1672,7 @@ async fn output_single_parquet_file_parallelized(
         serialize_tx,
         Arc::clone(&output_schema),
         Arc::clone(&arc_props),
-        &parallel_options,
+        parallel_options.into(),
         Arc::clone(&pool),
     );
     let parquet_meta_data = concatenate_parallel_row_groups(
