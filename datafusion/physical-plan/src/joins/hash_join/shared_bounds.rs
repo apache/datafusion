@@ -75,7 +75,7 @@ impl PartitionBounds {
 /// Creates a bounds predicate from partition bounds.
 ///
 /// Returns `None` if no column bounds are available.
-/// Returns a combined predicate (col >= min AND col <= max) for all columns with bounds.
+/// Returns a bound predicate (col >= min AND col <= max) for all key columns in the ON expression that have computed bounds from the build phase.
 fn create_bounds_predicate(
     on_right: &[PhysicalExprRef],
     bounds: &PartitionBounds,
