@@ -21,7 +21,7 @@ use datafusion::{
 };
 use substrait::proto::expression::window_function::BoundsType;
 
-/// Wrapper for the Substrait `BoundsType` that adds the `GROUPS` (value 3)
+/// Wrapper for the Substrait `BoundsType` to add the `GROUPS` (value 3)
 /// variant which `substrait::proto::expression::window_function::BoundsType`
 /// currently does not support. This type centralizes conversions to/from the
 /// Substrait `i32` representation and to DataFusion's `WindowFrameUnits`.
