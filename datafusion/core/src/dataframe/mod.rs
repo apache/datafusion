@@ -2330,7 +2330,7 @@ impl DataFrame {
     }
 
     /// Cache DataFrame as a memory table by default, or use
-    /// a [`CacheProducer`] if configured via [`SessionState`].
+    /// a [`crate::execution::context::CacheProducer`] if configured via [`SessionState`].
     ///
     /// ```
     /// # use datafusion::prelude::*;

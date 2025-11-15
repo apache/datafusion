@@ -1893,7 +1893,7 @@ pub enum RegisterFunction {
 /// Interface for applying a custom caching strategy.
 /// Implement this trait and register via [`SessionState`]
 /// to create a custom logical node for caching.
-/// Additionally, a custom [`ExtensionPlanner`]/[`QueryPlanner`]
+/// Additionally, a custom [`crate::physical_planner::ExtensionPlanner`]/[`QueryPlanner`]
 /// need to be implemented to handle plans containing such node.
 pub trait CacheProducer: Debug + Sync + Send {
     /// Create a custom logical node for caching
