@@ -31,10 +31,6 @@ use std::sync::Arc;
 /// 2. removes unions with a single input.
 pub struct OptimizeUnions;
 
-// Backwards compatibility name
-#[deprecated(since = "52.0.0", note = "Please use OptimizeUnions instead")]
-pub type EliminateNestedUnion = OptimizeUnions;
-
 impl OptimizeUnions {
     #[allow(missing_docs)]
     pub fn new() -> Self {

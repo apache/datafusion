@@ -51,6 +51,12 @@ pub mod eliminate_filter;
 pub mod eliminate_group_by_constant;
 pub mod eliminate_join;
 pub mod eliminate_limit;
+#[deprecated(since = "52.0.0", note = "Please use OptimizeUnions instead")]
+pub mod eliminate_nested_union {
+    use crate::optimize_unions::OptimizeUnions;
+    #[deprecated(since = "52.0.0", note = "Please use OptimizeUnions instead")]
+    pub type EliminateNestedUnion = OptimizeUnions;
+}
 pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
