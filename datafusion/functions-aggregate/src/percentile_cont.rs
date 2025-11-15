@@ -34,16 +34,15 @@ use arrow::{
 
 use arrow::array::ArrowNativeTypeOp;
 
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, Volatility,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
@@ -140,20 +139,8 @@ impl Default for PercentileCont {
 
 impl PercentileCont {
     pub fn new() -> Self {
-        let mut variants = Vec::with_capacity(NUMERICS.len());
-
-        let list_f64 =
-            DataType::List(Arc::new(Field::new("item", DataType::Float64, true)));
-
-        for num in NUMERICS {
-            // Accept any numeric value paired with a float64 percentile
-            variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
-            //Accept any numeric value paired with a list of float64 percentiles
-            variants.push(TypeSignature::Exact(vec![num.clone(), list_f64.clone()]));
-        }
-
         Self {
-            signature: Signature::one_of(variants, Volatility::Immutable)
+            signature: Signature::user_defined(Volatility::Immutable)
                 .with_parameter_names(vec!["expr".to_string(), "percentile".to_string()])
                 .expect("valid parameter names for percentile_cont"),
             aliases: vec![String::from("quantile_cont")],
@@ -234,6 +221,48 @@ impl AggregateUDFImpl for PercentileCont {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        // We expect exactly two arguments:
+        //   0: value expression (any numeric)
+        //   1: percentile (Float64 or List(Float64))
+        let [value_ty, perc_ty] = take_function_args(self.name(), arg_types)?;
+        // Coerce the value being aggregated to Float64
+        let coerced_value_ty = match value_ty {
+        // signed ints
+         DataType::Int8 |  DataType::Int16 | DataType::Int32 | DataType::Int64 |
+        // unsigned ints
+        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 |
+        // floats
+        DataType::Float64 => DataType::Float64,
+        DataType::Float32 => DataType::Float32,
+
+        other => {
+            return plan_err!(
+                "PERCENTILE_CONT does not support value expression of type {other}."
+            );
+        }
+    };
+
+        // Percentile argument: Float64 or List(Float64)
+        let coerced_perc_ty = match perc_ty {
+            DataType::Float64 => DataType::Float64,
+
+            DataType::List(field) if matches!(field.data_type(), DataType::Float64) => {
+                // keep the list + its nullability as-is
+                DataType::List(Arc::clone(field))
+            }
+
+            other => {
+                return plan_err!(
+                "PERCENTILE_CONT percentile argument must be Float64 or List(Float64), \
+                 got {other}."
+            );
+            }
+        };
+
+        Ok(vec![coerced_value_ty, coerced_perc_ty])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -812,7 +841,7 @@ fn calculate_percentiles<T: ArrowNumericType>(
 }
 
 fn extract_percentile<T: ArrowNumericType>(
-    values: &Vec<<T as ArrowPrimitiveType>::Native>,
+    values: &[<T as ArrowPrimitiveType>::Native],
     len: usize,
     percentile: &f64,
 ) -> Option<<T as ArrowPrimitiveType>::Native> {
