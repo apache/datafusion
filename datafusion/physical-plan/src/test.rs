@@ -321,9 +321,7 @@ impl TestMemoryExec {
         assert_or_internal_err!(
             ambiguous_column.is_none(),
             "Column {:?} is not found in the original schema of the TestMemoryExec",
-            ambiguous_column
-                .as_ref()
-                .expect("checked by assert_or_internal_err!")
+            ambiguous_column.as_ref().unwrap()
         );
 
         // If there is a projection on the source, we also need to project orderings

@@ -63,7 +63,7 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    assert_eq_or_internal_err, plan_err, project_schema, DataFusionError, JoinSide,
+    assert_or_internal_err, plan_err, project_schema, DataFusionError, JoinSide,
     JoinType, NullEquality, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -913,23 +913,18 @@ impl ExecutionPlan for HashJoinExec {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
 
-        if self.mode == PartitionMode::Partitioned {
-            assert_eq_or_internal_err!(
-                left_partitions,
-                right_partitions,
-                "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
-                 consider using RepartitionExec"
-            );
-        }
+        assert_or_internal_err!(
+            self.mode != PartitionMode::Partitioned
+                || left_partitions == right_partitions,
+            "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+             consider using RepartitionExec"
+        );
 
-        if self.mode == PartitionMode::CollectLeft {
-            assert_eq_or_internal_err!(
-                left_partitions,
-                1,
-                "Invalid HashJoinExec, the output partition count of the left child must be 1 in CollectLeft mode,\
-                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
-            );
-        }
+        assert_or_internal_err!(
+            self.mode != PartitionMode::CollectLeft || left_partitions == 1,
+            "Invalid HashJoinExec, the output partition count of the left child must be 1 in CollectLeft mode,\
+             consider using CoalescePartitionsExec or the EnforceDistribution rule"
+        );
 
         let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
 
