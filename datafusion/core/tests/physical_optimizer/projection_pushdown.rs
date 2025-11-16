@@ -230,9 +230,10 @@ fn test_update_matching_exprs() -> Result<()> {
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
     for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
-        assert!(update_expr(&expr, &child_exprs, true)?
-            .unwrap()
-            .eq(&expected_expr));
+        assert_eq!(
+            &update_expr(&expr, &child_exprs, true)?.unwrap(),
+            &expected_expr
+        );
     }
 
     Ok(())
