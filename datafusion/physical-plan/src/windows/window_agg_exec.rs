@@ -42,7 +42,7 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
@@ -337,9 +337,11 @@ impl WindowAggStream {
         ordered_partition_by_indices: Vec<usize>,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
-        if window_expr[0].partition_by().len() != ordered_partition_by_indices.len() {
-            return internal_err!("All partition by columns should have an ordering");
-        }
+        assert_eq_or_internal_err!(
+            window_expr[0].partition_by().len(),
+            ordered_partition_by_indices.len(),
+            "All partition by columns should have an ordering"
+        );
         Ok(Self {
             schema,
             input,
