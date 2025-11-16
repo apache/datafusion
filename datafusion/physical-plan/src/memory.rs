@@ -32,7 +32,9 @@ use crate::{
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, DataFusionError, Result,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -224,16 +226,17 @@ impl LazyMemoryExec {
     }
 
     pub fn try_set_partitioning(&mut self, partitioning: Partitioning) -> Result<()> {
-        if partitioning.partition_count() != self.batch_generators.len() {
-            internal_err!(
-                "Partition count must match generator count: {} != {}",
-                partitioning.partition_count(),
-                self.batch_generators.len()
-            )
-        } else {
-            self.cache.partitioning = partitioning;
-            Ok(())
-        }
+        let partition_count = partitioning.partition_count();
+        let generator_count = self.batch_generators.len();
+        assert_eq_or_internal_err!(
+            partition_count,
+            generator_count,
+            "Partition count must match generator count: {} != {}",
+            partition_count,
+            generator_count
+        );
+        self.cache.partitioning = partitioning;
+        Ok(())
     }
 
     pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
@@ -314,11 +317,11 @@ impl ExecutionPlan for LazyMemoryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.is_empty() {
-            Ok(self)
-        } else {
-            internal_err!("Children cannot be replaced in LazyMemoryExec")
-        }
+        assert_or_internal_err!(
+            children.is_empty(),
+            "Children cannot be replaced in LazyMemoryExec"
+        );
+        Ok(self)
     }
 
     fn execute(
@@ -326,13 +329,12 @@ impl ExecutionPlan for LazyMemoryExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition >= self.batch_generators.len() {
-            return internal_err!(
-                "Invalid partition {} for LazyMemoryExec with {} partitions",
-                partition,
-                self.batch_generators.len()
-            );
-        }
+        assert_or_internal_err!(
+            partition < self.batch_generators.len(),
+            "Invalid partition {} for LazyMemoryExec with {} partitions",
+            partition,
+            self.batch_generators.len()
+        );
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
