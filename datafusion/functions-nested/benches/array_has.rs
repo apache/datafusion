@@ -25,6 +25,7 @@ use datafusion_functions_nested::expr_fn::{
 };
 use std::hint::black_box;
 
+// If not explicitly stated, `array` and `array_size` refer to the haystack array.
 fn criterion_benchmark(c: &mut Criterion) {
     // Test different array sizes
     let array_sizes = vec![1, 10, 100, 1000, 10000];
