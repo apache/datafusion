@@ -154,7 +154,7 @@ env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.16.0", features = ["raw-entry"] }
-hashbrown_014 = { package="hashbrown", version = "0.14.5", features = ["raw"] }
+hashbrown_014 = { package = "hashbrown", version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
 indexmap = "2.12.0"
 insta = { version = "1.43.2", features = ["glob", "filters"] }
