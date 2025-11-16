@@ -194,7 +194,7 @@ fn bench_array_has_strings(c: &mut Criterion) {
                 .map(|i| lit(format!("TICKER{i:04}")))
                 .collect::<Vec<_>>();
             let list_array = make_array(array);
-            let needle = lit("TICKER0050");
+            let needle = lit("TICKER0005");
 
             b.iter(|| black_box(array_has(list_array.clone(), needle.clone())))
         });
