@@ -595,8 +595,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     })
                     .collect();
 
-                let arrays =
-                    self.build_struct_array(&rows, parent_field_name, fields)?;
+                let arrays = self.build_struct_array(&rows, parent_field_name, fields)?;
                 let data_type = DataType::Struct(fields.clone());
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
@@ -1749,23 +1748,23 @@ mod test {
           ]
         }"#,
         )
-            .unwrap();
+        .unwrap();
 
         let r1 = apache_avro::to_value(serde_json::json!({
-        "items": [
-            {
-                "id": 1,
-                "name": "first"
-            },
-            {
-                "id": 2,
-                "name": "second"
-            }
-        ]
-    }))
-            .unwrap()
-            .resolve(&schema)
-            .unwrap();
+            "items": [
+                {
+                    "id": 1,
+                    "name": "first"
+                },
+                {
+                    "id": 2,
+                    "name": "second"
+                }
+            ]
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
 
         let mut w = apache_avro::Writer::new(&schema, vec![]);
         w.append(r1).unwrap();
@@ -1775,7 +1774,7 @@ mod test {
         let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
             "items",
             DataType::List(Arc::new(Field::new(
-                "item",  // This is NOT "element"
+                "item", // This is NOT "element"
                 DataType::Struct(Fields::from(vec![
                     Field::new("id", DataType::Int64, false),
                     Field::new("name", DataType::Utf8, false),
