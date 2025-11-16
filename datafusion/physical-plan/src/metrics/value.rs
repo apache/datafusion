@@ -437,6 +437,15 @@ impl PruningMetrics {
 pub struct RatioMetrics {
     part: Arc<AtomicUsize>,
     total: Arc<AtomicUsize>,
+    merge_strategy: RatioMergeStrategy,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum RatioMergeStrategy {
+    #[default]
+    AddPartAddTotal,
+    AddPartSetTotal,
+    SetPartAddTotal,
 }
 
 impl RatioMetrics {
@@ -445,7 +454,13 @@ impl RatioMetrics {
         Self {
             part: Arc::new(AtomicUsize::new(0)),
             total: Arc::new(AtomicUsize::new(0)),
+            merge_strategy: RatioMergeStrategy::AddPartAddTotal,
         }
+    }
+
+    pub fn with_merge_strategy(mut self, merge_strategy: RatioMergeStrategy) -> Self {
+        self.merge_strategy = merge_strategy;
+        self
     }
 
     /// Add `n` to the numerator (`part`) value
@@ -458,10 +473,32 @@ impl RatioMetrics {
         self.total.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Set the numerator (`part`) value to `n`, overwriting any existing value
+    pub fn set_part(&self, n: usize) {
+        self.part.store(n, Ordering::Relaxed);
+    }
+
+    /// Set the denominator (`total`) value to `n`, overwriting any existing value
+    pub fn set_total(&self, n: usize) {
+        self.total.store(n, Ordering::Relaxed);
+    }
+
     /// Merge the value from `other` into `self`
     pub fn merge(&self, other: &Self) {
-        self.add_part(other.part());
-        self.add_total(other.total());
+        match self.merge_strategy {
+            RatioMergeStrategy::AddPartAddTotal => {
+                self.add_part(other.part());
+                self.add_total(other.total());
+            }
+            RatioMergeStrategy::AddPartSetTotal => {
+                self.add_part(other.part());
+                self.set_total(other.total());
+            }
+            RatioMergeStrategy::SetPartAddTotal => {
+                self.set_part(other.part());
+                self.add_total(other.total());
+            }
+        }
     }
 
     /// Return the numerator (`part`) value
@@ -784,10 +821,17 @@ impl MetricValue {
                 name: name.clone(),
                 pruning_metrics: PruningMetrics::new(),
             },
-            Self::Ratio { name, .. } => Self::Ratio {
-                name: name.clone(),
-                ratio_metrics: RatioMetrics::new(),
-            },
+            Self::Ratio {
+                name,
+                ratio_metrics,
+            } => {
+                let merge_strategy = ratio_metrics.merge_strategy.clone();
+                Self::Ratio {
+                    name: name.clone(),
+                    ratio_metrics: RatioMetrics::new()
+                        .with_merge_strategy(merge_strategy),
+                }
+            }
             Self::Custom { name, value } => Self::Custom {
                 name: name.clone(),
                 value: value.new_empty(),
@@ -1138,6 +1182,67 @@ mod tests {
         tiny_ratio_metrics.add_part(1);
         tiny_ratio_metrics.add_total(3000);
         assert_eq!("0.033% (1/3000)", tiny_ratio.to_string());
+    }
+
+    #[test]
+    fn test_ratio_set_methods() {
+        let ratio_metrics = RatioMetrics::new();
+
+        // Ensure set methods don't increment
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_total(40);
+        ratio_metrics.set_total(40);
+        assert_eq!("25% (10/40)", ratio_metrics.to_string());
+
+        let ratio_metrics = RatioMetrics::new();
+
+        // Calling set should change the value
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_part(30);
+        ratio_metrics.set_total(40);
+        ratio_metrics.set_total(50);
+        assert_eq!("60% (30/50)", ratio_metrics.to_string());
+    }
+
+    #[test]
+    fn test_ratio_merge_strategy() {
+        // Test AddPartSetTotal strategy
+        let ratio_metrics1 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
+
+        ratio_metrics1.set_part(10);
+        ratio_metrics1.set_total(40);
+        assert_eq!("25% (10/40)", ratio_metrics1.to_string());
+        let ratio_metrics2 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(40);
+        assert_eq!("50% (20/40)", ratio_metrics2.to_string());
+
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("75% (30/40)", ratio_metrics1.to_string());
+
+        // Test SetPartAddTotal strategy
+        let ratio_metrics1 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::SetPartAddTotal);
+        ratio_metrics1.set_part(20);
+        ratio_metrics1.set_total(50);
+        let ratio_metrics2 = RatioMetrics::new();
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(50);
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("20% (20/100)", ratio_metrics1.to_string());
+
+        // Test AddPartAddTotal strategy (default)
+        let ratio_metrics1 = RatioMetrics::new();
+        ratio_metrics1.set_part(20);
+        ratio_metrics1.set_total(50);
+        let ratio_metrics2 = RatioMetrics::new();
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(50);
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("40% (40/100)", ratio_metrics1.to_string());
     }
 
     #[test]

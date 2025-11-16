@@ -35,8 +35,7 @@ use std::sync::{Arc, Mutex};
 /// level access control scheme by introducing a filter to the query.
 ///
 /// See [optimizer_rule.rs] for an example of a optimizer rule
-#[tokio::main]
-pub async fn main() -> Result<()> {
+pub async fn analyzer_rule() -> Result<()> {
     // AnalyzerRules run before OptimizerRules.
     //
     // DataFusion includes several built in AnalyzerRules for tasks such as type

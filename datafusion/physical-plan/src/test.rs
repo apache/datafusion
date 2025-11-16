@@ -37,7 +37,8 @@ use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
-    config::ConfigOptions, internal_err, project_schema, Result, Statistics,
+    assert_or_internal_err, config::ConfigOptions, project_schema, DataFusionError,
+    Result, Statistics,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::equivalence::{
@@ -317,12 +318,11 @@ impl TestMemoryExec {
                     .map(|field| field.name() != col.name())
                     .unwrap_or(true)
             });
-        if let Some(col) = ambiguous_column {
-            return internal_err!(
-                "Column {:?} is not found in the original schema of the TestMemoryExec",
-                col
-            );
-        }
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the TestMemoryExec",
+            ambiguous_column.as_ref().unwrap()
+        );
 
         // If there is a projection on the source, we also need to project orderings
         if let Some(projection) = &self.projection {

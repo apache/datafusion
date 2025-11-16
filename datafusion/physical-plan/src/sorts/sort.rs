@@ -57,8 +57,8 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, unwrap_or_internal_err, DataFusionError,
-    Result,
+    assert_or_internal_err, internal_datafusion_err, unwrap_or_internal_err,
+    DataFusionError, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -425,9 +425,10 @@ impl ExternalSorter {
                 (*max_record_batch_size).max(batch.get_sliced_size()?);
         }
 
-        if !globally_sorted_batches.is_empty() {
-            return internal_err!("This function consumes globally_sorted_batches, so it should be empty after taking.");
-        }
+        assert_or_internal_err!(
+            globally_sorted_batches.is_empty(),
+            "This function consumes globally_sorted_batches, so it should be empty after taking."
+        );
 
         Ok(())
     }
@@ -518,11 +519,10 @@ impl ExternalSorter {
     /// Sorts the in-memory batches and merges them into a single sorted run, then writes
     /// the result to spill files.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
-        if self.in_mem_batches.is_empty() {
-            return internal_err!(
-                "in_mem_batches must not be empty when attempting to sort and spill"
-            );
-        }
+        assert_or_internal_err!(
+            !self.in_mem_batches.is_empty(),
+            "in_mem_batches must not be empty when attempting to sort and spill"
+        );
 
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
@@ -534,11 +534,10 @@ impl ExternalSorter {
             self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
-        if !self.in_mem_batches.is_empty() {
-            return internal_err!(
-                "in_mem_batches should be empty after constructing sorted stream"
-            );
-        }
+        assert_or_internal_err!(
+            self.in_mem_batches.is_empty(),
+            "in_mem_batches should be empty after constructing sorted stream"
+        );
         // 'global' here refers to all buffered batches when the memory limit is
         // reached. This variable will buffer the sorted batches after
         // sort-preserving merge and incrementally append to spill files.
@@ -570,11 +569,10 @@ impl ExternalSorter {
         // Sanity check after spilling
         let buffers_cleared_property =
             self.in_mem_batches.is_empty() && globally_sorted_batches.is_empty();
-        if !buffers_cleared_property {
-            return internal_err!(
-                "in_mem_batches and globally_sorted_batches should be cleared before"
-            );
-        }
+        assert_or_internal_err!(
+            buffers_cleared_property,
+            "in_mem_batches and globally_sorted_batches should be cleared before"
+        );
 
         // Reserve headroom for next sort/merge
         self.reserve_memory_for_merge()?;

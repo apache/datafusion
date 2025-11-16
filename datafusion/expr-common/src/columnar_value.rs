@@ -247,7 +247,8 @@ impl ColumnarValue {
                         Some(array_len)
                     } else {
                         return internal_err!(
-                            "Arguments has mixed length. Expected length: {array_len}, found length: {}", a.len()
+                            "Arguments has mixed length. Expected length: {array_len}, found length: {}",
+                            a.len()
                         );
                     }
                 }

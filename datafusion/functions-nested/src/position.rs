@@ -37,7 +37,9 @@ use arrow::array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
+use datafusion_common::{
+    assert_or_internal_err, exec_err, utils::take_function_args, DataFusionError, Result,
+};
 use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};
@@ -172,13 +174,11 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
 
     // if `start_from` index is out of bounds, return error
     for (arr, &from) in list_array.iter().zip(arr_from.iter()) {
-        if let Some(arr) = arr {
-            if from < 0 || from as usize > arr.len() {
-                return internal_err!("start_from index out of bounds");
-            }
-        } else {
-            // We will get null if we got null in the array, so we don't need to check
-        }
+        // If `arr` is `None`: we will get null if we got null in the array, so we don't need to check
+        assert_or_internal_err!(
+            arr.is_none_or(|arr| from >= 0 && (from as usize) <= arr.len()),
+            "start_from index out of bounds"
+        );
     }
 
     generic_position::<O>(list_array, element_array, arr_from)

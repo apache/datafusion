@@ -25,6 +25,27 @@
 
 You can see the current [status of the `52.0.0` release here](https://github.com/apache/datafusion/issues/18566)
 
+### Planner now requires explicit opt-in for WITHIN GROUP syntax
+
+The SQL planner now enforces the aggregate UDF contract more strictly: the
+`WITHIN GROUP (ORDER BY ...)` syntax is accepted only if the aggregate UDAF
+explicitly advertises support by returning `true` from
+`AggregateUDFImpl::supports_within_group_clause()`.
+
+Previously the planner forwarded a `WITHIN GROUP` clause to order-sensitive
+aggregates even when they did not implement ordered-set semantics, which could
+cause queries such as `SUM(x) WITHIN GROUP (ORDER BY x)` to plan successfully.
+This behavior was too permissive and has been changed to match PostgreSQL and
+the documented semantics.
+
+Migration: If your UDAF intentionally implements ordered-set semantics and
+wants to accept the `WITHIN GROUP` SQL syntax, update your implementation to
+return `true` from `supports_within_group_clause()` and handle the ordering
+semantics in your accumulator implementation. If your UDAF is merely
+order-sensitive (but not an ordered-set aggregate), do not advertise
+`supports_within_group_clause()` and clients should use alternative function
+signatures (for example, explicit ordering as a function argument) instead.
+
 ### `AggregateUDFImpl::supports_null_handling_clause` now defaults to `false`
 
 This method specifies whether an aggregate function allows `IGNORE NULLS`/`RESPECT NULLS`

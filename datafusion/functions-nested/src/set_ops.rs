@@ -29,7 +29,10 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
+    DataFusionError, Result,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -353,9 +356,11 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
         return general_array_distinct::<OffsetSize>(l, &field);
     }
 
-    if l.value_type() != r.value_type() {
-        return internal_err!("{set_op:?} is not implemented for '{l:?}' and '{r:?}'");
-    }
+    assert_eq_or_internal_err!(
+        l.value_type(),
+        r.value_type(),
+        "{set_op:?} is not implemented for '{l:?}' and '{r:?}'"
+    );
 
     let mut offsets = vec![OffsetSize::usize_as(0)];
     let mut new_arrays = vec![];

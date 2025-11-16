@@ -40,7 +40,8 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+    assert_eq_or_internal_err, internal_datafusion_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
@@ -189,12 +190,12 @@ impl AggregateUDFImpl for Median {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let num_args = args.exprs.len();
-        if num_args != 1 {
-            return internal_err!(
-                "median should only have 1 arg, but found num args:{}",
-                args.exprs.len()
-            );
-        }
+        assert_eq_or_internal_err!(
+            num_args,
+            1,
+            "median should only have 1 arg, but found num args:{}",
+            num_args
+        );
 
         let dt = args.expr_fields[0].data_type().clone();
 
