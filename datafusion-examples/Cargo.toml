@@ -35,14 +35,6 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
-[[example]]
-name = "dataframe_to_s3"
-path = "examples/external_dependency/dataframe-to-s3.rs"
-
-[[example]]
-name = "query_aws_s3"
-path = "examples/external_dependency/query-aws-s3.rs"
-
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:

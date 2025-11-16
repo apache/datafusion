@@ -60,7 +60,7 @@ cargo run --example dataframe
 - [`examples/custom_data_source/custom_datasource.rs`](examples/custom_data_source/custom_datasource.rs): Run queries against a custom datasource (TableProvider)
 - [`examples/custom_data_source/custom_file_casts.rs`](examples/custom_data_source/custom_file_casts.rs): Implement custom casting rules to adapt file schemas
 - [`examples/custom_data_source/custom_file_format.rs`](examples/custom_data_source/custom_file_format.rs): Write data to a custom file format
-- [`dataframe-to-s3.rs`](examples/external_dependency/dataframe-to-s3.rs): Run a query using a DataFrame against a parquet file from s3 and writing back to s3
+- [`examples/external_dependency/dataframe_to_s3.rs`](examples/external_dependency/dataframe_to_s3.rs): Run a query using a DataFrame against a parquet file from s3 and writing back to s3
 - [`dataframe.rs`](examples/dataframe.rs): Run a query using a DataFrame API against parquet files, csv files, and in-memory data, including multiple subqueries. Also demonstrates the various methods to write out a DataFrame to a table, parquet file, csv file, and json file.
 - [`examples/builtin_functions/date_time`](examples/builtin_functions/date_time.rs): Examples of date-time related functions and queries
 - [`default_column_values.rs`](examples/default_column_values.rs): Implement custom default value handling for missing columns using field metadata and PhysicalExprAdapter
@@ -82,7 +82,7 @@ cargo run --example dataframe
 - [`examples/query_planning/planner_api.rs`](examples/query_planning/planner_api.rs) APIs to manipulate logical and physical plans
 - [`examples/query_planning/pruning.rs`](examples/query_planning/pruning.rs): Use pruning to rule out files based on statistics
 - [`examples/query_planning/thread_pools.rs`](examples/query_planning/thread_pools.rs): Demonstrates TrackConsumersPool for memory tracking and debugging with enhanced error messages and shows how to implement memory-aware ExecutionPlan with memory reservation and spilling
-- [`query-aws-s3.rs`](examples/external_dependency/query-aws-s3.rs): Configure `object_store` and run a query against files stored in AWS S3
+- [`examples/external_dependency/query_aws_s3.rs`](examples/external_dependency/query_aws_s3.rs): Configure `object_store` and run a query against files stored in AWS S3
 - [`examples/data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs): Configure `object_store` and run a query against files via HTTP
 - [`examples/builtin_functions/regexp.rs`](examples/builtin_functions/regexp.rs): Examples of using regular expression functions
 - [`examples/data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs): Examples of interfacing with a remote catalog (e.g. over a network)

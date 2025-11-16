@@ -28,14 +28,23 @@ use datafusion::prelude::*;
 use object_store::aws::AmazonS3Builder;
 use url::Url;
 
-/// This example demonstrates querying data from AmazonS3 and writing
-/// the result of a query back to AmazonS3
-#[tokio::main]
-async fn main() -> Result<()> {
+/// This example demonstrates querying data from Amazon S3 and writing
+/// the result of a query back to Amazon S3
+///
+/// The following environment variables must be defined:
+///
+/// - AWS_ACCESS_KEY_ID
+/// - AWS_SECRET_ACCESS_KEY
+///
+/// If you are using temporary session credentials (e.g. AWS SSO),
+/// also set:
+///
+/// - AWS_SESSION_TOKEN
+pub async fn dataframe_to_s3() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    //enter region and bucket to which your credentials have GET and PUT access
+    // enter region and bucket to which your credentials have GET and PUT access
     let region = "<bucket-region-here>";
     let bucket_name = "<bucket-name-here>";
 
@@ -44,6 +53,7 @@ async fn main() -> Result<()> {
         .with_region(region)
         .with_access_key_id(env::var("AWS_ACCESS_KEY_ID").unwrap())
         .with_secret_access_key(env::var("AWS_SECRET_ACCESS_KEY").unwrap())
+        .with_token(env::var("AWS_SESSION_TOKEN").unwrap_or_default())
         .build()?;
 
     let path = format!("s3://{bucket_name}");
@@ -66,13 +76,13 @@ async fn main() -> Result<()> {
         .write_parquet(&out_path, DataFrameWriteOptions::new(), None)
         .await?;
 
-    //write as JSON to s3
+    // write as JSON to s3
     let json_out = format!("s3://{bucket_name}/json_out");
     df.clone()
         .write_json(&json_out, DataFrameWriteOptions::new(), None)
         .await?;
 
-    //write as csv to s3
+    // write as csv to s3
     let csv_out = format!("s3://{bucket_name}/csv_out");
     df.write_csv(&csv_out, DataFrameWriteOptions::new(), None)
         .await?;
