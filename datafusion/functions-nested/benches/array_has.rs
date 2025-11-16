@@ -46,7 +46,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 fn bench_array_has(c: &mut Criterion, array_size: usize) {
-    let mut group = c.benchmark_group("array_has");
+    let mut group = c.benchmark_group("array_has_i64");
 
     // Benchmark: element found at beginning
     group.bench_with_input(
