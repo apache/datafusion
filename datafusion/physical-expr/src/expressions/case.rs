@@ -1316,7 +1316,7 @@ impl CaseExpr {
     fn with_lookup_table(
         &self,
         batch: &RecordBatch,
-        scalars_or_null_lookup: &LiteralLookupTable,
+        lookup_table: &LiteralLookupTable,
     ) -> Result<ColumnarValue> {
         let expr = self.body.expr.as_ref().unwrap();
         let evaluated_expression = expr.evaluate(batch)?;
@@ -1324,7 +1324,7 @@ impl CaseExpr {
         let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
         let evaluated_expression = evaluated_expression.to_array(1)?;
 
-        let output = scalars_or_null_lookup.evaluate_input(&evaluated_expression)?;
+        let output = lookup_table.map_input_to_output(&evaluated_expression)?;
 
         let result = if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(output.as_ref(), 0)?)

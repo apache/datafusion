@@ -202,7 +202,7 @@ impl LiteralLookupTable {
         })
     }
 
-    pub(in super::super) fn evaluate_input(
+    pub(in super::super) fn map_input_to_output(
         &self,
         expr_array: &ArrayRef,
     ) -> datafusion_common::Result<ArrayRef> {
