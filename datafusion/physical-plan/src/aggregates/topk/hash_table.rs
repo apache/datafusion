@@ -29,7 +29,7 @@ use arrow::datatypes::{i256, DataType};
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::Result;
 use half::f16;
-use hashbrown::raw::RawTable;
+use hashbrown_014::raw::RawTable;
 use std::fmt::Debug;
 use std::sync::Arc;
 

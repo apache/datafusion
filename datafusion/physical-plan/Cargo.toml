@@ -63,6 +63,7 @@ datafusion-physical-expr-common = { workspace = true }
 futures = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
+hashbrown_014 = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
