@@ -115,6 +115,7 @@ impl FileStream {
     /// Since file opening is mostly IO (and may involve a
     /// bunch of sequential IO), it can be parallelized with decoding.
     fn start_next_file(&mut self) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>)>> {
+        let _timer = self.baseline_metrics.elapsed_compute().timer();
         let part_file = self.file_iter.pop_front()?;
 
         let partition_values = part_file.partition_values.clone();
@@ -213,6 +214,7 @@ impl FileStream {
                         Some(Ok(batch)) => {
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
+                            let _timer = self.baseline_metrics.elapsed_compute().timer();
                             let result = self
                                 .pc_projector
                                 .project(batch, partition_values)
