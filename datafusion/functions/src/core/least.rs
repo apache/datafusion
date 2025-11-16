@@ -21,7 +21,9 @@ use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::cmp;
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -126,11 +128,11 @@ impl GreatestLeastOperator for LeastFunc {
 
         let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
-        if lhs.len() != rhs.len() {
-            return internal_err!(
-                "All arrays should have the same length for least comparison"
-            );
-        }
+        assert_eq_or_internal_err!(
+            lhs.len(),
+            rhs.len(),
+            "All arrays should have the same length for least comparison"
+        );
 
         let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_le());
 

@@ -38,7 +38,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
+    assert_or_internal_err, exec_err, not_impl_err, DFSchema, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -459,11 +460,10 @@ pub fn in_list(
     let expr_data_type = expr.data_type(schema)?;
     for list_expr in list.iter() {
         let list_expr_data_type = list_expr.data_type(schema)?;
-        if !DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type) {
-            return internal_err!(
-                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            );
-        }
+        assert_or_internal_err!(
+            DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type),
+            "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
+        );
     }
     let static_filter = try_cast_static_filter_to_set(&list, schema).ok();
     Ok(Arc::new(InListExpr::new(

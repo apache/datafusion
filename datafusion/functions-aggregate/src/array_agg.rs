@@ -32,7 +32,9 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{
     compare_rows, get_row_at_idx, take_function_args, SingleRowListArrayBuilder,
 };
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, exec_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -319,9 +321,7 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
 
-        if values.len() != 1 {
-            return internal_err!("expects single batch");
-        }
+        assert_eq_or_internal_err!(values.len(), 1, "expects single batch");
 
         let val = &values[0];
         let nulls = if self.ignore_nulls {
@@ -349,9 +349,7 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
 
-        if states.len() != 1 {
-            return internal_err!("expects single state");
-        }
+        assert_eq_or_internal_err!(states.len(), 1, "expects single state");
 
         let list_arr = as_list_array(&states[0])?;
 
@@ -472,9 +470,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        if states.len() != 1 {
-            return internal_err!("expects single state");
-        }
+        assert_eq_or_internal_err!(states.len(), 1, "expects single state");
 
         states[0]
             .as_list::<i32>()

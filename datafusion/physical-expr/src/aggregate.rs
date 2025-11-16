@@ -41,7 +41,10 @@ use crate::expressions::Column;
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_or_internal_err, internal_err, not_impl_err, DataFusionError, Result,
+    ScalarValue,
+};
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
@@ -198,9 +201,7 @@ impl AggregateExprBuilder {
             is_distinct,
             is_reversed,
         } = self;
-        if args.is_empty() {
-            return internal_err!("args should not be empty");
-        }
+        assert_or_internal_err!(!args.is_empty(), "args should not be empty");
 
         let ordering_types = order_bys
             .iter()

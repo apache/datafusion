@@ -43,28 +43,26 @@ use std::sync::Arc;
 /// The code in this example shows how to:
 ///
 /// 1. [`simple_expr_to_sql_demo`]: Create a simple expression [`Exprs`] with
-/// fluent API and convert to sql suitable for passing to another database
+///    fluent API and convert to sql suitable for passing to another database
 ///
 /// 2. [`simple_expr_to_pretty_sql_demo`] Create a simple expression
-/// [`Exprs`] with fluent API and convert to sql without extra parentheses,
-/// suitable for displaying to humans
+///    [`Exprs`] with fluent API and convert to sql without extra parentheses,
+///    suitable for displaying to humans
 ///
 /// 3. [`simple_expr_to_sql_demo_escape_mysql_style`]" Create a simple
-/// expression [`Exprs`] with fluent API and convert to sql escaping column
-/// names in MySQL style.
+///    expression [`Exprs`] with fluent API and convert to sql escaping column
+///    names in MySQL style.
 ///
 /// 4. [`simple_plan_to_sql_demo`]: Create a simple logical plan using the
-/// DataFrames API and convert to sql string.
+///    DataFrames API and convert to sql string.
 ///
 /// 5. [`round_trip_plan_to_sql_demo`]: Create a logical plan from a SQL string, modify it using the
-/// DataFrames API and convert it back to a  sql string.
+///    DataFrames API and convert it back to a  sql string.
 ///
 /// 6. [`unparse_my_logical_plan_as_statement`]: Create a custom logical plan and unparse it as a statement.
 ///
 /// 7. [`unparse_my_logical_plan_as_subquery`]: Create a custom logical plan and unparse it as a subquery.
-
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn plan_to_sql_examples() -> Result<()> {
     // See how to evaluate expressions
     simple_expr_to_sql_demo()?;
     simple_expr_to_pretty_sql_demo()?;

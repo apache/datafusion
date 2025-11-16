@@ -79,7 +79,7 @@ impl DiskManagerBuilder {
                 used_disk_space: Arc::new(AtomicU64::new(0)),
             }),
             DiskManagerMode::Directories(conf_dirs) => {
-                let local_dirs = create_local_dirs(conf_dirs)?;
+                let local_dirs = create_local_dirs(&conf_dirs)?;
                 debug!(
                     "Created local dirs {local_dirs:?} as DataFusion working directory"
                 );
@@ -188,7 +188,7 @@ impl DiskManager {
                 used_disk_space: Arc::new(AtomicU64::new(0)),
             })),
             DiskManagerConfig::NewSpecified(conf_dirs) => {
-                let local_dirs = create_local_dirs(conf_dirs)?;
+                let local_dirs = create_local_dirs(&conf_dirs)?;
                 debug!(
                     "Created local dirs {local_dirs:?} as DataFusion working directory"
                 );
@@ -408,7 +408,7 @@ impl Drop for RefCountedTempFile {
 }
 
 /// Setup local dirs by creating one new dir in each of the given dirs
-fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<Arc<TempDir>>> {
+fn create_local_dirs(local_dirs: &[PathBuf]) -> Result<Vec<Arc<TempDir>>> {
     local_dirs
         .iter()
         .map(|root| {
