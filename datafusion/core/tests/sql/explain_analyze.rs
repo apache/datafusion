@@ -887,6 +887,7 @@ async fn parquet_explain_analyze() {
         &formatted,
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
     );
+    assert_contains!(&formatted, "scan_efficiency_ratio=14% (259/1851)");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)
