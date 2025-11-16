@@ -20,129 +20,50 @@
 //!
 //! [`Int64Array`]: arrow::array::Int64Array
 //! [`Float64Array`]: arrow::array::Float64Array
-use std::collections::HashSet;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::mem::size_of_val;
-use std::sync::Arc;
 
-use ahash::RandomState;
 use arrow::array::types::ArrowPrimitiveType;
 use arrow::array::ArrayRef;
-use arrow::array::PrimitiveArray;
 use arrow::datatypes::DataType;
 
-use datafusion_common::cast::{as_list_array, as_primitive_array};
-use datafusion_common::utils::memory::estimate_memory_size;
-use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 
-use crate::utils::GenericDistinctBuffer;
+use crate::utils::{DistinctStorage, GenericDistinctBuffer};
 
+/// Unified distinct count accumulator for primitive types.
+///
+/// This accumulator works with any primitive type and uses the `DistinctStorage`
+/// trait to select the appropriate hashing strategy:
+/// - Native `HashSet<T>` for natively hashable types (integers, decimals, dates, timestamps)
+/// - `HashSet<Hashable<T>>` for types requiring special hashing (floats)
 #[derive(Debug)]
-pub struct PrimitiveDistinctCountAccumulator<T>
+pub struct PrimitiveDistinctCountAccumulator<T, S>
 where
     T: ArrowPrimitiveType + Send,
-    T::Native: Eq + Hash,
+    S: DistinctStorage<Native = T::Native>,
 {
-    values: HashSet<T::Native, RandomState>,
-    data_type: DataType,
+    values: GenericDistinctBuffer<T, S>,
 }
 
-impl<T> PrimitiveDistinctCountAccumulator<T>
+impl<T, S> PrimitiveDistinctCountAccumulator<T, S>
 where
     T: ArrowPrimitiveType + Send,
-    T::Native: Eq + Hash,
+    S: DistinctStorage<Native = T::Native>,
 {
     pub fn new(data_type: &DataType) -> Self {
         Self {
-            values: HashSet::default(),
-            data_type: data_type.clone(),
+            values: GenericDistinctBuffer::new(data_type.clone()),
         }
     }
 }
 
-impl<T> Accumulator for PrimitiveDistinctCountAccumulator<T>
+impl<T, S> Accumulator for PrimitiveDistinctCountAccumulator<T, S>
 where
     T: ArrowPrimitiveType + Send + Debug,
-    T::Native: Eq + Hash,
+    S: DistinctStorage<Native = T::Native>,
 {
-    fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
-        let arr = Arc::new(
-            PrimitiveArray::<T>::from_iter_values(self.values.iter().cloned())
-                .with_data_type(self.data_type.clone()),
-        );
-        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let arr = as_primitive_array::<T>(&values[0])?;
-        arr.iter().for_each(|value| {
-            if let Some(value) = value {
-                self.values.insert(value);
-            }
-        });
-
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-        assert_eq!(
-            states.len(),
-            1,
-            "count_distinct states must be single array"
-        );
-
-        let arr = as_list_array(&states[0])?;
-        arr.iter().try_for_each(|maybe_list| {
-            if let Some(list) = maybe_list {
-                let list = as_primitive_array::<T>(&list)?;
-                self.values.extend(list.values())
-            };
-            Ok(())
-        })
-    }
-
-    fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
-    }
-
-    fn size(&self) -> usize {
-        let num_elements = self.values.len();
-        let fixed_size = size_of_val(self) + size_of_val(&self.values);
-
-        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
-    }
-}
-
-#[derive(Debug)]
-pub struct FloatDistinctCountAccumulator<T: ArrowPrimitiveType> {
-    values: GenericDistinctBuffer<T>,
-}
-
-impl<T: ArrowPrimitiveType> FloatDistinctCountAccumulator<T> {
-    pub fn new() -> Self {
-        Self {
-            values: GenericDistinctBuffer::new(T::DATA_TYPE),
-        }
-    }
-}
-
-impl<T: ArrowPrimitiveType> Default for FloatDistinctCountAccumulator<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T: ArrowPrimitiveType + Debug> Accumulator for FloatDistinctCountAccumulator<T> {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         self.values.state()
     }
@@ -163,3 +84,9 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for FloatDistinctCountAccumulato
         size_of_val(self) + self.values.size()
     }
 }
+
+// Type alias for float distinct count accumulator (uses Hashable wrapper)
+pub type FloatDistinctCountAccumulator<T> = PrimitiveDistinctCountAccumulator<
+    T,
+    std::collections::HashSet<crate::utils::Hashable<<T as ArrowPrimitiveType>::Native>, ahash::RandomState>,
+>;

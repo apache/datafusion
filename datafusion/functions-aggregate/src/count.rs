@@ -49,6 +49,7 @@ use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::PrimitiveDistinctCountAccumulator,
     groups_accumulator::accumulate::accumulate_indices,
 };
+use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::binary_map::OutputType;
@@ -180,76 +181,124 @@ impl Count {
 fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
     match data_type {
         // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
-        DataType::Int8 => Box::new(PrimitiveDistinctCountAccumulator::<Int8Type>::new(
-            data_type,
-        )),
-        DataType::Int16 => Box::new(PrimitiveDistinctCountAccumulator::<Int16Type>::new(
-            data_type,
-        )),
-        DataType::Int32 => Box::new(PrimitiveDistinctCountAccumulator::<Int32Type>::new(
-            data_type,
-        )),
-        DataType::Int64 => Box::new(PrimitiveDistinctCountAccumulator::<Int64Type>::new(
-            data_type,
-        )),
-        DataType::UInt8 => Box::new(PrimitiveDistinctCountAccumulator::<UInt8Type>::new(
-            data_type,
-        )),
+        DataType::Int8 => Box::new(
+            PrimitiveDistinctCountAccumulator::<Int8Type, HashSet<i8, RandomState>>::new(
+                data_type,
+            ),
+        ),
+        DataType::Int16 => Box::new(
+            PrimitiveDistinctCountAccumulator::<Int16Type, HashSet<i16, RandomState>>::new(
+                data_type,
+            ),
+        ),
+        DataType::Int32 => Box::new(
+            PrimitiveDistinctCountAccumulator::<Int32Type, HashSet<i32, RandomState>>::new(
+                data_type,
+            ),
+        ),
+        DataType::Int64 => Box::new(
+            PrimitiveDistinctCountAccumulator::<Int64Type, HashSet<i64, RandomState>>::new(
+                data_type,
+            ),
+        ),
+        DataType::UInt8 => Box::new(
+            PrimitiveDistinctCountAccumulator::<UInt8Type, HashSet<u8, RandomState>>::new(
+                data_type,
+            ),
+        ),
         DataType::UInt16 => Box::new(
-            PrimitiveDistinctCountAccumulator::<UInt16Type>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<UInt16Type, HashSet<u16, RandomState>>::new(
+                data_type,
+            ),
         ),
         DataType::UInt32 => Box::new(
-            PrimitiveDistinctCountAccumulator::<UInt32Type>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<UInt32Type, HashSet<u32, RandomState>>::new(
+                data_type,
+            ),
         ),
         DataType::UInt64 => Box::new(
-            PrimitiveDistinctCountAccumulator::<UInt64Type>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<UInt64Type, HashSet<u64, RandomState>>::new(
+                data_type,
+            ),
         ),
-        DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
-            Decimal128Type,
-        >::new(data_type)),
-        DataType::Decimal256(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
-            Decimal256Type,
-        >::new(data_type)),
+        DataType::Decimal128(_, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Decimal128Type, HashSet<i128, RandomState>>::new(
+                data_type,
+            ),
+        ),
+        DataType::Decimal256(_, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<
+                Decimal256Type,
+                HashSet<arrow::datatypes::i256, RandomState>,
+            >::new(data_type),
+        ),
 
         DataType::Date32 => Box::new(
-            PrimitiveDistinctCountAccumulator::<Date32Type>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<Date32Type, HashSet<i32, RandomState>>::new(
+                data_type,
+            ),
         ),
         DataType::Date64 => Box::new(
-            PrimitiveDistinctCountAccumulator::<Date64Type>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<Date64Type, HashSet<i64, RandomState>>::new(
+                data_type,
+            ),
         ),
         DataType::Time32(TimeUnit::Millisecond) => Box::new(
-            PrimitiveDistinctCountAccumulator::<Time32MillisecondType>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<
+                Time32MillisecondType,
+                HashSet<i32, RandomState>,
+            >::new(data_type),
         ),
         DataType::Time32(TimeUnit::Second) => Box::new(
-            PrimitiveDistinctCountAccumulator::<Time32SecondType>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<Time32SecondType, HashSet<i32, RandomState>>::new(
+                data_type,
+            ),
         ),
         DataType::Time64(TimeUnit::Microsecond) => Box::new(
-            PrimitiveDistinctCountAccumulator::<Time64MicrosecondType>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<
+                Time64MicrosecondType,
+                HashSet<i64, RandomState>,
+            >::new(data_type),
         ),
         DataType::Time64(TimeUnit::Nanosecond) => Box::new(
-            PrimitiveDistinctCountAccumulator::<Time64NanosecondType>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<
+                Time64NanosecondType,
+                HashSet<i64, RandomState>,
+            >::new(data_type),
         ),
         DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(
-            PrimitiveDistinctCountAccumulator::<TimestampMicrosecondType>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<
+                TimestampMicrosecondType,
+                HashSet<i64, RandomState>,
+            >::new(data_type),
         ),
         DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(
-            PrimitiveDistinctCountAccumulator::<TimestampMillisecondType>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<
+                TimestampMillisecondType,
+                HashSet<i64, RandomState>,
+            >::new(data_type),
         ),
         DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
-            PrimitiveDistinctCountAccumulator::<TimestampNanosecondType>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<
+                TimestampNanosecondType,
+                HashSet<i64, RandomState>,
+            >::new(data_type),
         ),
         DataType::Timestamp(TimeUnit::Second, _) => Box::new(
-            PrimitiveDistinctCountAccumulator::<TimestampSecondType>::new(data_type),
+            PrimitiveDistinctCountAccumulator::<
+                TimestampSecondType,
+                HashSet<i64, RandomState>,
+            >::new(data_type),
         ),
 
         DataType::Float16 => {
-            Box::new(FloatDistinctCountAccumulator::<Float16Type>::new())
+            Box::new(FloatDistinctCountAccumulator::<Float16Type>::new(data_type))
         }
         DataType::Float32 => {
-            Box::new(FloatDistinctCountAccumulator::<Float32Type>::new())
+            Box::new(FloatDistinctCountAccumulator::<Float32Type>::new(data_type))
         }
         DataType::Float64 => {
-            Box::new(FloatDistinctCountAccumulator::<Float64Type>::new())
+            Box::new(FloatDistinctCountAccumulator::<Float64Type>::new(data_type))
         }
 
         DataType::Utf8 => {
