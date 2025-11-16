@@ -367,7 +367,7 @@ pub enum RelationPlanning {
 pub trait RelationPlanner: Debug + Send + Sync {
     /// Plan a table factor into a [`LogicalPlan`].
     ///
-    /// Returning `Ok(RelationPlanning::Transformed(planned_relation))` short-circuits further planning and uses the
+    /// Returning `Ok(RelationPlanning::Planned(planned_relation))` short-circuits further planning and uses the
     /// provided plan. Returning `Ok(RelationPlanning::Original(relation))` allows the next registered planner,
     /// or DataFusion's default logic, to handle the relation.
     fn plan_relation(
