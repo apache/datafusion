@@ -32,8 +32,7 @@ use std::sync::Arc;
 ///
 /// [`query_memtable`]: a simple query against a [`MemTable`]
 /// [`query_parquet`]: a simple query against a directory with multiple Parquet files
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn query() -> Result<()> {
     query_memtable().await?;
     query_parquet().await?;
     Ok(())
