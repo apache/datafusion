@@ -23,14 +23,15 @@
 use std::fmt::Debug;
 use std::mem::size_of_val;
 
+use ahash::RandomState;
 use arrow::array::types::ArrowPrimitiveType;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion_common::ScalarValue;
+use datafusion_common::{HashSet, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 
-use crate::utils::{DistinctStorage, GenericDistinctBuffer};
+use crate::utils::{DistinctStorage, GenericDistinctBuffer, Hashable};
 
 /// Unified distinct count accumulator for primitive types.
 ///
@@ -61,7 +62,7 @@ where
 
 impl<T, S> Accumulator for PrimitiveDistinctCountAccumulator<T, S>
 where
-    T: ArrowPrimitiveType + Send + Debug,
+    T: ArrowPrimitiveType + Send + Sync + Debug,
     S: DistinctStorage<Native = T::Native>,
 {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
@@ -86,7 +87,5 @@ where
 }
 
 // Type alias for float distinct count accumulator (uses Hashable wrapper)
-pub type FloatDistinctCountAccumulator<T> = PrimitiveDistinctCountAccumulator<
-    T,
-    std::collections::HashSet<crate::utils::Hashable<<T as ArrowPrimitiveType>::Native>, ahash::RandomState>,
->;
+pub type FloatDistinctCountAccumulator<T> =
+    PrimitiveDistinctCountAccumulator<T, HashSet<Hashable<<T as ArrowPrimitiveType>::Native>, RandomState>>;

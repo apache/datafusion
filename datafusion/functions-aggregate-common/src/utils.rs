@@ -94,7 +94,7 @@ impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}
 /// implementations: native `HashSet<T>` for types that are natively hashable
 /// (like integers), and `HashSet<Hashable<T>>` for types that need special
 /// handling (like floats).
-pub trait DistinctStorage: Default + std::fmt::Debug {
+pub trait DistinctStorage: Default + std::fmt::Debug + Send + Sync {
     /// The native type being stored
     type Native: ArrowNativeType;
 

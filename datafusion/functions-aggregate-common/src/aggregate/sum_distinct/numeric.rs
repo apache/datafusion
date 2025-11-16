@@ -30,12 +30,14 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 
-use crate::utils::GenericDistinctBuffer;
+use crate::utils::{GenericDistinctBuffer, Hashable};
 
 /// Accumulator for computing SUM(DISTINCT expr)
+///
+/// Uses Hashable storage to correctly handle floats and other numeric types
 #[derive(Debug)]
 pub struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
-    values: GenericDistinctBuffer<T>,
+    values: GenericDistinctBuffer<T, datafusion_common::HashSet<Hashable<T::Native>, ahash::RandomState>>,
     data_type: DataType,
 }
 
@@ -52,7 +54,7 @@ impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
+impl<T: ArrowPrimitiveType + Send + Sync + Debug> Accumulator for DistinctSumAccumulator<T> {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.values.state()
     }

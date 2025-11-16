@@ -33,9 +33,10 @@ use arrow::{
 
 use arrow::array::ArrowNativeTypeOp;
 
+use ahash::RandomState;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError,
-    Result, ScalarValue,
+    assert_eq_or_internal_err, internal_datafusion_err, internal_err, plan_err, DataFusionError,
+    HashSet, Result, ScalarValue,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -48,7 +49,7 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
+use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
@@ -655,12 +656,12 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
 
 #[derive(Debug)]
 struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
-    distinct_values: GenericDistinctBuffer<T>,
+    distinct_values: GenericDistinctBuffer<T, HashSet<Hashable<T::Native>, RandomState>>,
     data_type: DataType,
     percentile: f64,
 }
 
-impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumulator<T> {
+impl<T: ArrowNumericType + Send + Sync + Debug> Accumulator for DistinctPercentileContAccumulator<T> {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.distinct_values.state()
     }

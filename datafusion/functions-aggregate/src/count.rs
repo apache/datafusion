@@ -31,7 +31,7 @@ use arrow::{
 };
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, stats::Precision,
-    utils::expr::COUNT_STAR_EXPANSION, HashMap, Result, ScalarValue,
+    utils::expr::COUNT_STAR_EXPANSION, HashMap, HashSet, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr::WindowFunction,
@@ -49,12 +49,10 @@ use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::PrimitiveDistinctCountAccumulator,
     groups_accumulator::accumulate::accumulate_indices,
 };
-use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::binary_map::OutputType;
 use std::{
-    collections::HashSet,
     fmt::Debug,
     mem::{size_of, size_of_val},
     ops::BitAnd,
