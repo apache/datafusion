@@ -83,39 +83,56 @@ pub fn percentile_cont(order_by: Sort, percentile: Expr) -> Expr {
 
 #[user_doc(
     doc_section(label = "General Functions"),
-    description = "Returns the exact percentile of input values, interpolating between values if needed.",
-    syntax_example = "percentile_cont(percentile) WITHIN GROUP (ORDER BY expression)",
+    description = "Returns the exact percentile(s) of input values, interpolating between values if needed. \
+Supports both scalar percentiles and arrays of percentiles.",
+    syntax_example = r#"percentile_cont(percentile) WITHIN GROUP (ORDER BY expression)
+percentile_cont(expression, percentile)
+percentile_cont(expression, ARRAY[percentile1, percentile2, ...])"#,
     sql_example = r#"```sql
+-- Standard WITHIN GROUP syntax
 > SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) FROM table_name;
 +----------------------------------------------------------+
 | percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) |
 +----------------------------------------------------------+
 | 45.5                                                     |
 +----------------------------------------------------------+
-```
 
-An alternate syntax is also supported:
-```sql
+-- Alternate function-call syntax
 > SELECT percentile_cont(column_name, 0.75) FROM table_name;
 +---------------------------------------+
 | percentile_cont(column_name, 0.75)    |
 +---------------------------------------+
 | 45.5                                  |
 +---------------------------------------+
+
+-- Multiple percentiles using an array
+> SELECT percentile_cont(column_name, ARRAY[0.25, 0.5, 0.75]) FROM table_name;
++--------------------------------------------------------------+
+| percentile_cont(column_name, ARRAY[0.25, 0.5, 0.75])         |
++--------------------------------------------------------------+
+| [12.0, 30.0, 45.5]                                           |
++--------------------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The"),
     argument(
         name = "percentile",
-        description = "Percentile to compute. Must be a float value between 0 and 1 (inclusive)."
+        description = "Percentile or list of percentiles to compute. \
+Can be a single float between 0 and 1 (inclusive), or an array of float values in that range. \
+When an array is provided, an array of results is returned in the same order."
     )
 )]
 /// PERCENTILE_CONT aggregate expression. This uses an exact calculation and stores all values
-/// in memory before computing the result. If an approximation is sufficient then
+/// in memory before computing the result. If an approximation is sufficient, then
 /// APPROX_PERCENTILE_CONT provides a much more efficient solution.
 ///
-/// If using the distinct variation, the memory usage will be similarly high if the
-/// cardinality is high as it stores all distinct values in memory before computing the
-/// result, but if cardinality is low then memory usage will also be lower.
+/// If using the DISTINCT variation, the memory usage will be similarly high when the
+/// cardinality is high, as it must store all distinct values before computing the result.
+/// For low-cardinality inputs, memory usage is correspondingly lower.
+///
+/// When percentile arguments are provided as an array, all percentiles are computed
+/// from a single in-memory sort of the input values, making multi-percentile computation
+/// significantly more efficient than issuing separate percentile_cont calls.
+
 #[derive(PartialEq, Eq, Hash)]
 pub struct PercentileCont {
     signature: Signature,
