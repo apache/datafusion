@@ -370,8 +370,8 @@ fn test_update_projected_exprs() -> Result<()> {
         .collect();
     for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
         assert_eq!(
-            update_expr(&expr, &proj_exprs, false)?.unwrap(),
-            expected_expr
+            &update_expr(&expr, &proj_exprs, false)?.unwrap(),
+            &expected_expr
         );
     }
 
