@@ -1533,6 +1533,7 @@ mod tests {
         data: bytes::Bytes,
         pruning_predicate: &PruningPredicate,
     ) -> Result<RowGroupAccessPlanFilter> {
+        use datafusion_datasource::PartitionedFile;
         use object_store::{ObjectMeta, ObjectStore};
 
         let object_meta = ObjectMeta {
@@ -1551,12 +1552,23 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
-        let inner = ParquetObjectReader::new(Arc::new(in_memory), object_meta.location)
-            .with_file_size(object_meta.size);
+        let inner =
+            ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
+                .with_file_size(object_meta.size);
+
+        let partitioned_file = PartitionedFile {
+            object_meta,
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+            extensions: None,
+            metadata_size_hint: None,
+        };
 
         let reader = ParquetFileReader {
             inner,
             file_metrics: file_metrics.clone(),
+            partitioned_file,
         };
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
