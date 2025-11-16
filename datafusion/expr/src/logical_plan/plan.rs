@@ -1472,11 +1472,22 @@ impl LogicalPlan {
                     Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
                 }
             })?
-            // always recompute the schema to ensure the changed in the schema's field should be
-            // poplulated to the plan's parent
-            .map_data(|plan| plan.recompute_schema())
+            .map_data(|plan| plan.update_schema_data_type())
         })
         .map(|res| res.data)
+    }
+
+    /// Recompute schema fields' data type after replacing params, ensuring fields data type can be
+    /// updated according to the new parameters.
+    fn update_schema_data_type(self) -> Result<LogicalPlan> {
+        match self {
+            // FIXME: we have to manually rebuild the schema for `LogicalPlan::Values`,
+            // because `recompute_schema` doesn't recompute a new schema for `LogicalPlan::Values`.
+            LogicalPlan::Values(Values { values, schema: _ }) => {
+                LogicalPlanBuilder::values(values)?.build()
+            }
+            plan => plan.recompute_schema(),
+        }
     }
 
     /// Walk the logical plan, find any `Placeholder` tokens, and return a set of their names.
