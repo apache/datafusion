@@ -163,6 +163,7 @@ impl TDigest {
         }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
         TDigest {
             centroids: vec![centroid.clone()],
