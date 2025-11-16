@@ -1790,8 +1790,9 @@ mod test {
             .build(std::io::Cursor::new(bytes))
             .unwrap();
 
-        // This should fail because schema_lookup will have "items.element.id" and "items.element.name"
-        // but build_struct_array will try to look up "items.item.id" and "items.item.name"
+        // This used to fail because schema_lookup would have "items.element.id" and "items.element.name"
+        // but build_struct_array will try to look up "items.item.id" and "items.item.name",
+        // Now it it is simply "items.id" and "items.name"
         let batch = reader.next().unwrap().unwrap();
 
         let expected = [
