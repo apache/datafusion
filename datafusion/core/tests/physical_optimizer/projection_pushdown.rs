@@ -369,9 +369,10 @@ fn test_update_projected_exprs() -> Result<()> {
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
     for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
-        assert!(update_expr(&expr, &proj_exprs, false)?
-            .unwrap()
-            .eq(&expected_expr));
+        assert_eq!(
+            update_expr(&expr, &proj_exprs, false)?.unwrap(),
+            expected_expr
+        );
     }
 
     Ok(())
