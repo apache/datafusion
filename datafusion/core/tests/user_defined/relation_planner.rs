@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Tests for the RelationPlanner extension point
+
 use std::sync::Arc;
 
 use arrow::array::{Int64Array, RecordBatch, StringArray};
@@ -29,66 +31,118 @@ use datafusion_expr::planner::{
 };
 use datafusion_expr::Expr;
 use datafusion_sql::sqlparser::ast::TableFactor;
+use insta::assert_snapshot;
 
-/// A planner that creates an in-memory table with custom values
+// ============================================================================
+// Test Planners - Example Implementations
+// ============================================================================
+
+// The planners in this section are deliberately minimal, static examples used
+// only for tests. In real applications a `RelationPlanner` would typically
+// construct richer logical plans tailored to external systems or custom
+// semantics rather than hard-coded in-memory tables.
+
+/// Helper to build simple static values-backed virtual tables used by the
+/// example planners below.
+fn plan_static_values_table(
+    relation: TableFactor,
+    table_name: &str,
+    column_name: &str,
+    values: Vec<ScalarValue>,
+) -> Result<RelationPlanning> {
+    match relation {
+        TableFactor::Table { name, alias, .. }
+            if name.to_string().eq_ignore_ascii_case(table_name) =>
+        {
+            let rows = values
+                .into_iter()
+                .map(|v| vec![Expr::Literal(v, None)])
+                .collect::<Vec<_>>();
+
+            let plan = LogicalPlanBuilder::values(rows)?
+                .project(vec![col("column1").alias(column_name)])?
+                .build()?;
+
+            Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+        }
+        other => Ok(RelationPlanning::Original(other)),
+    }
+}
+
+/// Example planner that provides a virtual `numbers` table with values
+/// 1, 2, 3.
 #[derive(Debug)]
-struct CustomValuesPlanner;
+struct NumbersPlanner;
 
-impl RelationPlanner for CustomValuesPlanner {
+impl RelationPlanner for NumbersPlanner {
     fn plan_relation(
         &self,
         relation: TableFactor,
         _context: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
-        match relation {
-            TableFactor::Table { name, alias, .. }
-                if name.to_string().eq_ignore_ascii_case("custom_values") =>
-            {
-                let plan = LogicalPlanBuilder::values(vec![
-                    vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)],
-                    vec![Expr::Literal(ScalarValue::Int64(Some(2)), None)],
-                    vec![Expr::Literal(ScalarValue::Int64(Some(3)), None)],
-                ])?
-                .build()?;
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
-            }
-            other => Ok(RelationPlanning::Original(other)),
-        }
+        plan_static_values_table(
+            relation,
+            "numbers",
+            "number",
+            vec![
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Int64(Some(2)),
+                ScalarValue::Int64(Some(3)),
+            ],
+        )
     }
 }
 
-/// A planner that handles string-based tables
+/// Example planner that provides a virtual `colors` table with three string
+/// values: `red`, `green`, `blue`.
 #[derive(Debug)]
-struct StringTablePlanner;
+struct ColorsPlanner;
 
-impl RelationPlanner for StringTablePlanner {
+impl RelationPlanner for ColorsPlanner {
     fn plan_relation(
         &self,
         relation: TableFactor,
         _context: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
-        match relation {
-            TableFactor::Table { name, alias, .. }
-                if name.to_string().eq_ignore_ascii_case("colors") =>
-            {
-                let plan = LogicalPlanBuilder::values(vec![
-                    vec![Expr::Literal(ScalarValue::Utf8(Some("red".into())), None)],
-                    vec![Expr::Literal(ScalarValue::Utf8(Some("green".into())), None)],
-                    vec![Expr::Literal(ScalarValue::Utf8(Some("blue".into())), None)],
-                ])?
-                .build()?;
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
-            }
-            other => Ok(RelationPlanning::Original(other)),
-        }
+        plan_static_values_table(
+            relation,
+            "colors",
+            "color",
+            vec![
+                ScalarValue::Utf8(Some("red".into())),
+                ScalarValue::Utf8(Some("green".into())),
+                ScalarValue::Utf8(Some("blue".into())),
+            ],
+        )
     }
 }
 
-/// A planner that intercepts nested joins and plans them recursively
+/// Alternative implementation of `numbers` (returns 100, 200) used to
+/// demonstrate planner precedence (last registered planner wins).
 #[derive(Debug)]
-struct RecursiveJoinPlanner;
+struct AlternativeNumbersPlanner;
 
-impl RelationPlanner for RecursiveJoinPlanner {
+impl RelationPlanner for AlternativeNumbersPlanner {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        _context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning> {
+        plan_static_values_table(
+            relation,
+            "numbers",
+            "number",
+            vec![ScalarValue::Int64(Some(100)), ScalarValue::Int64(Some(200))],
+        )
+    }
+}
+
+/// Example planner that intercepts nested joins and samples both sides (limit 2)
+/// before joining, demonstrating recursive planning with `context.plan()`.
+#[derive(Debug)]
+struct SamplingJoinPlanner;
+
+impl RelationPlanner for SamplingJoinPlanner {
     fn plan_relation(
         &self,
         relation: TableFactor,
@@ -100,12 +154,23 @@ impl RelationPlanner for RecursiveJoinPlanner {
                 alias,
                 ..
             } if table_with_joins.joins.len() == 1 => {
-                // Recursively plan both sides using context.plan()
+                // Use context.plan() to recursively plan both sides
+                // This ensures other planners (like NumbersPlanner) can handle them
                 let left = context.plan(table_with_joins.relation.clone())?;
                 let right = context.plan(table_with_joins.joins[0].relation.clone())?;
 
-                // Create a cross join
-                let plan = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                // Sample each table to 2 rows
+                let left_sampled =
+                    LogicalPlanBuilder::from(left).limit(0, Some(2))?.build()?;
+
+                let right_sampled =
+                    LogicalPlanBuilder::from(right).limit(0, Some(2))?.build()?;
+
+                // Cross join: 2 rows × 2 rows = 4 rows (instead of 3×3=9 without sampling)
+                let plan = LogicalPlanBuilder::from(left_sampled)
+                    .cross_join(right_sampled)?
+                    .build()?;
+
                 Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
             }
             other => Ok(RelationPlanning::Original(other)),
@@ -113,7 +178,8 @@ impl RelationPlanner for RecursiveJoinPlanner {
     }
 }
 
-/// A planner that always returns None to test delegation
+/// Example planner that never handles any relation and always delegates by
+/// returning `RelationPlanning::Original`.
 #[derive(Debug)]
 struct PassThroughPlanner;
 
@@ -123,231 +189,325 @@ impl RelationPlanner for PassThroughPlanner {
         relation: TableFactor,
         _context: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
-        // Always return Original - delegates to next planner or default
+        // Never handles anything - always delegates
         Ok(RelationPlanning::Original(relation))
     }
 }
 
-async fn collect_sql(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
-    ctx.sql(sql).await.unwrap().collect().await.unwrap()
+/// Example planner that shows how planners can block specific constructs and
+/// surface custom error messages by rejecting `UNNEST` relations (here framed
+/// as a mock premium feature check).
+#[derive(Debug)]
+struct PremiumFeaturePlanner;
+
+impl RelationPlanner for PremiumFeaturePlanner {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        _context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning> {
+        match relation {
+            TableFactor::UNNEST { .. } => Err(datafusion_common::DataFusionError::Plan(
+                "UNNEST is a premium feature! Please upgrade to DataFusion Pro™ \
+                     to unlock advanced array operations."
+                    .to_string(),
+            )),
+            other => Ok(RelationPlanning::Original(other)),
+        }
+    }
 }
 
-#[tokio::test]
-async fn test_custom_planner_handles_relation() {
-    let ctx = SessionContext::new();
-    ctx.register_relation_planner(Arc::new(CustomValuesPlanner))
-        .unwrap();
+// ============================================================================
+// Test Helpers - SQL Execution
+// ============================================================================
 
-    let results = collect_sql(&ctx, "SELECT * FROM custom_values").await;
-
-    let expected = "\
-+---------+
-| column1 |
-+---------+
-| 1       |
-| 2       |
-| 3       |
-+---------+";
-    assert_eq!(batches_to_string(&results), expected);
+/// Execute SQL and return results with better error messages.
+async fn execute_sql(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
+    let df = ctx.sql(sql).await?;
+    df.collect().await
 }
 
-#[tokio::test]
-async fn test_multiple_planners_first_wins() {
-    let ctx = SessionContext::new();
-
-    // Register multiple planners - first one wins
-    ctx.register_relation_planner(Arc::new(CustomValuesPlanner))
-        .unwrap();
-    ctx.register_relation_planner(Arc::new(StringTablePlanner))
-        .unwrap();
-
-    // CustomValuesPlanner handles this
-    let results = collect_sql(&ctx, "SELECT * FROM custom_values").await;
-    let expected = "\
-+---------+
-| column1 |
-+---------+
-| 1       |
-| 2       |
-| 3       |
-+---------+";
-    assert_eq!(batches_to_string(&results), expected);
-
-    // StringTablePlanner handles this
-    let results = collect_sql(&ctx, "SELECT * FROM colors").await;
-    let expected = "\
-+---------+
-| column1 |
-+---------+
-| red     |
-| green   |
-| blue    |
-+---------+";
-    assert_eq!(batches_to_string(&results), expected);
+/// Execute SQL and convert to string format for snapshot comparison.
+async fn execute_sql_to_string(ctx: &SessionContext, sql: &str) -> String {
+    let batches = execute_sql(ctx, sql)
+        .await
+        .expect("SQL execution should succeed");
+    batches_to_string(&batches)
 }
 
-#[tokio::test]
-async fn test_planner_delegates_to_default() {
+// ============================================================================
+// Test Helpers - Context Builders
+// ============================================================================
+
+/// Create a SessionContext with a catalog table containing Int64 and Utf8 columns.
+///
+/// Creates a table with the specified name and sample data for fallback/integration tests.
+fn create_context_with_catalog_table(
+    table_name: &str,
+    id_values: Vec<i64>,
+    name_values: Vec<&str>,
+) -> SessionContext {
     let ctx = SessionContext::new();
 
-    // Register a planner that always returns None
-    ctx.register_relation_planner(Arc::new(PassThroughPlanner))
-        .unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, false),
+    ]));
 
-    // Also register a real table
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(id_values)),
+            Arc::new(StringArray::from(name_values)),
+        ],
+    )
+    .unwrap();
+
+    let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+    ctx.register_table(table_name, Arc::new(table)).unwrap();
+
+    ctx
+}
+
+/// Create a SessionContext with a simple single-column Int64 table.
+///
+/// Useful for basic tests that need a real catalog table.
+fn create_context_with_simple_table(
+    table_name: &str,
+    values: Vec<i64>,
+) -> SessionContext {
+    let ctx = SessionContext::new();
+
     let schema = Arc::new(Schema::new(vec![Field::new(
         "value",
         DataType::Int64,
         true,
     )]));
+
     let batch =
-        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![42]))])
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(values))])
             .unwrap();
+
     let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-    ctx.register_table("real_table", Arc::new(table)).unwrap();
+    ctx.register_table(table_name, Arc::new(table)).unwrap();
 
-    // PassThroughPlanner returns None, so it delegates to the default planner
-    let results = collect_sql(&ctx, "SELECT * FROM real_table").await;
-    let expected = "\
-+-------+
-| value |
-+-------+
-| 42    |
-+-------+";
-    assert_eq!(batches_to_string(&results), expected);
+    ctx
 }
 
-#[tokio::test]
-async fn test_planner_delegates_with_multiple_planners() {
-    let ctx = SessionContext::new();
+// ============================================================================
+// TESTS: Ordered from Basic to Complex
+// ============================================================================
 
-    // Register planners in order
-    ctx.register_relation_planner(Arc::new(PassThroughPlanner))
-        .unwrap();
-    ctx.register_relation_planner(Arc::new(CustomValuesPlanner))
-        .unwrap();
-    ctx.register_relation_planner(Arc::new(StringTablePlanner))
-        .unwrap();
+/// Comprehensive test suite for RelationPlanner extension point.
+/// Tests are ordered from simplest smoke test to most complex scenarios.
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // PassThroughPlanner returns None, CustomValuesPlanner handles it
-    let results = collect_sql(&ctx, "SELECT * FROM custom_values").await;
-    let expected = "\
-+---------+
-| column1 |
-+---------+
-| 1       |
-| 2       |
-| 3       |
-+---------+";
-    assert_eq!(batches_to_string(&results), expected);
+    /// Small extension trait to make test setup read fluently.
+    trait TestSessionExt {
+        fn with_planner<P: RelationPlanner + 'static>(self, planner: P) -> Self;
+    }
 
-    // PassThroughPlanner and CustomValuesPlanner both return None,
-    // StringTablePlanner handles it
-    let results = collect_sql(&ctx, "SELECT * FROM colors").await;
-    let expected = "\
-+---------+
-| column1 |
-+---------+
-| red     |
-| green   |
-| blue    |
-+---------+";
-    assert_eq!(batches_to_string(&results), expected);
-}
+    impl TestSessionExt for SessionContext {
+        fn with_planner<P: RelationPlanner + 'static>(self, planner: P) -> Self {
+            self.register_relation_planner(Arc::new(planner)).unwrap();
+            self
+        }
+    }
 
-#[tokio::test]
-async fn test_recursive_planning_with_context_plan() {
-    let ctx = SessionContext::new();
+    /// Session context with only the `NumbersPlanner` registered.
+    fn ctx_with_numbers() -> SessionContext {
+        SessionContext::new().with_planner(NumbersPlanner)
+    }
 
-    // Register planners
-    ctx.register_relation_planner(Arc::new(CustomValuesPlanner))
-        .unwrap();
-    ctx.register_relation_planner(Arc::new(StringTablePlanner))
-        .unwrap();
-    ctx.register_relation_planner(Arc::new(RecursiveJoinPlanner))
-        .unwrap();
+    /// Session context with virtual tables (`numbers`, `colors`) and the
+    /// `SamplingJoinPlanner` registered for nested joins.
+    fn ctx_with_virtual_tables_and_sampling() -> SessionContext {
+        SessionContext::new()
+            .with_planner(NumbersPlanner)
+            .with_planner(ColorsPlanner)
+            .with_planner(SamplingJoinPlanner)
+    }
 
-    // RecursiveJoinPlanner calls context.plan() on both sides,
-    // which recursively invokes the planner pipeline
-    let results = collect_sql(
-        &ctx,
-        "SELECT * FROM custom_values AS nums JOIN colors AS c ON true",
-    )
-    .await;
+    // Basic smoke test: virtual table can be queried like a regular table.
+    #[tokio::test]
+    async fn virtual_table_basic_select() {
+        let ctx = ctx_with_numbers();
 
-    // Should produce a cross join: 3 numbers × 3 colors = 9 rows
-    let expected = "\
-+---------+---------+
-| column1 | column1 |
-+---------+---------+
-| 1       | red     |
-| 1       | green   |
-| 1       | blue    |
-| 2       | red     |
-| 2       | green   |
-| 2       | blue    |
-| 3       | red     |
-| 3       | green   |
-| 3       | blue    |
-+---------+---------+";
-    assert_eq!(batches_to_string(&results), expected);
-}
+        let result = execute_sql_to_string(&ctx, "SELECT * FROM numbers").await;
 
-#[tokio::test]
-async fn test_planner_with_filters_and_projections() {
-    let ctx = SessionContext::new();
-    ctx.register_relation_planner(Arc::new(CustomValuesPlanner))
-        .unwrap();
+        assert_snapshot!(result, @r"
+        +--------+
+        | number |
+        +--------+
+        | 1      |
+        | 2      |
+        | 3      |
+        +--------+");
+    }
 
-    // Test that filters and projections work on custom-planned tables
-    let results = collect_sql(
-        &ctx,
-        "SELECT column1 * 10 AS scaled FROM custom_values WHERE column1 > 1",
-    )
-    .await;
+    // Virtual table supports standard SQL operations (projection, filter, aggregation).
+    #[tokio::test]
+    async fn virtual_table_filters_and_aggregation() {
+        let ctx = ctx_with_numbers();
 
-    let expected = "\
-+--------+
-| scaled |
-+--------+
-| 20     |
-| 30     |
-+--------+";
-    assert_eq!(batches_to_string(&results), expected);
-}
+        let filtered = execute_sql_to_string(
+            &ctx,
+            "SELECT number * 10 AS scaled FROM numbers WHERE number > 1",
+        )
+        .await;
 
-#[tokio::test]
-async fn test_planner_falls_back_to_default_for_unknown_table() {
-    let ctx = SessionContext::new();
+        assert_snapshot!(filtered, @r"
+        +--------+
+        | scaled |
+        +--------+
+        | 20     |
+        | 30     |
+        +--------+");
 
-    ctx.register_relation_planner(Arc::new(CustomValuesPlanner))
-        .unwrap();
+        let aggregated = execute_sql_to_string(
+            &ctx,
+            "SELECT COUNT(*) as count, SUM(number) as total, AVG(number) as average \
+             FROM numbers",
+        )
+        .await;
 
-    // Register a regular table
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, false),
-    ]));
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int64Array::from(vec![1, 2])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
-        ],
-    )
-    .unwrap();
-    let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-    ctx.register_table("users", Arc::new(table)).unwrap();
+        assert_snapshot!(aggregated, @r"
+        +-------+-------+---------+
+        | count | total | average |
+        +-------+-------+---------+
+        | 3     | 6     | 2.0     |
+        +-------+-------+---------+");
+    }
 
-    // CustomValuesPlanner doesn't handle "users", falls back to default
-    let results = collect_sql(&ctx, "SELECT * FROM users ORDER BY id").await;
+    // Multiple planners can coexist and each handles its own virtual table.
+    #[tokio::test]
+    async fn multiple_planners_virtual_tables() {
+        let ctx = SessionContext::new()
+            .with_planner(NumbersPlanner)
+            .with_planner(ColorsPlanner);
 
-    let expected = "\
-+----+-------+
-| id | name  |
-+----+-------+
-| 1  | Alice |
-| 2  | Bob   |
-+----+-------+";
-    assert_eq!(batches_to_string(&results), expected);
+        let result1 = execute_sql_to_string(&ctx, "SELECT * FROM numbers").await;
+        assert_snapshot!(result1, @r"
+        +--------+
+        | number |
+        +--------+
+        | 1      |
+        | 2      |
+        | 3      |
+        +--------+");
+
+        let result2 = execute_sql_to_string(&ctx, "SELECT * FROM colors").await;
+        assert_snapshot!(result2, @r"
+        +-------+
+        | color |
+        +-------+
+        | red   |
+        | green |
+        | blue  |
+        +-------+");
+    }
+
+    // Last registered planner for the same table name takes precedence (LIFO).
+    #[tokio::test]
+    async fn lifo_precedence_last_planner_wins() {
+        let ctx = SessionContext::new()
+            .with_planner(AlternativeNumbersPlanner)
+            .with_planner(NumbersPlanner);
+
+        let result = execute_sql_to_string(&ctx, "SELECT * FROM numbers").await;
+
+        // CustomValuesPlanner registered last, should win (returns 1,2,3 not 100,200)
+        assert_snapshot!(result, @r"
+        +--------+
+        | number |
+        +--------+
+        | 1      |
+        | 2      |
+        | 3      |
+        +--------+");
+    }
+
+    // Pass-through planner delegates to the catalog without changing behavior.
+    #[tokio::test]
+    async fn delegation_pass_through_to_catalog() {
+        let ctx = create_context_with_simple_table("real_table", vec![42])
+            .with_planner(PassThroughPlanner);
+
+        let result = execute_sql_to_string(&ctx, "SELECT * FROM real_table").await;
+
+        assert_snapshot!(result, @r"
+        +-------+
+        | value |
+        +-------+
+        | 42    |
+        +-------+");
+    }
+
+    // Catalog is used when no planner claims the relation.
+    #[tokio::test]
+    async fn catalog_fallback_when_no_planner() {
+        let ctx =
+            create_context_with_catalog_table("users", vec![1, 2], vec!["Alice", "Bob"])
+                .with_planner(NumbersPlanner);
+
+        let result = execute_sql_to_string(&ctx, "SELECT * FROM users ORDER BY id").await;
+
+        assert_snapshot!(result, @r"
+        +----+-------+
+        | id | name  |
+        +----+-------+
+        | 1  | Alice |
+        | 2  | Bob   |
+        +----+-------+");
+    }
+
+    // Planners can block specific constructs and surface custom error messages.
+    #[tokio::test]
+    async fn error_handling_premium_feature_blocking() {
+        // Verify UNNEST works without planner
+        let ctx_without_planner = SessionContext::new();
+        let result =
+            execute_sql(&ctx_without_planner, "SELECT * FROM UNNEST(ARRAY[1, 2, 3])")
+                .await
+                .expect("UNNEST should work by default");
+        assert_eq!(result.len(), 1);
+
+        // Same query with blocking planner registered
+        let ctx = SessionContext::new().with_planner(PremiumFeaturePlanner);
+
+        // Verify UNNEST is now rejected
+        let error = execute_sql(&ctx, "SELECT * FROM UNNEST(ARRAY[1, 2, 3])")
+            .await
+            .expect_err("UNNEST should be rejected");
+
+        let error_msg = error.to_string();
+        assert!(
+            error_msg.contains("premium feature") && error_msg.contains("DataFusion Pro"),
+            "Expected custom rejection message, got: {error_msg}"
+        );
+    }
+
+    // SamplingJoinPlanner recursively calls `context.plan()` on both sides of a
+    // nested join before sampling, exercising recursive relation planning.
+    #[tokio::test]
+    async fn recursive_planning_sampling_join() {
+        let ctx = ctx_with_virtual_tables_and_sampling();
+
+        let result =
+            execute_sql_to_string(&ctx, "SELECT * FROM (numbers JOIN colors ON true)")
+                .await;
+
+        // SamplingJoinPlanner limits each side to 2 rows: 2×2=4 (not 3×3=9)
+        assert_snapshot!(result, @r"
+        +--------+-------+
+        | number | color |
+        +--------+-------+
+        | 1      | red   |
+        | 1      | green |
+        | 2      | red   |
+        | 2      | green |
+        +--------+-------+");
+    }
 }
