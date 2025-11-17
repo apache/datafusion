@@ -38,8 +38,8 @@ pub(super) trait GreatestLeastOperator {
 }
 
 fn keep_array<Op: GreatestLeastOperator>(
-    lhs: ArrayRef,
-    rhs: ArrayRef,
+    lhs: &ArrayRef,
+    rhs: &ArrayRef,
 ) -> Result<ArrayRef> {
     // True for values that we should keep from the left array
     let keep_lhs = Op::get_indexes_to_keep(lhs.as_ref(), rhs.as_ref())?;
@@ -102,8 +102,8 @@ pub(super) fn execute_conditional<Op: GreatestLeastOperator>(
 
         // Start with the result value
         result = keep_array::<Op>(
-            Arc::clone(first_array),
-            result_scalar.to_array_of_size(first_array.len())?,
+            &Arc::clone(first_array),
+            &result_scalar.to_array_of_size(first_array.len())?,
         )?;
     } else {
         // If we only have arrays, start with the first array
@@ -112,7 +112,7 @@ pub(super) fn execute_conditional<Op: GreatestLeastOperator>(
     }
 
     for array in arrays_iter {
-        result = keep_array::<Op>(Arc::clone(array), result)?;
+        result = keep_array::<Op>(&Arc::clone(array), &result)?;
     }
 
     Ok(ColumnarValue::Array(result))

@@ -260,6 +260,7 @@ pub fn regexp_count(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn regexp_count_inner<'a, S>(
     values: S,
     regex_array: S,
