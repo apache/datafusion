@@ -41,7 +41,10 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, JoinType, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, internal_err, DataFusionError, JoinType, Result,
+    ScalarValue,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
@@ -300,12 +303,12 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if self.left.output_partitioning().partition_count() != 1 {
-            return internal_err!(
-                "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
+        assert_eq_or_internal_err!(
+            self.left.output_partitioning().partition_count(),
+            1,
+            "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
                  consider using CoalescePartitionsExec or the EnforceDistribution rule"
-            );
-        }
+        );
 
         let stream = self.right.execute(partition, Arc::clone(&context))?;
 

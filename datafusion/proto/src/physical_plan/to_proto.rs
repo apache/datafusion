@@ -52,6 +52,7 @@ use crate::protobuf::{
 
 use super::PhysicalExtensionCodec;
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn serialize_physical_aggr_expr(
     aggr_expr: Arc<AggregateFunctionExpr>,
     codec: &dyn PhysicalExtensionCodec,

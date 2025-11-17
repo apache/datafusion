@@ -27,7 +27,7 @@ use crate::utils::{
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -139,16 +139,21 @@ pub fn plan_with_order_preserving_variants(
         if let Some(ordering) = child.output_ordering() {
             let mut fetch = fetch;
             if let Some(coalesce_fetch) = sort_input.plan.fetch() {
-                if let Some(sort_fetch) = fetch {
-                    if coalesce_fetch < sort_fetch {
-                        return internal_err!(
-                            "CoalescePartitionsExec fetch [{:?}] should be greater than or equal to SortExec fetch [{:?}]", coalesce_fetch, sort_fetch
+                fetch = match fetch {
+                    Some(sort_fetch) => {
+                        assert_or_internal_err!(
+                            coalesce_fetch >= sort_fetch,
+                            "CoalescePartitionsExec fetch [{:?}] should be greater than or equal to SortExec fetch [{:?}]",
+                            coalesce_fetch,
+                            sort_fetch
                         );
+                        Some(sort_fetch)
                     }
-                } else {
-                    // If the sort node does not have a fetch, we need to keep the coalesce node's fetch.
-                    fetch = Some(coalesce_fetch);
-                }
+                    None => {
+                        // If the sort node does not have a fetch, we need to keep the coalesce node's fetch.
+                        Some(coalesce_fetch)
+                    }
+                };
             };
             // When the input of a `CoalescePartitionsExec` has an ordering,
             // replace it with a `SortPreservingMergeExec` if appropriate:

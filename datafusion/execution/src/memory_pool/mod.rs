@@ -24,9 +24,7 @@ use std::{cmp::Ordering, sync::atomic, sync::Arc};
 
 mod pool;
 pub mod proxy {
-    pub use datafusion_common::utils::proxy::{
-        HashTableAllocExt, RawTableAllocExt, VecAllocExt,
-    };
+    pub use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 }
 
 pub use pool::*;
