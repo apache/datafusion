@@ -17,15 +17,18 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::{Array, ArrayRef, Date32Array, Date64Array, NullArray};
-use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::DataType;
-use arrow::util::pretty::pretty_format_columns;
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::scalar::{
-    date_to_timestamp_multiplier, ensure_timestamp_in_bounds,
+use arrow::{
+    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
+    compute::{kernels, CastOptions},
+    datatypes::DataType,
+    util::pretty::pretty_format_columns,
 };
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{
+    format::DEFAULT_CAST_OPTIONS,
+    internal_err,
+    scalar::{date_to_timestamp_multiplier, ensure_timestamp_in_bounds},
+    Result, ScalarValue,
+};
 use std::fmt;
 use std::sync::Arc;
 
@@ -367,8 +370,10 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Date64Array, Int32Array};
-    use arrow::datatypes::TimeUnit;
+    use arrow::{
+        array::{Date64Array, Int32Array},
+        datatypes::TimeUnit,
+    };
 
     #[test]
     fn into_array_of_size() {
