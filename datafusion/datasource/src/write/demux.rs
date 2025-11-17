@@ -296,7 +296,7 @@ async fn hive_style_partitions_demuxer(
         let all_partition_values = compute_partition_keys_by_row(&rb, &partition_by)?;
 
         // Next compute how the batch should be split up to take each distinct key to its own batch
-        let take_map = compute_take_arrays(&rb, all_partition_values);
+        let take_map = compute_take_arrays(&rb, &all_partition_values);
 
         // Divide up the batch into distinct partition key batches and send each batch
         for (part_key, mut builder) in take_map.into_iter() {
@@ -516,7 +516,7 @@ fn compute_partition_keys_by_row<'a>(
 
 fn compute_take_arrays(
     rb: &RecordBatch,
-    all_partition_values: Vec<Vec<Cow<str>>>,
+    all_partition_values: &[Vec<Cow<str>>],
 ) -> HashMap<Vec<String>, UInt64Builder> {
     let mut take_map = HashMap::new();
     for i in 0..rb.num_rows() {

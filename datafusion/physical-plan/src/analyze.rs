@@ -31,7 +31,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::instant::Instant;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -161,11 +161,11 @@ impl ExecutionPlan for AnalyzeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if 0 != partition {
-            return internal_err!(
-                "AnalyzeExec invalid partition. Expected 0, got {partition}"
-            );
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "AnalyzeExec invalid partition. Expected 0, got {partition}"
+        );
 
         // Gather futures that will run each input partition in
         // parallel (on a separate tokio task) using a JoinSet to

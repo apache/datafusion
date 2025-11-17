@@ -85,7 +85,7 @@ use crate::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
-use datafusion_common::{internal_err, Result, Statistics};
+use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result, Statistics};
 use datafusion_execution::TaskContext;
 
 use crate::execution_plan::SchedulingType;
@@ -269,9 +269,11 @@ impl ExecutionPlan for CooperativeExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return internal_err!("CooperativeExec requires exactly one child");
-        }
+        assert_eq_or_internal_err!(
+            children.len(),
+            1,
+            "CooperativeExec requires exactly one child"
+        );
         Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
     }
 

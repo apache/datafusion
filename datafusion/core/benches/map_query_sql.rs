@@ -16,10 +16,11 @@
 // under the License.
 
 use std::collections::HashSet;
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use parking_lot::Mutex;
 use rand::prelude::ThreadRng;
 use rand::Rng;

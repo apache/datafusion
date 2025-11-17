@@ -36,7 +36,9 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{config::ConfigOptions, internal_err, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, config::ConfigOptions, DataFusionError, Result,
+};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
@@ -422,7 +424,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(
-            push_down_filters(Arc::clone(&plan), vec![], config, self.phase)?
+            push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
                 .updated_node
                 .unwrap_or(plan),
         )
@@ -438,7 +440,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
 }
 
 fn push_down_filters(
-    node: Arc<dyn ExecutionPlan>,
+    node: &Arc<dyn ExecutionPlan>,
     parent_predicates: Vec<Arc<dyn PhysicalExpr>>,
     config: &ConfigOptions,
     phase: FilterPushdownPhase,
@@ -461,22 +463,18 @@ fn push_down_filters(
 
     let filter_description_parent_filters = filter_description.parent_filters();
     let filter_description_self_filters = filter_description.self_filters();
-    if filter_description_parent_filters.len() != children.len() {
-        return internal_err!(
-            "Filter pushdown expected FilterDescription to have parent filters for {}, but got {} for node {}",
-            children.len(),
-            filter_description_parent_filters.len(),
-            node.name()
-        );
-    }
-    if filter_description_self_filters.len() != children.len() {
-        return internal_err!(
-            "Filter pushdown expected FilterDescription to have self filters for {}, but got {} for node {}",
-            children.len(),
-            filter_description_self_filters.len(),
-            node.name()
-        );
-    }
+    assert_eq_or_internal_err!(
+        filter_description_parent_filters.len(),
+        children.len(),
+        "Filter pushdown expected parent filters count to match number of children for node {}",
+        node.name()
+    );
+    assert_eq_or_internal_err!(
+        filter_description_self_filters.len(),
+        children.len(),
+        "Filter pushdown expected self filters count to match number of children for node {}",
+        node.name()
+    );
 
     for (child_idx, (child, parent_filters, self_filters)) in izip!(
         children,
@@ -510,7 +508,8 @@ fn push_down_filters(
         let num_parent_filters = all_predicates.len() - num_self_filters;
 
         // Any filters that could not be pushed down to a child are marked as not-supported to our parents
-        let result = push_down_filters(Arc::clone(child), all_predicates, config, phase)?;
+        let result =
+            push_down_filters(&Arc::clone(child), all_predicates, config, phase)?;
 
         if let Some(new_child) = result.updated_node {
             // If we have a filter pushdown result, we need to update our children
@@ -524,15 +523,12 @@ fn push_down_filters(
         // from our parents and filters that the current node injected. We need to de-entangle
         // this since we do need to distinguish between them.
         let mut all_filters = result.filters.into_iter().collect_vec();
-        if all_filters.len() != num_self_filters + num_parent_filters {
-            return internal_err!(
-                "Filter pushdown did not return the expected number of filters: expected {} self filters and {} parent filters, but got {}. Likely culprit is {}",
-                num_self_filters,
-                num_parent_filters,
-                all_filters.len(),
-                child.name()
-            );
-        }
+        assert_eq_or_internal_err!(
+            all_filters.len(),
+            num_self_filters + num_parent_filters,
+            "Filter pushdown did not return the expected number of filters from {}",
+            child.name()
+        );
         let parent_filters = all_filters
             .split_off(num_self_filters)
             .into_iter()
@@ -571,7 +567,7 @@ fn push_down_filters(
     }
 
     // Re-create this node with new children
-    let updated_node = with_new_children_if_necessary(Arc::clone(&node), new_children)?;
+    let updated_node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
 
     // TODO: by calling `handle_child_pushdown_result` we are assuming that the
     // `ExecutionPlan` implementation will not change the plan itself.
@@ -596,7 +592,7 @@ fn push_down_filters(
     )?;
     // Compare pointers for new_node and node, if they are different we must replace
     // ourselves because of changes in our children.
-    if res.updated_node.is_none() && !Arc::ptr_eq(&updated_node, &node) {
+    if res.updated_node.is_none() && !Arc::ptr_eq(&updated_node, node) {
         res.updated_node = Some(updated_node)
     }
     Ok(res)

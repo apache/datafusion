@@ -722,35 +722,12 @@ impl<'a> ConstEvaluator<'a> {
                 } else {
                     // Non-ListArray
                     match ScalarValue::try_from_array(&a, 0) {
-                        Ok(s) => {
-                            // TODO: support the optimization for `Map` type after support impl hash for it
-                            if matches!(&s, ScalarValue::Map(_)) {
-                                ConstSimplifyResult::SimplifyRuntimeError(
-                                    DataFusionError::NotImplemented("Const evaluate for Map type is still not supported".to_string()),
-                                    expr,
-                                )
-                            } else {
-                                ConstSimplifyResult::Simplified(s, metadata)
-                            }
-                        }
+                        Ok(s) => ConstSimplifyResult::Simplified(s, metadata),
                         Err(err) => ConstSimplifyResult::SimplifyRuntimeError(err, expr),
                     }
                 }
             }
-            ColumnarValue::Scalar(s) => {
-                // TODO: support the optimization for `Map` type after support impl hash for it
-                if matches!(&s, ScalarValue::Map(_)) {
-                    ConstSimplifyResult::SimplifyRuntimeError(
-                        DataFusionError::NotImplemented(
-                            "Const evaluate for Map type is still not supported"
-                                .to_string(),
-                        ),
-                        expr,
-                    )
-                } else {
-                    ConstSimplifyResult::Simplified(s, metadata)
-                }
-            }
+            ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s, metadata),
         }
     }
 }
@@ -1682,7 +1659,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                     .to_string();
                                 Transformed::yes(Expr::Like(Like {
                                     pattern: Box::new(to_string_scalar(
-                                        data_type,
+                                        &data_type,
                                         Some(simplified_pattern),
                                     )),
                                     ..like
@@ -1994,7 +1971,7 @@ fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
     }
 }
 
-fn to_string_scalar(data_type: DataType, value: Option<String>) -> Expr {
+fn to_string_scalar(data_type: &DataType, value: Option<String>) -> Expr {
     match data_type {
         DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value), None),
         DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value), None),

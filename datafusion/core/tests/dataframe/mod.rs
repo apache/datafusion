@@ -45,6 +45,7 @@ use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
@@ -66,7 +67,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
 use datafusion_common::{
     assert_contains, internal_datafusion_err, Constraint, Constraints, DFSchema,
-    DataFusionError, ScalarValue, TableReference, UnnestOptions,
+    DataFusionError, ScalarValue, SchemaError, TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
@@ -300,6 +301,27 @@ async fn select_columns() -> Result<()> {
 
     // the two plans should be identical
     assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_columns_with_nonexistent_columns() -> Result<()> {
+    let t = test_table().await?;
+    let t2 = t.select_columns(&["canada", "c2", "rocks"]);
+
+    match t2 {
+        Err(DataFusionError::SchemaError(boxed_err, _)) => {
+            // Verify it's the first invalid column
+            match boxed_err.as_ref() {
+                SchemaError::FieldNotFound { field, .. } => {
+                    assert_eq!(field.name(), "canada");
+                }
+                _ => panic!("Expected SchemaError::FieldNotFound for 'canada'"),
+            }
+        }
+        _ => panic!("Expected SchemaError"),
+    }
 
     Ok(())
 }
@@ -765,9 +787,8 @@ async fn test_aggregate_with_pk2() -> Result<()> {
         physical_plan_to_string(&df).await,
         @r"
     AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[], ordering_mode=Sorted
-      CoalesceBatchesExec: target_batch_size=8192
-        FilterExec: id@0 = 1 AND name@1 = a
-          DataSourceExec: partitions=1, partition_sizes=[1]
+      FilterExec: id@0 = 1 AND name@1 = a
+        DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
 
@@ -814,9 +835,8 @@ async fn test_aggregate_with_pk3() -> Result<()> {
         physical_plan_to_string(&df).await,
         @r"
     AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[], ordering_mode=PartiallySorted([0])
-      CoalesceBatchesExec: target_batch_size=8192
-        FilterExec: id@0 = 1
-          DataSourceExec: partitions=1, partition_sizes=[1]
+      FilterExec: id@0 = 1
+        DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
 
@@ -865,9 +885,8 @@ async fn test_aggregate_with_pk4() -> Result<()> {
         physical_plan_to_string(&df).await,
         @r"
     AggregateExec: mode=Single, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
-      CoalesceBatchesExec: target_batch_size=8192
-        FilterExec: id@0 = 1
-          DataSourceExec: partitions=1, partition_sizes=[1]
+      FilterExec: id@0 = 1
+        DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
 
@@ -1626,7 +1645,9 @@ async fn register_table() -> Result<()> {
     let df_impl = DataFrame::new(ctx.state(), df.logical_plan().clone());
 
     // register a dataframe as a table
-    ctx.register_table("test_table", df_impl.clone().into_view())?;
+    let table_provider = df_impl.clone().into_view();
+    assert_eq!(table_provider.table_type(), TableType::View);
+    ctx.register_table("test_table", table_provider)?;
 
     // pull the table out
     let table = ctx.table("test_table").await?;
@@ -2863,10 +2884,9 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     |               |       ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*), count(Int64(1))@1 as count(Int64(1))] |
     |               |         AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))]                       |
     |               |           CoalesceBatchesExec: target_batch_size=8192                                                      |
-    |               |             RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4                               |
-    |               |               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                         |
-    |               |                 AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]                        |
-    |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                        |
+    |               |             RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1                               |
+    |               |               AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]                          |
+    |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                          |
     |               |                                                                                                            |
     +---------------+------------------------------------------------------------------------------------------------------------+
     "###
@@ -2875,22 +2895,21 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
         @r###"
-    +---------------+--------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                           |
-    +---------------+--------------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) ASC NULLS LAST                                                  |
-    |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]            |
-    |               |     TableScan: t1 projection=[b]                                               |
-    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                           |
-    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]     |
-    |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(*)]      |
-    |               |       CoalesceBatchesExec: target_batch_size=8192                              |
-    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4       |
-    |               |           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1 |
-    |               |             AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(*)]       |
-    |               |               DataSourceExec: partitions=1, partition_sizes=[1]                |
-    |               |                                                                                |
-    +---------------+--------------------------------------------------------------------------------+
+    +---------------+----------------------------------------------------------------------------+
+    | plan_type     | plan                                                                       |
+    +---------------+----------------------------------------------------------------------------+
+    | logical_plan  | Sort: count(*) ASC NULLS LAST                                              |
+    |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]        |
+    |               |     TableScan: t1 projection=[b]                                           |
+    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                       |
+    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true] |
+    |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(*)]  |
+    |               |       CoalesceBatchesExec: target_batch_size=8192                          |
+    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1   |
+    |               |           AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(*)]     |
+    |               |             DataSourceExec: partitions=1, partition_sizes=[1]              |
+    |               |                                                                            |
+    +---------------+----------------------------------------------------------------------------+
     "###
     );
     Ok(())
@@ -3111,6 +3130,156 @@ async fn test_count_wildcard_on_window() -> Result<()> {
 }
 
 #[tokio::test]
+// Test with `repartition_sorts` disabled, causing a full resort of the data
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false(
+) -> Result<()> {
+    assert_snapshot!(
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
+        @r#"
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+      SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+        CoalescePartitionsExec
+          AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+            UnionExec
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+    "#);
+    Ok(())
+}
+
+#[ignore] // See https://github.com/apache/datafusion/issues/18380
+#[tokio::test]
+// Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true(
+) -> Result<()> {
+    assert_snapshot!(
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
+        @r#"
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+      SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+          UnionExec
+            DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+            SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+    "#);
+
+    // 💥 Doesn't pass, and generates this plan:
+    //
+    // AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    //   SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+    //     SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+    //       AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+    //         UnionExec
+    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+    //
+    //
+    // === Excerpt from the verbose explain ===
+    //
+    // +------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    // | plan_type                                                  | plan                                                                                                                                                                                                                                                                                                                                        |
+    // +------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    // | initial_physical_plan                                      | AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                                  |
+    // |                                                            |   AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                              |
+    // |                                                            |     UnionExec                                                                                                                                                                                                                                                                                                                               |
+    // |                                                            |       DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet                                                                                                                               |
+    // |                                                            |       SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                                                                                                                                                   |
+    // |                                                            |         DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                                                                                                                                                    |
+    // ...
+    // | physical_plan after EnforceDistribution                    | OutputRequirementExec: order_by=[], dist_by=Unspecified                                                                                                                                                                                                                                                                                     |
+    // |                                                            |   AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                                |
+    // |                                                            |     SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                                                                                                                                                     |
+    // |                                                            |       CoalescePartitionsExec                                                                                                                                                                                                                                                                                                                |
+    // |                                                            |         AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                        |
+    // |                                                            |           UnionExec                                                                                                                                                                                                                                                                                                                         |
+    // |                                                            |             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet                                                                                                                         |
+    // |                                                            |             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                                                                                                                                             |
+    // |                                                            |               DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                                                                                                                                              |
+    // |                                                            |                                                                                                                                                                                                                                                                                                                                             |
+    // | physical_plan after CombinePartialFinalAggregate           | SAME TEXT AS ABOVE
+    // |                                                            |                                                                                                                                                                                                                                                                                                                                             |
+    // | physical_plan after EnforceSorting                         | OutputRequirementExec: order_by=[], dist_by=Unspecified                                                                                                                                                                                                                                                                                     |
+    // |                                                            |   AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                                |
+    // |                                                            |     SortPreservingMergeExec: [id@0 ASC NULLS LAST]                                                                                                                                                                                                                                                                                          |
+    // |                                                            |       SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]                                                                                                                                                                                                                                                                    |
+    // |                                                            |         AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]                                                                                                                                                                                                                                                                              |
+    // |                                                            |           UnionExec                                                                                                                                                                                                                                                                                                                         |
+    // |                                                            |             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet                                                                                                                         |
+    // |                                                            |             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                                                                                                                                                |
+    // ...
+    // +------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+    Ok(())
+}
+
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
+    repartition_sorts: bool,
+) -> Result<String> {
+    let config = SessionConfig::default()
+        .with_target_partitions(1)
+        .with_repartition_sorts(repartition_sorts);
+    let ctx = SessionContext::new_with_config(config);
+
+    let testdata = parquet_test_data();
+
+    // Register "sorted" table, that is sorted
+    ctx.register_parquet(
+        "sorted",
+        &format!("{testdata}/alltypes_tiny_pages.parquet"),
+        ParquetReadOptions::default()
+            .file_sort_order(vec![vec![col("id").sort(true, false)]]),
+    )
+    .await?;
+
+    // Register "unsorted" table
+    ctx.register_parquet(
+        "unsorted",
+        &format!("{testdata}/alltypes_tiny_pages.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+
+    let source_sorted = ctx
+        .table("sorted")
+        .await
+        .unwrap()
+        .select(vec![col("id")])
+        .unwrap();
+
+    let source_unsorted = ctx
+        .table("unsorted")
+        .await
+        .unwrap()
+        .select(vec![col("id")])
+        .unwrap();
+
+    let source_unsorted_resorted =
+        source_unsorted.sort(vec![col("id").sort(true, false)])?;
+
+    let union = source_sorted.union(source_unsorted_resorted)?;
+
+    let agg = union.aggregate(vec![col("id")], vec![])?;
+
+    let df = agg;
+
+    // To be able to remove user specific paths from the plan, for stable assertions
+    let testdata_clean = Path::new(&testdata).canonicalize()?.display().to_string();
+    let testdata_clean = testdata_clean.strip_prefix("/").unwrap_or(&testdata_clean);
+
+    // Use displayable() rather than explain().collect() to avoid table formatting issues. We need
+    // to replace machine-specific paths with variable lengths, which breaks table alignment and
+    // causes snapshot mismatches.
+    let physical_plan = df.create_physical_plan().await?;
+    let displayable_plan = displayable(physical_plan.as_ref())
+        .indent(true)
+        .to_string()
+        .replace(testdata_clean, "{testdata}");
+
+    Ok(displayable_plan)
+}
+
+#[tokio::test]
 async fn test_count_wildcard_on_aggregate() -> Result<()> {
     let ctx = create_join_context()?;
     register_alltypes_tiny_pages_parquet(&ctx).await?;
@@ -3180,32 +3349,30 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
         @r"
-    +---------------+---------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                      |
-    +---------------+---------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: t1.a, t1.b                                                                                                    |
-    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)          |
-    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                           |
-    |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                   |
-    |               |         TableScan: t1 projection=[a, b]                                                                                   |
-    |               |         SubqueryAlias: __scalar_sq_1                                                                                      |
-    |               |           Projection: count(Int64(1)) AS count(*), t2.a, Boolean(true) AS __always_true                                   |
-    |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1))]]                                                         |
-    |               |               TableScan: t2 projection=[a]                                                                                |
-    | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |
-    |               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |
-    |               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |
-    |               |       HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
-    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                 |
-    |               |         ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                             |
-    |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                    |
-    |               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |
-    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4                                            |
-    |               |                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                      |
-    |               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                     |
-    |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |
-    |               |                                                                                                                           |
-    +---------------+---------------------------------------------------------------------------------------------------------------------------+
+    +---------------+-------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                    |
+    +---------------+-------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Projection: t1.a, t1.b                                                                                                  |
+    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)        |
+    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                         |
+    |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                 |
+    |               |         TableScan: t1 projection=[a, b]                                                                                 |
+    |               |         SubqueryAlias: __scalar_sq_1                                                                                    |
+    |               |           Projection: count(Int64(1)) AS count(*), t2.a, Boolean(true) AS __always_true                                 |
+    |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1))]]                                                       |
+    |               |               TableScan: t2 projection=[a]                                                                              |
+    | physical_plan | FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |
+    |               |   CoalesceBatchesExec: target_batch_size=8192                                                                           |
+    |               |     HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
+    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                 |
+    |               |       ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                             |
+    |               |         AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                    |
+    |               |           CoalesceBatchesExec: target_batch_size=8192                                                                   |
+    |               |             RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                            |
+    |               |               AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                       |
+    |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                                       |
+    |               |                                                                                                                         |
+    +---------------+-------------------------------------------------------------------------------------------------------------------------+
     "
     );
 
@@ -3237,32 +3404,30 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
         @r"
-    +---------------+---------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                      |
-    +---------------+---------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: t1.a, t1.b                                                                                                    |
-    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)          |
-    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                           |
-    |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                   |
-    |               |         TableScan: t1 projection=[a, b]                                                                                   |
-    |               |         SubqueryAlias: __scalar_sq_1                                                                                      |
-    |               |           Projection: count(*), t2.a, Boolean(true) AS __always_true                                                      |
-    |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1)) AS count(*)]]                                             |
-    |               |               TableScan: t2 projection=[a]                                                                                |
-    | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |
-    |               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |
-    |               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |
-    |               |       HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
-    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                 |
-    |               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                    |
-    |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                           |
-    |               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |
-    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4                                            |
-    |               |                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                      |
-    |               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                            |
-    |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |
-    |               |                                                                                                                           |
-    +---------------+---------------------------------------------------------------------------------------------------------------------------+
+    +---------------+-------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                    |
+    +---------------+-------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Projection: t1.a, t1.b                                                                                                  |
+    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)        |
+    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                         |
+    |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                 |
+    |               |         TableScan: t1 projection=[a, b]                                                                                 |
+    |               |         SubqueryAlias: __scalar_sq_1                                                                                    |
+    |               |           Projection: count(*), t2.a, Boolean(true) AS __always_true                                                    |
+    |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1)) AS count(*)]]                                           |
+    |               |               TableScan: t2 projection=[a]                                                                              |
+    | physical_plan | FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |
+    |               |   CoalesceBatchesExec: target_batch_size=8192                                                                           |
+    |               |     HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
+    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                 |
+    |               |       ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                    |
+    |               |         AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                           |
+    |               |           CoalesceBatchesExec: target_batch_size=8192                                                                   |
+    |               |             RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                            |
+    |               |               AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                              |
+    |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                                       |
+    |               |                                                                                                                         |
+    +---------------+-------------------------------------------------------------------------------------------------------------------------+
     "
     );
 
@@ -5274,7 +5439,7 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    Projection: Int32(3) AS $1 [$1:Null;N]
+    Projection: Int32(3) AS $1 [$1:Int32]
       EmptyRelation: rows=1 []
     "
     );
