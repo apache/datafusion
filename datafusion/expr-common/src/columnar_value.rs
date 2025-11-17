@@ -19,7 +19,7 @@
 
 use arrow::{
     array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
-    compute::{kernels, CastOptions},
+    compute::{kernels, max, min, CastOptions},
     datatypes::DataType,
     util::pretty::pretty_format_columns,
 };
@@ -310,7 +310,8 @@ fn ensure_date_array_timestamp_bounds(
         return Ok(());
     }
 
-    match &source_type {
+    // Use compute kernels to find min/max instead of iterating all elements
+    let (min_val, max_val): (Option<i64>, Option<i64>) = match &source_type {
         DataType::Date32 => {
             let arr = array
                 .as_any()
@@ -321,27 +322,7 @@ fn ensure_date_array_timestamp_bounds(
                         array.data_type()
                     )
                 })?;
-
-            // Find min and max values in the array (ignoring nulls) and only
-            // check those bounds. This reduces the number of checked
-            // multiplications from N to at most 2 while preserving
-            // correctness.
-            let mut min: Option<i64> = None;
-            let mut max: Option<i64> = None;
-            for v in arr.iter().flatten().map(|v| v as i64) {
-                min = Some(min.map_or(v, |m| m.min(v)));
-                max = Some(max.map_or(v, |m| m.max(v)));
-            }
-
-            if let Some(v) = min {
-                ensure_timestamp_in_bounds(v, multiplier, &source_type, cast_type)?;
-            }
-            if let Some(v) = max {
-                // If min == max, we've already checked the value.
-                if Some(v) != min {
-                    ensure_timestamp_in_bounds(v, multiplier, &source_type, cast_type)?;
-                }
-            }
+            (min(arr).map(|v| v as i64), max(arr).map(|v| v as i64))
         }
         DataType::Date64 => {
             let arr = array
@@ -353,24 +334,17 @@ fn ensure_date_array_timestamp_bounds(
                         array.data_type()
                     )
                 })?;
-
-            let mut min: Option<i64> = None;
-            let mut max: Option<i64> = None;
-            for v in arr.iter().flatten() {
-                min = Some(min.map_or(v, |m| m.min(v)));
-                max = Some(max.map_or(v, |m| m.max(v)));
-            }
-
-            if let Some(v) = min {
-                ensure_timestamp_in_bounds(v, multiplier, &source_type, cast_type)?;
-            }
-            if let Some(v) = max {
-                if Some(v) != min {
-                    ensure_timestamp_in_bounds(v, multiplier, &source_type, cast_type)?;
-                }
-            }
+            (min(arr), max(arr))
         }
         _ => return Ok(()), // Not a date type, nothing to do
+    };
+
+    // Only validate the min and max values instead of all elements
+    if let Some(min) = min_val {
+        ensure_timestamp_in_bounds(min, multiplier, &source_type, cast_type)?;
+    }
+    if let Some(max) = max_val {
+        ensure_timestamp_in_bounds(max, multiplier, &source_type, cast_type)?;
     }
 
     Ok(())
