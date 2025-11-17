@@ -98,8 +98,8 @@ async fn test_inner_join_1k_filtered() {
             JoinType::Inner,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -112,8 +112,8 @@ async fn test_inner_join_1k() {
             JoinType::Inner,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -126,8 +126,8 @@ async fn test_left_join_1k() {
             JoinType::Left,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -140,8 +140,8 @@ async fn test_left_join_1k_filtered() {
             JoinType::Left,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -154,8 +154,8 @@ async fn test_right_join_1k() {
             JoinType::Right,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -168,8 +168,8 @@ async fn test_right_join_1k_filtered() {
             JoinType::Right,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -182,8 +182,8 @@ async fn test_full_join_1k() {
             JoinType::Full,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -196,8 +196,8 @@ async fn test_full_join_1k_filtered() {
             JoinType::Full,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[NljHj, HjSmj], false)
-          .await
+        .run_test(&[NljHj, HjSmj], false)
+        .await
     }
 }
 
@@ -210,8 +210,8 @@ async fn test_left_semi_join_1k() {
             JoinType::LeftSemi,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -224,8 +224,8 @@ async fn test_left_semi_join_1k_filtered() {
             JoinType::LeftSemi,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -238,8 +238,8 @@ async fn test_right_semi_join_1k() {
             JoinType::RightSemi,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -252,8 +252,8 @@ async fn test_right_semi_join_1k_filtered() {
             JoinType::RightSemi,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -266,8 +266,8 @@ async fn test_left_anti_join_1k() {
             JoinType::LeftAnti,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -280,8 +280,8 @@ async fn test_left_anti_join_1k_filtered() {
             JoinType::LeftAnti,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -294,8 +294,8 @@ async fn test_right_anti_join_1k() {
             JoinType::RightAnti,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -308,8 +308,8 @@ async fn test_right_anti_join_1k_filtered() {
             JoinType::RightAnti,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -322,8 +322,8 @@ async fn test_left_mark_join_1k() {
             JoinType::LeftMark,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -336,8 +336,8 @@ async fn test_left_mark_join_1k_filtered() {
             JoinType::LeftMark,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -351,8 +351,8 @@ async fn test_right_mark_join_1k() {
             JoinType::RightMark,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -365,8 +365,8 @@ async fn test_right_mark_join_1k_filtered() {
             JoinType::RightMark,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -379,8 +379,8 @@ async fn test_inner_join_1k_binary_filtered() {
             JoinType::Inner,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -393,8 +393,8 @@ async fn test_inner_join_1k_binary() {
             JoinType::Inner,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -407,8 +407,8 @@ async fn test_left_join_1k_binary() {
             JoinType::Left,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -421,8 +421,8 @@ async fn test_left_join_1k_binary_filtered() {
             JoinType::Left,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -435,8 +435,8 @@ async fn test_right_join_1k_binary() {
             JoinType::Right,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -449,8 +449,8 @@ async fn test_right_join_1k_binary_filtered() {
             JoinType::Right,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -463,8 +463,8 @@ async fn test_full_join_1k_binary() {
             JoinType::Full,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -477,8 +477,8 @@ async fn test_full_join_1k_binary_filtered() {
             JoinType::Full,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[NljHj, HjSmj], false)
-          .await
+        .run_test(&[NljHj, HjSmj], false)
+        .await
     }
 }
 
@@ -491,8 +491,8 @@ async fn test_left_semi_join_1k_binary() {
             JoinType::LeftSemi,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -505,8 +505,8 @@ async fn test_left_semi_join_1k_binary_filtered() {
             JoinType::LeftSemi,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -519,8 +519,8 @@ async fn test_right_semi_join_1k_binary() {
             JoinType::RightSemi,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -533,8 +533,8 @@ async fn test_right_semi_join_1k_binary_filtered() {
             JoinType::RightSemi,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -547,8 +547,8 @@ async fn test_left_anti_join_1k_binary() {
             JoinType::LeftAnti,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -561,8 +561,8 @@ async fn test_left_anti_join_1k_binary_filtered() {
             JoinType::LeftAnti,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -575,8 +575,8 @@ async fn test_right_anti_join_1k_binary() {
             JoinType::RightAnti,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -589,8 +589,8 @@ async fn test_right_anti_join_1k_binary_filtered() {
             JoinType::RightAnti,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -603,8 +603,8 @@ async fn test_left_mark_join_1k_binary() {
             JoinType::LeftMark,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -617,8 +617,8 @@ async fn test_left_mark_join_1k_binary_filtered() {
             JoinType::LeftMark,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -632,8 +632,8 @@ async fn test_right_mark_join_1k_binary() {
             JoinType::RightMark,
             None,
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -646,8 +646,8 @@ async fn test_right_mark_join_1k_binary_filtered() {
             JoinType::RightMark,
             Some(Box::new(col_lt_col_filter)),
         )
-          .run_test(&[HjSmj, NljHj], false)
-          .await
+        .run_test(&[HjSmj, NljHj], false)
+        .await
     }
 }
 
@@ -1127,7 +1127,6 @@ fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<Record
     let input3 = Int32Array::from_iter_values(input3);
     let input4 = Int32Array::from_iter_values(input4);
 
-
     let mut columns = vec![
         ("a", Arc::new(input1) as ArrayRef),
         ("b", Arc::new(input2) as ArrayRef),
@@ -1139,8 +1138,7 @@ fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<Record
     }
 
     // split into several record batches
-    let batch = RecordBatch::try_from_iter(columns)
-      .unwrap();
+    let batch = RecordBatch::try_from_iter(columns).unwrap();
 
     // use a random number generator to pick a random sized output
     stagger_batch_with_seed(batch, 42)
@@ -1156,7 +1154,10 @@ fn rand_bytes<R: Rng>(rng: &mut R, min: usize, max: usize) -> Vec<u8> {
 /// Return randomly sized record batches with:
 /// two sorted binary columns 'a', 'b' (lexicographically) as join columns
 /// two random binary columns 'x', 'y' as other columns
-fn make_staggered_batches_binary(len: usize, with_extra_column: bool) -> Vec<RecordBatch> {
+fn make_staggered_batches_binary(
+    len: usize,
+    with_extra_column: bool,
+) -> Vec<RecordBatch> {
     let mut rng = rand::rng();
 
     // produce (a,b) pairs then sort lexicographically so SMJ has naturally sorted keys
@@ -1184,8 +1185,7 @@ fn make_staggered_batches_binary(len: usize, with_extra_column: bool) -> Vec<Rec
         columns.push(("y", Arc::new(y) as ArrayRef));
     }
 
-    let batch = RecordBatch::try_from_iter(columns)
-    .unwrap();
+    let batch = RecordBatch::try_from_iter(columns).unwrap();
 
     // preserve your existing randomized partitioning
     stagger_batch_with_seed(batch, 42)
