@@ -27,8 +27,7 @@ use datafusion_common::utils::{
     base_type, coerced_fixed_size_list_to_list, ListCoercion,
 };
 use datafusion_common::{
-    assert_or_internal_err, exec_err, internal_err, plan_err, types::NativeType,
-    utils::list_ndims, DataFusionError, Result,
+    exec_err, internal_err, plan_err, types::NativeType, utils::list_ndims, Result,
 };
 use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
@@ -314,14 +313,15 @@ fn get_valid_types_with_scalar_udf(
             }
 
             // Every signature failed, return the joined error
-            assert_or_internal_err!(
-                !res.is_empty(),
-                "Function '{}' failed to match any signature, errors: {}",
-                func.name(),
-                errors.join(",")
-            );
-
-            Ok(res)
+            if res.is_empty() {
+                internal_err!(
+                    "Function '{}' failed to match any signature, errors: {}",
+                    func.name(),
+                    errors.join(",")
+                )
+            } else {
+                Ok(res)
+            }
         }
         _ => get_valid_types(func.name(), signature, current_types),
     }
