@@ -466,11 +466,11 @@ async fn run_test_file_with_postgres(
     pb.set_message(format!("{:?}", &relative_path));
 
     let mut runner = sqllogictest::Runner::new(|| {
-        Postgres::connect(relative_path.clone(), pb.clone()).map(|conn| {
-            conn.with_currently_executing_sql_tracker(
-                currently_executing_sql_tracker.clone(),
-            )
-        })
+        Postgres::connect_with_tracked_sql(
+            relative_path.clone(),
+            pb.clone(),
+            currently_executing_sql_tracker.clone(),
+        )
     });
     runner.add_label("postgres");
     runner.with_column_validator(strict_column_validator);
@@ -573,11 +573,11 @@ async fn run_complete_file_with_postgres(
     pb.set_message(format!("{:?}", &relative_path));
 
     let mut runner = sqllogictest::Runner::new(|| {
-        Postgres::connect(relative_path.clone(), pb.clone()).map(|conn| {
-            conn.with_currently_executing_sql_tracker(
-                currently_executing_sql_tracker.clone(),
-            )
-        })
+        Postgres::connect_with_tracked_sql(
+            relative_path.clone(),
+            pb.clone(),
+            currently_executing_sql_tracker.clone(),
+        )
     });
     runner.add_label("postgres");
     runner.with_column_validator(strict_column_validator);

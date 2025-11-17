@@ -24,7 +24,6 @@ use sqllogictest::DBOutput;
 /// Postgres engine implementation for sqllogictest.
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::conversion::*;
@@ -123,6 +122,17 @@ impl Postgres {
             pb,
             currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
         })
+    }
+
+    /// Creates a runner for executing queries against an existing postgres connection
+    /// with a tracker for currently executing SQL statements.
+    pub async fn connect_with_tracked_sql(
+        relative_path: PathBuf,
+        pb: ProgressBar,
+        currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    ) -> Result<Self> {
+        let conn = Self::connect(relative_path, pb).await?;
+        Ok(conn.with_currently_executing_sql_tracker(currently_executing_sql_tracker))
     }
 
     /// Add a tracker that will track the currently executed SQL statement.
