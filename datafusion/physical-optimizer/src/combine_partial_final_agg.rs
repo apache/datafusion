@@ -49,7 +49,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(|plan| {
             // Check if the plan is AggregateExec

@@ -305,7 +305,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match self.mode {
             RuleMode::Add => require_top_ordering(plan),

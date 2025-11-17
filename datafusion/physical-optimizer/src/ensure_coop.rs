@@ -64,7 +64,7 @@ impl PhysicalOptimizerRule for EnsureCooperative {
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
             let is_leaf = plan.children().is_empty();

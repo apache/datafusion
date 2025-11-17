@@ -62,7 +62,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let global_state = GlobalRequirements {
             fetch: None,

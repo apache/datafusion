@@ -59,7 +59,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let alias_generator = AliasGenerator::new();
         let plan = plan

@@ -72,7 +72,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
             if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
