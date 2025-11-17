@@ -110,6 +110,13 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Remove unnecessary preinstalled software
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          rm -rf /__t/* || true
+          echo "Disk space after cleanup:"
+          df -h
       - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
