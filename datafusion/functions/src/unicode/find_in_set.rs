@@ -194,15 +194,21 @@ impl ScalarUDFImpl for FindInSetFunc {
                         let result = match str_list_array.data_type() {
                             DataType::Utf8 => {
                                 let str_list = str_list_array.as_string::<i32>();
-                                find_in_set_left_literal::<Int32Type, _>(&string, str_list)
+                                find_in_set_left_literal::<Int32Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             DataType::LargeUtf8 => {
                                 let str_list = str_list_array.as_string::<i64>();
-                                find_in_set_left_literal::<Int64Type, _>(&string, str_list)
+                                find_in_set_left_literal::<Int64Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             DataType::Utf8View => {
                                 let str_list = str_list_array.as_string_view();
-                                find_in_set_left_literal::<Int32Type, _>(&string, str_list)
+                                find_in_set_left_literal::<Int32Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             other => {
                                 exec_err!("Unsupported data type {other:?} for function find_in_set")
@@ -289,10 +295,7 @@ where
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
-fn find_in_set_left_literal<'a, T, V>(
-    string: &str,
-    str_list_array: V,
-) -> Result<ArrayRef>
+fn find_in_set_left_literal<'a, T, V>(string: &str, str_list_array: V) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
