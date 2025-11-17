@@ -146,7 +146,7 @@ datafusion-sql = { workspace = true, optional = true }
 flate2 = { version = "1.1.4", optional = true }
 futures = { workspace = true }
 itertools = { workspace = true }
-liblzma = { version = "0.4.4", optional = true, features = ["static"] }
+liblzma = { workspace = true, optional = true }
 log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
