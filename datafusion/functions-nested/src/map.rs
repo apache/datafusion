@@ -61,11 +61,7 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let can_evaluate_to_const = can_evaluate_to_const(args);
 
-    // check the keys array is unique
     let keys = get_first_array_ref(keys_arg)?;
-    if keys.null_count() > 0 {
-        return exec_err!("map key cannot be null");
-    }
     let key_array = keys.as_ref();
 
     match keys_arg {
@@ -84,22 +80,31 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
             row_keys
                 .iter()
-                .try_for_each(|key| check_unique_keys(key.as_ref()))?;
+                .try_for_each(|key| validate_map_keys(key.as_ref()))?;
         }
         ColumnarValue::Scalar(_) => {
-            check_unique_keys(key_array)?;
+            validate_map_keys(key_array)?;
         }
     }
 
     let values = get_first_array_ref(values_arg)?;
+
     make_map_batch_internal(keys, values, can_evaluate_to_const, keys_arg.data_type())
 }
 
-fn check_unique_keys(array: &dyn Array) -> Result<()> {
+/// Validates that map keys are non-null and unique.
+fn validate_map_keys(array: &dyn Array) -> Result<()> {
     let mut seen_keys = HashSet::with_capacity(array.len());
 
     for i in 0..array.len() {
         let key = ScalarValue::try_from_array(array, i)?;
+
+        // Validation 1: Map keys cannot be null
+        if key.is_null() {
+            return exec_err!("map key cannot be null");
+        }
+
+        // Validation 2: Map keys must be unique
         if seen_keys.contains(&key) {
             return exec_err!("map key must be unique, duplicate key found: {}", key);
         }
@@ -130,11 +135,21 @@ fn make_map_batch_internal(
         return exec_err!("map requires key and value lists to have the same length");
     }
 
-    if !can_evaluate_to_const {
-        return if let DataType::LargeList(..) = data_type {
-            make_map_array_internal::<i64>(keys, values)
-        } else {
-            make_map_array_internal::<i32>(keys, values)
+    // Use the array path (make_map_array_internal) in these cases:
+    // 1. Not const evaluation (!can_evaluate_to_const) - allows scalar elimination optimization
+    // 2. NULL maps present (keys.null_count() > 0) - fast path doesn't handle NULL list elements
+    if !can_evaluate_to_const || keys.null_count() > 0 {
+        return match data_type {
+            DataType::LargeList(..) => make_map_array_internal::<i64>(keys, values),
+            DataType::List(..) => make_map_array_internal::<i32>(keys, values),
+            DataType::FixedSizeList(..) => {
+                // FixedSizeList doesn't use OffsetSizeTrait, so handle it separately
+                make_map_array_from_fixed_size_list(keys, values)
+            }
+            _ => exec_err!(
+                "Expected List, LargeList, or FixedSizeList, got {:?}",
+                data_type
+            ),
         };
     }
 
@@ -356,27 +371,120 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,
 ) -> Result<ColumnarValue> {
-    let mut offset_buffer = vec![O::zero()];
-    let mut running_offset = O::zero();
+    // Save original data types and array length before list_to_arrays transforms them
+    let keys_data_type = keys.data_type().clone();
+    let values_data_type = values.data_type().clone();
+    let original_len = keys.len(); // This is the number of rows in the input
+
+    // Save the nulls bitmap from the original keys array (before list_to_arrays)
+    // This tells us which MAP values are NULL (not which keys within maps are null)
+    let nulls_bitmap = keys.nulls().cloned();
 
     let keys = list_to_arrays::<O>(&keys);
     let values = list_to_arrays::<O>(&values);
 
+    build_map_array(
+        keys,
+        values,
+        keys_data_type,
+        values_data_type,
+        original_len,
+        nulls_bitmap,
+    )
+}
+
+/// Helper function specifically for FixedSizeList inputs
+/// Similar to make_map_array_internal but uses fixed_size_list_to_arrays instead of list_to_arrays
+fn make_map_array_from_fixed_size_list(
+    keys: ArrayRef,
+    values: ArrayRef,
+) -> Result<ColumnarValue> {
+    // Save original data types and array length
+    let keys_data_type = keys.data_type().clone();
+    let values_data_type = values.data_type().clone();
+    let original_len = keys.len();
+
+    // Save the nulls bitmap from the original keys array
+    let nulls_bitmap = keys.nulls().cloned();
+
+    let keys = fixed_size_list_to_arrays(&keys);
+    let values = fixed_size_list_to_arrays(&values);
+
+    build_map_array(
+        keys,
+        values,
+        keys_data_type,
+        values_data_type,
+        original_len,
+        nulls_bitmap,
+    )
+}
+
+/// Common logic to build a MapArray from decomposed list arrays
+fn build_map_array(
+    keys: Vec<ArrayRef>,
+    values: Vec<ArrayRef>,
+    keys_data_type: DataType,
+    values_data_type: DataType,
+    original_len: usize,
+    nulls_bitmap: Option<arrow::buffer::NullBuffer>,
+) -> Result<ColumnarValue> {
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];
     for (k, v) in keys.iter().zip(values.iter()) {
-        running_offset = running_offset.add(O::usize_as(k.len()));
-        offset_buffer.push(running_offset);
         key_array_vec.push(k.as_ref());
         value_array_vec.push(v.as_ref());
     }
 
-    // concatenate all the arrays
-    let flattened_keys = arrow::compute::concat(key_array_vec.as_ref())?;
-    if flattened_keys.null_count() > 0 {
-        return exec_err!("keys cannot be null");
+    // Build offset buffer that accounts for NULL maps
+    // For each row, if it's NULL, the offset stays the same (empty range)
+    // If it's not NULL, the offset advances by the number of entries in that map
+    // NOTE: MapArray always requires i32 offsets, regardless of input list type
+    let mut running_offset = 0i32;
+    let mut offset_buffer = vec![running_offset];
+    let mut non_null_idx = 0;
+    for i in 0..original_len {
+        let is_null = nulls_bitmap.as_ref().is_some_and(|nulls| nulls.is_null(i));
+        if !is_null {
+            let entry_count = keys[non_null_idx].len();
+            // Validate that we won't overflow i32 when converting from potentially i64 offsets
+            let entry_count_i32 = i32::try_from(entry_count).map_err(|_| {
+                datafusion_common::DataFusionError::Execution(format!(
+                    "Map offset overflow: entry count {entry_count} at index {i} exceeds i32::MAX",
+                ))
+            })?;
+            running_offset =
+                running_offset.checked_add(entry_count_i32).ok_or_else(|| {
+                    datafusion_common::DataFusionError::Execution(format!(
+                    "Map offset overflow: cumulative offset exceeds i32::MAX at index {i}",
+                ))
+                })?;
+            non_null_idx += 1;
+        }
+        offset_buffer.push(running_offset);
     }
-    let flattened_values = arrow::compute::concat(value_array_vec.as_ref())?;
+
+    // concatenate all the arrays
+    // If key_array_vec is empty, it means all maps were NULL (list elements were NULL).
+    // In this case, we need to create empty arrays with the correct data type.
+    let (flattened_keys, flattened_values) = if key_array_vec.is_empty() {
+        // All maps are NULL - create empty arrays
+        // We need to infer the data type from the original keys/values arrays
+        let key_type = get_element_type(&keys_data_type)?;
+        let value_type = get_element_type(&values_data_type)?;
+
+        (
+            arrow::array::new_empty_array(key_type),
+            arrow::array::new_empty_array(value_type),
+        )
+    } else {
+        let flattened_keys = arrow::compute::concat(key_array_vec.as_ref())?;
+        if flattened_keys.null_count() > 0 {
+            return exec_err!("keys cannot be null");
+        }
+        let flattened_values = arrow::compute::concat(value_array_vec.as_ref())?;
+        (flattened_keys, flattened_values)
+    };
 
     let fields = vec![
         Arc::new(Field::new("key", flattened_keys.data_type().clone(), false)),
@@ -393,7 +501,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
         .add_child_data(flattened_values.to_data())
         .build()?;
 
-    let map_data = ArrayData::builder(DataType::Map(
+    let mut map_data_builder = ArrayData::builder(DataType::Map(
         Arc::new(Field::new(
             "entries",
             struct_data.data_type().clone(),
@@ -401,9 +509,241 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
         )),
         false,
     ))
-    .len(keys.len())
+    .len(original_len) // Use the original number of rows, not the filtered count
     .add_child_data(struct_data)
-    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
-    .build()?;
+    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()));
+
+    // Add the nulls bitmap if present (to preserve NULL map values)
+    if let Some(nulls) = nulls_bitmap {
+        map_data_builder = map_data_builder.nulls(Some(nulls));
+    }
+
+    let map_data = map_data_builder.build()?;
     Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_make_map_with_null_maps() {
+        // Test that NULL map values (entire map is NULL) are correctly handled
+        // This test directly calls make_map_batch with a List containing NULL elements
+        //
+        // Background: On main branch, the code would fail with "map key cannot be null"
+        // because it couldn't distinguish between:
+        // - NULL map (entire map is NULL) - should be allowed
+        // - null key within a map - should be rejected
+
+        // Build keys array: [['a'], NULL, ['b']]
+        // The middle NULL represents an entire NULL map, not a null key
+        let mut key_builder =
+            arrow::array::ListBuilder::new(arrow::array::StringBuilder::new());
+
+        // First map: ['a']
+        key_builder.values().append_value("a");
+        key_builder.append(true);
+
+        // Second map: NULL (entire map is NULL)
+        key_builder.append(false);
+
+        // Third map: ['b']
+        key_builder.values().append_value("b");
+        key_builder.append(true);
+
+        let keys_array = Arc::new(key_builder.finish());
+
+        // Build values array: [[1], [2], [3]]
+        let mut value_builder =
+            arrow::array::ListBuilder::new(arrow::array::Int32Builder::new());
+
+        value_builder.values().append_value(1);
+        value_builder.append(true);
+
+        value_builder.values().append_value(2);
+        value_builder.append(true);
+
+        value_builder.values().append_value(3);
+        value_builder.append(true);
+
+        let values_array = Arc::new(value_builder.finish());
+
+        // Call make_map_batch - should succeed
+        let result = make_map_batch(&[
+            ColumnarValue::Array(keys_array),
+            ColumnarValue::Array(values_array),
+        ]);
+
+        assert!(result.is_ok(), "Should handle NULL maps correctly");
+
+        // Verify the result
+        let map_array = match result.unwrap() {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected Array result"),
+        };
+
+        assert_eq!(map_array.len(), 3, "Should have 3 maps");
+        assert!(!map_array.is_null(0), "First map should not be NULL");
+        assert!(map_array.is_null(1), "Second map should be NULL");
+        assert!(!map_array.is_null(2), "Third map should not be NULL");
+    }
+
+    #[test]
+    fn test_make_map_with_null_key_within_map_should_fail() {
+        // Test that null keys WITHIN a map are properly rejected
+        // This ensures the fix doesn't accidentally allow invalid null keys
+
+        // Build keys array: [['a', NULL, 'b']]
+        // The NULL here is a null key within the map, which is invalid
+        let mut key_builder =
+            arrow::array::ListBuilder::new(arrow::array::StringBuilder::new());
+
+        key_builder.values().append_value("a");
+        key_builder.values().append_null(); // Invalid: null key
+        key_builder.values().append_value("b");
+        key_builder.append(true);
+
+        let keys_array = Arc::new(key_builder.finish());
+
+        // Build values array: [[1, 2, 3]]
+        let mut value_builder =
+            arrow::array::ListBuilder::new(arrow::array::Int32Builder::new());
+
+        value_builder.values().append_value(1);
+        value_builder.values().append_value(2);
+        value_builder.values().append_value(3);
+        value_builder.append(true);
+
+        let values_array = Arc::new(value_builder.finish());
+
+        // Call make_map_batch - should fail
+        let result = make_map_batch(&[
+            ColumnarValue::Array(keys_array),
+            ColumnarValue::Array(values_array),
+        ]);
+
+        assert!(result.is_err(), "Should reject null keys within maps");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("cannot be null"),
+            "Error should mention null keys, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_make_map_with_large_list() {
+        // Test that LargeList inputs work correctly with i32 offset conversion
+        // This verifies the fix for the offset buffer type mismatch issue
+
+        // Build keys array as LargeList: [['a', 'b'], ['c']]
+        let mut key_builder =
+            arrow::array::LargeListBuilder::new(arrow::array::StringBuilder::new());
+
+        // First map: ['a', 'b']
+        key_builder.values().append_value("a");
+        key_builder.values().append_value("b");
+        key_builder.append(true);
+
+        // Second map: ['c']
+        key_builder.values().append_value("c");
+        key_builder.append(true);
+
+        let keys_array = Arc::new(key_builder.finish());
+
+        // Build values array as LargeList: [[1, 2], [3]]
+        let mut value_builder =
+            arrow::array::LargeListBuilder::new(arrow::array::Int32Builder::new());
+
+        value_builder.values().append_value(1);
+        value_builder.values().append_value(2);
+        value_builder.append(true);
+
+        value_builder.values().append_value(3);
+        value_builder.append(true);
+
+        let values_array = Arc::new(value_builder.finish());
+
+        // Call make_map_batch - should succeed
+        let result = make_map_batch(&[
+            ColumnarValue::Array(keys_array),
+            ColumnarValue::Array(values_array),
+        ]);
+
+        assert!(
+            result.is_ok(),
+            "Should handle LargeList inputs correctly: {:?}",
+            result.err()
+        );
+
+        // Verify the result
+        let map_array = match result.unwrap() {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected Array result"),
+        };
+
+        assert_eq!(map_array.len(), 2, "Should have 2 maps");
+        assert!(!map_array.is_null(0), "First map should not be NULL");
+        assert!(!map_array.is_null(1), "Second map should not be NULL");
+    }
+
+    #[test]
+    fn test_make_map_with_fixed_size_list() {
+        // Test that FixedSizeList inputs work correctly
+        // This verifies the fix for FixedSizeList support in the data type check
+
+        use arrow::array::FixedSizeListBuilder;
+
+        // Build keys array as FixedSizeList(2): [['a', 'b'], ['c', 'd']]
+        let key_values_builder = arrow::array::StringBuilder::new();
+        let mut key_builder = FixedSizeListBuilder::new(key_values_builder, 2);
+
+        // First map: ['a', 'b']
+        key_builder.values().append_value("a");
+        key_builder.values().append_value("b");
+        key_builder.append(true);
+
+        // Second map: ['c', 'd']
+        key_builder.values().append_value("c");
+        key_builder.values().append_value("d");
+        key_builder.append(true);
+
+        let keys_array = Arc::new(key_builder.finish());
+
+        // Build values array as FixedSizeList(2): [[1, 2], [3, 4]]
+        let value_values_builder = arrow::array::Int32Builder::new();
+        let mut value_builder = FixedSizeListBuilder::new(value_values_builder, 2);
+
+        value_builder.values().append_value(1);
+        value_builder.values().append_value(2);
+        value_builder.append(true);
+
+        value_builder.values().append_value(3);
+        value_builder.values().append_value(4);
+        value_builder.append(true);
+
+        let values_array = Arc::new(value_builder.finish());
+
+        // Call make_map_batch - should succeed
+        let result = make_map_batch(&[
+            ColumnarValue::Array(keys_array),
+            ColumnarValue::Array(values_array),
+        ]);
+
+        assert!(
+            result.is_ok(),
+            "Should handle FixedSizeList inputs correctly: {:?}",
+            result.err()
+        );
+
+        // Verify the result
+        let map_array = match result.unwrap() {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected Array result"),
+        };
+
+        assert_eq!(map_array.len(), 2, "Should have 2 maps");
+        assert!(!map_array.is_null(0), "First map should not be NULL");
+        assert!(!map_array.is_null(1), "Second map should not be NULL");
+    }
 }
