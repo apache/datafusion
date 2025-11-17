@@ -121,7 +121,7 @@ fn rewrite_in_terms_of_projection(
         }
 
         if let Some(found) = found {
-            let found = ensure_column_qualifiers(found);
+            let found = ensure_column_qualifiers(found)?;
             return Ok(Transformed::yes(match normalized_expr {
                 Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
                     expr: Box::new(found),
@@ -140,19 +140,18 @@ fn rewrite_in_terms_of_projection(
     .data()
 }
 
-fn ensure_column_qualifiers(expr: Expr) -> Expr {
-    match expr {
-        Expr::Column(column) => Expr::Column(qualify_column(column)),
-        Expr::Alias(mut alias) => {
-            alias.expr = Box::new(ensure_column_qualifiers(*alias.expr));
-            Expr::Alias(alias)
+fn ensure_column_qualifiers(expr: Expr) -> Result<Expr> {
+    expr.transform(|expr| match expr {
+        Expr::Column(column) => {
+            Ok(Transformed::yes(Expr::Column(qualify_column(column))))
         }
-        other => other,
-    }
+        _ => Ok(Transformed::no(expr)),
+    })
+    .data()
 }
 
 fn qualify_column(column: Column) -> Column {
-    if column.relation.is_some() {
+    if column.relation.is_some() || !column.name.contains('.') {
         return column;
     }
     let parsed = Column::from_qualified_name(column.name.clone());
@@ -189,6 +188,7 @@ mod test {
     use super::*;
     use crate::test::function_stub::avg;
     use crate::test::function_stub::min;
+    use datafusion_common::TableReference;
 
     #[test]
     fn rewrite_sort_cols_by_agg() {
@@ -362,5 +362,60 @@ mod test {
         let asc = true;
         let nulls_first = true;
         expr.sort(asc, nulls_first)
+    }
+
+    #[test]
+    fn qualify_column_handles_dotted_and_simple_names() {
+        let qualified =
+            Column::new(Some(TableReference::Bare { table: "t".into() }), "c1");
+        assert_eq!(qualify_column(qualified.clone()), qualified);
+
+        let simple = Column::new_unqualified("alias_without_dot");
+        assert_eq!(qualify_column(simple.clone()), simple);
+
+        let dotted = Column::new_unqualified("min(t.c2)");
+        let parsed = qualify_column(dotted);
+        assert_eq!(
+            parsed.relation,
+            Some(TableReference::Bare {
+                table: "min(t".into()
+            })
+        );
+        assert_eq!(parsed.name, "c2)");
+    }
+
+    #[test]
+    fn ensure_column_qualifiers_updates_nested_columns() {
+        let left = Expr::Column(Column::new_unqualified("min(t.c2)"));
+        let right = Expr::Alias(Alias::new(
+            Expr::Column(Column::new_unqualified("avg(t.c3)")),
+            Option::<TableReference>::None,
+            "avg_alias",
+        ));
+        let expr = left.add(right);
+
+        let qualified = ensure_column_qualifiers(expr).unwrap();
+        if let Expr::BinaryExpr(binary) = qualified {
+            assert!(matches!(
+                binary.left.as_ref(),
+                Expr::Column(Column {
+                    relation: Some(_),
+                    ..
+                })
+            ));
+
+            match binary.right.as_ref() {
+                Expr::Alias(Alias { expr, .. }) => assert!(matches!(
+                    expr.as_ref(),
+                    Expr::Column(Column {
+                        relation: Some(_),
+                        ..
+                    })
+                )),
+                other => panic!("expected alias on right side, got {other:?}"),
+            }
+        } else {
+            panic!("expected BinaryExpr");
+        }
     }
 }
