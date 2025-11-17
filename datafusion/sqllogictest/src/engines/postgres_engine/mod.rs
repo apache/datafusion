@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::conversion::*;
-use crate::engines::currently_executed_sql::CurrentlyExecutedSqlTracker;
+use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::output::{DFColumnType, DFOutput};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use indicatif::ProgressBar;
@@ -61,7 +61,7 @@ pub struct Postgres {
     /// Relative test file path
     relative_path: PathBuf,
     pb: ProgressBar,
-    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 }
 
 impl Postgres {
@@ -121,16 +121,19 @@ impl Postgres {
             spawned_task: Some(spawned_task),
             relative_path,
             pb,
-            currently_executed_sql_tracker: CurrentlyExecutedSqlTracker::default(),
+            currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
         })
     }
 
-    pub fn with_currently_executed_sql_tracker(
+    /// Add a tracker that will track the currently executed SQL statement.
+    ///
+    /// This is useful for logging and debugging purposes.
+    pub fn with_currently_executing_sql_tracker(
         self,
-        currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+        currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     ) -> Self {
         Self {
-            currently_executed_sql_tracker,
+            currently_executing_sql_tracker,
             ..self
         }
     }
@@ -256,7 +259,7 @@ impl sqllogictest::AsyncDB for Postgres {
             sql
         );
 
-        self.currently_executed_sql_tracker.set_sql(sql);
+        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
         let lower_sql = sql.trim_start().to_ascii_lowercase();
 
@@ -308,7 +311,7 @@ impl sqllogictest::AsyncDB for Postgres {
                 .collect()
         };
 
-        self.currently_executed_sql_tracker.clear_sql_if_same(sql);
+        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
         if rows.is_empty() && types.is_empty() {
             Ok(DBOutput::StatementComplete(0))

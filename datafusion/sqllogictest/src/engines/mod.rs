@@ -30,7 +30,7 @@ pub use datafusion_substrait_roundtrip_engine::DataFusionSubstraitRoundTrip;
 pub use output::DFColumnType;
 pub use output::DFOutput;
 
-pub use currently_executed_sql::CurrentlyExecutedSqlTracker;
+pub use currently_executed_sql::CurrentlyExecutingSqlTracker;
 
 #[cfg(feature = "postgres")]
 mod postgres_engine;

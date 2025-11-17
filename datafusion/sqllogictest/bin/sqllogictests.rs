@@ -21,7 +21,7 @@ use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_sqllogictest::{
     df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
-    should_skip_record, value_normalizer, CurrentlyExecutedSqlTracker, DataFusion,
+    should_skip_record, value_normalizer, CurrentlyExecutingSqlTracker, DataFusion,
     DataFusionSubstraitRoundTrip, Filter, TestContext,
 };
 use futures::stream::StreamExt;
@@ -158,8 +158,8 @@ async fn run_tests() -> Result<()> {
             let relative_path = test_file.relative_path.clone();
 
             // Mutex per file to hold the current sql being run
-            let current_sql = CurrentlyExecutedSqlTracker::new();
-            let current_sql_clone = current_sql.clone();
+            let current_sql_tracker = CurrentlyExecutingSqlTracker::new();
+            let current_sql_tracker_clone = current_sql_tracker.clone();
             SpawnedTask::spawn(async move {
                 match (
                     options.postgres_runner,
@@ -173,7 +173,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
-                            current_sql_clone,
+                            current_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -184,7 +184,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
-                            current_sql_clone,
+                            current_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -194,7 +194,7 @@ async fn run_tests() -> Result<()> {
                             validator,
                             m_clone,
                             m_style_clone,
-                            current_sql_clone,
+                            current_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -205,7 +205,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
-                            current_sql_clone,
+                            current_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -215,7 +215,7 @@ async fn run_tests() -> Result<()> {
                             validator,
                             m_clone,
                             m_style_clone,
-                            current_sql_clone,
+                            current_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -223,7 +223,7 @@ async fn run_tests() -> Result<()> {
                 Ok(()) as Result<()>
             })
             .join()
-            .map(move |result| (result, relative_path, current_sql))
+            .map(move |result| (result, relative_path, current_sql_tracker))
         })
         // run up to num_cpus streams in parallel
         .buffer_unordered(options.test_threads)
@@ -233,17 +233,30 @@ async fn run_tests() -> Result<()> {
                 // Tokio panic error
                 Err(e) => {
                     let error = DataFusionError::External(Box::new(e));
-                    let current_sql = current_sql.get_sql();
+                    let current_sql = current_sql.get_currently_running_sqls();
 
-                    match current_sql {
-                        Some(sql) => Some(error.context(format!(
-                            "failure in {} for sql {sql}",
-                            test_file_path.display()
-                        ))),
-                        None => Some(error.context(format!(
+                    if current_sql.is_empty() {
+                        Some(error.context(format!(
                             "failure in {} with no currently running sql tracked",
                             test_file_path.display()
-                        ))),
+                        )))
+                    } else if current_sql.len() == 1 {
+                        let sql = &current_sql[0];
+                        Some(error.context(format!(
+                            "failure in {} for sql {sql}",
+                            test_file_path.display()
+                        )))
+                    } else {
+                        let sqls = current_sql
+                            .iter()
+                            .enumerate()
+                            .map(|(i, sql)| format!("\n[{}]: {}", i + 1, sql))
+                            .collect::<String>();
+                        Some(error.context(format!(
+                            "failure in {} for multiple currently running sqls: {}",
+                            test_file_path.display(),
+                            sqls
+                        )))
                     }
                 }
                 Ok(thread_result) => thread_result.err(),
@@ -278,7 +291,7 @@ async fn run_test_file_substrait_round_trip(
     mp: MultiProgress,
     mp_style: ProgressStyle,
     filters: &[Filter],
-    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -302,7 +315,7 @@ async fn run_test_file_substrait_round_trip(
             relative_path.clone(),
             pb.clone(),
         )
-        .with_currently_executed_sql_tracker(currently_executed_sql_tracker.clone()))
+        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone()))
     });
     runner.add_label("DatafusionSubstraitRoundTrip");
     runner.with_column_validator(strict_column_validator);
@@ -319,7 +332,7 @@ async fn run_test_file(
     mp: MultiProgress,
     mp_style: ProgressStyle,
     filters: &[Filter],
-    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -343,7 +356,7 @@ async fn run_test_file(
             relative_path.clone(),
             pb.clone(),
         )
-        .with_currently_executed_sql_tracker(currently_executed_sql_tracker.clone()))
+        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone()))
     });
     runner.add_label("Datafusion");
     runner.with_column_validator(strict_column_validator);
@@ -437,7 +450,7 @@ async fn run_test_file_with_postgres(
     mp: MultiProgress,
     mp_style: ProgressStyle,
     filters: &[Filter],
-    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 ) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
@@ -454,8 +467,8 @@ async fn run_test_file_with_postgres(
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect(relative_path.clone(), pb.clone()).map(|conn| {
-            conn.with_currently_executed_sql_tracker(
-                currently_executed_sql_tracker.clone(),
+            conn.with_currently_executing_sql_tracker(
+                currently_executing_sql_tracker.clone(),
             )
         })
     });
@@ -475,7 +488,7 @@ async fn run_test_file_with_postgres(
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
     _filters: &[Filter],
-    _currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    _currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 ) -> Result<()> {
     use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
@@ -486,7 +499,7 @@ async fn run_complete_file(
     validator: Validator,
     mp: MultiProgress,
     mp_style: ProgressStyle,
-    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -513,7 +526,7 @@ async fn run_complete_file(
             relative_path.clone(),
             pb.clone(),
         )
-        .with_currently_executed_sql_tracker(currently_executed_sql_tracker.clone()))
+        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone()))
     });
 
     let col_separator = " ";
@@ -540,7 +553,7 @@ async fn run_complete_file_with_postgres(
     validator: Validator,
     mp: MultiProgress,
     mp_style: ProgressStyle,
-    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 ) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
@@ -561,8 +574,8 @@ async fn run_complete_file_with_postgres(
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect(relative_path.clone(), pb.clone()).map(|conn| {
-            conn.with_currently_executed_sql_tracker(
-                currently_executed_sql_tracker.clone(),
+            conn.with_currently_executing_sql_tracker(
+                currently_executing_sql_tracker.clone(),
             )
         })
     });
@@ -595,7 +608,7 @@ async fn run_complete_file_with_postgres(
     _validator: Validator,
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
-    _currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    _currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 ) -> Result<()> {
     use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")

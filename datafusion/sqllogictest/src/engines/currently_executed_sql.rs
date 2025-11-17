@@ -1,49 +1,59 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicUsize;
 
-/// Hold the currently executed SQL statement.
-/// This is used to save the last executed SQL statement in case of a crash.
-///
-/// This can only hold one SQL statement at a time.
+/// Hold the currently executed SQL statements.
+/// This is used to save the currently running SQLs in case of a crash.
 #[derive(Clone)]
-pub struct CurrentlyExecutedSqlTracker {
+pub struct CurrentlyExecutingSqlTracker {
+    /// The index of the SQL statement.
+    /// Used to uniquely identify each SQL statement even if they are the same.
+    sql_index: Arc<AtomicUsize>,
     /// Lock to store the currently executed SQL statement.
     /// It DOES NOT hold the lock for the duration of query execution and only execute the lock
     /// when updating the currently executed SQL statement to allow for saving the last executed SQL
     /// in case of a crash.
-    currently_executed_sql: Arc<Mutex<Option<String>>>,
+    currently_executed_sqls: Arc<Mutex<HashMap<usize, String>>>,
 }
 
-impl Default for CurrentlyExecutedSqlTracker {
+impl Default for CurrentlyExecutingSqlTracker {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CurrentlyExecutedSqlTracker {
+impl CurrentlyExecutingSqlTracker {
     pub fn new() -> Self {
         Self {
-            currently_executed_sql: Arc::new(Mutex::new(None)),
+            sql_index: Arc::new(AtomicUsize::new(0)),
+            currently_executed_sqls: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Set the currently executed SQL statement.
-    pub fn set_sql(&self, sql: impl Into<String>) {
-        let mut lock = self.currently_executed_sql.lock().unwrap();
-        *lock = Some(sql.into());
+    ///
+    /// Returns a key to use to remove the SQL statement when done.
+    ///
+    /// We are not returning a guard that will automatically remove the SQL statement when dropped.
+    /// as on panic the drop can be called, and it will remove the SQL statement before we can log it.
+    #[must_use = "The returned index must be used to remove the SQL statement when done."]
+    pub fn set_sql(&self, sql: impl Into<String>) -> usize {
+        let index = self.sql_index.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut lock = self.currently_executed_sqls.lock().unwrap();
+        lock.insert(index, sql.into());
+        drop(lock);
+        index
     }
 
-    /// Get the currently executed SQL statement.
-    pub fn get_sql(&self) -> Option<String> {
-        let lock = self.currently_executed_sql.lock().unwrap();
-        lock.clone()
+    /// Remove the currently executed SQL statement by the provided key that was returned by [`Self::set_sql`].
+    pub fn remove_sql(&self, index: usize) {
+        let mut lock = self.currently_executed_sqls.lock().unwrap();
+        lock.remove(&index);
     }
 
-    /// Clear the currently executed SQL statement only if it matches the provided SQL.
-    pub fn clear_sql_if_same(&self, sql: impl Into<String>) {
-        let mut lock = self.currently_executed_sql.lock().unwrap();
-        if lock.as_ref() != Some(&sql.into()) {
-            return;
-        }
-        *lock = None;
+    /// Get the currently executed SQL statements.
+    pub fn get_currently_running_sqls(&self) -> Vec<String> {
+        let lock = self.currently_executed_sqls.lock().unwrap();
+        lock.values().cloned().collect()
     }
 }

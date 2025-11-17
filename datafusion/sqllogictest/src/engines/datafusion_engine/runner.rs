@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
 use super::{error::Result, normalize, DFSqlLogicTestError};
-use crate::engines::currently_executed_sql::CurrentlyExecutedSqlTracker;
+use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::output::{DFColumnType, DFOutput};
 use crate::is_spark_path;
 use arrow::record_batch::RecordBatch;
@@ -37,7 +37,7 @@ pub struct DataFusion {
     ctx: SessionContext,
     relative_path: PathBuf,
     pb: ProgressBar,
-    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 }
 
 impl DataFusion {
@@ -46,16 +46,19 @@ impl DataFusion {
             ctx,
             relative_path,
             pb,
-            currently_executed_sql_tracker: CurrentlyExecutedSqlTracker::default(),
+            currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
         }
     }
 
-    pub fn with_currently_executed_sql_tracker(
+    /// Add a tracker that will track the currently executed SQL statement.
+    ///
+    /// This is useful for logging and debugging purposes.
+    pub fn with_currently_executing_sql_tracker(
         self,
-        currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+        currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     ) -> Self {
         Self {
-            currently_executed_sql_tracker,
+            currently_executing_sql_tracker,
             ..self
         }
     }
@@ -91,13 +94,13 @@ impl sqllogictest::AsyncDB for DataFusion {
             );
         }
 
-        self.currently_executed_sql_tracker.set_sql(sql);
+        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
         let start = Instant::now();
         let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
         let duration = start.elapsed();
 
-        self.currently_executed_sql_tracker.clear_sql_if_same(sql);
+        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
         if duration.gt(&Duration::from_millis(500)) {
             self.update_slow_count();
