@@ -1903,6 +1903,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let variable = object_name_to_string(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
+                // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
                 if variable_lower == "timezone" || variable_lower == "time.zone" {
                     variable_lower = "datafusion.execution.time_zone".to_string();
                 }
@@ -1944,6 +1945,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let variable = object_name_to_string(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
+                // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
                 if variable_lower == "timezone" || variable_lower == "time.zone" {
                     variable_lower = "datafusion.execution.time_zone".to_string();
                 }

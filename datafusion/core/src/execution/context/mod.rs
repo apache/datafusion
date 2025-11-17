@@ -1162,6 +1162,7 @@ impl SessionContext {
                 builder.with_metadata_cache_limit(limit)
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
+            // Remember to update `reset_runtime_variable()` when adding new options
         };
 
         *state = SessionStateBuilder::from(state.clone())
