@@ -54,8 +54,13 @@ use hashbrown::hash_map::RawEntryMut;
 /// Static filter for InList that stores the array and hash set for O(1) lookups
 #[derive(Debug, Clone)]
 struct StaticFilter {
-    array: ArrayRef,
-    hash_set: ArrayHashSet,
+    in_array: ArrayRef,
+    state: RandomState,
+    /// Used to provide a lookup from value to in list index
+    ///
+    /// Note: usize::hash is not used, instead the raw entry
+    /// API is used to store entries w.r.t their value
+    map: HashMap<usize, (), ()>,
 }
 
 /// InList
@@ -76,32 +81,19 @@ impl Debug for InListExpr {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ArrayHashSet {
-    state: RandomState,
-    /// Used to provide a lookup from value to in list index
-    ///
-    /// Note: usize::hash is not used, instead the raw entry
-    /// API is used to store entries w.r.t their value
-    map: HashMap<usize, (), ()>,
-}
-
-impl ArrayHashSet {
+impl StaticFilter {
     /// Checks if values in `v` are contained in the `in_array` using this hash set for lookup.
-    fn contains(
-        &self,
-        v: &dyn Array,
-        in_array: &dyn Array,
-        negated: bool,
-    ) -> Result<BooleanArray> {
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
         // Null type comparisons always return null (SQL three-valued logic)
-        if v.data_type() == &DataType::Null || in_array.data_type() == &DataType::Null {
+        if v.data_type() == &DataType::Null
+            || self.in_array.data_type() == &DataType::Null
+        {
             return Ok(BooleanArray::from(vec![None; v.len()]));
         }
 
         downcast_dictionary_array! {
             v => {
-                let values_contains = self.contains(v.values().as_ref(), in_array, negated)?;
+                let values_contains = self.contains(v.values().as_ref(), negated)?;
                 let result = take(&values_contains, v.keys(), None)?;
                 return Ok(downcast_array(result.as_ref()))
             }
@@ -110,10 +102,10 @@ impl ArrayHashSet {
 
         let needle_nulls = v.logical_nulls();
         let needle_nulls = needle_nulls.as_ref();
-        let haystack_has_nulls = in_array.null_count() != 0;
+        let haystack_has_nulls = self.in_array.null_count() != 0;
 
         with_hashes([v], &self.state, |hashes| {
-            let cmp = make_comparator(v, in_array, SortOptions::default())?;
+            let cmp = make_comparator(v, &self.in_array, SortOptions::default())?;
             Ok((0..v.len())
                 .map(|i| {
                     // SQL three-valued logic: null IN (...) is always null
@@ -137,51 +129,56 @@ impl ArrayHashSet {
                 .collect())
         })
     }
-}
 
-/// Computes an [`ArrayHashSet`] for the provided [`Array`] if there
-/// are nulls present or there are more than the configured number of
-/// elements.
-///
-/// Note: This is split into a separate function as higher-rank trait bounds currently
-/// cause type inference to misbehave
-fn make_hash_set(array: &dyn Array) -> Result<ArrayHashSet> {
-    // Null type has no natural order - return empty hash set
-    if array.data_type() == &DataType::Null {
-        return Ok(ArrayHashSet {
-            state: RandomState::new(),
-            map: HashMap::with_hasher(()),
-        });
-    }
-
-    let state = RandomState::new();
-    let mut map: HashMap<usize, (), ()> = HashMap::with_hasher(());
-
-    with_hashes([array], &state, |hashes| -> Result<()> {
-        let cmp = make_comparator(array, array, SortOptions::default())?;
-
-        let insert_value = |idx| {
-            let hash = hashes[idx];
-            if let RawEntryMut::Vacant(v) = map
-                .raw_entry_mut()
-                .from_hash(hash, |x| cmp(*x, idx).is_eq())
-            {
-                v.insert_with_hasher(hash, idx, (), |x| hashes[*x]);
-            }
-        };
-
-        match array.nulls() {
-            Some(nulls) => {
-                BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
-                    .for_each(insert_value)
-            }
-            None => (0..array.len()).for_each(insert_value),
+    /// Computes a [`StaticFilter`] for the provided [`Array`] if there
+    /// are nulls present or there are more than the configured number of
+    /// elements.
+    ///
+    /// Note: This is split into a separate function as higher-rank trait bounds currently
+    /// cause type inference to misbehave
+    fn try_new(in_array: ArrayRef) -> Result<StaticFilter> {
+        // Null type has no natural order - return empty hash set
+        if in_array.data_type() == &DataType::Null {
+            return Ok(StaticFilter {
+                in_array,
+                state: RandomState::new(),
+                map: HashMap::with_hasher(()),
+            });
         }
 
-        Ok(())
-    })?;
+        let state = RandomState::new();
+        let mut map: HashMap<usize, (), ()> = HashMap::with_hasher(());
 
-    Ok(ArrayHashSet { state, map })
+        with_hashes([&in_array], &state, |hashes| -> Result<()> {
+            let cmp = make_comparator(&in_array, &in_array, SortOptions::default())?;
+
+            let insert_value = |idx| {
+                let hash = hashes[idx];
+                if let RawEntryMut::Vacant(v) = map
+                    .raw_entry_mut()
+                    .from_hash(hash, |x| cmp(*x, idx).is_eq())
+                {
+                    v.insert_with_hasher(hash, idx, (), |x| hashes[*x]);
+                }
+            };
+
+            match in_array.nulls() {
+                Some(nulls) => {
+                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                        .for_each(insert_value)
+                }
+                None => (0..in_array.len()).for_each(insert_value),
+            }
+
+            Ok(())
+        })?;
+
+        Ok(Self {
+            in_array,
+            state,
+            map,
+        })
+    }
 }
 
 /// Evaluates the list of expressions into an array, flattening any dictionaries
@@ -253,8 +250,8 @@ impl InListExpr {
     /// Create a new InList expression directly from an array, bypassing expression evaluation.
     ///
     /// This is more efficient than `in_list()` when you already have the list as an array,
-    /// as it avoids the conversion: `ArrayRef -> Vec<PhysicalExpr> -> ArrayRef -> ArrayHashSet`.
-    /// Instead it goes directly: `ArrayRef -> ArrayHashSet`.
+    /// as it avoids the conversion: `ArrayRef -> Vec<PhysicalExpr> -> ArrayRef -> StaticFilter`.
+    /// Instead it goes directly: `ArrayRef -> StaticFilter`.
     ///
     /// The `list` field will be empty when using this constructor, as the array is stored
     /// directly in the static filter.
@@ -272,8 +269,7 @@ impl InListExpr {
                 Ok(crate::expressions::lit(scalar) as Arc<dyn PhysicalExpr>)
             })
             .collect::<Result<Vec<_>>>()?;
-        let hash_set = make_hash_set(array.as_ref())?;
-        let static_filter = StaticFilter { array, hash_set };
+        let static_filter = StaticFilter::try_new(array)?;
         Ok(Self::new(expr, list, negated, Some(static_filter)))
     }
 }
@@ -311,7 +307,7 @@ impl PhysicalExpr for InListExpr {
         }
 
         if let Some(static_filter) = &self.static_filter {
-            Ok(static_filter.array.null_count() > 0)
+            Ok(static_filter.in_array.null_count() > 0)
         } else {
             for expr in &self.list {
                 if expr.nullable(input_schema)? {
@@ -328,11 +324,9 @@ impl PhysicalExpr for InListExpr {
         let r = match &self.static_filter {
             Some(filter) => {
                 match value {
-                    ColumnarValue::Array(array) => filter.hash_set.contains(
-                        &array,
-                        filter.array.as_ref(),
-                        self.negated,
-                    )?,
+                    ColumnarValue::Array(array) => {
+                        filter.contains(&array, self.negated)?
+                    }
                     ColumnarValue::Scalar(scalar) => {
                         if scalar.is_null() {
                             // SQL three-valued logic: null IN (...) is always null
@@ -344,11 +338,8 @@ impl PhysicalExpr for InListExpr {
                         // Use a 1 row array to avoid code duplication/branching
                         // Since all we do is compute hash and lookup this should be efficient enough
                         let array = scalar.to_array()?;
-                        let result_array = filter.hash_set.contains(
-                            array.as_ref(),
-                            filter.array.as_ref(),
-                            self.negated,
-                        )?;
+                        let result_array =
+                            filter.contains(array.as_ref(), self.negated)?;
                         // Broadcast the single result to all rows
                         // Must check is_null() to preserve NULL values (SQL three-valued logic)
                         if result_array.is_null(0) {
@@ -498,9 +489,7 @@ pub fn in_list(
 
     // Try to create a static filter for constant expressions
     let static_filter = try_evaluate_constant_list(&list, schema)
-        .and_then(|array| {
-            make_hash_set(array.as_ref()).map(|hash_set| StaticFilter { array, hash_set })
-        })
+        .and_then(StaticFilter::try_new)
         .ok();
 
     Ok(Arc::new(InListExpr::new(
@@ -560,9 +549,9 @@ mod tests {
     fn try_cast_static_filter_to_set(
         list: &[Arc<dyn PhysicalExpr>],
         schema: &Schema,
-    ) -> Result<ArrayHashSet> {
+    ) -> Result<StaticFilter> {
         let array = try_evaluate_constant_list(list, schema)?;
-        make_hash_set(array.as_ref())
+        StaticFilter::try_new(array)
     }
 
     // Attempts to coerce the types of `list_type` to be comparable with the
@@ -1202,11 +1191,10 @@ mod tests {
             expressions::cast(lit(2i32), &schema, DataType::Int64)?,
             try_cast(lit(3.13f32), &schema, DataType::Int64)?,
         ];
-        let set_array = try_evaluate_constant_list(&phy_exprs, &schema)?;
-        let result = try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
+        let static_filter = try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
 
         let array = Int64Array::from(vec![1, 2, 3, 4]);
-        let r = result.contains(&array, set_array.as_ref(), false).unwrap();
+        let r = static_filter.contains(&array, false).unwrap();
         assert_eq!(r, BooleanArray::from(vec![true, true, true, false]));
 
         try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
