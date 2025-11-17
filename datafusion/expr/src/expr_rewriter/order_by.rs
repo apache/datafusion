@@ -80,7 +80,13 @@ fn rewrite_in_terms_of_projection(
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
             let (qualifier, field_name) = found.qualified_name();
-            let col = Expr::Column(Column::new(qualifier, field_name));
+            // Use `Column::from_qualified_name` to preserve any implicit qualifiers
+            // that might be encoded in the field name itself (e.g. "min(t.c2)").
+            let column = match qualifier {
+                Some(qualifier) => Column::new(Some(qualifier), field_name),
+                None => Column::from_qualified_name(field_name),
+            };
+            let col = Expr::Column(column);
             return Ok(Transformed::yes(col));
         }
 
@@ -115,6 +121,7 @@ fn rewrite_in_terms_of_projection(
         }
 
         if let Some(found) = found {
+            let found = ensure_column_qualifiers(found);
             return Ok(Transformed::yes(match normalized_expr {
                 Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
                     expr: Box::new(found),
@@ -131,6 +138,29 @@ fn rewrite_in_terms_of_projection(
         Ok(Transformed::no(expr))
     })
     .data()
+}
+
+fn ensure_column_qualifiers(expr: Expr) -> Expr {
+    match expr {
+        Expr::Column(column) => Expr::Column(qualify_column(column)),
+        Expr::Alias(mut alias) => {
+            alias.expr = Box::new(ensure_column_qualifiers(*alias.expr));
+            Expr::Alias(alias)
+        }
+        other => other,
+    }
+}
+
+fn qualify_column(column: Column) -> Column {
+    if column.relation.is_some() {
+        return column;
+    }
+    let parsed = Column::from_qualified_name(column.name.clone());
+    if parsed.relation.is_some() {
+        parsed
+    } else {
+        column
+    }
 }
 
 /// Does the underlying expr match e?
