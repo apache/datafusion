@@ -67,7 +67,7 @@ SELECT median(c1) IGNORE NULLS FROM table
 
 Instead of silently succeeding.
 
-### API change for Cache Accessor trait
+### API change for `CacheAccessor` trait
 
 The remove API no longer requires a mutable instance
 
