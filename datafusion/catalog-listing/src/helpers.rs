@@ -21,8 +21,9 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
-use datafusion_common::internal_err;
-use datafusion_common::{HashMap, Result, ScalarValue};
+use datafusion_common::{
+    assert_or_internal_err, DataFusionError, HashMap, Result, ScalarValue,
+};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::PartitionedFile;
 use datafusion_expr::{lit, utils, BinaryExpr, Operator};
@@ -386,12 +387,11 @@ pub async fn pruned_partition_list<'a>(
         .try_filter(|object_meta| futures::future::ready(object_meta.size > 0));
 
     if partition_cols.is_empty() {
-        if !filters.is_empty() {
-            return internal_err!(
-                "Got partition filters for unpartitioned table {}",
-                table_path
-            );
-        }
+        assert_or_internal_err!(
+            filters.is_empty(),
+            "Got partition filters for unpartitioned table {}",
+            table_path
+        );
 
         // if no partition col => simply list all the files
         Ok(objects.map_ok(|object_meta| object_meta.into()).boxed())

@@ -28,8 +28,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, plan_err, qualified_name, Column, DFSchema,
-    DataFusionError, Result,
+    assert_eq_or_internal_err, assert_or_internal_err, internal_err, plan_err,
+    qualified_name, Column, DFSchema, DataFusionError, Result,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -1372,9 +1372,7 @@ fn insert_below(
     })?;
 
     // make sure we did the actual replacement
-    if new_child.is_some() {
-        return internal_err!("node had no  inputs");
-    }
+    assert_or_internal_err!(new_child.is_none(), "node had no  inputs");
 
     Ok(transformed_plan)
 }

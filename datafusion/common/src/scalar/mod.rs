@@ -33,6 +33,7 @@ use std::mem::{size_of, size_of_val};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::assert_or_internal_err;
 use crate::cast::{
     as_binary_array, as_binary_view_array, as_boolean_array, as_date32_array,
     as_date64_array, as_decimal128_array, as_decimal256_array, as_decimal32_array,
@@ -1581,9 +1582,7 @@ impl ScalarValue {
                 validate_decimal_precision_and_scale::<Decimal32Type>(
                     *precision, *scale,
                 )?;
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match 10_i32.checked_pow(*scale as u32) {
                     Some(value) => {
                         ScalarValue::Decimal32(Some(value), *precision, *scale)
@@ -1595,9 +1594,7 @@ impl ScalarValue {
                 validate_decimal_precision_and_scale::<Decimal64Type>(
                     *precision, *scale,
                 )?;
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i64::from(10).checked_pow(*scale as u32) {
                     Some(value) => {
                         ScalarValue::Decimal64(Some(value), *precision, *scale)
@@ -1609,9 +1606,7 @@ impl ScalarValue {
                 validate_decimal_precision_and_scale::<Decimal128Type>(
                     *precision, *scale,
                 )?;
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i128::from(10).checked_pow(*scale as u32) {
                     Some(value) => {
                         ScalarValue::Decimal128(Some(value), *precision, *scale)
@@ -1623,9 +1618,7 @@ impl ScalarValue {
                 validate_decimal_precision_and_scale::<Decimal256Type>(
                     *precision, *scale,
                 )?;
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i256::from(10).checked_pow(*scale as u32) {
                     Some(value) => {
                         ScalarValue::Decimal256(Some(value), *precision, *scale)
@@ -1655,9 +1648,7 @@ impl ScalarValue {
                 validate_decimal_precision_and_scale::<Decimal32Type>(
                     *precision, *scale,
                 )?;
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match 10_i32.checked_pow(*scale as u32) {
                     Some(value) => {
                         ScalarValue::Decimal32(Some(-value), *precision, *scale)
@@ -1669,9 +1660,7 @@ impl ScalarValue {
                 validate_decimal_precision_and_scale::<Decimal64Type>(
                     *precision, *scale,
                 )?;
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i64::from(10).checked_pow(*scale as u32) {
                     Some(value) => {
                         ScalarValue::Decimal64(Some(-value), *precision, *scale)
@@ -1683,9 +1672,7 @@ impl ScalarValue {
                 validate_decimal_precision_and_scale::<Decimal128Type>(
                     *precision, *scale,
                 )?;
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i128::from(10).checked_pow(*scale as u32) {
                     Some(value) => {
                         ScalarValue::Decimal128(Some(-value), *precision, *scale)
@@ -1697,9 +1684,7 @@ impl ScalarValue {
                 validate_decimal_precision_and_scale::<Decimal256Type>(
                     *precision, *scale,
                 )?;
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i256::from(10).checked_pow(*scale as u32) {
                     Some(value) => {
                         ScalarValue::Decimal256(Some(-value), *precision, *scale)
@@ -1729,14 +1714,15 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(10.0)),
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
             DataType::Decimal32(precision, scale) => {
-                if let Err(err) = validate_decimal_precision_and_scale::<Decimal32Type>(
+                let validation = validate_decimal_precision_and_scale::<Decimal32Type>(
                     *precision, *scale,
-                ) {
-                    return _internal_err!("Invalid precision and scale {err}");
-                }
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                );
+                assert_or_internal_err!(
+                    validation.is_ok(),
+                    "Invalid precision and scale {}",
+                    validation.unwrap_err()
+                );
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match 10_i32.checked_pow((*scale + 1) as u32) {
                     Some(value) => {
                         ScalarValue::Decimal32(Some(value), *precision, *scale)
@@ -1745,14 +1731,15 @@ impl ScalarValue {
                 }
             }
             DataType::Decimal64(precision, scale) => {
-                if let Err(err) = validate_decimal_precision_and_scale::<Decimal64Type>(
+                let validation = validate_decimal_precision_and_scale::<Decimal64Type>(
                     *precision, *scale,
-                ) {
-                    return _internal_err!("Invalid precision and scale {err}");
-                }
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                );
+                assert_or_internal_err!(
+                    validation.is_ok(),
+                    "Invalid precision and scale {}",
+                    validation.unwrap_err()
+                );
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i64::from(10).checked_pow((*scale + 1) as u32) {
                     Some(value) => {
                         ScalarValue::Decimal64(Some(value), *precision, *scale)
@@ -1761,14 +1748,15 @@ impl ScalarValue {
                 }
             }
             DataType::Decimal128(precision, scale) => {
-                if let Err(err) = validate_decimal_precision_and_scale::<Decimal128Type>(
+                let validation = validate_decimal_precision_and_scale::<Decimal128Type>(
                     *precision, *scale,
-                ) {
-                    return _internal_err!("Invalid precision and scale {err}");
-                }
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                );
+                assert_or_internal_err!(
+                    validation.is_ok(),
+                    "Invalid precision and scale {}",
+                    validation.unwrap_err()
+                );
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i128::from(10).checked_pow((*scale + 1) as u32) {
                     Some(value) => {
                         ScalarValue::Decimal128(Some(value), *precision, *scale)
@@ -1777,14 +1765,15 @@ impl ScalarValue {
                 }
             }
             DataType::Decimal256(precision, scale) => {
-                if let Err(err) = validate_decimal_precision_and_scale::<Decimal256Type>(
+                let validation = validate_decimal_precision_and_scale::<Decimal256Type>(
                     *precision, *scale,
-                ) {
-                    return _internal_err!("Invalid precision and scale {err}");
-                }
-                if *scale < 0 {
-                    return _internal_err!("Negative scale is not supported");
-                }
+                );
+                assert_or_internal_err!(
+                    validation.is_ok(),
+                    "Invalid precision and scale {}",
+                    validation.unwrap_err()
+                );
+                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
                 match i256::from(10).checked_pow((*scale + 1) as u32) {
                     Some(value) => {
                         ScalarValue::Decimal256(Some(value), *precision, *scale)
