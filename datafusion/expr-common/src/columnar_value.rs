@@ -310,7 +310,7 @@ fn ensure_date_array_timestamp_bounds(
         return Ok(());
     }
 
-    let iter: Box<dyn Iterator<Item = i64> + '_> = match &source_type {
+    match &source_type {
         DataType::Date32 => {
             let arr = array
                 .as_any()
@@ -321,7 +321,27 @@ fn ensure_date_array_timestamp_bounds(
                         array.data_type()
                     )
                 })?;
-            Box::new(arr.iter().flatten().map(|v| v as i64))
+
+            // Find min and max values in the array (ignoring nulls) and only
+            // check those bounds. This reduces the number of checked
+            // multiplications from N to at most 2 while preserving
+            // correctness.
+            let mut min: Option<i64> = None;
+            let mut max: Option<i64> = None;
+            for v in arr.iter().flatten().map(|v| v as i64) {
+                min = Some(min.map_or(v, |m| m.min(v)));
+                max = Some(max.map_or(v, |m| m.max(v)));
+            }
+
+            if let Some(v) = min {
+                ensure_timestamp_in_bounds(v, multiplier, &source_type, cast_type)?;
+            }
+            if let Some(v) = max {
+                // If min == max, we've already checked the value.
+                if Some(v) != min {
+                    ensure_timestamp_in_bounds(v, multiplier, &source_type, cast_type)?;
+                }
+            }
         }
         DataType::Date64 => {
             let arr = array
@@ -333,13 +353,24 @@ fn ensure_date_array_timestamp_bounds(
                         array.data_type()
                     )
                 })?;
-            Box::new(arr.iter().flatten())
+
+            let mut min: Option<i64> = None;
+            let mut max: Option<i64> = None;
+            for v in arr.iter().flatten() {
+                min = Some(min.map_or(v, |m| m.min(v)));
+                max = Some(max.map_or(v, |m| m.max(v)));
+            }
+
+            if let Some(v) = min {
+                ensure_timestamp_in_bounds(v, multiplier, &source_type, cast_type)?;
+            }
+            if let Some(v) = max {
+                if Some(v) != min {
+                    ensure_timestamp_in_bounds(v, multiplier, &source_type, cast_type)?;
+                }
+            }
         }
         _ => return Ok(()), // Not a date type, nothing to do
-    };
-
-    for value in iter {
-        ensure_timestamp_in_bounds(value, multiplier, &source_type, cast_type)?;
     }
 
     Ok(())
@@ -557,7 +588,8 @@ mod tests {
             value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None), None);
         let err = result.expect_err("expected overflow to be detected");
         assert!(
-            err.to_string().contains("+/-2262"),
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
             "unexpected error: {err}"
         );
     }

@@ -132,7 +132,11 @@ pub fn date_to_timestamp_multiplier(
         // to micro/nano requires multiplying by 1_000 / 1_000_000.
         DataType::Date64 => match target_unit {
             TimeUnit::Second => None,
-            TimeUnit::Millisecond => Some(1),
+            // Converting Date64 (ms since epoch) to millisecond timestamps
+            // is an identity conversion and does not require multiplication.
+            // Returning `None` indicates no multiplication-based overflow
+            // check is necessary.
+            TimeUnit::Millisecond => None,
             TimeUnit::Microsecond => Some(MICROS_PER_MILLISECOND),
             TimeUnit::Nanosecond => Some(NANOS_PER_MILLISECOND),
         },
@@ -157,7 +161,7 @@ pub fn ensure_timestamp_in_bounds(
     if value.checked_mul(multiplier).is_none() {
         let target = format_timestamp_type_for_error(target_type);
         _exec_err!(
-            "Cannot cast {} value {} to {}: timestamp values are limited to +/-2262 years",
+            "Cannot cast {} value {} to {}: converted value exceeds the representable i64 range",
             source_type,
             value,
             target
@@ -5183,7 +5187,7 @@ mod tests {
         );
         assert!(err.is_err());
         let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("Cannot cast Date32 value 2932896 to Timestamp(ns): timestamp values are limited to +/-2262 years"));
+        assert!(msg.contains("Cannot cast Date32 value 2932896 to Timestamp(ns): converted value exceeds the representable i64 range"));
 
         // Date64 overflow for ns (millis * 1_000_000)
         let overflow_millis: i64 = (i64::MAX / NANOS_PER_MILLISECOND) + 1;
@@ -8784,7 +8788,8 @@ mod tests {
             .cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None))
             .expect_err("expected cast to fail");
         assert!(
-            err.to_string().contains("+/-2262"),
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
             "unexpected error: {err}"
         );
     }
