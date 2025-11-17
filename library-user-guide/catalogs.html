@@ -403,7 +403,7 @@
 -->
 <section id="catalogs-schemas-and-tables">
 <h1>Catalogs, Schemas, and Tables<a class="headerlink" href="#catalogs-schemas-and-tables" title="Link to this heading">#</a></h1>
-<p>This section describes how to create and manage catalogs, schemas, and tables in DataFusion. For those wanting to dive into the code quickly please see the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/catalog.rs">example</a>.</p>
+<p>This section describes how to create and manage catalogs, schemas, and tables in DataFusion. For those wanting to dive into the code quickly please see the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/catalog.rs">example</a>.</p>
 <section id="general-concepts">
 <h2>General Concepts<a class="headerlink" href="#general-concepts" title="Link to this heading">#</a></h2>
 <p>Catalog providers, catalogs, schemas, and tables are organized in a hierarchy. A <code class="docutils literal notranslate"><span class="pre">CatalogProviderList</span></code> contains <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>s, a <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> contains <code class="docutils literal notranslate"><span class="pre">SchemaProviders</span></code> and a <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code> contains <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>s.</p>
