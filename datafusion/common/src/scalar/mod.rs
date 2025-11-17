@@ -178,9 +178,9 @@ pub(crate) fn format_timestamp_type_for_error(target_type: &DataType) -> String 
                 TimeUnit::Microsecond => "us",
                 TimeUnit::Nanosecond => "ns",
             };
-            format!("Timestamp({})", s)
+            format!("Timestamp({s})")
         }
-        other => format!("{}", other),
+        other => format!("{other}"),
     }
 }
 
