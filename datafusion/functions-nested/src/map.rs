@@ -450,15 +450,13 @@ fn build_map_array(
             // Validate that we won't overflow i32 when converting from potentially i64 offsets
             let entry_count_i32 = i32::try_from(entry_count).map_err(|_| {
                 datafusion_common::DataFusionError::Execution(format!(
-                    "Map offset overflow: entry count {} at index {} exceeds i32::MAX",
-                    entry_count, i
+                    "Map offset overflow: entry count {entry_count} at index {i} exceeds i32::MAX",
                 ))
             })?;
             running_offset =
                 running_offset.checked_add(entry_count_i32).ok_or_else(|| {
                     datafusion_common::DataFusionError::Execution(format!(
-                    "Map offset overflow: cumulative offset exceeds i32::MAX at index {}",
-                    i
+                    "Map offset overflow: cumulative offset exceeds i32::MAX at index {i}",
                 ))
                 })?;
             non_null_idx += 1;
@@ -476,8 +474,8 @@ fn build_map_array(
         let value_type = get_element_type(&values_data_type)?;
 
         (
-            arrow::array::new_empty_array(&key_type),
-            arrow::array::new_empty_array(&value_type),
+            arrow::array::new_empty_array(key_type),
+            arrow::array::new_empty_array(value_type),
         )
     } else {
         let flattened_keys = arrow::compute::concat(key_array_vec.as_ref())?;
