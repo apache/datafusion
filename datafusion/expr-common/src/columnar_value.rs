@@ -17,11 +17,14 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::{Array, ArrayRef, NullArray};
+use arrow::array::{Array, ArrayRef, Date32Array, Date64Array, NullArray};
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+use datafusion_common::scalar::{
+    date_to_timestamp_multiplier, ensure_timestamp_in_bounds,
+};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
@@ -275,14 +278,66 @@ impl ColumnarValue {
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
-            )),
+            ColumnarValue::Array(array) => {
+                ensure_date_array_timestamp_bounds(array, cast_type)?;
+                Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
+                    array,
+                    cast_type,
+                    &cast_options,
+                )?))
+            }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
             )),
         }
     }
+}
+
+fn ensure_date_array_timestamp_bounds(
+    array: &ArrayRef,
+    cast_type: &DataType,
+) -> Result<()> {
+    let source_type = array.data_type().clone();
+    let Some(multiplier) = date_to_timestamp_multiplier(&source_type, cast_type) else {
+        return Ok(());
+    };
+
+    if multiplier <= 1 {
+        return Ok(());
+    }
+
+    match &source_type {
+        DataType::Date32 => {
+            let Some(date_array) = array.as_any().downcast_ref::<Date32Array>() else {
+                return internal_err!(
+                    "Expected Date32Array when validating cast. Found {}",
+                    array.data_type()
+                );
+            };
+            for value in date_array.iter().flatten() {
+                ensure_timestamp_in_bounds(
+                    i64::from(value),
+                    multiplier,
+                    &source_type,
+                    cast_type,
+                )?;
+            }
+        }
+        DataType::Date64 => {
+            let Some(date_array) = array.as_any().downcast_ref::<Date64Array>() else {
+                return internal_err!(
+                    "Expected Date64Array when validating cast. Found {}",
+                    array.data_type()
+                );
+            };
+            for value in date_array.iter().flatten() {
+                ensure_timestamp_in_bounds(value, multiplier, &source_type, cast_type)?;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 // Implement Display trait for ColumnarValue
@@ -312,7 +367,8 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
+    use arrow::array::{Date64Array, Int32Array};
+    use arrow::datatypes::TimeUnit;
 
     #[test]
     fn into_array_of_size() {
@@ -482,6 +538,20 @@ mod tests {
                 "| 3                       |\n",
                 "+-------------------------+"
             )
+        );
+    }
+
+    #[test]
+    fn cast_date64_array_to_timestamp_overflow() {
+        let overflow_value = i64::MAX / 1_000_000 + 1;
+        let array: ArrayRef = Arc::new(Date64Array::from(vec![Some(overflow_value)]));
+        let value = ColumnarValue::Array(array);
+        let result =
+            value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None), None);
+        let err = result.expect_err("expected overflow to be detected");
+        assert!(
+            err.to_string().contains("+/-2262"),
+            "unexpected error: {err}"
         );
     }
 }
