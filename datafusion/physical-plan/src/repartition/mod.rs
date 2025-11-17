@@ -46,8 +46,10 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
-use datafusion_common::{internal_err, ColumnStatistics, HashMap};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    assert_or_internal_err, internal_err, ColumnStatistics, DataFusionError, HashMap,
+};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -976,13 +978,12 @@ impl ExecutionPlan for RepartitionExec {
                 return Ok(Statistics::new_unknown(&self.schema()));
             }
 
-            if partition >= partition_count {
-                return internal_err!(
-                    "RepartitionExec invalid partition {} (expected less than {})",
-                    partition,
-                    self.partitioning().partition_count()
-                );
-            }
+            assert_or_internal_err!(
+                partition < partition_count,
+                "RepartitionExec invalid partition {} (expected less than {})",
+                partition,
+                partition_count
+            );
 
             let mut stats = self.input.partition_statistics(None)?;
 

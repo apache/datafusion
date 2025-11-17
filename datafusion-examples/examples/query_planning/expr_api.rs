@@ -55,8 +55,7 @@ use datafusion::prelude::*;
 /// 5. Analyze predicates for boundary ranges: [`range_analysis_demo`]
 /// 6. Get the types of the expressions: [`expression_type_demo`]
 /// 7. Apply type coercion to expressions: [`type_coercion_demo`]
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn expr_api() -> Result<()> {
     // The easiest way to do create expressions is to use the
     // "fluent"-style API:
     let expr = col("a") + lit(5);

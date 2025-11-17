@@ -102,7 +102,7 @@ impl ExecutionProps {
     }
 
     /// Returns the provider for the `var_type`, if any
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn get_var_provider(
         &self,
         var_type: VarType,

@@ -25,7 +25,9 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
+use datafusion_common::{
+    assert_or_internal_err, internal_datafusion_err, plan_err, DataFusionError, Result,
+};
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use indexmap::IndexMap;
@@ -625,13 +627,11 @@ impl ProjectionMapping {
                     let idx = col.index();
                     let matching_field = input_schema.field(idx);
                     let matching_name = matching_field.name();
-                    if col.name() != matching_name {
-                        return internal_err!(
-                            "Input field name {} does not match with the projection expression {}",
-                            matching_name,
-                            col.name()
-                        );
-                    }
+                    assert_or_internal_err!(
+                        col.name() == matching_name,
+                        "Input field name {matching_name} does not match with the projection expression {}",
+                        col.name()
+                    );
                     let matching_column = Column::new(matching_name, idx);
                     Ok(Transformed::yes(Arc::new(matching_column)))
                 }

@@ -18,7 +18,7 @@
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::apply_cmp;
 use std::hash::Hash;
@@ -169,11 +169,10 @@ pub fn like(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = &expr.data_type(input_schema)?;
     let pattern_type = &pattern.data_type(input_schema)?;
-    if !expr_type.eq(pattern_type) && !can_like_type(expr_type) {
-        return internal_err!(
-            "The type of {expr_type} AND {pattern_type} of like physical should be same"
-        );
-    }
+    assert_or_internal_err!(
+        expr_type.eq(pattern_type) || can_like_type(expr_type),
+        "The type of {expr_type} AND {pattern_type} of like physical should be same"
+    );
     Ok(Arc::new(LikeExpr::new(
         negated,
         case_insensitive,

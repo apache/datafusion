@@ -33,6 +33,7 @@ mod tests {
     use datafusion_datasource_csv::CsvFormat;
     use object_store::ObjectStore;
 
+    use crate::datasource::file_format::FileFormat;
     use crate::prelude::CsvReadOptions;
     use crate::prelude::SessionContext;
     use crate::test::partitioned_file_groups;
@@ -104,12 +105,13 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
@@ -176,12 +178,13 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
@@ -247,12 +250,13 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
@@ -317,12 +321,13 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
@@ -378,12 +383,13 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let mut file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
@@ -489,12 +495,13 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )
