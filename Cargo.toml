@@ -106,7 +106,7 @@ arrow-ord = { version = "57.0.0", default-features = false }
 arrow-schema = { version = "57.0.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
-bytes = "1.10"
+bytes = "1.11"
 chrono = { version = "0.4.42", default-features = false }
 criterion = "0.7"
 ctor = "0.6.1"
