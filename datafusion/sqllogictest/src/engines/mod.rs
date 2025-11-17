@@ -17,10 +17,10 @@
 
 /// Implementation of sqllogictest for datafusion.
 mod conversion;
+mod currently_executed_sql;
 mod datafusion_engine;
 mod datafusion_substrait_roundtrip_engine;
 mod output;
-mod currently_executed_sql;
 
 pub use datafusion_engine::convert_batches;
 pub use datafusion_engine::convert_schema_to_types;

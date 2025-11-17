@@ -16,8 +16,8 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, Mutex};
 
 /// Hold the currently executed SQL statements.
 /// This is used to save the currently running SQLs in case of a crash.
@@ -55,7 +55,9 @@ impl CurrentlyExecutingSqlTracker {
     /// as on panic the drop can be called, and it will remove the SQL statement before we can log it.
     #[must_use = "The returned index must be used to remove the SQL statement when done."]
     pub fn set_sql(&self, sql: impl Into<String>) -> usize {
-        let index = self.sql_index.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let index = self
+            .sql_index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut lock = self.currently_executed_sqls.lock().unwrap();
         lock.insert(index, sql.into());
         drop(lock);
