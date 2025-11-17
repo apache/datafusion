@@ -33,7 +33,8 @@ use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::hash_utils::with_hashes;
 use datafusion_common::{
-    assert_or_internal_err, exec_err, DFSchema, DataFusionError, Result, ScalarValue,
+    assert_or_internal_err, exec_datafusion_err, exec_err, DFSchema, DataFusionError,
+    HashSet, Result, ScalarValue,
 };
 use datafusion_expr::{expr_vec_fmt, ColumnarValue};
 
@@ -41,16 +42,12 @@ use ahash::RandomState;
 use datafusion_common::HashMap;
 use hashbrown::hash_map::RawEntryMut;
 
-/// Static filter for InList that stores the array and hash set for O(1) lookups
-#[derive(Debug, Clone)]
-struct StaticFilter {
-    in_array: ArrayRef,
-    state: RandomState,
-    /// Used to provide a lookup from value to in list index
-    ///
-    /// Note: usize::hash is not used, instead the raw entry
-    /// API is used to store entries w.r.t their value
-    map: HashMap<usize, (), ()>,
+/// Trait for InList static filters
+trait StaticFilter {
+    fn null_count(&self) -> usize;
+
+    /// Checks if values in `v` are contained in the filter
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
 }
 
 /// InList
@@ -58,7 +55,7 @@ pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
-    static_filter: Option<StaticFilter>,
+    static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
 }
 
 impl Debug for InListExpr {
@@ -71,7 +68,23 @@ impl Debug for InListExpr {
     }
 }
 
-impl StaticFilter {
+/// Static filter for InList that stores the array and hash set for O(1) lookups
+#[derive(Debug, Clone)]
+struct ArrayStaticFilter {
+    in_array: ArrayRef,
+    state: RandomState,
+    /// Used to provide a lookup from value to in list index
+    ///
+    /// Note: usize::hash is not used, instead the raw entry
+    /// API is used to store entries w.r.t their value
+    map: HashMap<usize, (), ()>,
+}
+
+impl StaticFilter for ArrayStaticFilter {
+    fn null_count(&self) -> usize {
+        self.in_array.null_count()
+    }
+
     /// Checks if values in `v` are contained in the `in_array` using this hash set for lookup.
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
         // Null type comparisons always return null (SQL three-valued logic)
@@ -119,17 +132,31 @@ impl StaticFilter {
                 .collect())
         })
     }
+}
 
+fn instantiate_static_filter(
+    in_array: ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+    match in_array.data_type() {
+        DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
+        _ => {
+            /* fall through to generic implementation */
+            Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?))
+        }
+    }
+}
+
+impl ArrayStaticFilter {
     /// Computes a [`StaticFilter`] for the provided [`Array`] if there
     /// are nulls present or there are more than the configured number of
     /// elements.
     ///
     /// Note: This is split into a separate function as higher-rank trait bounds currently
     /// cause type inference to misbehave
-    fn try_new(in_array: ArrayRef) -> Result<StaticFilter> {
+    fn try_new(in_array: ArrayRef) -> Result<ArrayStaticFilter> {
         // Null type has no natural order - return empty hash set
         if in_array.data_type() == &DataType::Null {
-            return Ok(StaticFilter {
+            return Ok(ArrayStaticFilter {
                 in_array,
                 state: RandomState::new(),
                 map: HashMap::with_hasher(()),
@@ -168,6 +195,68 @@ impl StaticFilter {
             state,
             map,
         })
+    }
+}
+
+struct Int32StaticFilter {
+    null_count: usize,
+    values: HashSet<i32>,
+}
+
+impl Int32StaticFilter {
+    fn try_new(in_array: &ArrayRef) -> Result<Self> {
+        let in_array = in_array
+            .as_primitive_opt::<Int32Type>()
+            .ok_or_else(|| exec_datafusion_err!("Failed to downcast array"))?;
+
+        let mut values = HashSet::with_capacity(in_array.len());
+        let null_count = in_array.null_count();
+
+        for v in in_array.iter().flatten() {
+            values.insert(v);
+        }
+
+        Ok(Self { null_count, values })
+    }
+}
+
+impl StaticFilter for Int32StaticFilter {
+    fn null_count(&self) -> usize {
+        self.null_count
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        let v = v
+            .as_primitive_opt::<Int32Type>()
+            .ok_or_else(|| exec_datafusion_err!("Failed to downcast array"))?;
+
+        let result = match (v.null_count() > 0, negated) {
+            (true, false) => {
+                // has nulls, not negated"
+                BooleanArray::from_iter(
+                    v.iter().map(|value| Some(self.values.contains(&value?))),
+                )
+            }
+            (true, true) => {
+                // has nulls, negated
+                BooleanArray::from_iter(
+                    v.iter().map(|value| Some(!self.values.contains(&value?))),
+                )
+            }
+            (false, false) => {
+                //no null, not negated
+                BooleanArray::from_iter(
+                    v.values().iter().map(|value| self.values.contains(value)),
+                )
+            }
+            (false, true) => {
+                // no null, negated
+                BooleanArray::from_iter(
+                    v.values().iter().map(|value| !self.values.contains(value)),
+                )
+            }
+        };
+        Ok(result)
     }
 }
 
@@ -212,7 +301,7 @@ impl InListExpr {
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
-        static_filter: Option<StaticFilter>,
+        static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
     ) -> Self {
         Self {
             expr,
@@ -259,8 +348,12 @@ impl InListExpr {
                 Ok(crate::expressions::lit(scalar) as Arc<dyn PhysicalExpr>)
             })
             .collect::<Result<Vec<_>>>()?;
-        let static_filter = StaticFilter::try_new(array)?;
-        Ok(Self::new(expr, list, negated, Some(static_filter)))
+        Ok(Self::new(
+            expr,
+            list,
+            negated,
+            Some(instantiate_static_filter(array)?),
+        ))
     }
 }
 impl std::fmt::Display for InListExpr {
@@ -297,7 +390,7 @@ impl PhysicalExpr for InListExpr {
         }
 
         if let Some(static_filter) = &self.static_filter {
-            Ok(static_filter.in_array.null_count() > 0)
+            Ok(static_filter.null_count() > 0)
         } else {
             for expr in &self.list {
                 if expr.nullable(input_schema)? {
@@ -420,7 +513,7 @@ impl PhysicalExpr for InListExpr {
             Arc::clone(&children[0]),
             children[1..].to_vec(),
             self.negated,
-            self.static_filter.clone(),
+            self.static_filter.as_ref().map(Arc::clone),
         )))
     }
 
@@ -479,8 +572,11 @@ pub fn in_list(
 
     // Try to create a static filter for constant expressions
     let static_filter = try_evaluate_constant_list(&list, schema)
-        .and_then(StaticFilter::try_new)
-        .ok();
+        .and_then(ArrayStaticFilter::try_new)
+        .ok()
+        .map(|static_filter| {
+            Arc::new(static_filter) as Arc<dyn StaticFilter + Send + Sync>
+        });
 
     Ok(Arc::new(InListExpr::new(
         expr,
@@ -539,9 +635,9 @@ mod tests {
     fn try_cast_static_filter_to_set(
         list: &[Arc<dyn PhysicalExpr>],
         schema: &Schema,
-    ) -> Result<StaticFilter> {
+    ) -> Result<ArrayStaticFilter> {
         let array = try_evaluate_constant_list(list, schema)?;
-        StaticFilter::try_new(array)
+        ArrayStaticFilter::try_new(array)
     }
 
     // Attempts to coerce the types of `list_type` to be comparable with the
