@@ -24,7 +24,7 @@ use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Result, TableReference};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
 /// For example, `max(x)` is written to `col("max(x)")`
@@ -156,10 +156,29 @@ fn qualify_column(column: Column) -> Column {
     }
     let parsed = Column::from_qualified_name(column.name.clone());
     if parsed.relation.is_some() {
-        parsed
-    } else {
-        column
+        return parsed;
     }
+
+    manual_split_qualified_name(&column)
+        .map(|(relation, name)| Column::new(Some(relation), name))
+        .unwrap_or(column)
+}
+
+fn manual_split_qualified_name(column: &Column) -> Option<(TableReference, String)> {
+    let name = column.name.as_str();
+    let dot_idx = name.rfind('.')?;
+    if dot_idx == 0 || dot_idx == name.len() - 1 {
+        return None;
+    }
+    let qualifier = &name[..dot_idx];
+    let field = &name[dot_idx + 1..];
+    if qualifier.is_empty() || field.is_empty() {
+        return None;
+    }
+    Some((
+        TableReference::bare(qualifier.to_string()),
+        field.to_string(),
+    ))
 }
 
 /// Does the underlying expr match e?
