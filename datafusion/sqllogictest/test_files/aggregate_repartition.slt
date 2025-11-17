@@ -84,6 +84,7 @@ physical_plan
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/aggregate_repartition/dim.csv]]}, projection=[env], file_type=csv, has_header=true
 
 # Test 2: EXPLAIN query for Parquet table with GROUP BY
+# Small dataset (5 rows < 8192 batch_size) should use Single mode without repartitioning
 
 query TT
 EXPLAIN SELECT env, count(*) FROM dim_parquet GROUP BY env;
@@ -94,11 +95,8 @@ logical_plan
 03)----TableScan: dim_parquet projection=[env]
 physical_plan
 01)ProjectionExec: expr=[env@0 as env, count(Int64(1))@1 as count(*)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[env@0 as env], aggr=[count(Int64(1))]
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([env@0], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[env@0 as env], aggr=[count(Int64(1))]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/aggregate_repartition/dim.parquet]]}, projection=[env], file_type=parquet
+02)--AggregateExec: mode=Single, gby=[env@0 as env], aggr=[count(Int64(1))]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/aggregate_repartition/dim.parquet]]}, projection=[env], file_type=parquet
 
 # Verify the queries actually work and return the same results
 query TI rowsort
