@@ -157,9 +157,9 @@ async fn run_tests() -> Result<()> {
 
             let relative_path = test_file.relative_path.clone();
 
-            // Mutex per file to hold the current sql being run
-            let current_sql_tracker = CurrentlyExecutingSqlTracker::new();
-            let current_sql_tracker_clone = current_sql_tracker.clone();
+            let currently_running_sql_tracker = CurrentlyExecutingSqlTracker::new();
+            let currently_running_sql_tracker_clone =
+                currently_running_sql_tracker.clone();
             SpawnedTask::spawn(async move {
                 match (
                     options.postgres_runner,
@@ -173,7 +173,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
-                            current_sql_tracker_clone,
+                            currently_running_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -184,7 +184,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
-                            current_sql_tracker_clone,
+                            currently_running_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -194,7 +194,7 @@ async fn run_tests() -> Result<()> {
                             validator,
                             m_clone,
                             m_style_clone,
-                            current_sql_tracker_clone,
+                            currently_running_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -205,7 +205,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
-                            current_sql_tracker_clone,
+                            currently_running_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -215,7 +215,7 @@ async fn run_tests() -> Result<()> {
                             validator,
                             m_clone,
                             m_style_clone,
-                            current_sql_tracker_clone,
+                            currently_running_sql_tracker_clone,
                         )
                         .await?
                     }
@@ -223,7 +223,7 @@ async fn run_tests() -> Result<()> {
                 Ok(()) as Result<()>
             })
             .join()
-            .map(move |result| (result, relative_path, current_sql_tracker))
+            .map(move |result| (result, relative_path, currently_running_sql_tracker))
         })
         // run up to num_cpus streams in parallel
         .buffer_unordered(options.test_threads)
