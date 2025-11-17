@@ -34,18 +34,12 @@ use datafusion_functions_nested::map::map;
 mod data_utils;
 
 fn build_keys(rng: &mut ThreadRng) -> Vec<String> {
-    let mut keys = vec![];
-    let mut seen = HashSet::with_capacity(1000);
-    // Generate unique keys by tracking seen keys
+    let mut keys = HashSet::with_capacity(1000);
     while keys.len() < 1000 {
         let key = rng.random_range(0..9999).to_string();
-        if seen.insert(key.clone()) {
-            // Only push if it's a new unique key
-            keys.push(key);
-        }
-        // If key was already in set, skip it and generate another
+        keys.insert(key);
     }
-    keys
+    keys.into_iter().collect()
 }
 
 fn build_values(rng: &mut ThreadRng) -> Vec<i32> {
