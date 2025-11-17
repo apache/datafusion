@@ -416,7 +416,10 @@ impl ProjectionExprs {
     /// For example, if an expression only works with integer columns but the input schema has a string column at that index.
     pub fn make_projector(&self, input_schema: &Schema) -> Result<Projector> {
         let output_schema = Arc::new(self.project_schema(input_schema)?);
-        Ok(Projector { projection: self.clone(), output_schema })
+        Ok(Projector {
+            projection: self.clone(),
+            output_schema,
+        })
     }
 
     /// Project statistics according to this projection.
