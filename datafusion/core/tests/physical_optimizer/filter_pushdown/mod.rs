@@ -18,7 +18,7 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
-    array::{Float64Array, Int32Array, RecordBatch, StringArray, record_batch},
+    array::{record_batch, Float64Array, Int32Array, RecordBatch, StringArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     util::pretty::pretty_format_batches,
 };
@@ -2419,7 +2419,8 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
         .unwrap(),
     );
 
-    let plan = Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
+    let plan =
+        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
 
     // Apply the filter pushdown optimizer
     let mut config = SessionConfig::new();
@@ -2481,7 +2482,7 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
     // Create build side with NULL values
     let build_batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, true), // nullable
+            Field::new("a", DataType::Utf8, true),  // nullable
             Field::new("b", DataType::Int32, true), // nullable
         ])),
         vec![
@@ -2555,7 +2556,8 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
         .unwrap(),
     );
 
-    let plan = Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
+    let plan =
+        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
 
     // Apply the filter pushdown optimizer
     let mut config = SessionConfig::new();
