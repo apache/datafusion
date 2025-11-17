@@ -1570,10 +1570,11 @@ impl SortMergeJoinStream {
                 left_columns.extend(right_columns);
                 left_columns
             } else {
+                // For right joins, the first columns are the right columns.
                 let left_columns = null_joined_batch
                     .columns()
                     .iter()
-                    .skip(left_columns_length)
+                    .skip(right_columns_length)
                     .cloned()
                     .collect::<Vec<_>>();
 

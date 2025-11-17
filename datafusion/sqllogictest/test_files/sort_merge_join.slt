@@ -891,3 +891,23 @@ drop table t2;
 # return sql params back to default values
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;
+
+##########
+## Tests for equijoins with different column counts
+##########
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+CREATE TABLE t1(a int, b int) AS VALUES (1, 100), (2, 200), (3, 300);
+
+statement ok
+CREATE TABLE t2(a int, b int, c int) AS VALUES (4, 101, 1001), (3, 201, 2001), (2, 250, 3001);
+
+query IIIII
+SELECT * FROM t2 RIGHT JOIN t1 on t1.a = t2.a AND t1.b < t2.b
+----
+NULL NULL NULL 1 100
+2 250 3001 2 200
+NULL NULL NULL 3 300

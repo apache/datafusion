@@ -644,6 +644,67 @@ async fn join_right_one() -> Result<()> {
     Ok(())
 }
 
+
+#[tokio::test]
+async fn join_right_different_columns_count_with_filter() -> Result<()> {
+
+    // select *
+    // from t1
+    // right join t2 on t1.b1 = t2.b1 and t1.a1 > t2.a2
+
+    let left = build_table(
+        ("a1", &vec![1, 21, 3]), // 21(t1.a1) > 20(t2.a2)
+        ("b1", &vec![4, 5, 7]),
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let right = build_table_two_cols(
+        ("a2", &vec![10, 20, 30]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the left
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a1", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("a2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Right).await?;
+
+    // The output order is important as SMJ preserves sortedness
+    assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 |
+            +----+----+----+----+----+
+            |    |    |    | 10 | 4  |
+            | 21 | 5  | 8  | 20 | 5  |
+            |    |    |    | 30 | 6  |
+            +----+----+----+----+----+
+            "#);
+    Ok(())
+}
+
 #[tokio::test]
 async fn join_full_one() -> Result<()> {
     let left = build_table(
