@@ -38,7 +38,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
+    assert_or_internal_err, exec_err, not_impl_err, DFSchema, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -149,7 +150,7 @@ where
 ///
 /// Note: This is split into a separate function as higher-rank trait bounds currently
 /// cause type inference to misbehave
-fn make_hash_set<T>(array: T) -> ArrayHashSet
+fn make_hash_set<T>(array: &T) -> ArrayHashSet
 where
     T: ArrayAccessor,
     T::Item: IsEqual,
@@ -183,26 +184,26 @@ where
 /// Creates a `Box<dyn Set>` for the given list of `IN` expressions and `batch`
 fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
     Ok(downcast_primitive_array! {
-        array => Arc::new(ArraySet::new(array, make_hash_set(array))),
+        array => Arc::new(ArraySet::new(array, make_hash_set(&array))),
         DataType::Boolean => {
             let array = as_boolean_array(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         },
         DataType::Utf8 => {
             let array = as_string_array(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         }
         DataType::LargeUtf8 => {
             let array = as_largestring_array(array);
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         }
         DataType::Binary => {
             let array = as_generic_binary_array::<i32>(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         }
         DataType::LargeBinary => {
             let array = as_generic_binary_array::<i64>(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
         d => return not_impl_err!("DataType::{d} not supported in InList")
@@ -459,11 +460,10 @@ pub fn in_list(
     let expr_data_type = expr.data_type(schema)?;
     for list_expr in list.iter() {
         let list_expr_data_type = list_expr.data_type(schema)?;
-        if !DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type) {
-            return internal_err!(
-                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            );
-        }
+        assert_or_internal_err!(
+            DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type),
+            "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
+        );
     }
     let static_filter = try_cast_static_filter_to_set(&list, schema).ok();
     Ok(Arc::new(InListExpr::new(

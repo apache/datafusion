@@ -46,7 +46,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             // Create a logical plan for the CTE
             let cte_plan = if is_recursive {
-                self.recursive_cte(cte_name.clone(), *cte.query, planner_context)?
+                self.recursive_cte(&cte_name, *cte.query, planner_context)?
             } else {
                 self.non_recursive_cte(*cte.query, planner_context)?
             };
@@ -70,7 +70,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn recursive_cte(
         &self,
-        cte_name: String,
+        cte_name: &str,
         mut cte_query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
@@ -136,7 +136,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Step 2.1: Create a table source for the temporary relation
         let work_table_source = self
             .context_provider
-            .create_cte_work_table(&cte_name, Arc::clone(static_plan.schema().inner()))?;
+            .create_cte_work_table(cte_name, Arc::clone(static_plan.schema().inner()))?;
 
         // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term
@@ -147,14 +147,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?
         .build()?;
 
-        let name = cte_name.clone();
+        let name = cte_name.to_string();
 
         // Step 2.3: Register the temporary relation in the planning context
         // For all the self references in the variadic term, we'll replace it
         // with the temporary relation we created above by temporarily registering
         // it as a CTE. This temporary relation in the planning context will be
         // replaced by the actual CTE plan once we're done with the planning.
-        planner_context.insert_cte(cte_name.clone(), work_table_plan);
+        planner_context.insert_cte(cte_name.to_string(), work_table_plan);
 
         // ---------- Step 3: Compile the recursive term ------------------
         // this uses the named_relation we inserted above to resolve the
@@ -166,7 +166,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // if not, it is a non-recursive CTE
         if !has_work_table_reference(&recursive_plan, &work_table_source) {
             // Remove the work table plan from the context
-            planner_context.remove_cte(&cte_name);
+            planner_context.remove_cte(cte_name);
             // Compile it as a non-recursive CTE
             return self.set_operation_to_plan(
                 SetOperator::Union,

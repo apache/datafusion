@@ -588,10 +588,17 @@ For async UDF implementation details, see [`async_udf.rs`](https://github.com/ap
 
 ## Named Arguments
 
-DataFusion supports PostgreSQL-style named arguments for scalar functions, allowing you to pass arguments by parameter name:
+DataFusion supports named arguments for Scalar, Window, and Aggregate UDFs, allowing you to pass arguments by parameter name:
 
 ```sql
+-- Scalar function
 SELECT substr(str => 'hello', start_pos => 2, length => 3);
+
+-- Window function
+SELECT lead(expr => value, offset => 1) OVER (ORDER BY id) FROM table;
+
+-- Aggregate function
+SELECT corr(y => col1, x => col2) FROM table;
 ```
 
 Named arguments can be mixed with positional arguments, but positional arguments must come first:
@@ -602,38 +609,7 @@ SELECT substr('hello', start_pos => 2, length => 3);  -- Valid
 
 ### Implementing Functions with Named Arguments
 
-To support named arguments in your UDF, add parameter names to your function's signature using `.with_parameter_names()`:
-
-```rust
-# use arrow::datatypes::DataType;
-# use datafusion_expr::{Signature, Volatility};
-#
-# #[derive(Debug)]
-# struct MyFunction {
-#     signature: Signature,
-# }
-#
-impl MyFunction {
-    fn new() -> Self {
-        Self {
-            signature: Signature::uniform(
-                2,
-                vec![DataType::Float64],
-                Volatility::Immutable
-            )
-            .with_parameter_names(vec![
-                "base".to_string(),
-                "exponent".to_string()
-            ])
-            .expect("valid parameter names"),
-        }
-    }
-}
-```
-
-The parameter names should match the order of arguments in your function's signature. DataFusion automatically resolves named arguments to the correct positional order before invoking your function.
-
-### Example
+To support named arguments in your UDF, add parameter names to your function's signature using `.with_parameter_names()`. This works the same way for Scalar, Window, and Aggregate UDFs:
 
 ```rust
 # use std::sync::Arc;
@@ -681,10 +657,14 @@ impl ScalarUDFImpl for PowerFunction {
 }
 ```
 
-Once registered, users can call your function with named arguments:
+The parameter names should match the order of arguments in your function's signature. DataFusion automatically resolves named arguments to the correct positional order before invoking your function.
+
+Once registered, users can call your functions with named arguments in any order:
 
 ```sql
+-- All equivalent
 SELECT power(base => 2.0, exponent => 3.0);
+SELECT power(exponent => 3.0, base => 2.0);
 SELECT power(2.0, exponent => 3.0);
 ```
 

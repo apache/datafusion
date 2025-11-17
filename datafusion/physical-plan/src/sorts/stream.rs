@@ -25,6 +25,7 @@ use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -164,11 +165,7 @@ impl RowCursorStream {
         batch: &RecordBatch,
         stream_idx: usize,
     ) -> Result<RowValues> {
-        let cols = self
-            .column_expressions
-            .iter()
-            .map(|expr| expr.evaluate(batch)?.into_array(batch.num_rows()))
-            .collect::<Result<Vec<_>>>()?;
+        let cols = evaluate_expressions_to_arrays(&self.column_expressions, batch)?;
 
         // At this point, ownership should of this Rows should be unique
         let mut rows = self.rows.take_next(stream_idx)?;

@@ -29,7 +29,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -136,13 +136,12 @@ impl ExecutionPlan for EmptyExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        if partition >= self.partitions {
-            return internal_err!(
-                "EmptyExec invalid partition {} (expected less than {})",
-                partition,
-                self.partitions
-            );
-        }
+        assert_or_internal_err!(
+            partition < self.partitions,
+            "EmptyExec invalid partition {} (expected less than {})",
+            partition,
+            self.partitions
+        );
 
         Ok(Box::pin(MemoryStream::try_new(
             self.data()?,
@@ -157,13 +156,12 @@ impl ExecutionPlan for EmptyExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
-            if partition >= self.partitions {
-                return internal_err!(
-                    "EmptyExec invalid partition {} (expected less than {})",
-                    partition,
-                    self.partitions
-                );
-            }
+            assert_or_internal_err!(
+                partition < self.partitions,
+                "EmptyExec invalid partition {} (expected less than {})",
+                partition,
+                self.partitions
+            );
         }
 
         let batch = self

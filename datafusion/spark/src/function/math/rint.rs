@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::DataFusionError;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -24,7 +25,7 @@ use arrow::datatypes::DataType::{
     Float32, Float64, Int16, Int32, Int64, Int8, UInt16, UInt32, UInt64, UInt8,
 };
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, exec_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -84,7 +85,7 @@ impl ScalarUDFImpl for SparkRint {
 
 pub fn spark_rint(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
-        return exec_err!("rint expects exactly 1 argument, got {}", args.len());
+        assert_eq_or_internal_err!(args.len(), 1, "`rint` expects exactly one argument");
     }
 
     let array: &dyn Array = args[0].as_ref();

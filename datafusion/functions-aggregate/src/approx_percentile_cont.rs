@@ -315,11 +315,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Ok(arg_types[0].clone())
     }
 
-    fn supports_null_handling_clause(&self) -> bool {
-        false
-    }
-
-    fn is_ordered_set_aggregate(&self) -> bool {
+    fn supports_within_group_clause(&self) -> bool {
         true
     }
 

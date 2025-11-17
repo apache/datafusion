@@ -23,7 +23,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
+    assert_eq_or_internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
@@ -183,15 +183,21 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .map(|aggr_expr| match aggr_expr {
                         Expr::AggregateFunction(AggregateFunction {
                             func,
-                            params: AggregateFunctionParams { mut args, distinct, .. }
+                            params:
+                                AggregateFunctionParams {
+                                    mut args, distinct, ..
+                                },
                         }) => {
                             if distinct {
-                                if args.len() != 1 {
-                                    return internal_err!("DISTINCT aggregate should have exactly one argument");
-                                }
+                                assert_eq_or_internal_err!(
+                                    args.len(),
+                                    1,
+                                    "DISTINCT aggregate should have exactly one argument"
+                                );
                                 let arg = args.swap_remove(0);
 
-                                if group_fields_set.insert(arg.schema_name().to_string()) {
+                                if group_fields_set.insert(arg.schema_name().to_string())
+                                {
                                     inner_group_exprs
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));
                                 }

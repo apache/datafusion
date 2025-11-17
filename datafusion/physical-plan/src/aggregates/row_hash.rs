@@ -39,7 +39,10 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, internal_err, DataFusionError,
+    Result,
+};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -298,7 +301,6 @@ impl SkipAggregationProbe {
 /// later stream-merge sort on reading back the spilled data does re-grouping. Note the rows cannot
 /// be grouped once spilled onto disk, the read back data needs to be re-grouped again. In addition,
 /// re-grouping may cause out of memory again. Thus, re-grouping has to be a sort based aggregation.
-///
 /// ```text
 /// Partial Aggregation [batch_size = 2] (max memory = 3 rows)
 ///
@@ -434,6 +436,9 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Aggregation-specific metrics
     group_by_metrics: GroupByMetrics,
+
+    /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
+    reduction_factor: Option<metrics::RatioMetrics>,
 }
 
 impl GroupedHashAggregateStream {
@@ -601,6 +606,16 @@ impl GroupedHashAggregateStream {
             None
         };
 
+        let reduction_factor = if agg.mode == AggregateMode::Partial {
+            Some(
+                MetricBuilder::new(&agg.metrics)
+                    .with_type(metrics::MetricType::SUMMARY)
+                    .ratio_metrics("reduction_factor", partition),
+            )
+        } else {
+            None
+        };
+
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
             input,
@@ -621,6 +636,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
+            reduction_factor,
         })
     }
 }
@@ -662,6 +678,11 @@ impl Stream for GroupedHashAggregateStream {
                         Some(Ok(batch)) if self.mode == AggregateMode::Partial => {
                             let timer = elapsed_compute.timer();
                             let input_rows = batch.num_rows();
+
+                            if let Some(reduction_factor) = self.reduction_factor.as_ref()
+                            {
+                                reduction_factor.add_total(input_rows);
+                            }
 
                             // Do the grouping
                             self.group_aggregate_batch(batch)?;
@@ -800,6 +821,11 @@ impl Stream for GroupedHashAggregateStream {
                         let output = batch.slice(0, size);
                         (ExecutionState::ProducingOutput(remaining), output)
                     };
+
+                    if let Some(reduction_factor) = self.reduction_factor.as_ref() {
+                        reduction_factor.add_part(output_batch.num_rows());
+                    }
+
                     // Empty record batches should not be emitted.
                     // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
                     debug_assert!(output_batch.num_rows() > 0);
@@ -915,9 +941,10 @@ impl GroupedHashAggregateStream {
                         )?;
                     }
                     _ => {
-                        if opt_filter.is_some() {
-                            return internal_err!("aggregate filter should be applied in partial stage, there should be no filter in final stage");
-                        }
+                        assert_or_internal_err!(
+                            opt_filter.is_none(),
+                            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+                        );
 
                         // if aggregation is over intermediate states,
                         // use merge
@@ -1195,9 +1222,11 @@ impl GroupedHashAggregateStream {
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
-        if group_values.len() != 1 {
-            return internal_err!("group_values expected to have single element");
-        }
+        assert_eq_or_internal_err!(
+            group_values.len(),
+            1,
+            "group_values expected to have single element"
+        );
         let mut output = group_values.swap_remove(0);
 
         let iter = self

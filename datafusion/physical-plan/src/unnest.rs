@@ -277,8 +277,6 @@ struct UnnestMetrics {
     input_batches: metrics::Count,
     /// Number of rows consumed
     input_rows: metrics::Count,
-    /// Number of batches produced
-    output_batches: metrics::Count,
 }
 
 impl UnnestMetrics {
@@ -288,14 +286,10 @@ impl UnnestMetrics {
 
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
 
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
-
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
             input_batches,
             input_rows,
-            output_batches,
         }
     }
 }
@@ -361,7 +355,6 @@ impl UnnestStream {
                     let Some(result_batch) = result else {
                         continue;
                     };
-                    self.metrics.output_batches.add(1);
                     (&result_batch).record_output(&self.metrics.baseline_metrics);
 
                     // Empty record batches should not be emitted.
@@ -375,7 +368,7 @@ impl UnnestStream {
                         produced {} output batches containing {} rows in {}",
                         self.metrics.input_batches,
                         self.metrics.input_rows,
-                        self.metrics.output_batches,
+                        self.metrics.baseline_metrics.output_batches(),
                         self.metrics.baseline_metrics.output_rows(),
                         self.metrics.baseline_metrics.elapsed_compute(),
                     );
@@ -760,7 +753,6 @@ fn build_batch(
 /// ```ignore
 /// longest_length: [3, 1, 1, 2]
 /// ```
-///
 fn find_longest_length(
     list_arrays: &[ArrayRef],
     options: &UnnestOptions,
@@ -881,7 +873,6 @@ fn unnest_list_arrays(
 /// ```ignore
 /// [1, null, 2, 3, 4, null, null, 5, null, null]
 /// ```
-///
 fn unnest_list_array(
     list_array: &dyn ListArrayType,
     length_array: &PrimitiveArray<Int64Type>,
@@ -929,7 +920,6 @@ fn unnest_list_array(
 /// ```ignore
 /// [0, 0, 1, 1, 1, 2]
 /// ```
-///
 fn create_take_indices(
     length_array: &PrimitiveArray<Int64Type>,
     capacity: usize,
@@ -994,7 +984,6 @@ fn create_take_indices(
 /// ```ignore
 /// c1: 1, null, 2, 3, 4, null, 5, 6  // Repeated using `indices`
 /// c2: null, null, null, null, null, null, null, null  // Replaced with nulls
-///
 fn repeat_arrs_from_indices(
     batch: &[ArrayRef],
     indices: &PrimitiveArray<Int64Type>,

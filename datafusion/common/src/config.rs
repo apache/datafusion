@@ -185,6 +185,31 @@ macro_rules! config_namespace {
                     self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
+
+            fn reset(&mut self, key: &str) -> $crate::error::Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
+                    $(
+                        stringify!($field_name) => {
+                            #[allow(deprecated)]
+                            {
+                                if rem.is_empty() {
+                                    let default_value: $field_type = $default;
+                                    self.$field_name = default_value;
+                                    Ok(())
+                                } else {
+                                    self.$field_name.reset(rem)
+                                }
+                            }
+                        },
+                    )*
+                    _ => $crate::error::_config_err!(
+                        "Config value \"{}\" not found on {}",
+                        key,
+                        stringify!($struct_name)
+                    ),
+                }
+            }
         }
         impl Default for $struct_name {
             fn default() -> Self {
@@ -467,9 +492,8 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
-        /// according to this time zone, and then extract the hour
-        pub time_zone: String, default = "+00:00".into()
+        /// Some functions, e.g. `now` return timestamps in this time zone
+        pub time_zone: Option<String>, default = None
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
@@ -517,6 +541,23 @@ config_namespace! {
         /// and sorted in a single RecordBatch rather than sorted in
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
+
+        /// Maximum size in bytes for individual spill files before rotating to a new file.
+        ///
+        /// When operators spill data to disk (e.g., RepartitionExec), they write
+        /// multiple batches to the same file until this size limit is reached, then rotate
+        /// to a new file. This reduces syscall overhead compared to one-file-per-batch
+        /// while preventing files from growing too large.
+        ///
+        /// A larger value reduces file creation overhead but may hold more disk space.
+        /// A smaller value creates more files but allows finer-grained space reclamation
+        /// as files can be deleted once fully consumed.
+        ///
+        /// Now only `RepartitionExec` supports this spill file rotation feature, other spilling operators
+        /// may create spill files larger than the limit.
+        ///
+        /// Default: 128 MB
+        pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
 
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
@@ -590,6 +631,29 @@ config_namespace! {
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+
+        /// Whether to enable ANSI SQL mode.
+        ///
+        /// The flag is experimental and relevant only for DataFusion Spark built-in functions
+        ///
+        /// When `enable_ansi_mode` is set to `true`, the query engine follows ANSI SQL
+        /// semantics for expressions, casting, and error handling. This means:
+        /// - **Strict type coercion rules:** implicit casts between incompatible types are disallowed.
+        /// - **Standard SQL arithmetic behavior:** operations such as division by zero,
+        ///   numeric overflow, or invalid casts raise runtime errors rather than returning
+        ///   `NULL` or adjusted values.
+        /// - **Consistent ANSI behavior** for string concatenation, comparisons, and `NULL` handling.
+        ///
+        /// When `enable_ansi_mode` is `false` (the default), the engine uses a more permissive,
+        /// non-ANSI mode designed for user convenience and backward compatibility. In this mode:
+        /// - Implicit casts between types are allowed (e.g., string to integer when possible).
+        /// - Arithmetic operations are more lenient — for example, `abs()` on the minimum
+        ///   representable integer value returns the input value instead of raising overflow.
+        /// - Division by zero or invalid casts may return `NULL` instead of failing.
+        ///
+        /// # Default
+        /// `false` — ANSI SQL mode is disabled by default.
+        pub enable_ansi_mode: bool, default = false
     }
 }
 
@@ -1108,6 +1172,15 @@ pub struct ConfigOptions {
 }
 
 impl ConfigField for ConfigOptions {
+    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+        self.catalog.visit(v, "datafusion.catalog", "");
+        self.execution.visit(v, "datafusion.execution", "");
+        self.optimizer.visit(v, "datafusion.optimizer", "");
+        self.explain.visit(v, "datafusion.explain", "");
+        self.sql_parser.visit(v, "datafusion.sql_parser", "");
+        self.format.visit(v, "datafusion.format", "");
+    }
+
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
@@ -1122,13 +1195,43 @@ impl ConfigField for ConfigOptions {
         }
     }
 
-    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
-        self.catalog.visit(v, "datafusion.catalog", "");
-        self.execution.visit(v, "datafusion.execution", "");
-        self.optimizer.visit(v, "datafusion.optimizer", "");
-        self.explain.visit(v, "datafusion.explain", "");
-        self.sql_parser.visit(v, "datafusion.sql_parser", "");
-        self.format.visit(v, "datafusion.format", "");
+    /// Reset a configuration option back to its default value
+    fn reset(&mut self, key: &str) -> Result<()> {
+        let Some((prefix, rest)) = key.split_once('.') else {
+            return _config_err!("could not find config namespace for key \"{key}\"");
+        };
+
+        if prefix != "datafusion" {
+            return _config_err!("Could not find config namespace \"{prefix}\"");
+        }
+
+        let (section, rem) = rest.split_once('.').unwrap_or((rest, ""));
+        if rem.is_empty() {
+            return _config_err!("could not find config field for key \"{key}\"");
+        }
+
+        match section {
+            "catalog" => self.catalog.reset(rem),
+            "execution" => self.execution.reset(rem),
+            "optimizer" => {
+                if rem == "enable_dynamic_filter_pushdown" {
+                    let defaults = OptimizerOptions::default();
+                    self.optimizer.enable_dynamic_filter_pushdown =
+                        defaults.enable_dynamic_filter_pushdown;
+                    self.optimizer.enable_topk_dynamic_filter_pushdown =
+                        defaults.enable_topk_dynamic_filter_pushdown;
+                    self.optimizer.enable_join_dynamic_filter_pushdown =
+                        defaults.enable_join_dynamic_filter_pushdown;
+                    Ok(())
+                } else {
+                    self.optimizer.reset(rem)
+                }
+            }
+            "explain" => self.explain.reset(rem),
+            "sql_parser" => self.sql_parser.reset(rem),
+            "format" => self.format.reset(rem),
+            other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
+        }
     }
 }
 
@@ -1438,6 +1541,10 @@ pub trait ConfigField {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str);
 
     fn set(&mut self, key: &str, value: &str) -> Result<()>;
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        _config_err!("Reset is not supported for this config field, key: {}", key)
+    }
 }
 
 impl<F: ConfigField + Default> ConfigField for Option<F> {
@@ -1450,6 +1557,15 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         self.get_or_insert_with(Default::default).set(key, value)
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = Default::default();
+            Ok(())
+        } else {
+            self.get_or_insert_with(Default::default).reset(key)
+        }
     }
 }
 
@@ -1514,6 +1630,19 @@ macro_rules! config_field {
             fn set(&mut self, _: &str, $arg: &str) -> $crate::error::Result<()> {
                 *self = $transform;
                 Ok(())
+            }
+
+            fn reset(&mut self, key: &str) -> $crate::error::Result<()> {
+                if key.is_empty() {
+                    *self = <$t as Default>::default();
+                    Ok(())
+                } else {
+                    $crate::error::_config_err!(
+                        "Config field is a scalar {} and does not have nested field \"{}\"",
+                        stringify!($t),
+                        key
+                    )
+                }
             }
         }
     };
@@ -2523,7 +2652,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
                 self.footer_signature_verification.set(rem, value.as_ref())
             }
             _ => _config_err!(
-                "Config value \"{}\" not found on ConfigFileEncryptionProperties",
+                "Config value \"{}\" not found on ConfigFileDecryptionProperties",
                 key
             ),
         }
@@ -2837,7 +2966,6 @@ mod tests {
     };
     use std::any::Any;
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {
@@ -2952,6 +3080,19 @@ mod tests {
         assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
+    #[test]
+    fn reset_nested_scalar_reports_helpful_error() {
+        let mut value = true;
+        let err = <bool as ConfigField>::reset(&mut value, "nested").unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.starts_with(
+                "Invalid or Unsupported Configuration: Config field is a scalar bool and does not have nested field \"nested\""
+            ),
+            "unexpected error message: {message}"
+        );
+    }
+
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options() {
@@ -2974,6 +3115,7 @@ mod tests {
         };
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
+        use std::sync::Arc;
 
         let footer_key = b"0123456789012345".to_vec(); // 128bit/16
         let column_names = vec!["double_field", "float_field"];

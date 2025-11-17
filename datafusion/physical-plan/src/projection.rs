@@ -57,6 +57,7 @@ pub use datafusion_physical_expr::projection::{
     update_expr, ProjectionExpr, ProjectionExprs,
 };
 
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -110,18 +111,22 @@ impl ProjectionExec {
     /// let b = col("b", &schema).unwrap();
     /// let a_plus_b = binary(Arc::clone(&a), Operator::Plus, b, &schema).unwrap();
     /// // create ProjectionExec
-    /// let proj = ProjectionExec::try_new([
-    ///     ProjectionExpr {
-    ///       // expr a produces the column named "a"
-    ///       expr: a,
-    ///       alias: "a".to_string(),
-    ///     },
-    ///     ProjectionExpr {
-    ///       // expr: a + b produces the column named "sum_ab"
-    ///       expr: a_plus_b,
-    ///       alias: "sum_ab".to_string(),
-    ///     }
-    ///   ], input()).unwrap();
+    /// let proj = ProjectionExec::try_new(
+    ///     [
+    ///         ProjectionExpr {
+    ///             // expr a produces the column named "a"
+    ///             expr: a,
+    ///             alias: "a".to_string(),
+    ///         },
+    ///         ProjectionExpr {
+    ///             // expr: a + b produces the column named "sum_ab"
+    ///             expr: a_plus_b,
+    ///             alias: "sum_ab".to_string(),
+    ///         },
+    ///     ],
+    ///     input(),
+    /// )
+    /// .unwrap();
     /// # }
     /// ```
     pub fn try_new<I, E>(expr: I, input: Arc<dyn ExecutionPlan>) -> Result<Self>
@@ -353,14 +358,7 @@ impl ProjectionStream {
     fn batch_project(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         // Records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        let arrays = self
-            .expr
-            .iter()
-            .map(|expr| {
-                expr.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let arrays = evaluate_expressions_to_arrays(&self.expr, batch)?;
 
         if arrays.is_empty() {
             let options =

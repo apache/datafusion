@@ -18,10 +18,11 @@
 extern crate criterion;
 
 use arrow::datatypes::{DataType, Field};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::math::random::RandomFunc;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {

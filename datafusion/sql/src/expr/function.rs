@@ -22,11 +22,12 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{
-    NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction,
+use datafusion_expr::{
+    expr,
+    expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
+    planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
+    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
 };
-use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
-use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
@@ -212,6 +213,9 @@ impl FunctionArgs {
     }
 }
 
+// Helper type for extracting WITHIN GROUP ordering and prepended args
+type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<String>>);
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -386,7 +390,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                let args = self.function_args_to_expr(args, schema, planner_context)?;
+                let (args, arg_names) =
+                    self.function_args_to_expr_with_names(args, schema, planner_context)?;
+
+                let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+                    let signature = match &fun {
+                        WindowFunctionDefinition::AggregateUDF(udaf) => udaf.signature(),
+                        WindowFunctionDefinition::WindowUDF(udwf) => udwf.signature(),
+                    };
+
+                    if let Some(param_names) = &signature.parameter_names {
+                        datafusion_expr::arguments::resolve_function_arguments(
+                            param_names,
+                            args,
+                            arg_names,
+                        )?
+                    } else {
+                        return plan_err!(
+                            "Window function '{}' does not support named arguments",
+                            name
+                        );
+                    }
+                } else {
+                    args
+                };
 
                 // Plan FILTER clause if present
                 let filter = filter
@@ -396,7 +423,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
-                    args,
+                    args: resolved_args,
                     partition_by,
                     order_by,
                     window_frame,
@@ -464,28 +491,33 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     );
                 }
 
-                let mut args =
-                    self.function_args_to_expr(args, schema, planner_context)?;
+                let (mut args, mut arg_names) =
+                    self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
-                let order_by = if fm.is_ordered_set_aggregate() {
-                    let within_group = self.order_by_to_sort_expr(
-                        within_group,
-                        schema,
-                        planner_context,
-                        false,
-                        None,
-                    )?;
+                // UDAFs must opt-in via `supports_within_group_clause()` to
+                // accept a WITHIN GROUP clause.
+                let supports_within_group = fm.supports_within_group_clause();
 
-                    // Add the WITHIN GROUP ordering expressions to the front of the argument list
-                    // So function(arg) WITHIN GROUP (ORDER BY x) becomes function(x, arg)
-                    if !within_group.is_empty() {
-                        args = within_group
-                            .iter()
-                            .map(|sort| sort.expr.clone())
-                            .chain(args)
-                            .collect::<Vec<_>>();
-                    }
-                    within_group
+                if !within_group.is_empty() && !supports_within_group {
+                    return plan_err!(
+                        "WITHIN GROUP is only supported for ordered-set aggregate functions"
+                    );
+                }
+
+                // If the UDAF supports WITHIN GROUP, convert the ordering into
+                // sort expressions and prepend them as unnamed function args.
+                let order_by = if supports_within_group {
+                    let (within_group_sorts, new_args, new_arg_names) = self
+                        .extract_and_prepend_within_group_args(
+                            within_group,
+                            args,
+                            arg_names,
+                            schema,
+                            planner_context,
+                        )?;
+                    args = new_args;
+                    arg_names = new_arg_names;
+                    within_group_sorts
                 } else {
                     let order_by = if !order_by.is_empty() {
                         order_by
@@ -506,9 +538,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .transpose()?
                     .map(Box::new);
 
+                let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+                    if let Some(param_names) = &fm.signature().parameter_names {
+                        datafusion_expr::arguments::resolve_function_arguments(
+                            param_names,
+                            args,
+                            arg_names,
+                        )?
+                    } else {
+                        return plan_err!(
+                            "Aggregate function '{}' does not support named arguments",
+                            fm.name()
+                        );
+                    }
+                } else {
+                    args
+                };
+
                 let mut aggregate_expr = RawAggregateExpr {
                     func: fm,
-                    args,
+                    args: resolved_args,
                     distinct,
                     filter,
                     order_by,
@@ -759,6 +808,38 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let pairs = results?;
         let (exprs, names): (Vec<Expr>, Vec<Option<String>>) = pairs.into_iter().unzip();
         Ok((exprs, names))
+    }
+
+    fn extract_and_prepend_within_group_args(
+        &self,
+        within_group: Vec<OrderByExpr>,
+        mut args: Vec<Expr>,
+        mut arg_names: Vec<Option<String>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<WithinGroupExtraction> {
+        let within_group = self.order_by_to_sort_expr(
+            within_group,
+            schema,
+            planner_context,
+            false,
+            None,
+        )?;
+
+        if !within_group.is_empty() {
+            let within_group_count = within_group.len();
+            arg_names = std::iter::repeat_n(None, within_group_count)
+                .chain(arg_names)
+                .collect();
+
+            args = within_group
+                .iter()
+                .map(|sort| sort.expr.clone())
+                .chain(args)
+                .collect::<Vec<_>>();
+        }
+
+        Ok((within_group, args, arg_names))
     }
 
     pub(crate) fn check_unnest_arg(arg: &Expr, schema: &DFSchema) -> Result<()> {
