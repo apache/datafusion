@@ -23,6 +23,7 @@ use arrow::{
     datatypes::DataType,
     util::pretty::pretty_format_columns,
 };
+use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
     format::DEFAULT_CAST_OPTIONS,
     internal_err,
@@ -309,35 +310,36 @@ fn ensure_date_array_timestamp_bounds(
         return Ok(());
     }
 
-    match &source_type {
+    let iter: Box<dyn Iterator<Item = i64> + '_> = match &source_type {
         DataType::Date32 => {
-            let Some(date_array) = array.as_any().downcast_ref::<Date32Array>() else {
-                return internal_err!(
-                    "Expected Date32Array when validating cast. Found {}",
-                    array.data_type()
-                );
-            };
-            for value in date_array.iter().flatten() {
-                ensure_timestamp_in_bounds(
-                    i64::from(value),
-                    multiplier,
-                    &source_type,
-                    cast_type,
-                )?;
-            }
+            let arr = array
+                .as_any()
+                .downcast_ref::<Date32Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected Date32Array but found {}",
+                        array.data_type()
+                    )
+                })?;
+            Box::new(arr.iter().flatten().map(|v| v as i64))
         }
         DataType::Date64 => {
-            let Some(date_array) = array.as_any().downcast_ref::<Date64Array>() else {
-                return internal_err!(
-                    "Expected Date64Array when validating cast. Found {}",
-                    array.data_type()
-                );
-            };
-            for value in date_array.iter().flatten() {
-                ensure_timestamp_in_bounds(value, multiplier, &source_type, cast_type)?;
-            }
+            let arr = array
+                .as_any()
+                .downcast_ref::<Date64Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected Date64Array but found {}",
+                        array.data_type()
+                    )
+                })?;
+            Box::new(arr.iter().flatten())
         }
-        _ => {}
+        _ => return Ok(()), // Not a date type, nothing to do
+    };
+
+    for value in iter {
+        ensure_timestamp_in_bounds(value, multiplier, &source_type, cast_type)?;
     }
 
     Ok(())
