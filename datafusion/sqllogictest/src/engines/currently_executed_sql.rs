@@ -58,21 +58,28 @@ impl CurrentlyExecutingSqlTracker {
         let index = self
             .sql_index
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut lock = self.currently_executed_sqls.lock().unwrap();
-        lock.insert(index, sql.into());
-        drop(lock);
+        self.currently_executed_sqls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(index, sql.into());
         index
     }
 
     /// Remove the currently executed SQL statement by the provided key that was returned by [`Self::set_sql`].
     pub fn remove_sql(&self, index: usize) {
-        let mut lock = self.currently_executed_sqls.lock().unwrap();
-        lock.remove(&index);
+        self.currently_executed_sqls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&index);
     }
 
     /// Get the currently executed SQL statements.
     pub fn get_currently_running_sqls(&self) -> Vec<String> {
-        let lock = self.currently_executed_sqls.lock().unwrap();
-        lock.values().cloned().collect()
+        self.currently_executed_sqls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect()
     }
 }

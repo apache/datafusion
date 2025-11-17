@@ -287,11 +287,15 @@ impl sqllogictest::AsyncDB for Postgres {
 
         if lower_sql.starts_with("copy") {
             self.pb.inc(1);
-            return self.run_copy_command(sql).await;
+            let result = self.run_copy_command(sql).await;
+            self.currently_executing_sql_tracker.remove_sql(tracked_sql);
+
+            return result;
         }
 
         if !is_query_sql {
             self.get_client().execute(sql, &[]).await?;
+            self.currently_executing_sql_tracker.remove_sql(tracked_sql);
             self.pb.inc(1);
             return Ok(DBOutput::StatementComplete(0));
         }
