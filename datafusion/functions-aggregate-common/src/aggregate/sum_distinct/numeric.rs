@@ -37,7 +37,10 @@ use crate::utils::{GenericDistinctBuffer, Hashable};
 /// Uses Hashable storage to correctly handle floats and other numeric types
 #[derive(Debug)]
 pub struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
-    values: GenericDistinctBuffer<T, datafusion_common::HashSet<Hashable<T::Native>, ahash::RandomState>>,
+    values: GenericDistinctBuffer<
+        T,
+        datafusion_common::HashSet<Hashable<T::Native>, ahash::RandomState>,
+    >,
     data_type: DataType,
 }
 
@@ -54,7 +57,9 @@ impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType + Send + Sync + Debug> Accumulator for DistinctSumAccumulator<T> {
+impl<T: ArrowPrimitiveType + Send + Sync + Debug> Accumulator
+    for DistinctSumAccumulator<T>
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.values.state()
     }

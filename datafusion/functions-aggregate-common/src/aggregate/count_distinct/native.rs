@@ -87,5 +87,7 @@ where
 }
 
 // Type alias for float distinct count accumulator (uses Hashable wrapper)
-pub type FloatDistinctCountAccumulator<T> =
-    PrimitiveDistinctCountAccumulator<T, HashSet<Hashable<<T as ArrowPrimitiveType>::Native>, RandomState>>;
+pub type FloatDistinctCountAccumulator<T> = PrimitiveDistinctCountAccumulator<
+    T,
+    HashSet<Hashable<<T as ArrowPrimitiveType>::Native>, RandomState>,
+>;

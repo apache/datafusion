@@ -513,7 +513,9 @@ struct DistinctMedianAccumulator<T: ArrowNumericType> {
     data_type: DataType,
 }
 
-impl<T: ArrowNumericType + Send + Sync + Debug> Accumulator for DistinctMedianAccumulator<T> {
+impl<T: ArrowNumericType + Send + Sync + Debug> Accumulator
+    for DistinctMedianAccumulator<T>
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.distinct_values.state()
     }

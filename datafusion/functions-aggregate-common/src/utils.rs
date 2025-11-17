@@ -270,7 +270,10 @@ impl<T: DecimalType> DecimalAverager<T> {
 /// This struct is generic over the storage strategy `S`, allowing it to use
 /// native `HashSet<T>` for natively hashable types (integers) or
 /// `HashSet<Hashable<T>>` for types requiring special handling (floats).
-pub struct GenericDistinctBuffer<T: ArrowPrimitiveType, S: DistinctStorage<Native = T::Native>> {
+pub struct GenericDistinctBuffer<
+    T: ArrowPrimitiveType,
+    S: DistinctStorage<Native = T::Native>,
+> {
     pub values: S,
     data_type: DataType,
     _phantom: std::marker::PhantomData<T>,
@@ -289,7 +292,9 @@ impl<T: ArrowPrimitiveType, S: DistinctStorage<Native = T::Native>> std::fmt::De
     }
 }
 
-impl<T: ArrowPrimitiveType, S: DistinctStorage<Native = T::Native>> GenericDistinctBuffer<T, S> {
+impl<T: ArrowPrimitiveType, S: DistinctStorage<Native = T::Native>>
+    GenericDistinctBuffer<T, S>
+{
     pub fn new(data_type: DataType) -> Self {
         Self {
             values: S::default(),

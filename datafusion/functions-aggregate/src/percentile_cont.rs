@@ -35,8 +35,8 @@ use arrow::array::ArrowNativeTypeOp;
 
 use ahash::RandomState;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError, HashSet,
-    Result, ScalarValue,
+    assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError,
+    HashSet, Result, ScalarValue,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -661,7 +661,9 @@ struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
     percentile: f64,
 }
 
-impl<T: ArrowNumericType + Send + Sync + Debug> Accumulator for DistinctPercentileContAccumulator<T> {
+impl<T: ArrowNumericType + Send + Sync + Debug> Accumulator
+    for DistinctPercentileContAccumulator<T>
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.distinct_values.state()
     }
