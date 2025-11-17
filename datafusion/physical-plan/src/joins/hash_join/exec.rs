@@ -1295,14 +1295,14 @@ impl BuildSideState {
         reservation: MemoryReservation,
         on_left: Vec<Arc<dyn PhysicalExpr>>,
         schema: &SchemaRef,
-        should_compute_bounds: bool,
+        should_compute_dynamic_filters: bool,
     ) -> Result<Self> {
         Ok(Self {
             batches: Vec::new(),
             num_rows: 0,
             metrics,
             reservation,
-            bounds_accumulators: should_compute_bounds
+            bounds_accumulators: should_compute_dynamic_filters
                 .then(|| {
                     on_left
                         .iter()
@@ -1332,10 +1332,10 @@ impl BuildSideState {
 /// * `reservation` - Memory reservation tracker for the hash table and data
 /// * `with_visited_indices_bitmap` - Whether to track visited indices (for outer joins)
 /// * `probe_threads_count` - Number of threads that will probe this hash table
-/// * `should_compute_bounds` - Whether to compute min/max bounds for dynamic filtering
+/// * `should_compute_dynamic_filters` - Whether to compute min/max bounds for dynamic filtering
 ///
 /// # Dynamic Filter Coordination
-/// When `should_compute_bounds` is true, this function computes the min/max bounds
+/// When `should_compute_dynamic_filters` is true, this function computes the min/max bounds
 /// for each join key column but does NOT update the dynamic filter. Instead, the
 /// bounds are stored in the returned `JoinLeftData` and later coordinated by
 /// `SharedBuildAccumulator` to ensure all partitions contribute their bounds
@@ -1353,7 +1353,7 @@ async fn collect_left_input(
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
-    should_compute_bounds: bool,
+    should_compute_dynamic_filters: bool,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1365,7 +1365,7 @@ async fn collect_left_input(
         reservation,
         on_left.clone(),
         &schema,
-        should_compute_bounds,
+        should_compute_dynamic_filters,
     )?;
 
     let state = left_stream
@@ -1409,7 +1409,7 @@ async fn collect_left_input(
 
     // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
     // `u64` indice variant
-    // it will be then converted to Arc below for sharing with SharedBuildAccumulator (when hash map pushdown optimization is enabled)
+    // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
     let mut hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
         let estimated_hashtable_size =
             estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;

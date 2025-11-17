@@ -18,7 +18,7 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
-    array::record_batch,
+    array::{Float64Array, Int32Array, RecordBatch, StringArray, record_batch},
     datatypes::{DataType, Field, Schema, SchemaRef},
     util::pretty::pretty_format_batches,
 };
@@ -2329,4 +2329,281 @@ fn test_pushdown_with_computed_grouping_key() {
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=c@2 > 5
     "
     );
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Test scenario where all build-side partitions are empty
+    // This validates the code path that sets the filter to `false` when no rows can match
+
+    // Create empty build side
+    let build_batches = vec![];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with some data
+    let probe_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab", "ac"]),
+        ("b", Utf8, ["ba", "bb", "bc"])
+    )
+    .unwrap()];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create RepartitionExec nodes for both sides
+    let partition_count = 4;
+
+    let build_hash_exprs = vec![
+        col("a", &build_side_schema).unwrap(),
+        col("b", &build_side_schema).unwrap(),
+    ];
+    let build_repartition = Arc::new(
+        RepartitionExec::try_new(
+            build_scan,
+            Partitioning::Hash(build_hash_exprs, partition_count),
+        )
+        .unwrap(),
+    );
+    let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
+
+    let probe_hash_exprs = vec![
+        col("a", &probe_side_schema).unwrap(),
+        col("b", &probe_side_schema).unwrap(),
+    ];
+    let probe_repartition = Arc::new(
+        RepartitionExec::try_new(
+            Arc::clone(&probe_scan),
+            Partitioning::Hash(probe_hash_exprs, partition_count),
+        )
+        .unwrap(),
+    );
+    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
+
+    // Create HashJoinExec
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_coalesce,
+            probe_coalesce,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    let plan = Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
+
+    // Apply the filter pushdown optimizer
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(plan, config.options()).unwrap();
+
+    insta::assert_snapshot!(
+        format_plan_for_test(&plan),
+        @r"
+    - CoalesceBatchesExec: target_batch_size=8192
+    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -     CoalesceBatchesExec: target_batch_size=8192
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+    -     CoalesceBatchesExec: target_batch_size=8192
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    "
+    );
+
+    // Put some data through the plan to check that the filter is updated to reflect the TopK state
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    // Execute all partitions (required for partitioned hash join coordination)
+    let _batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    // Test that filters are pushed down correctly to each side of the join
+    insta::assert_snapshot!(
+        format_plan_for_test(&plan),
+        @r"
+    - CoalesceBatchesExec: target_batch_size=8192
+    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -     CoalesceBatchesExec: target_batch_size=8192
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+    -     CoalesceBatchesExec: target_batch_size=8192
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ false ]
+    "
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_with_nulls() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Test scenario where build side has NULL values in join keys
+    // This validates NULL handling in bounds computation and filter generation
+
+    // Create build side with NULL values
+    let build_batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true), // nullable
+            Field::new("b", DataType::Int32, true), // nullable
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec![Some("aa"), None, Some("ab")])),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), None])),
+        ],
+    )
+    .unwrap();
+    let build_batches = vec![build_batch];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with nullable fields
+    let probe_batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec![
+                Some("aa"),
+                Some("ab"),
+                Some("ac"),
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![Some(1), Some(3), Some(4), Some(5)])),
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+        ],
+    )
+    .unwrap();
+    let probe_batches = vec![probe_batch];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, true),
+        Field::new("b", DataType::Int32, true),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create HashJoinExec in CollectLeft mode (simpler for this test)
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            Arc::clone(&probe_scan),
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    let plan = Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
+
+    // Apply the filter pushdown optimizer
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(plan, config.options()).unwrap();
+
+    insta::assert_snapshot!(
+        format_plan_for_test(&plan),
+        @r"
+    - CoalesceBatchesExec: target_batch_size=8192
+    -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    "
+    );
+
+    // Put some data through the plan to check that the filter is updated to reflect the TopK state
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    // Execute all partitions (required for partitioned hash join coordination)
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    // Test that filters are pushed down correctly to each side of the join
+    insta::assert_snapshot!(
+        format_plan_for_test(&plan),
+        @r"
+    - CoalesceBatchesExec: target_batch_size=8192
+    -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= 1 AND b@1 <= 2 ]
+    "
+    );
+
+    #[rustfmt::skip]
+    let expected = [
+        "+----+---+----+---+-----+",
+        "| a  | b | a  | b | c   |",
+        "+----+---+----+---+-----+",
+        "| aa | 1 | aa | 1 | 1.0 |",
+        "+----+---+----+---+-----+",
+    ];
+    assert_batches_eq!(&expected, &batches);
 }
