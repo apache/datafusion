@@ -67,6 +67,10 @@ SELECT median(c1) IGNORE NULLS FROM table
 
 Instead of silently succeeding.
 
+### API change for Cache Accessor trait
+
+The remove API no longer requires a mutable instance
+
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0
