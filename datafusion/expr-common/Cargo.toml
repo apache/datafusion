@@ -45,4 +45,4 @@ arrow = { workspace = true }
 datafusion-common = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
-paste = "^1.0"
+paste = { workspace = true }
