@@ -427,7 +427,7 @@ async fn test_select_cast_date_literal_to_timestamp_overflow() -> Result<()> {
 
     assert_contains!(
         err.to_string(),
-        "Cannot cast Date32 value 2932896 to Timestamp(ns): timestamp values are limited to +/-2262 years"
+        "Cannot cast Date32 value 2932896 to Timestamp(ns): converted value exceeds the representable i64 range"
     );
     Ok(())
 }
