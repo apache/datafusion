@@ -406,33 +406,17 @@ impl ProjectionExprs {
         ))
     }
 
-    /// Project a RecordBatch.
+    /// Create a new [`Projector`] from this projection and an input schema.
     ///
-    /// This function accepts a pre-computed output schema instead of calling [`ProjectionExprs::project_schema`]
-    /// so that repeated calls do not have schema projection overhead.
-    pub fn project_batch(
-        &self,
-        batch: &RecordBatch,
-        output_schema: SchemaRef,
-    ) -> Result<RecordBatch> {
-        let arrays = self
-            .exprs
-            .iter()
-            .map(|expr| {
-                expr.expr
-                    .evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        if arrays.is_empty() {
-            let options =
-                RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-            RecordBatch::try_new_with_options(output_schema, arrays, &options)
-                .map_err(Into::into)
-        } else {
-            RecordBatch::try_new(output_schema, arrays).map_err(Into::into)
-        }
+    /// A [`Projector`] can be used to apply this projection to record batches.
+    ///
+    /// # Errors
+    /// This function returns an error if the output schema cannot be constructed from the input schema
+    /// with the given projection expressions.
+    /// For example, if an expression only works with integer columns but the input schema has a string column at that index.
+    pub fn make_projector(&self, input_schema: &Schema) -> Result<Projector> {
+        let output_schema = Arc::new(self.project_schema(input_schema)?);
+        Ok(Projector { projection: self.clone(), output_schema })
     }
 
     /// Project statistics according to this projection.
@@ -480,6 +464,60 @@ impl<'a> IntoIterator for &'a ProjectionExprs {
 
     fn into_iter(self) -> Self::IntoIter {
         self.exprs.iter()
+    }
+}
+
+/// Applies a projection to record batches.
+///
+/// A [`Projector`] uses a set of projection expressions to transform
+/// and a pre-computed output schema to project record batches accordingly.
+///
+/// The main reason to use a `Projector` is to avoid repeatedly computing
+/// the output schema for each batch, which can be costly if the projection
+/// expressions are complex.
+#[derive(Clone, Debug)]
+pub struct Projector {
+    projection: ProjectionExprs,
+    output_schema: SchemaRef,
+}
+
+impl Projector {
+    /// Project a record batch according to this projector's expressions.
+    ///
+    /// # Errors
+    /// This function returns an error if any expression evaluation fails.
+    pub fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let arrays = self
+            .projection
+            .iter()
+            .map(|expr| {
+                expr.expr
+                    .evaluate(batch)
+                    .and_then(|v| v.into_array_of_size(batch.num_rows()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        if arrays.is_empty() {
+            let options =
+                RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            RecordBatch::try_new_with_options(
+                Arc::clone(&self.output_schema),
+                arrays,
+                &options,
+            )
+            .map_err(Into::into)
+        } else {
+            RecordBatch::try_new(Arc::clone(&self.output_schema), arrays)
+                .map_err(Into::into)
+        }
+    }
+
+    pub fn output_schema(&self) -> &SchemaRef {
+        &self.output_schema
+    }
+
+    pub fn projection(&self) -> &ProjectionExprs {
+        &self.projection
     }
 }
 
