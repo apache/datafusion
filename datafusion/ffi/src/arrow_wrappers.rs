@@ -57,7 +57,8 @@ fn catch_df_schema_error(e: &ArrowError) -> Schema {
 
 impl From<WrappedSchema> for SchemaRef {
     fn from(value: WrappedSchema) -> Self {
-        let schema = Schema::try_from(&value.0).unwrap_or_else(|e| catch_df_schema_error(&e));
+        let schema =
+            Schema::try_from(&value.0).unwrap_or_else(|e| catch_df_schema_error(&e));
         Arc::new(schema)
     }
 }
