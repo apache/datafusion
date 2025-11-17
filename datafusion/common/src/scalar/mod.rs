@@ -5117,7 +5117,7 @@ mod tests {
     use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{
-        ArrowNumericType, Fields, Float64Type, DECIMAL256_MAX_PRECISION,
+        ArrowNumericType, Fields, Float64Type, TimeUnit, DECIMAL256_MAX_PRECISION,
     };
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
@@ -5148,6 +5148,52 @@ mod tests {
         let map_arr = sv.to_array().unwrap();
         let actual = as_map_array(&map_arr).unwrap();
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_format_timestamp_type_for_error_and_bounds() {
+        // format helper
+        let ts_ns = format_timestamp_type_for_error(&DataType::Timestamp(
+            TimeUnit::Nanosecond,
+            None,
+        ));
+        assert_eq!(ts_ns, "Timestamp(ns)");
+
+        let ts_us = format_timestamp_type_for_error(&DataType::Timestamp(
+            TimeUnit::Microsecond,
+            None,
+        ));
+        assert_eq!(ts_us, "Timestamp(us)");
+
+        // ensure_timestamp_in_bounds: Date32 non-overflow
+        let ok = ensure_timestamp_in_bounds(
+            1000,
+            NANOS_PER_DAY,
+            &DataType::Date32,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        assert!(ok.is_ok());
+
+        // Date32 overflow -- known large day value (9999-12-31 -> 2932896)
+        let err = ensure_timestamp_in_bounds(
+            2932896,
+            NANOS_PER_DAY,
+            &DataType::Date32,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("Cannot cast Date32 value 2932896 to Timestamp(ns): timestamp values are limited to +/-2262 years"));
+
+        // Date64 overflow for ns (millis * 1_000_000)
+        let overflow_millis: i64 = (i64::MAX / NANOS_PER_MILLISECOND) + 1;
+        let err2 = ensure_timestamp_in_bounds(
+            overflow_millis,
+            NANOS_PER_MILLISECOND,
+            &DataType::Date64,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        assert!(err2.is_err());
     }
 
     #[test]
