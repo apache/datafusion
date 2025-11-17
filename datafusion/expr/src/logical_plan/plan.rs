@@ -59,10 +59,10 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, NullEquality, ParamValues, Result, ScalarValue, Spans,
-    TableReference, UnnestOptions,
+    aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError,
+    Dependency, FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues,
+    Result, ScalarValue, Spans, TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -965,13 +965,13 @@ impl LogicalPlan {
             }
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
                 let old_expr_len = skip.iter().chain(fetch.iter()).count();
-                if old_expr_len != expr.len() {
-                    return internal_err!(
-                        "Invalid number of new Limit expressions: expected {}, got {}",
-                        old_expr_len,
-                        expr.len()
-                    );
-                }
+                assert_eq_or_internal_err!(
+                    old_expr_len,
+                    expr.len(),
+                    "Invalid number of new Limit expressions: expected {}, got {}",
+                    old_expr_len,
+                    expr.len()
+                );
                 // `LogicalPlan::expressions()` returns in [skip, fetch] order, so we can pop from the end.
                 let new_fetch = fetch.as_ref().and_then(|_| expr.pop());
                 let new_skip = skip.as_ref().and_then(|_| expr.pop());
@@ -1158,9 +1158,11 @@ impl LogicalPlan {
     #[inline]
     #[expect(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
     fn assert_no_expressions(&self, expr: Vec<Expr>) -> Result<()> {
-        if !expr.is_empty() {
-            return internal_err!("{self:?} should have no exprs, got {:?}", expr);
-        }
+        assert_or_internal_err!(
+            expr.is_empty(),
+            "{self:?} should have no exprs, got {:?}",
+            expr
+        );
         Ok(())
     }
 
@@ -1168,33 +1170,35 @@ impl LogicalPlan {
     #[inline]
     #[expect(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
     fn assert_no_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<()> {
-        if !inputs.is_empty() {
-            return internal_err!("{self:?} should have no inputs, got: {:?}", inputs);
-        }
+        assert_or_internal_err!(
+            inputs.is_empty(),
+            "{self:?} should have no inputs, got: {:?}",
+            inputs
+        );
         Ok(())
     }
 
     /// Helper for [Self::with_new_exprs] to use when exactly one expression is expected.
     #[inline]
     fn only_expr(&self, mut expr: Vec<Expr>) -> Result<Expr> {
-        if expr.len() != 1 {
-            return internal_err!(
-                "{self:?} should have exactly one expr, got {:?}",
-                expr
-            );
-        }
+        assert_eq_or_internal_err!(
+            expr.len(),
+            1,
+            "{self:?} should have exactly one expr, got {:?}",
+            &expr
+        );
         Ok(expr.remove(0))
     }
 
     /// Helper for [Self::with_new_exprs] to use when exactly one input is expected.
     #[inline]
     fn only_input(&self, mut inputs: Vec<LogicalPlan>) -> Result<LogicalPlan> {
-        if inputs.len() != 1 {
-            return internal_err!(
-                "{self:?} should have exactly one input, got {:?}",
-                inputs
-            );
-        }
+        assert_eq_or_internal_err!(
+            inputs.len(),
+            1,
+            "{self:?} should have exactly one input, got {:?}",
+            &inputs
+        );
         Ok(inputs.remove(0))
     }
 
@@ -1204,12 +1208,12 @@ impl LogicalPlan {
         &self,
         mut inputs: Vec<LogicalPlan>,
     ) -> Result<(LogicalPlan, LogicalPlan)> {
-        if inputs.len() != 2 {
-            return internal_err!(
-                "{self:?} should have exactly two inputs, got {:?}",
-                inputs
-            );
-        }
+        assert_eq_or_internal_err!(
+            inputs.len(),
+            2,
+            "{self:?} should have exactly two inputs, got {:?}",
+            &inputs
+        );
         let right = inputs.remove(1);
         let left = inputs.remove(0);
         Ok((left, right))
