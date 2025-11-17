@@ -35,8 +35,8 @@ use arrow::array::ArrowNativeTypeOp;
 
 use ahash::RandomState;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, internal_err, plan_err, DataFusionError,
-    HashSet, Result, ScalarValue,
+    assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError, HashSet,
+    Result, ScalarValue,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};

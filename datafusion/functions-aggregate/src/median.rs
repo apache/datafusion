@@ -41,8 +41,8 @@ use arrow::datatypes::{
 
 use ahash::RandomState;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, internal_err, DataFusionError, HashSet,
-    Result, ScalarValue,
+    assert_eq_or_internal_err, internal_datafusion_err, DataFusionError, HashSet, Result,
+    ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
