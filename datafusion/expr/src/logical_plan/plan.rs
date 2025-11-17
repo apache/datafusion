@@ -1479,13 +1479,18 @@ impl LogicalPlan {
 
     /// Recompute schema fields' data type after replacing params, ensuring fields data type can be
     /// updated according to the new parameters.
+    ///
+    /// Unlike `recompute_schema()`, this method rebuilds VALUES plans entirely to properly infer
+    /// types types from literal values after placeholder substitution.
     fn update_schema_data_type(self) -> Result<LogicalPlan> {
         match self {
-            // FIXME: we have to manually rebuild the schema for `LogicalPlan::Values`,
-            // because `recompute_schema` doesn't recompute a new schema for `LogicalPlan::Values`.
+            // Build `LogicalPlan::Values` from the values for type inference.
+            // We can't use `recompute_schema` because it skips recomputing for
+            // `LogicalPlan::Values`.
             LogicalPlan::Values(Values { values, schema: _ }) => {
                 LogicalPlanBuilder::values(values)?.build()
             }
+            // other plans can just use `recompute_schema` directly.
             plan => plan.recompute_schema(),
         }
     }
