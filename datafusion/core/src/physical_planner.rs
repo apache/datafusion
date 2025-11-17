@@ -63,6 +63,7 @@ use arrow::datatypes::Schema;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
     assert_eq_or_internal_err, assert_or_internal_err, TableReference,
@@ -71,7 +72,6 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
 };
-use datafusion_common::stats::Precision;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
@@ -802,7 +802,10 @@ impl DefaultPhysicalPlanner {
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations()
-                    && has_sufficient_rows_for_repartition(initial_aggr.input(), session_state)?;
+                    && has_sufficient_rows_for_repartition(
+                        initial_aggr.input(),
+                        session_state,
+                    )?;
 
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
@@ -1585,12 +1588,12 @@ fn has_sufficient_rows_for_repartition(
     session_state: &SessionState,
 ) -> Result<bool> {
     let stats = input.partition_statistics(None)?;
-    
+
     if let Precision::Exact(num_rows) = stats.num_rows {
         let batch_size = session_state.config().batch_size();
         return Ok(num_rows > batch_size);
     }
-    
+
     Ok(true)
 }
 
