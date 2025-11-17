@@ -24,7 +24,7 @@ use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{Column, Result, TableReference};
+use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
 /// For example, `max(x)` is written to `col("max(x)")`
@@ -121,7 +121,6 @@ fn rewrite_in_terms_of_projection(
         }
 
         if let Some(found) = found {
-            let found = ensure_column_qualifiers(found)?;
             return Ok(Transformed::yes(match normalized_expr {
                 Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
                     expr: Box::new(found),
@@ -138,47 +137,6 @@ fn rewrite_in_terms_of_projection(
         Ok(Transformed::no(expr))
     })
     .data()
-}
-
-fn ensure_column_qualifiers(expr: Expr) -> Result<Expr> {
-    expr.transform(|expr| match expr {
-        Expr::Column(column) => {
-            Ok(Transformed::yes(Expr::Column(qualify_column(column))))
-        }
-        _ => Ok(Transformed::no(expr)),
-    })
-    .data()
-}
-
-fn qualify_column(column: Column) -> Column {
-    if column.relation.is_some() || !column.name.contains('.') {
-        return column;
-    }
-    let parsed = Column::from_qualified_name(column.name.clone());
-    if parsed.relation.is_some() {
-        return parsed;
-    }
-
-    manual_split_qualified_name(&column)
-        .map(|(relation, name)| Column::new(Some(relation), name))
-        .unwrap_or(column)
-}
-
-fn manual_split_qualified_name(column: &Column) -> Option<(TableReference, String)> {
-    let name = column.name.as_str();
-    let dot_idx = name.rfind('.')?;
-    if dot_idx == 0 || dot_idx == name.len() - 1 {
-        return None;
-    }
-    let qualifier = &name[..dot_idx];
-    let field = &name[dot_idx + 1..];
-    if qualifier.is_empty() || field.is_empty() {
-        return None;
-    }
-    Some((
-        TableReference::bare(qualifier.to_string()),
-        field.to_string(),
-    ))
 }
 
 /// Does the underlying expr match e?
@@ -207,7 +165,6 @@ mod test {
     use super::*;
     use crate::test::function_stub::avg;
     use crate::test::function_stub::min;
-    use datafusion_common::TableReference;
 
     #[test]
     fn rewrite_sort_cols_by_agg() {
@@ -284,18 +241,18 @@ mod test {
             TestCase {
                 desc: r#"min(c2) --> "min(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(min(col("c2"))),
-                expected: sort(col("min(t.c2)")),
+                expected: sort(derived_col("min(t.c2)")),
             },
             TestCase {
                 desc: r#"c1 + min(c2) --> "c1 + min(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(col("c1") + min(col("c2"))),
                 // should be "c1" not t.c1
-                expected: sort(col("c1") + col("min(t.c2)")),
+                expected: sort(col("c1") + derived_col("min(t.c2)")),
             },
             TestCase {
                 desc: r#"avg(c3) --> "avg(t.c3)" as average (column *named* "avg(t.c3)", aliased)"#,
                 input: sort(avg(col("c3"))),
-                expected: sort(col("avg(t.c3)").alias("average")),
+                expected: sort(derived_col("avg(t.c3)").alias("average")),
             },
         ];
 
@@ -383,58 +340,7 @@ mod test {
         expr.sort(asc, nulls_first)
     }
 
-    #[test]
-    fn qualify_column_handles_dotted_and_simple_names() {
-        let qualified =
-            Column::new(Some(TableReference::Bare { table: "t".into() }), "c1");
-        assert_eq!(qualify_column(qualified.clone()), qualified);
-
-        let simple = Column::new_unqualified("alias_without_dot");
-        assert_eq!(qualify_column(simple.clone()), simple);
-
-        let dotted = Column::new_unqualified("min(t.c2)");
-        let parsed = qualify_column(dotted);
-        assert_eq!(
-            parsed.relation,
-            Some(TableReference::Bare {
-                table: "min(t".into()
-            })
-        );
-        assert_eq!(parsed.name, "c2)");
-    }
-
-    #[test]
-    fn ensure_column_qualifiers_updates_nested_columns() {
-        let left = Expr::Column(Column::new_unqualified("min(t.c2)"));
-        let right = Expr::Alias(Alias::new(
-            Expr::Column(Column::new_unqualified("avg(t.c3)")),
-            Option::<TableReference>::None,
-            "avg_alias",
-        ));
-        let expr = left.add(right);
-
-        let qualified = ensure_column_qualifiers(expr).unwrap();
-        if let Expr::BinaryExpr(binary) = qualified {
-            assert!(matches!(
-                binary.left.as_ref(),
-                Expr::Column(Column {
-                    relation: Some(_),
-                    ..
-                })
-            ));
-
-            match binary.right.as_ref() {
-                Expr::Alias(Alias { expr, .. }) => assert!(matches!(
-                    expr.as_ref(),
-                    Expr::Column(Column {
-                        relation: Some(_),
-                        ..
-                    })
-                )),
-                other => panic!("expected alias on right side, got {other:?}"),
-            }
-        } else {
-            panic!("expected BinaryExpr");
-        }
+    fn derived_col(name: &str) -> Expr {
+        Expr::Column(Column::new_unqualified(name))
     }
 }
