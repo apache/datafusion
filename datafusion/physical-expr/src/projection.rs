@@ -50,7 +50,8 @@ pub struct ProjectionExpr {
 
 impl PartialEq for ProjectionExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.expr.eq(&other.expr) && self.alias == other.alias
+        let ProjectionExpr { expr, alias } = self;
+        expr.eq(&other.expr) && alias == other.alias
     }
 }
 
