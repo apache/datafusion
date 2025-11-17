@@ -155,14 +155,32 @@ pub fn ensure_timestamp_in_bounds(
     }
 
     if value.checked_mul(multiplier).is_none() {
+        let target = format_timestamp_type_for_error(target_type);
         _exec_err!(
             "Cannot cast {} value {} to {}: timestamp values are limited to +/-2262 years",
             source_type,
             value,
-            target_type
+            target
         )
     } else {
         Ok(())
+    }
+}
+
+/// Format a `DataType::Timestamp` into a short, stable string used in
+/// user-facing error messages.
+pub(crate) fn format_timestamp_type_for_error(target_type: &DataType) -> String {
+    match target_type {
+        DataType::Timestamp(unit, _) => {
+            let s = match unit {
+                TimeUnit::Second => "s",
+                TimeUnit::Millisecond => "ms",
+                TimeUnit::Microsecond => "us",
+                TimeUnit::Nanosecond => "ns",
+            };
+            format!("Timestamp({})", s)
+        }
+        other => format!("{}", other),
     }
 }
 
