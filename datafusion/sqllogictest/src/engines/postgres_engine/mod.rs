@@ -24,9 +24,11 @@ use sqllogictest::DBOutput;
 /// Postgres engine implementation for sqllogictest.
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::conversion::*;
+use crate::engines::currently_executed_sql::CurrentlyExecutedSqlTracker;
 use crate::engines::output::{DFColumnType, DFOutput};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use indicatif::ProgressBar;
@@ -59,6 +61,7 @@ pub struct Postgres {
     /// Relative test file path
     relative_path: PathBuf,
     pb: ProgressBar,
+    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 }
 
 impl Postgres {
@@ -118,7 +121,18 @@ impl Postgres {
             spawned_task: Some(spawned_task),
             relative_path,
             pb,
+            currently_executed_sql_tracker: CurrentlyExecutedSqlTracker::default(),
         })
+    }
+
+    pub fn with_currently_executed_sql_tracker(
+        self,
+        currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    ) -> Self {
+        Self {
+            currently_executed_sql_tracker,
+            ..self
+        }
     }
 
     fn get_client(&mut self) -> &mut tokio_postgres::Client {
@@ -242,6 +256,8 @@ impl sqllogictest::AsyncDB for Postgres {
             sql
         );
 
+        self.currently_executed_sql_tracker.set_sql(sql);
+
         let lower_sql = sql.trim_start().to_ascii_lowercase();
 
         let is_query_sql = {
@@ -291,6 +307,8 @@ impl sqllogictest::AsyncDB for Postgres {
                 .map(|c| c.type_().clone())
                 .collect()
         };
+
+        self.currently_executed_sql_tracker.clear_sql_if_same(sql);
 
         if rows.is_empty() && types.is_empty() {
             Ok(DBOutput::StatementComplete(0))

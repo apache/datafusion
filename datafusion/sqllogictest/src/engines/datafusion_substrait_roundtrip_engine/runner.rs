@@ -18,6 +18,7 @@
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
+use crate::engines::currently_executed_sql::CurrentlyExecutedSqlTracker;
 use crate::engines::datafusion_engine::Result;
 use crate::engines::output::{DFColumnType, DFOutput};
 use crate::{convert_batches, convert_schema_to_types, DFSqlLogicTestError};
@@ -39,6 +40,7 @@ pub struct DataFusionSubstraitRoundTrip {
     ctx: SessionContext,
     relative_path: PathBuf,
     pb: ProgressBar,
+    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 }
 
 impl DataFusionSubstraitRoundTrip {
@@ -47,6 +49,17 @@ impl DataFusionSubstraitRoundTrip {
             ctx,
             relative_path,
             pb,
+            currently_executed_sql_tracker: CurrentlyExecutedSqlTracker::default(),
+        }
+    }
+
+    pub fn with_currently_executed_sql_tracker(
+        self,
+        currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
+    ) -> Self {
+        Self {
+            currently_executed_sql_tracker,
+            ..self
         }
     }
 
@@ -81,9 +94,13 @@ impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
             );
         }
 
+        self.currently_executed_sql_tracker.set_sql(sql);
+
         let start = Instant::now();
         let result = run_query_substrait_round_trip(&self.ctx, sql).await;
         let duration = start.elapsed();
+
+        self.currently_executed_sql_tracker.clear_sql_if_same(sql);
 
         if duration.gt(&Duration::from_millis(500)) {
             self.update_slow_count();

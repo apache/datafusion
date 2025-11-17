@@ -21,8 +21,8 @@ use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_sqllogictest::{
     df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
-    should_skip_record, value_normalizer, DataFusion, DataFusionSubstraitRoundTrip,
-    Filter, TestContext,
+    should_skip_record, value_normalizer, CurrentlyExecutedSqlTracker, DataFusion,
+    DataFusionSubstraitRoundTrip, Filter, TestContext,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -41,6 +41,7 @@ use crate::postgres_container::{
     initialize_postgres_container, terminate_postgres_container,
 };
 use datafusion::common::runtime::SpawnedTask;
+use futures::FutureExt;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -154,6 +155,11 @@ async fn run_tests() -> Result<()> {
             let m_style_clone = m_style.clone();
             let filters = options.filters.clone();
 
+            let relative_path = test_file.relative_path.clone();
+
+            // Mutex per file to hold the current sql being run
+            let current_sql = CurrentlyExecutedSqlTracker::new();
+            let current_sql_clone = current_sql.clone();
             SpawnedTask::spawn(async move {
                 match (
                     options.postgres_runner,
@@ -167,6 +173,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
+                            current_sql_clone,
                         )
                         .await?
                     }
@@ -177,12 +184,19 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
+                            current_sql_clone,
                         )
                         .await?
                     }
                     (false, true, _) => {
-                        run_complete_file(test_file, validator, m_clone, m_style_clone)
-                            .await?
+                        run_complete_file(
+                            test_file,
+                            validator,
+                            m_clone,
+                            m_style_clone,
+                            current_sql_clone,
+                        )
+                        .await?
                     }
                     (true, false, _) => {
                         run_test_file_with_postgres(
@@ -191,6 +205,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                             filters.as_ref(),
+                            current_sql_clone,
                         )
                         .await?
                     }
@@ -200,6 +215,7 @@ async fn run_tests() -> Result<()> {
                             validator,
                             m_clone,
                             m_style_clone,
+                            current_sql_clone,
                         )
                         .await?
                     }
@@ -207,14 +223,29 @@ async fn run_tests() -> Result<()> {
                 Ok(()) as Result<()>
             })
             .join()
+            .map(move |result| (result, relative_path, current_sql))
         })
         // run up to num_cpus streams in parallel
         .buffer_unordered(options.test_threads)
-        .flat_map(|result| {
+        .flat_map(|(result, test_file_path, current_sql)| {
             // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {
                 // Tokio panic error
-                Err(e) => Some(DataFusionError::External(Box::new(e))),
+                Err(e) => {
+                    let error = DataFusionError::External(Box::new(e));
+                    let current_sql = current_sql.get_sql();
+
+                    match current_sql {
+                        Some(sql) => Some(error.context(format!(
+                            "failure in {} for sql {sql}",
+                            test_file_path.display()
+                        ))),
+                        None => Some(error.context(format!(
+                            "failure in {} with no currently running sql tracked",
+                            test_file_path.display()
+                        ))),
+                    }
+                }
                 Ok(thread_result) => thread_result.err(),
             })
         })
@@ -247,6 +278,7 @@ async fn run_test_file_substrait_round_trip(
     mp: MultiProgress,
     mp_style: ProgressStyle,
     filters: &[Filter],
+    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -269,7 +301,8 @@ async fn run_test_file_substrait_round_trip(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
-        ))
+        )
+        .with_currently_executed_sql_tracker(currently_executed_sql_tracker.clone()))
     });
     runner.add_label("DatafusionSubstraitRoundTrip");
     runner.with_column_validator(strict_column_validator);
@@ -286,6 +319,7 @@ async fn run_test_file(
     mp: MultiProgress,
     mp_style: ProgressStyle,
     filters: &[Filter],
+    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -308,7 +342,8 @@ async fn run_test_file(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
-        ))
+        )
+        .with_currently_executed_sql_tracker(currently_executed_sql_tracker.clone()))
     });
     runner.add_label("Datafusion");
     runner.with_column_validator(strict_column_validator);
@@ -402,6 +437,7 @@ async fn run_test_file_with_postgres(
     mp: MultiProgress,
     mp_style: ProgressStyle,
     filters: &[Filter],
+    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 ) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
@@ -417,7 +453,11 @@ async fn run_test_file_with_postgres(
     pb.set_message(format!("{:?}", &relative_path));
 
     let mut runner = sqllogictest::Runner::new(|| {
-        Postgres::connect(relative_path.clone(), pb.clone())
+        Postgres::connect(relative_path.clone(), pb.clone()).map(|conn| {
+            conn.with_currently_executed_sql_tracker(
+                currently_executed_sql_tracker.clone(),
+            )
+        })
     });
     runner.add_label("postgres");
     runner.with_column_validator(strict_column_validator);
@@ -435,6 +475,7 @@ async fn run_test_file_with_postgres(
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
     _filters: &[Filter],
+    _currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 ) -> Result<()> {
     use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
@@ -445,6 +486,7 @@ async fn run_complete_file(
     validator: Validator,
     mp: MultiProgress,
     mp_style: ProgressStyle,
+    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 ) -> Result<()> {
     let TestFile {
         path,
@@ -470,7 +512,8 @@ async fn run_complete_file(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
-        ))
+        )
+        .with_currently_executed_sql_tracker(currently_executed_sql_tracker.clone()))
     });
 
     let col_separator = " ";
@@ -497,6 +540,7 @@ async fn run_complete_file_with_postgres(
     validator: Validator,
     mp: MultiProgress,
     mp_style: ProgressStyle,
+    currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 ) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
@@ -516,7 +560,11 @@ async fn run_complete_file_with_postgres(
     pb.set_message(format!("{:?}", &relative_path));
 
     let mut runner = sqllogictest::Runner::new(|| {
-        Postgres::connect(relative_path.clone(), pb.clone())
+        Postgres::connect(relative_path.clone(), pb.clone()).map(|conn| {
+            conn.with_currently_executed_sql_tracker(
+                currently_executed_sql_tracker.clone(),
+            )
+        })
     });
     runner.add_label("postgres");
     runner.with_column_validator(strict_column_validator);
@@ -547,6 +595,7 @@ async fn run_complete_file_with_postgres(
     _validator: Validator,
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
+    _currently_executed_sql_tracker: CurrentlyExecutedSqlTracker,
 ) -> Result<()> {
     use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
