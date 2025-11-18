@@ -79,38 +79,6 @@ impl ScalarUDFImpl for SparkAbs {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_abs(&args.args)
     }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("abs", (1, 1), arg_types.len()));
-        }
-        match &arg_types[0] {
-            DataType::Null
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => Ok(vec![arg_types[0].clone()]),
-            other => {
-                if other.is_numeric() {
-                    Ok(vec![DataType::Float64])
-                } else {
-                    Err(unsupported_data_type_exec_err(
-                        "abs",
-                        "Numeric Type",
-                        &arg_types[0],
-                    ))
-                }
-            }
-        }
-    }
 }
 
 macro_rules! scalar_compute_op {
