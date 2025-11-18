@@ -33,13 +33,14 @@ pub(crate) enum BoundsTypeExt {
     Unspecified,
 }
 
+const SUBSTRAIT_GROUPS_VALUE: i32 = 3;
 impl BoundsTypeExt {
     /// Convert from an i32 value (from Substrait protobuf) to BoundsTypeExt
     pub(crate) fn from_i32(value: i32) -> Result<Self> {
         match value {
             v if v == BoundsType::Rows as i32 => Ok(BoundsTypeExt::Rows),
             v if v == BoundsType::Range as i32 => Ok(BoundsTypeExt::Range),
-            3 => Ok(BoundsTypeExt::Groups), // Groups variant from Substrait spec
+            v if v == SUBSTRAIT_GROUPS_VALUE => Ok(BoundsTypeExt::Groups),
             v if v == BoundsType::Unspecified as i32 => Ok(BoundsTypeExt::Unspecified),
             _ => Err(plan_datafusion_err!("Invalid bound type: {}", value)),
         }
