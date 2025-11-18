@@ -31,7 +31,9 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
+mod guarantees;
 mod order_by;
+
 pub use order_by::rewrite_sort_cols_by_aggs;
 
 /// Trait for rewriting [`Expr`]s into function calls.
