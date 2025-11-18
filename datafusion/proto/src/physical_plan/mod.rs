@@ -21,11 +21,7 @@ use std::sync::Arc;
 use self::from_proto::parse_protobuf_partitioning;
 use self::to_proto::{serialize_partitioning, serialize_physical_expr};
 use crate::common::{byte_to_string, str_to_byte};
-use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches,
-    parse_table_schema_from_proto,
-};
+use crate::physical_plan::from_proto::{parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs, parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto, Deserializer};
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
     serialize_physical_sort_exprs, serialize_physical_window_expr,
@@ -126,11 +122,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_into_physical_plan(
+    fn try_into_physical_plan<D: Deserializer + ?Sized>(
         &self,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
@@ -139,117 +133,114 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         })?;
         match plan {
             PhysicalPlanType::Explain(explain) => {
-                self.try_into_explain_physical_plan(explain, ctx, extension_codec)
+                self.try_into_explain_physical_plan(explain, parser)
             }
             PhysicalPlanType::Projection(projection) => {
-                self.try_into_projection_physical_plan(projection, ctx, extension_codec)
+                self.try_into_projection_physical_plan(projection, parser)
             }
             PhysicalPlanType::Filter(filter) => {
-                self.try_into_filter_physical_plan(filter, ctx, extension_codec)
+                self.try_into_filter_physical_plan(filter, parser)
             }
             PhysicalPlanType::CsvScan(scan) => {
-                self.try_into_csv_scan_physical_plan(scan, ctx, extension_codec)
+                self.try_into_csv_scan_physical_plan(scan, parser)
             }
             PhysicalPlanType::JsonScan(scan) => {
-                self.try_into_json_scan_physical_plan(scan, ctx, extension_codec)
+                self.try_into_json_scan_physical_plan(scan, parser)
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
-                self.try_into_parquet_scan_physical_plan(scan, ctx, extension_codec)
+                self.try_into_parquet_scan_physical_plan(scan, parser)
             }
             #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
             PhysicalPlanType::AvroScan(scan) => {
-                self.try_into_avro_scan_physical_plan(scan, ctx, extension_codec)
+                self.try_into_avro_scan_physical_plan(scan, parser)
             }
             PhysicalPlanType::MemoryScan(scan) => {
-                self.try_into_memory_scan_physical_plan(scan, ctx, extension_codec)
+                self.try_into_memory_scan_physical_plan(scan, parser)
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => self
                 .try_into_coalesce_batches_physical_plan(
                     coalesce_batches,
-                    ctx,
-                    extension_codec,
+                    parser,
                 ),
             PhysicalPlanType::Merge(merge) => {
-                self.try_into_merge_physical_plan(merge, ctx, extension_codec)
+                self.try_into_merge_physical_plan(merge, parser)
             }
             PhysicalPlanType::Repartition(repart) => {
-                self.try_into_repartition_physical_plan(repart, ctx, extension_codec)
+                self.try_into_repartition_physical_plan(repart, parser)
             }
             PhysicalPlanType::GlobalLimit(limit) => {
-                self.try_into_global_limit_physical_plan(limit, ctx, extension_codec)
+                self.try_into_global_limit_physical_plan(limit, parser)
             }
             PhysicalPlanType::LocalLimit(limit) => {
-                self.try_into_local_limit_physical_plan(limit, ctx, extension_codec)
+                self.try_into_local_limit_physical_plan(limit, parser)
             }
             PhysicalPlanType::Window(window_agg) => {
-                self.try_into_window_physical_plan(window_agg, ctx, extension_codec)
+                self.try_into_window_physical_plan(window_agg, parser)
             }
             PhysicalPlanType::Aggregate(hash_agg) => {
-                self.try_into_aggregate_physical_plan(hash_agg, ctx, extension_codec)
+                self.try_into_aggregate_physical_plan(hash_agg, parser)
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
-                self.try_into_hash_join_physical_plan(hashjoin, ctx, extension_codec)
+                self.try_into_hash_join_physical_plan(hashjoin, parser)
             }
             PhysicalPlanType::SymmetricHashJoin(sym_join) => self
                 .try_into_symmetric_hash_join_physical_plan(
                     sym_join,
-                    ctx,
-                    extension_codec,
+                    parser,
                 ),
             PhysicalPlanType::Union(union) => {
-                self.try_into_union_physical_plan(union, ctx, extension_codec)
+                self.try_into_union_physical_plan(union, parser)
             }
             PhysicalPlanType::Interleave(interleave) => {
-                self.try_into_interleave_physical_plan(interleave, ctx, extension_codec)
+                self.try_into_interleave_physical_plan(interleave, parser)
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
-                self.try_into_cross_join_physical_plan(crossjoin, ctx, extension_codec)
+                self.try_into_cross_join_physical_plan(crossjoin, parser)
             }
             PhysicalPlanType::Empty(empty) => {
-                self.try_into_empty_physical_plan(empty, ctx, extension_codec)
+                self.try_into_empty_physical_plan(empty, parser)
             }
             PhysicalPlanType::PlaceholderRow(placeholder) => self
                 .try_into_placeholder_row_physical_plan(
                     placeholder,
-                    ctx,
-                    extension_codec,
+                    parser
                 ),
             PhysicalPlanType::Sort(sort) => {
-                self.try_into_sort_physical_plan(sort, ctx, extension_codec)
+                self.try_into_sort_physical_plan(sort, parser)
             }
             PhysicalPlanType::SortPreservingMerge(sort) => self
-                .try_into_sort_preserving_merge_physical_plan(sort, ctx, extension_codec),
+                .try_into_sort_preserving_merge_physical_plan(sort, parser),
             PhysicalPlanType::Extension(extension) => {
-                self.try_into_extension_physical_plan(extension, ctx, extension_codec)
+                self.try_into_extension_physical_plan(extension, parser)
             }
             PhysicalPlanType::NestedLoopJoin(join) => {
-                self.try_into_nested_loop_join_physical_plan(join, ctx, extension_codec)
+                self.try_into_nested_loop_join_physical_plan(join, parser)
             }
             PhysicalPlanType::Analyze(analyze) => {
-                self.try_into_analyze_physical_plan(analyze, ctx, extension_codec)
+                self.try_into_analyze_physical_plan(analyze, parser)
             }
             PhysicalPlanType::JsonSink(sink) => {
-                self.try_into_json_sink_physical_plan(sink, ctx, extension_codec)
+                self.try_into_json_sink_physical_plan(sink, parser)
             }
             PhysicalPlanType::CsvSink(sink) => {
-                self.try_into_csv_sink_physical_plan(sink, ctx, extension_codec)
+                self.try_into_csv_sink_physical_plan(sink, parser)
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetSink(sink) => {
-                self.try_into_parquet_sink_physical_plan(sink, ctx, extension_codec)
+                self.try_into_parquet_sink_physical_plan(sink, parser)
             }
             PhysicalPlanType::Unnest(unnest) => {
-                self.try_into_unnest_physical_plan(unnest, ctx, extension_codec)
+                self.try_into_unnest_physical_plan(unnest, parser)
             }
             PhysicalPlanType::Cooperative(cooperative) => {
-                self.try_into_cooperative_physical_plan(cooperative, ctx, extension_codec)
+                self.try_into_cooperative_physical_plan(cooperative, parser)
             }
             PhysicalPlanType::GenerateSeries(generate_series) => {
                 self.try_into_generate_series_physical_plan(generate_series)
             }
             PhysicalPlanType::SortMergeJoin(sort_join) => {
-                self.try_into_sort_join(sort_join, ctx, extension_codec)
+                self.try_into_sort_join(sort_join, parser)
             }
         }
     }
@@ -491,12 +482,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 }
 
 impl protobuf::PhysicalPlanNode {
-    fn try_into_explain_physical_plan(
+    fn try_into_explain_physical_plan<D: Deserializer + ?Sized>(
         &self,
         explain: &protobuf::ExplainExecNode,
-        _ctx: &TaskContext,
-
-        _extension_codec: &dyn PhysicalExtensionCodec,
+        _parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(ExplainExec::new(
             Arc::new(explain.schema.as_ref().unwrap().try_into()?),
@@ -509,15 +498,13 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_projection_physical_plan(
+    fn try_into_projection_physical_plan<D: Deserializer + ?Sized>(
         &self,
         projection: &protobuf::ProjectionExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&projection.input, ctx, extension_codec)?;
+            into_physical_plan(&projection.input, parser)?;
         let exprs = projection
             .expr
             .iter()
@@ -526,9 +513,8 @@ impl protobuf::PhysicalPlanNode {
                 Ok((
                     parse_physical_expr(
                         expr,
-                        ctx,
+                        parser,
                         input.schema().as_ref(),
-                        extension_codec,
                     )?,
                     name.to_string(),
                 ))
@@ -541,21 +527,19 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
-    fn try_into_filter_physical_plan(
+    fn try_into_filter_physical_plan<D: Deserializer + ?Sized>(
         &self,
         filter: &protobuf::FilterExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&filter.input, ctx, extension_codec)?;
+            into_physical_plan(&filter.input, parser)?;
 
         let predicate = filter
             .expr
             .as_ref()
             .map(|expr| {
-                parse_physical_expr(expr, ctx, input.schema().as_ref(), extension_codec)
+                parse_physical_expr(expr, parser, input.schema().as_ref())
             })
             .transpose()?
             .ok_or_else(|| {
@@ -589,12 +573,10 @@ impl protobuf::PhysicalPlanNode {
         }
     }
 
-    fn try_into_csv_scan_physical_plan(
+    fn try_into_csv_scan_physical_plan<D: Deserializer + ?Sized>(
         &self,
         scan: &protobuf::CsvScanExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let escape =
             if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape)) =
@@ -633,8 +615,7 @@ impl protobuf::PhysicalPlanNode {
 
         let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(
             scan.base_conf.as_ref().unwrap(),
-            ctx,
-            extension_codec,
+            parser,
             source,
         )?)
         .with_newlines_in_values(scan.newlines_in_values)
@@ -643,31 +624,26 @@ impl protobuf::PhysicalPlanNode {
         Ok(DataSourceExec::from_data_source(conf))
     }
 
-    fn try_into_json_scan_physical_plan(
+    fn try_into_json_scan_physical_plan<D: Deserializer + ?Sized>(
         &self,
         scan: &protobuf::JsonScanExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let base_conf = scan.base_conf.as_ref().unwrap();
         let table_schema = parse_table_schema_from_proto(base_conf)?;
         let scan_conf = parse_protobuf_file_scan_config(
             base_conf,
-            ctx,
-            extension_codec,
+            parser,
             Arc::new(JsonSource::new(table_schema)),
         )?;
         Ok(DataSourceExec::from_data_source(scan_conf))
     }
 
     #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
-    fn try_into_parquet_scan_physical_plan(
+    fn try_into_parquet_scan_physical_plan<D: Deserializer + ?Sized>(
         &self,
         scan: &protobuf::ParquetScanExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
@@ -695,9 +671,8 @@ impl protobuf::PhysicalPlanNode {
                 .map(|expr| {
                     parse_physical_expr(
                         expr,
-                        ctx,
+                        parser,
                         predicate_schema.as_ref(),
-                        extension_codec,
                     )
                 })
                 .transpose()?;
@@ -718,8 +693,7 @@ impl protobuf::PhysicalPlanNode {
             }
             let base_config = parse_protobuf_file_scan_config(
                 base_conf,
-                ctx,
-                extension_codec,
+                parser,
                 Arc::new(source),
             )?;
             Ok(DataSourceExec::from_data_source(base_config))
@@ -729,11 +703,10 @@ impl protobuf::PhysicalPlanNode {
     }
 
     #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
-    fn try_into_avro_scan_physical_plan(
+    fn try_into_avro_scan_physical_plan<D: Deserializer + ?Sized>(
         &self,
         scan: &protobuf::AvroScanExecNode,
-        ctx: &TaskContext,
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "avro")]
         {
@@ -741,8 +714,7 @@ impl protobuf::PhysicalPlanNode {
                 parse_table_schema_from_proto(scan.base_conf.as_ref().unwrap())?;
             let conf = parse_protobuf_file_scan_config(
                 scan.base_conf.as_ref().unwrap(),
-                ctx,
-                extension_codec,
+                parser,
                 Arc::new(AvroSource::new(table_schema)),
             )?;
             Ok(DataSourceExec::from_data_source(conf))
@@ -751,12 +723,10 @@ impl protobuf::PhysicalPlanNode {
         panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
     }
 
-    fn try_into_memory_scan_physical_plan(
+    fn try_into_memory_scan_physical_plan<D: Deserializer + ?Sized>(
         &self,
         scan: &protobuf::MemoryScanExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let partitions = scan
             .partitions
@@ -784,9 +754,8 @@ impl protobuf::PhysicalPlanNode {
         for ordering in &scan.sort_information {
             let sort_exprs = parse_physical_sort_exprs(
                 &ordering.physical_sort_expr_nodes,
-                ctx,
+                parser,
                 &schema,
-                extension_codec,
             )?;
             sort_information.extend(LexOrdering::new(sort_exprs));
         }
@@ -800,50 +769,43 @@ impl protobuf::PhysicalPlanNode {
         Ok(DataSourceExec::from_data_source(source))
     }
 
-    fn try_into_coalesce_batches_physical_plan(
+    fn try_into_coalesce_batches_physical_plan<D: Deserializer + ?Sized>(
         &self,
         coalesce_batches: &protobuf::CoalesceBatchesExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&coalesce_batches.input, ctx, extension_codec)?;
+            into_physical_plan(&coalesce_batches.input, parser)?;
         Ok(Arc::new(
             CoalesceBatchesExec::new(input, coalesce_batches.target_batch_size as usize)
                 .with_fetch(coalesce_batches.fetch.map(|f| f as usize)),
         ))
     }
 
-    fn try_into_merge_physical_plan(
+    fn try_into_merge_physical_plan<D: Deserializer + ?Sized>(
         &self,
         merge: &protobuf::CoalescePartitionsExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&merge.input, ctx, extension_codec)?;
+            into_physical_plan(&merge.input, parser)?;
         Ok(Arc::new(
             CoalescePartitionsExec::new(input)
                 .with_fetch(merge.fetch.map(|f| f as usize)),
         ))
     }
 
-    fn try_into_repartition_physical_plan(
+    fn try_into_repartition_physical_plan<D: Deserializer + ?Sized>(
         &self,
         repart: &protobuf::RepartitionExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&repart.input, ctx, extension_codec)?;
+            into_physical_plan(&repart.input, parser)?;
         let partitioning = parse_protobuf_partitioning(
             repart.partitioning.as_ref(),
-            ctx,
+            parser,
             input.schema().as_ref(),
-            extension_codec,
         )?;
         Ok(Arc::new(RepartitionExec::try_new(
             input,
@@ -851,15 +813,13 @@ impl protobuf::PhysicalPlanNode {
         )?))
     }
 
-    fn try_into_global_limit_physical_plan(
+    fn try_into_global_limit_physical_plan<D: Deserializer + ?Sized>(
         &self,
         limit: &protobuf::GlobalLimitExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&limit.input, ctx, extension_codec)?;
+            into_physical_plan(&limit.input, parser)?;
         let fetch = if limit.fetch >= 0 {
             Some(limit.fetch as usize)
         } else {
@@ -872,27 +832,23 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_local_limit_physical_plan(
+    fn try_into_local_limit_physical_plan<D: Deserializer + ?Sized>(
         &self,
         limit: &protobuf::LocalLimitExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&limit.input, ctx, extension_codec)?;
+            into_physical_plan(&limit.input, parser)?;
         Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
     }
 
-    fn try_into_window_physical_plan(
+    fn try_into_window_physical_plan<D: Deserializer + ?Sized>(
         &self,
         window_agg: &protobuf::WindowAggExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&window_agg.input, ctx, extension_codec)?;
+            into_physical_plan(&window_agg.input, parser)?;
         let input_schema = input.schema();
 
         let physical_window_expr: Vec<Arc<dyn WindowExpr>> = window_agg
@@ -901,9 +857,8 @@ impl protobuf::PhysicalPlanNode {
             .map(|window_expr| {
                 parse_physical_window_expr(
                     window_expr,
-                    ctx,
+                    parser,
                     input_schema.as_ref(),
-                    extension_codec,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -912,7 +867,7 @@ impl protobuf::PhysicalPlanNode {
             .partition_keys
             .iter()
             .map(|expr| {
-                parse_physical_expr(expr, ctx, input.schema().as_ref(), extension_codec)
+                parse_physical_expr(expr, parser, input.schema().as_ref())
             })
             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
 
@@ -942,15 +897,13 @@ impl protobuf::PhysicalPlanNode {
         }
     }
 
-    fn try_into_aggregate_physical_plan(
+    fn try_into_aggregate_physical_plan<D: Deserializer + ?Sized>(
         &self,
         hash_agg: &protobuf::AggregateExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&hash_agg.input, ctx, extension_codec)?;
+            into_physical_plan(&hash_agg.input, parser)?;
         let mode = protobuf::AggregateMode::try_from(hash_agg.mode).map_err(|_| {
             proto_error(format!(
                 "Received a AggregateNode message with unknown AggregateMode {}",
@@ -974,7 +927,7 @@ impl protobuf::PhysicalPlanNode {
             .iter()
             .zip(hash_agg.group_expr_name.iter())
             .map(|(expr, name)| {
-                parse_physical_expr(expr, ctx, input.schema().as_ref(), extension_codec)
+                parse_physical_expr(expr, parser, input.schema().as_ref())
                     .map(|expr| (expr, name.to_string()))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -984,7 +937,7 @@ impl protobuf::PhysicalPlanNode {
             .iter()
             .zip(hash_agg.group_expr_name.iter())
             .map(|(expr, name)| {
-                parse_physical_expr(expr, ctx, input.schema().as_ref(), extension_codec)
+                parse_physical_expr(expr, parser, input.schema().as_ref())
                     .map(|expr| (expr, name.to_string()))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1011,7 +964,7 @@ impl protobuf::PhysicalPlanNode {
                 expr.expr
                     .as_ref()
                     .map(|e| {
-                        parse_physical_expr(e, ctx, &physical_schema, extension_codec)
+                        parse_physical_expr(e, parser, &physical_schema)
                     })
                     .transpose()
             })
@@ -1034,9 +987,8 @@ impl protobuf::PhysicalPlanNode {
                             .map(|e| {
                                 parse_physical_expr(
                                     e,
-                                    ctx,
+                                    parser,
                                     &physical_schema,
-                                    extension_codec,
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
@@ -1046,9 +998,8 @@ impl protobuf::PhysicalPlanNode {
                             .map(|e| {
                                 parse_physical_sort_expr(
                                     e,
-                                    ctx,
+                                    parser,
                                     &physical_schema,
-                                    extension_codec,
                                 )
                             })
                             .collect::<Result<_>>()?;
@@ -1057,14 +1008,9 @@ impl protobuf::PhysicalPlanNode {
                             .as_ref()
                             .map(|func| match func {
                                 AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
-                                    let agg_udf = match &agg_node.fun_definition {
-                                        Some(buf) => extension_codec
-                                            .try_decode_udaf(udaf_name, buf)?,
-                                        None => ctx.udaf(udaf_name).or_else(|_| {
-                                            extension_codec
-                                                .try_decode_udaf(udaf_name, &[])
-                                        })?,
-                                    };
+                                    let empty_buf = Vec::with_capacity(0);
+                                    let buf = agg_node.fun_definition.as_ref().unwrap_or(&empty_buf);
+                                    let agg_udf = parser.try_decode_udaf(udaf_name, &buf)?;
 
                                     AggregateExprBuilder::new(agg_udf, input_phy_expr)
                                         .schema(Arc::clone(&physical_schema))
@@ -1108,17 +1054,15 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(agg))
     }
 
-    fn try_into_hash_join_physical_plan(
+    fn try_into_hash_join_physical_plan<D: Deserializer + ?Sized>(
         &self,
         hashjoin: &protobuf::HashJoinExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&hashjoin.left, ctx, extension_codec)?;
+            into_physical_plan(&hashjoin.left, parser)?;
         let right: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&hashjoin.right, ctx, extension_codec)?;
+            into_physical_plan(&hashjoin.right, parser)?;
         let left_schema = left.schema();
         let right_schema = right.schema();
         let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = hashjoin
@@ -1127,15 +1071,13 @@ impl protobuf::PhysicalPlanNode {
             .map(|col| {
                 let left = parse_physical_expr(
                     &col.left.clone().unwrap(),
-                    ctx,
+                    parser,
                     left_schema.as_ref(),
-                    extension_codec,
                 )?;
                 let right = parse_physical_expr(
                     &col.right.clone().unwrap(),
-                    ctx,
+                    parser,
                     right_schema.as_ref(),
-                    extension_codec,
                 )?;
                 Ok((left, right))
             })
@@ -1168,8 +1110,7 @@ impl protobuf::PhysicalPlanNode {
                     f.expression.as_ref().ok_or_else(|| {
                         proto_error("Unexpected empty filter expression")
                     })?,
-                    ctx, &schema,
-                    extension_codec,
+                    parser, &schema,
                 )?;
                 let column_indices = f.column_indices
                     .iter()
@@ -1226,15 +1167,13 @@ impl protobuf::PhysicalPlanNode {
         )?))
     }
 
-    fn try_into_symmetric_hash_join_physical_plan(
+    fn try_into_symmetric_hash_join_physical_plan<D: Deserializer + ?Sized>(
         &self,
         sym_join: &protobuf::SymmetricHashJoinExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = into_physical_plan(&sym_join.left, ctx, extension_codec)?;
-        let right = into_physical_plan(&sym_join.right, ctx, extension_codec)?;
+        let left = into_physical_plan(&sym_join.left, parser)?;
+        let right = into_physical_plan(&sym_join.right, parser)?;
         let left_schema = left.schema();
         let right_schema = right.schema();
         let on = sym_join
@@ -1243,15 +1182,13 @@ impl protobuf::PhysicalPlanNode {
             .map(|col| {
                 let left = parse_physical_expr(
                     &col.left.clone().unwrap(),
-                    ctx,
+                    parser,
                     left_schema.as_ref(),
-                    extension_codec,
                 )?;
                 let right = parse_physical_expr(
                     &col.right.clone().unwrap(),
-                    ctx,
+                    parser,
                     right_schema.as_ref(),
-                    extension_codec,
                 )?;
                 Ok((left, right))
             })
@@ -1284,8 +1221,7 @@ impl protobuf::PhysicalPlanNode {
                     f.expression.as_ref().ok_or_else(|| {
                         proto_error("Unexpected empty filter expression")
                     })?,
-                    ctx, &schema,
-                    extension_codec,
+                    parser, &schema,
                 )?;
                 let column_indices = f.column_indices
                     .iter()
@@ -1309,17 +1245,15 @@ impl protobuf::PhysicalPlanNode {
 
         let left_sort_exprs = parse_physical_sort_exprs(
             &sym_join.left_sort_exprs,
-            ctx,
+            parser,
             &left_schema,
-            extension_codec,
         )?;
         let left_sort_exprs = LexOrdering::new(left_sort_exprs);
 
         let right_sort_exprs = parse_physical_sort_exprs(
             &sym_join.right_sort_exprs,
-            ctx,
+            parser,
             &right_schema,
-            extension_codec,
         )?;
         let right_sort_exprs = LexOrdering::new(right_sort_exprs);
 
@@ -1354,78 +1288,66 @@ impl protobuf::PhysicalPlanNode {
         .map(|e| Arc::new(e) as _)
     }
 
-    fn try_into_union_physical_plan(
+    fn try_into_union_physical_plan<D: Deserializer + ?Sized>(
         &self,
         union: &protobuf::UnionExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
         for input in &union.inputs {
-            inputs.push(input.try_into_physical_plan(ctx, extension_codec)?);
+            inputs.push(input.try_into_physical_plan(parser)?);
         }
         UnionExec::try_new(inputs)
     }
 
-    fn try_into_interleave_physical_plan(
+    fn try_into_interleave_physical_plan<D: Deserializer + ?Sized>(
         &self,
         interleave: &protobuf::InterleaveExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
         for input in &interleave.inputs {
-            inputs.push(input.try_into_physical_plan(ctx, extension_codec)?);
+            inputs.push(input.try_into_physical_plan(parser)?);
         }
         Ok(Arc::new(InterleaveExec::try_new(inputs)?))
     }
 
-    fn try_into_cross_join_physical_plan(
+    fn try_into_cross_join_physical_plan<D: Deserializer + ?Sized>(
         &self,
         crossjoin: &protobuf::CrossJoinExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&crossjoin.left, ctx, extension_codec)?;
+            into_physical_plan(&crossjoin.left, parser)?;
         let right: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&crossjoin.right, ctx, extension_codec)?;
+            into_physical_plan(&crossjoin.right, parser)?;
         Ok(Arc::new(CrossJoinExec::new(left, right)))
     }
 
-    fn try_into_empty_physical_plan(
+    fn try_into_empty_physical_plan<D: Deserializer + ?Sized>(
         &self,
         empty: &protobuf::EmptyExecNode,
-        _ctx: &TaskContext,
-
-        _extension_codec: &dyn PhysicalExtensionCodec,
+        _parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(empty.schema)?);
         Ok(Arc::new(EmptyExec::new(schema)))
     }
 
-    fn try_into_placeholder_row_physical_plan(
+    fn try_into_placeholder_row_physical_plan<D: Deserializer + ?Sized>(
         &self,
         placeholder: &protobuf::PlaceholderRowExecNode,
-        _ctx: &TaskContext,
-
-        _extension_codec: &dyn PhysicalExtensionCodec,
+        _parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(placeholder.schema)?);
         Ok(Arc::new(PlaceholderRowExec::new(schema)))
     }
 
-    fn try_into_sort_physical_plan(
+    fn try_into_sort_physical_plan<D: Deserializer + ?Sized>(
         &self,
         sort: &protobuf::SortExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&sort.input, ctx, extension_codec)?;
+        let input = into_physical_plan(&sort.input, parser)?;
         let exprs = sort
             .expr
             .iter()
@@ -1446,7 +1368,7 @@ impl protobuf::PhysicalPlanNode {
                         })?
                         .as_ref();
                     Ok(PhysicalSortExpr {
-                        expr: parse_physical_expr(expr, ctx, input.schema().as_ref(), extension_codec)?,
+                        expr: parse_physical_expr(expr, parser, input.schema().as_ref())?,
                         options: SortOptions {
                             descending: !sort_expr.asc,
                             nulls_first: sort_expr.nulls_first,
@@ -1470,14 +1392,12 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(new_sort))
     }
 
-    fn try_into_sort_preserving_merge_physical_plan(
+    fn try_into_sort_preserving_merge_physical_plan<D: Deserializer + ?Sized>(
         &self,
         sort: &protobuf::SortPreservingMergeExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&sort.input, ctx, extension_codec)?;
+        let input = into_physical_plan(&sort.input, parser)?;
         let exprs = sort
             .expr
             .iter()
@@ -1500,9 +1420,8 @@ impl protobuf::PhysicalPlanNode {
                     Ok(PhysicalSortExpr {
                         expr: parse_physical_expr(
                             expr,
-                            ctx,
+                            parser,
                             input.schema().as_ref(),
-                            extension_codec,
                         )?,
                         options: SortOptions {
                             descending: !sort_expr.asc,
@@ -1523,36 +1442,32 @@ impl protobuf::PhysicalPlanNode {
         ))
     }
 
-    fn try_into_extension_physical_plan(
+    fn try_into_extension_physical_plan<D: Deserializer + ?Sized>(
         &self,
         extension: &protobuf::PhysicalExtensionNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
             .inputs
             .iter()
-            .map(|i| i.try_into_physical_plan(ctx, extension_codec))
+            .map(|i| i.try_into_physical_plan(parser))
             .collect::<Result<_>>()?;
 
         let extension_node =
-            extension_codec.try_decode(extension.node.as_slice(), &inputs, ctx)?;
+            parser.try_decode_extension_plan(extension.node.as_slice(), &inputs)?;
 
         Ok(extension_node)
     }
 
-    fn try_into_nested_loop_join_physical_plan(
+    fn try_into_nested_loop_join_physical_plan<D: Deserializer + ?Sized>(
         &self,
         join: &protobuf::NestedLoopJoinExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&join.left, ctx, extension_codec)?;
+            into_physical_plan(&join.left, parser)?;
         let right: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&join.right, ctx, extension_codec)?;
+            into_physical_plan(&join.right, parser)?;
         let join_type = protobuf::JoinType::try_from(join.join_type).map_err(|_| {
             proto_error(format!(
                 "Received a NestedLoopJoinExecNode message with unknown JoinType {}",
@@ -1573,8 +1488,7 @@ impl protobuf::PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            ctx, &schema,
-                            extension_codec,
+                            parser, &schema,
                         )?;
                         let column_indices = f.column_indices
                             .iter()
@@ -1616,15 +1530,13 @@ impl protobuf::PhysicalPlanNode {
         )?))
     }
 
-    fn try_into_analyze_physical_plan(
+    fn try_into_analyze_physical_plan<D: Deserializer + ?Sized>(
         &self,
         analyze: &protobuf::AnalyzeExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&analyze.input, ctx, extension_codec)?;
+            into_physical_plan(&analyze.input, parser)?;
         Ok(Arc::new(AnalyzeExec::new(
             analyze.verbose,
             analyze.show_statistics,
@@ -1634,14 +1546,12 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_json_sink_physical_plan(
+    fn try_into_json_sink_physical_plan<D: Deserializer + ?Sized>(
         &self,
         sink: &protobuf::JsonSinkExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&sink.input, ctx, extension_codec)?;
+        let input = into_physical_plan(&sink.input, parser)?;
 
         let data_sink: JsonSink = sink
             .sink
@@ -1655,9 +1565,8 @@ impl protobuf::PhysicalPlanNode {
             .map(|collection| {
                 parse_physical_sort_exprs(
                     &collection.physical_sort_expr_nodes,
-                    ctx,
+                    parser,
                     &sink_schema,
-                    extension_codec,
                 )
                 .map(|sort_exprs| {
                     LexRequirement::new(sort_exprs.into_iter().map(Into::into))
@@ -1672,14 +1581,12 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_csv_sink_physical_plan(
+    fn try_into_csv_sink_physical_plan<D: Deserializer + ?Sized>(
         &self,
         sink: &protobuf::CsvSinkExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&sink.input, ctx, extension_codec)?;
+        let input = into_physical_plan(&sink.input, parser)?;
 
         let data_sink: CsvSink = sink
             .sink
@@ -1693,9 +1600,8 @@ impl protobuf::PhysicalPlanNode {
             .map(|collection| {
                 parse_physical_sort_exprs(
                     &collection.physical_sort_expr_nodes,
-                    ctx,
+                    parser,
                     &sink_schema,
-                    extension_codec,
                 )
                 .map(|sort_exprs| {
                     LexRequirement::new(sort_exprs.into_iter().map(Into::into))
@@ -1711,16 +1617,14 @@ impl protobuf::PhysicalPlanNode {
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
-    fn try_into_parquet_sink_physical_plan(
+    fn try_into_parquet_sink_physical_plan<D: Deserializer + ?Sized>(
         &self,
         sink: &protobuf::ParquetSinkExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
-            let input = into_physical_plan(&sink.input, ctx, extension_codec)?;
+            let input = into_physical_plan(&sink.input, parser)?;
 
             let data_sink: ParquetSink = sink
                 .sink
@@ -1734,9 +1638,8 @@ impl protobuf::PhysicalPlanNode {
                 .map(|collection| {
                     parse_physical_sort_exprs(
                         &collection.physical_sort_expr_nodes,
-                        ctx,
+                        parser,
                         &sink_schema,
-                        extension_codec,
                     )
                     .map(|sort_exprs| {
                         LexRequirement::new(sort_exprs.into_iter().map(Into::into))
@@ -1754,14 +1657,12 @@ impl protobuf::PhysicalPlanNode {
         panic!("Trying to use ParquetSink without `parquet` feature enabled");
     }
 
-    fn try_into_unnest_physical_plan(
+    fn try_into_unnest_physical_plan<D: Deserializer + ?Sized>(
         &self,
         unnest: &protobuf::UnnestExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&unnest.input, ctx, extension_codec)?;
+        let input = into_physical_plan(&unnest.input, parser)?;
 
         Ok(Arc::new(UnnestExec::new(
             input,
@@ -1785,16 +1686,14 @@ impl protobuf::PhysicalPlanNode {
             protobuf::GenerateSeriesName::GsRange => "range",
         }
     }
-    fn try_into_sort_join(
+    fn try_into_sort_join<D: Deserializer + ?Sized>(
         &self,
         sort_join: &SortMergeJoinExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = into_physical_plan(&sort_join.left, ctx, extension_codec)?;
+        let left = into_physical_plan(&sort_join.left, parser)?;
         let left_schema = left.schema();
-        let right = into_physical_plan(&sort_join.right, ctx, extension_codec)?;
+        let right = into_physical_plan(&sort_join.right, parser)?;
         let right_schema = right.schema();
 
         let filter = sort_join
@@ -1811,9 +1710,8 @@ impl protobuf::PhysicalPlanNode {
                     f.expression.as_ref().ok_or_else(|| {
                         proto_error("Unexpected empty filter expression")
                     })?,
-                    ctx,
+                    parser,
                     &schema,
-                    extension_codec,
                 )?;
                 let column_indices = f
                     .column_indices
@@ -1872,15 +1770,13 @@ impl protobuf::PhysicalPlanNode {
             .map(|col| {
                 let left = parse_physical_expr(
                     &col.left.clone().unwrap(),
-                    ctx,
+                    parser,
                     left_schema.as_ref(),
-                    extension_codec,
                 )?;
                 let right = parse_physical_expr(
                     &col.right.clone().unwrap(),
-                    ctx,
+                    parser,
                     right_schema.as_ref(),
-                    extension_codec,
                 )?;
                 Ok((left, right))
             })
@@ -1962,14 +1858,12 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
 
-    fn try_into_cooperative_physical_plan(
+    fn try_into_cooperative_physical_plan<D: Deserializer + ?Sized>(
         &self,
         field_stream: &protobuf::CooperativeExecNode,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&field_stream.input, ctx, extension_codec)?;
+        let input = into_physical_plan(&field_stream.input, parser)?;
         Ok(Arc::new(CooperativeExec::new(input)))
     }
 
@@ -2372,7 +2266,7 @@ impl protobuf::PhysicalPlanNode {
 
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::SortMergeJoin(Box::new(
-                protobuf::SortMergeJoinExecNode {
+                SortMergeJoinExecNode {
                     left: Some(Box::new(left)),
                     right: Some(Box::new(right)),
                     on,
@@ -3235,11 +3129,9 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         B: BufMut,
         Self: Sized;
 
-    fn try_into_physical_plan(
+    fn try_into_physical_plan<D: Deserializer + ?Sized>(
         &self,
-        ctx: &TaskContext,
-
-        extension_codec: &dyn PhysicalExtensionCodec,
+        parser: &mut D,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     fn try_from_physical_plan(
@@ -3437,14 +3329,12 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     }
 }
 
-fn into_physical_plan(
+fn into_physical_plan<D: Deserializer + ?Sized>(
     node: &Option<Box<protobuf::PhysicalPlanNode>>,
-    ctx: &TaskContext,
-
-    extension_codec: &dyn PhysicalExtensionCodec,
+    parser: &mut D,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(field) = node {
-        field.try_into_physical_plan(ctx, extension_codec)
+        field.try_into_physical_plan(parser)
     } else {
         Err(proto_error("Missing required field in protobuf"))
     }
