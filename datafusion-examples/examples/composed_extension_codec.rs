@@ -38,8 +38,10 @@ use datafusion::common::internal_err;
 use datafusion::common::Result;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
+use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec,
+    TaskContextWithPhysicalCodec,
 };
 use datafusion_proto::protobuf;
 
@@ -52,24 +54,29 @@ async fn main() {
         input: Arc::new(ChildExec {}),
     });
 
+    let task_ctx = SessionContext::new().task_ctx();
     // Position in this list is important as it will be used for decoding.
     // If new codec is added it should go to last position.
-    let mut composed_codec = ComposedPhysicalExtensionCodec::new(vec![
+    let composed_codec = Arc::new(ComposedPhysicalExtensionCodec::new(vec![
         Arc::new(ParentPhysicalExtensionCodec {}),
         Arc::new(ChildPhysicalExtensionCodec {}),
-    ]);
+    ]));
+    let mut decoder = TaskContextWithPhysicalCodec {
+        task_ctx,
+        codec: Arc::clone(&composed_codec) as Arc<dyn PhysicalExtensionCodec>,
+    };
 
     // serialize execution plan to proto
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec_plan.clone(),
-            &composed_codec,
+            composed_codec.as_ref(),
         )
         .expect("to proto");
 
     // deserialize proto back to execution plan
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&mut composed_codec)
+        .try_into_physical_plan(&mut decoder)
         .expect("from proto");
 
     // assert that the original and deserialized execution plans are equal

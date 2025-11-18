@@ -139,7 +139,7 @@ fn roundtrip_test_and_return(
     ctx: &SessionContext,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let mut task_ctx = ctx.task_ctx().as_ref().clone();
+    let mut task_ctx = ctx.task_ctx();
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
             .expect("to proto");
@@ -1723,7 +1723,7 @@ fn roundtrip_unnest() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_coalesce() -> Result<()> {
     let ctx = SessionContext::new();
-    let mut task_ctx = ctx.task_ctx().as_ref().clone();
+    let mut task_ctx = ctx.task_ctx();
     ctx.register_table(
         "t",
         Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
@@ -1759,7 +1759,7 @@ async fn roundtrip_coalesce() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_generate_series() -> Result<()> {
     let ctx = SessionContext::new();
-    let mut task_ctx = ctx.task_ctx().as_ref().clone();
+    let mut task_ctx = ctx.task_ctx();
     ctx.register_table(
         "t",
         Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
@@ -1870,7 +1870,7 @@ async fn roundtrip_physical_plan_node() {
     use datafusion_proto::protobuf::PhysicalPlanNode;
 
     let ctx = SessionContext::new();
-    let mut task_ctx = ctx.task_ctx().as_ref().clone();
+    let mut task_ctx = ctx.task_ctx();
 
     ctx.register_parquet(
         "pt",
@@ -1957,7 +1957,7 @@ fn get_tpch_query_sql(query: usize) -> Result<Vec<String>> {
 async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
     // Create context with TPC-H tables
     let ctx = tpch_context().await?;
-    let mut task_ctx = ctx.task_ctx().as_ref().clone();
+    let mut task_ctx = ctx.task_ctx();
 
     // repeat to run all 22 queries
     for query in 1..=22 {
@@ -2070,7 +2070,7 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     use datafusion_common::test_util::datafusion_test_data;
 
     let ctx = SessionContext::new();
-    let mut task_ctx = ctx.task_ctx().as_ref().clone();
+    let mut task_ctx = ctx.task_ctx();
 
     // Register the TPC-H part table using the local test data
     let test_data = datafusion_test_data();
@@ -2102,7 +2102,7 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
 /// Tests that we can serialize an unoptimized "analyze" plan and it will work on the other end
 async fn analyze_roundtrip_unoptimized() -> Result<()> {
     let ctx = SessionContext::new();
-    let mut task_ctx = ctx.task_ctx().as_ref().clone();
+    let mut task_ctx = ctx.task_ctx();
 
     // No optimizations
     let session_state =

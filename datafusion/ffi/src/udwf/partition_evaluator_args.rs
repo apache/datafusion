@@ -136,7 +136,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_PartitionEvaluatorArgs) -> Result<Self> {
-        let mut task_ctx = SessionContext::new().task_ctx().as_ref().clone();
+        let mut task_ctx = SessionContext::new().task_ctx();
 
         let schema: SchemaRef = value.schema.into();
 

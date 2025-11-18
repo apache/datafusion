@@ -32,7 +32,7 @@ use std::{collections::HashMap, sync::Arc};
 /// information.
 ///
 /// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TaskContext {
     /// Session Id
     session_id: String,

@@ -181,7 +181,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
         // TODO Extend FFI to get the registry and codex
         let default_ctx = SessionContext::new();
-        let mut task_context = default_ctx.task_ctx().as_ref().clone();
+        let mut task_context = default_ctx.task_ctx();
 
         let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
 
