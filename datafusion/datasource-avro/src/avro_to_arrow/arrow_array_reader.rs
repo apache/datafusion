@@ -974,11 +974,10 @@ fn flatten_string_values<'a>(values: &[&'a Value]) -> Vec<Option<&'a str>> {
 fn resolve_string(v: &Value) -> ArrowResult<Option<&str>> {
     let v = if let Value::Union(_, b) = v { b } else { v };
     match v {
-        Value::String(s) => Ok(Some(s.as_str())),
-        Value::Bytes(bytes) => str::from_utf8(bytes.as_slice())
+        Value::String(s) | Value::Enum(_, s) => Ok(Some(s.as_str())),
+        Value::Bytes(bytes) | Value::Fixed(_, bytes) => str::from_utf8(bytes.as_slice())
             .map_err(|e| AvroError::new(AvroErrorDetails::ConvertToUtf8Error(e)))
             .map(Some),
-        Value::Enum(_, s) => Ok(Some(s.as_str())),
         Value::Null => Ok(None),
         other => Err(AvroError::new(AvroErrorDetails::GetString(other.clone()))),
     }
@@ -1005,8 +1004,9 @@ fn resolve_bytes(v: &'_ Value) -> Option<Cow<'_, [u8]>> {
     };
 
     match v {
-        Value::Bytes(bytes) => Some(Cow::Borrowed(bytes.as_slice())),
-        Value::Fixed(_, bytes) => Some(Cow::Borrowed(bytes.as_slice())),
+        Value::Bytes(bytes) | Value::Fixed(_, bytes) => {
+            Some(Cow::Borrowed(bytes.as_slice()))
+        }
         Value::String(s) => Some(Cow::Borrowed(s.as_bytes())),
         Value::Array(items) => items
             .iter()
