@@ -90,11 +90,10 @@ use sqlparser::{
 use url::Url;
 use uuid::Uuid;
 
-/// Used for supplying a custom caching strategy.
 /// A [`CacheFactory`] can be registered via [`SessionState`]
 /// to create a custom logical plan for caching.
 /// Additionally, a custom [`crate::physical_planner::ExtensionPlanner`]/[`QueryPlanner`]
-/// need to be implemented to handle such plans.
+/// may need to be implemented to handle such plans.
 pub type CacheFactory =
     fn(LogicalPlan, &SessionState) -> datafusion_common::Result<LogicalPlan>;
 
@@ -370,7 +369,7 @@ impl SessionState {
         self.cache_factory = Some(cache_factory);
     }
 
-    /// Get the cache producer
+    /// Get the cache factory
     pub fn cache_factory(&self) -> Option<&CacheFactory> {
         self.cache_factory.as_ref()
     }
@@ -1651,7 +1650,7 @@ impl SessionStateBuilder {
         &mut self.function_factory
     }
 
-    /// Returns the cache producer
+    /// Returns the cache factory
     pub fn cache_factory(&mut self) -> &mut Option<CacheFactory> {
         &mut self.cache_factory
     }

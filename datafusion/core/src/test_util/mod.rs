@@ -334,7 +334,7 @@ fn cache_factory(
     }))
 }
 
-/// Create a test table registered to a session context with an associated cache producer
+/// Create a test table registered to a session context with an associated cache factory
 pub async fn test_table_with_cache_factory() -> Result<DataFrame> {
     let session_state = SessionStateBuilder::new()
         .with_cache_factory(Some(cache_factory))
