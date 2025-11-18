@@ -269,6 +269,18 @@ impl Interval {
     ///   - Floating-point endpoints with `NaN`, `INF`, or `NEG_INF` are converted
     ///     to `NULL`s.
     pub fn try_new(lower: ScalarValue, upper: ScalarValue) -> Result<Self> {
+        let lower = if lower.data_type().is_null() && !upper.data_type().is_null() {
+            ScalarValue::try_new_null(&upper.data_type())?
+        } else {
+            lower
+        };
+
+        let upper = if upper.data_type().is_null() && !lower.data_type().is_null() {
+            ScalarValue::try_new_null(&lower.data_type())?
+        } else {
+            upper
+        };
+
         assert_eq_or_internal_err!(
             lower.data_type(),
             upper.data_type(),
