@@ -110,19 +110,8 @@ fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
         .collect())
 }
 
-/// Generate the power set of a slice, returning owned clones
-///
-/// The [power set] (or powerset) of a set S is the set of all subsets of S,
-/// including the empty set and S itself.
-///
 /// This is a variant of `powerset` that clones elements instead of returning references.
 /// Useful when owned values are needed (e.g., for Substrait conversion).
-///
-/// # Errors
-///
-/// Returns an error if the slice has 64 or more elements (would generate 2^64 subsets).
-///
-/// [power set]: https://en.wikipedia.org/wiki/Power_set
 pub fn powerset_cloned<T: Clone>(slice: &[T]) -> Result<Vec<Vec<T>>> {
     if slice.len() >= 64 {
         let pow_str = if slice.len() == 64 {
