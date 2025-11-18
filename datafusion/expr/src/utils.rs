@@ -120,14 +120,15 @@ fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
 /// [power set]: https://en.wikipedia.org/wiki/Power_set
 pub fn powerset_cloned<T: Clone>(slice: &[T]) -> Result<Vec<Vec<T>>> {
     if slice.len() >= 64 {
+        let pow_str = if slice.len() == 64 {
+            "2^64".to_string()
+        } else {
+            format!("2^{}", slice.len())
+        };
         return plan_err!(
             "The size of the set must be less than 64 (would generate 2^{} = {} subsets)",
             slice.len(),
-            if slice.len() == 64 {
-                "2^64"
-            } else {
-                &format!("2^{}", slice.len())
-            }
+            pow_str
         );
     }
 
