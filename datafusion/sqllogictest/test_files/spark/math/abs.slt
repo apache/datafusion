@@ -31,6 +31,7 @@ SELECT abs(-127::TINYINT), abs(-32767::SMALLINT), abs(-2147483647::INT), abs(-92
 127 32767 2147483647 9223372036854775807 NULL
 
 
+# See https://github.com/apache/datafusion/issues/18794 for operator precedence
 # abs: signed int minimal values
 query IIII
 select abs((-128)::TINYINT), abs((-32768)::SMALLINT), abs((-2147483648)::INT), abs((-9223372036854775808)::BIGINT)
@@ -93,3 +94,4 @@ drop table test_nullable_decimal
 ## PySpark 3.5.5 Result: {"abs(INTERVAL '-1-1' YEAR TO MONTH)": 13, "typeof(abs(INTERVAL '-1-1' YEAR TO MONTH))": 'interval year to month', "typeof(INTERVAL '-1-1' YEAR TO MONTH)": 'interval year to month'}
 #query
 #SELECT abs(INTERVAL '-1-1' YEAR TO MONTH::interval year to month);
+# See GitHub issue for ANSI interval support: https://github.com/apache/datafusion/issues/18793
