@@ -55,7 +55,7 @@ use std::sync::Arc;
 type RecordSlice<'a> = &'a [&'a Vec<(String, Value)>];
 
 #[derive(Default)]
-pub struct UnresolvedNames {
+pub struct NamesResolver {
     in_progress: HashSet<Name>,
     all_subnames_in_name: HashMap<Name, BTreeMap<String, usize>>,
 }
@@ -88,7 +88,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 name,
                 ..
             }) => {
-                let mut unresolved_names = UnresolvedNames::default();
+                let mut unresolved_names = NamesResolver::default();
                 unresolved_names.in_progress.insert(name.clone());
 
                 for field in fields {
@@ -115,7 +115,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
         parent_field_name: &str,
         schema: &AvroSchema,
         schema_lookup: &'b mut BTreeMap<String, usize>,
-        unresolved_names: &'b mut UnresolvedNames,
+        unresolved_names: &'b mut NamesResolver,
     ) -> Result<&'b BTreeMap<String, usize>> {
         match schema {
             AvroSchema::Union(us) => {
