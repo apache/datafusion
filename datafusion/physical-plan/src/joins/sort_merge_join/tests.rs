@@ -690,7 +690,6 @@ async fn join_right_different_columns_count_with_filter() -> Result<()> {
 
     let (_, batches) = join_collect_with_filter(left, right, on, filter, Right).await?;
 
-    // The output order is important as SMJ preserves sortedness
     assert_snapshot!(batches_to_string(&batches), @r#"
             +----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 |
@@ -749,7 +748,6 @@ async fn join_left_different_columns_count_with_filter() -> Result<()> {
 
     let (_, batches) = join_collect_with_filter(left, right, on, filter, Left).await?;
 
-    // The output order is important as SMJ preserves sortedness
     assert_snapshot!(batches_to_string(&batches), @r#"
             +----+----+----+----+----+
             | a2 | b1 | a1 | b1 | c1 |
@@ -809,8 +807,6 @@ async fn join_left_mark_different_columns_count_with_filter() -> Result<()> {
     let (_, batches) =
         join_collect_with_filter(left, right, on, filter, LeftMark).await?;
 
-    // The output order is important as SMJ preserves sortedness
-    // LeftMark returns all left rows with a boolean mark column
     assert_snapshot!(batches_to_string(&batches), @r#"
             +----+----+-------+
             | a2 | b1 | mark  |
@@ -870,8 +866,6 @@ async fn join_right_mark_different_columns_count_with_filter() -> Result<()> {
     let (_, batches) =
         join_collect_with_filter(left, right, on, filter, RightMark).await?;
 
-    // The output order is important as SMJ preserves sortedness
-    // RightMark returns all right rows with a boolean mark column
     assert_snapshot!(batches_to_string(&batches), @r#"
             +----+----+-------+
             | a2 | b1 | mark  |

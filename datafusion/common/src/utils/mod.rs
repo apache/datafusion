@@ -22,8 +22,9 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
-use crate::{Result, ScalarValue};
+use crate::assert_or_internal_err;
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err};
+use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
     OffsetSizeTrait,
@@ -519,9 +520,7 @@ pub fn arrays_into_list_array(
     arr: impl IntoIterator<Item = ArrayRef>,
 ) -> Result<ListArray> {
     let arr = arr.into_iter().collect::<Vec<_>>();
-    if arr.is_empty() {
-        return _internal_err!("Cannot wrap empty array into list array");
-    }
+    assert_or_internal_err!(!arr.is_empty(), "Cannot wrap empty array into list array");
 
     let lens = arr.iter().map(|x| x.len()).collect::<Vec<_>>();
     // Assume data type is consistent
