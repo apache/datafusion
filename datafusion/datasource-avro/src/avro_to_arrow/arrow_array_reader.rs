@@ -1966,4 +1966,174 @@ mod test {
         ];
         assert_batches_eq!(expected, &[batch]);
     }
+
+    #[test]
+    fn test_avro_fixed_and_list_of_fixed() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "test_fixed",
+              "fields": [
+                {
+                  "name": "id",
+                  "type": "int"
+                },
+                {
+                  "name": "hash",
+                  "type": [
+                    "null",
+                    {
+                      "type": "fixed",
+                      "name": "md5",
+                      "size": 16
+                    }
+                  ],
+                  "default": null
+                },
+                {
+                  "name": "hashes",
+                  "type": [
+                    "null",
+                    {
+                      "type": "array",
+                      "items": [
+                        "null",
+                        {
+                          "type": "fixed",
+                          "name": "hash_value",
+                          "size": 8
+                        }
+                      ]
+                    }
+                  ],
+                  "default": null
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        use apache_avro::types::Value;
+
+        // Record with both fields populated
+        let r1 = Value::Record(vec![
+            ("id".to_string(), Value::Int(1)),
+            (
+                "hash".to_string(),
+                Value::Union(
+                    1,
+                    Box::new(Value::Fixed(
+                        16,
+                        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                    )),
+                ),
+            ),
+            (
+                "hashes".to_string(),
+                Value::Union(
+                    1,
+                    Box::new(Value::Array(vec![
+                        Value::Union(
+                            1,
+                            Box::new(Value::Fixed(8, vec![1, 2, 3, 4, 5, 6, 7, 8])),
+                        ),
+                        Value::Union(
+                            1,
+                            Box::new(Value::Fixed(8, vec![8, 7, 6, 5, 4, 3, 2, 1])),
+                        ),
+                    ])),
+                ),
+            ),
+        ]);
+
+        // Record with null hash and populated list
+        let r2 = Value::Record(vec![
+            ("id".to_string(), Value::Int(2)),
+            ("hash".to_string(), Value::Union(0, Box::new(Value::Null))),
+            (
+                "hashes".to_string(),
+                Value::Union(
+                    1,
+                    Box::new(Value::Array(vec![
+                        Value::Union(1, Box::new(Value::Fixed(8, vec![255; 8]))),
+                        Value::Union(0, Box::new(Value::Null)),
+                    ])),
+                ),
+            ),
+        ]);
+
+        // Record with populated hash and null list
+        let r3 = Value::Record(vec![
+            ("id".to_string(), Value::Int(3)),
+            (
+                "hash".to_string(),
+                Value::Union(1, Box::new(Value::Fixed(16, vec![0; 16]))),
+            ),
+            ("hashes".to_string(), Value::Union(0, Box::new(Value::Null))),
+        ]);
+
+        // Record with both fields null
+        let r4 = Value::Record(vec![
+            ("id".to_string(), Value::Int(4)),
+            ("hash".to_string(), Value::Union(0, Box::new(Value::Null))),
+            ("hashes".to_string(), Value::Union(0, Box::new(Value::Null))),
+        ]);
+
+        // Record with list containing all nulls
+        let r5 = Value::Record(vec![
+            ("id".to_string(), Value::Int(5)),
+            (
+                "hash".to_string(),
+                Value::Union(
+                    1,
+                    Box::new(Value::Fixed(
+                        16,
+                        vec![170, 187, 204, 221, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                    )),
+                ),
+            ),
+            (
+                "hashes".to_string(),
+                Value::Union(
+                    1,
+                    Box::new(Value::Array(vec![
+                        Value::Union(0, Box::new(Value::Null)),
+                        Value::Union(0, Box::new(Value::Null)),
+                    ])),
+                ),
+            ),
+        ]);
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(r1).unwrap();
+        w.append(r2).unwrap();
+        w.append(r3).unwrap();
+        w.append(r4).unwrap();
+        w.append(r5).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        let mut reader = ReaderBuilder::new()
+            .read_schema()
+            .with_batch_size(10)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 5);
+        assert_eq!(batch.num_columns(), 3);
+
+        let expected = [
+            "+----+----------------------------------+--------------------------------------+",
+            "| id | hash                             | hashes                               |",
+            "+----+----------------------------------+--------------------------------------+",
+            "| 1  | 0102030405060708090a0b0c0d0e0f10 | [0102030405060708, 0807060504030201] |",
+            "| 2  |                                  | [ffffffffffffffff, ]                 |",
+            "| 3  | 00000000000000000000000000000000 |                                      |",
+            "| 4  |                                  |                                      |",
+            "| 5  | aabbccdd0102030405060708090a0b0c | [, ]                                 |",
+            "+----+----------------------------------+--------------------------------------+"
+        ];
+        assert_batches_eq!(expected, &[batch]);
+    }
 }
