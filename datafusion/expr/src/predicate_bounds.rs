@@ -223,14 +223,15 @@ mod tests {
     use crate::expr::ScalarFunction;
     use crate::predicate_bounds::evaluate_bounds;
     use crate::{
-        binary_expr, col, create_udf, is_false, is_not_false, is_not_null, is_not_true,
-        is_not_unknown, is_null, is_true, is_unknown, lit, not, Expr,
+        binary_expr, col, create_udf, is_between, is_false, is_not_false, is_not_null,
+        is_not_true, is_not_unknown, is_null, is_true, is_unknown, like, lit, negative,
+        not, Expr,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{DFSchema, Result, ScalarValue};
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_expr_common::interval_arithmetic::NullableInterval;
-    use datafusion_expr_common::operator::Operator::{And, Or};
+    use datafusion_expr_common::operator::Operator::{And, Eq, Or};
     use datafusion_expr_common::signature::Volatility;
     use std::sync::Arc;
 
@@ -274,82 +275,25 @@ mod tests {
 
         #[rustfmt::skip]
         let cases = vec![
-            (
-                binary_expr(null.clone(), And, null.clone()),
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                binary_expr(null.clone(), And, one.clone()),
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                binary_expr(null.clone(), And, zero.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(one.clone(), And, one.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(one.clone(), And, zero.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(null.clone(), And, t.clone()),
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                binary_expr(t.clone(), And, null.clone()),
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                binary_expr(null.clone(), And, f.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(f.clone(), And, null.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(t.clone(), And, t.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(t.clone(), And, f.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(f.clone(), And, t.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(f.clone(), And, f.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(t.clone(), And, func.clone()),
-                NullableInterval::ANY_TRUTH_VALUE,
-            ),
-            (
-                binary_expr(func.clone(), And, t.clone()),
-                NullableInterval::ANY_TRUTH_VALUE,
-            ),
-            (
-                binary_expr(f.clone(), And, func.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(func.clone(), And, f.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(null.clone(), And, func.clone()),
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
-            (
-                binary_expr(func.clone(), And, null.clone()),
-                NullableInterval::FALSE_OR_UNKNOWN,
-            ),
+            (binary_expr(null.clone(), And, null.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(null.clone(), And, one.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(null.clone(), And, zero.clone()), NullableInterval::FALSE),
+            (binary_expr(one.clone(), And, one.clone()), NullableInterval::TRUE),
+            (binary_expr(one.clone(), And, zero.clone()), NullableInterval::FALSE),
+            (binary_expr(null.clone(), And, t.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(t.clone(), And, null.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(null.clone(), And, f.clone()), NullableInterval::FALSE),
+            (binary_expr(f.clone(), And, null.clone()), NullableInterval::FALSE),
+            (binary_expr(t.clone(), And, t.clone()), NullableInterval::TRUE),
+            (binary_expr(t.clone(), And, f.clone()), NullableInterval::FALSE),
+            (binary_expr(f.clone(), And, t.clone()), NullableInterval::FALSE),
+            (binary_expr(f.clone(), And, f.clone()), NullableInterval::FALSE),
+            (binary_expr(t.clone(), And, func.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (binary_expr(func.clone(), And, t.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (binary_expr(f.clone(), And, func.clone()), NullableInterval::FALSE),
+            (binary_expr(func.clone(), And, f.clone()), NullableInterval::FALSE),
+            (binary_expr(null.clone(), And, func.clone()), NullableInterval::FALSE_OR_UNKNOWN),
+            (binary_expr(func.clone(), And, null.clone()), NullableInterval::FALSE_OR_UNKNOWN),
         ];
 
         for case in cases {
@@ -373,82 +317,25 @@ mod tests {
 
         #[rustfmt::skip]
         let cases = vec![
-            (
-                binary_expr(null.clone(), Or, null.clone()),
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                binary_expr(null.clone(), Or, one.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(null.clone(), Or, zero.clone()),
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                binary_expr(one.clone(), Or, one.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(one.clone(), Or, zero.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(null.clone(), Or, t.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(t.clone(), Or, null.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(null.clone(), Or, f.clone()),
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                binary_expr(f.clone(), Or, null.clone()),
-                NullableInterval::UNKNOWN,
-            ),
-            (
-                binary_expr(t.clone(), Or, t.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(t.clone(), Or, f.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(f.clone(), Or, t.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(f.clone(), Or, f.clone()),
-                NullableInterval::FALSE,
-            ),
-            (
-                binary_expr(t.clone(), Or, func.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(func.clone(), Or, t.clone()),
-                NullableInterval::TRUE,
-            ),
-            (
-                binary_expr(f.clone(), Or, func.clone()),
-                NullableInterval::ANY_TRUTH_VALUE,
-            ),
-            (
-                binary_expr(func.clone(), Or, f.clone()),
-                NullableInterval::ANY_TRUTH_VALUE,
-            ),
-            (
-                binary_expr(null.clone(), Or, func.clone()),
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
-            (
-                binary_expr(func.clone(), Or, null.clone()),
-                NullableInterval::TRUE_OR_UNKNOWN,
-            ),
+            (binary_expr(null.clone(), Or, null.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(null.clone(), Or, one.clone()), NullableInterval::TRUE),
+            (binary_expr(null.clone(), Or, zero.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(one.clone(), Or, one.clone()), NullableInterval::TRUE),
+            (binary_expr(one.clone(), Or, zero.clone()), NullableInterval::TRUE),
+            (binary_expr(null.clone(), Or, t.clone()), NullableInterval::TRUE),
+            (binary_expr(t.clone(), Or, null.clone()), NullableInterval::TRUE),
+            (binary_expr(null.clone(), Or, f.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(f.clone(), Or, null.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(t.clone(), Or, t.clone()), NullableInterval::TRUE),
+            (binary_expr(t.clone(), Or, f.clone()), NullableInterval::TRUE),
+            (binary_expr(f.clone(), Or, t.clone()), NullableInterval::TRUE),
+            (binary_expr(f.clone(), Or, f.clone()), NullableInterval::FALSE),
+            (binary_expr(t.clone(), Or, func.clone()), NullableInterval::TRUE),
+            (binary_expr(func.clone(), Or, t.clone()), NullableInterval::TRUE),
+            (binary_expr(f.clone(), Or, func.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (binary_expr(func.clone(), Or, f.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (binary_expr(null.clone(), Or, func.clone()), NullableInterval::TRUE_OR_UNKNOWN),
+            (binary_expr(func.clone(), Or, null.clone()), NullableInterval::TRUE_OR_UNKNOWN),
         ];
 
         for case in cases {
@@ -515,38 +402,46 @@ mod tests {
         let cases = vec![
             (is_null(null.clone()), NullableInterval::TRUE),
             (is_null(one.clone()), NullableInterval::FALSE),
+            (is_null(binary_expr(null.clone(), Eq, null.clone())), NullableInterval::TRUE),
             (is_not_null(null.clone()), NullableInterval::FALSE),
             (is_not_null(one.clone()), NullableInterval::TRUE),
+            (is_not_null(binary_expr(null.clone(), Eq, null.clone())), NullableInterval::FALSE),
             (is_true(null.clone()), NullableInterval::FALSE),
             (is_true(t.clone()), NullableInterval::TRUE),
             (is_true(f.clone()), NullableInterval::FALSE),
             (is_true(zero.clone()), NullableInterval::FALSE),
             (is_true(one.clone()), NullableInterval::TRUE),
+            (is_true(binary_expr(null.clone(), Eq, null.clone())), NullableInterval::FALSE),
             (is_not_true(null.clone()), NullableInterval::TRUE),
             (is_not_true(t.clone()), NullableInterval::FALSE),
             (is_not_true(f.clone()), NullableInterval::TRUE),
             (is_not_true(zero.clone()), NullableInterval::TRUE),
             (is_not_true(one.clone()), NullableInterval::FALSE),
+            (is_not_true(binary_expr(null.clone(), Eq, null.clone())), NullableInterval::TRUE),
             (is_false(null.clone()), NullableInterval::FALSE),
             (is_false(t.clone()), NullableInterval::FALSE),
             (is_false(f.clone()), NullableInterval::TRUE),
             (is_false(zero.clone()), NullableInterval::TRUE),
             (is_false(one.clone()), NullableInterval::FALSE),
+            (is_false(binary_expr(null.clone(), Eq, null.clone())), NullableInterval::FALSE),
             (is_not_false(null.clone()), NullableInterval::TRUE),
             (is_not_false(t.clone()), NullableInterval::TRUE),
             (is_not_false(f.clone()), NullableInterval::FALSE),
             (is_not_false(zero.clone()), NullableInterval::FALSE),
             (is_not_false(one.clone()), NullableInterval::TRUE),
+            (is_not_false(binary_expr(null.clone(), Eq, null.clone())), NullableInterval::TRUE),
             (is_unknown(null.clone()), NullableInterval::TRUE),
             (is_unknown(t.clone()), NullableInterval::FALSE),
             (is_unknown(f.clone()), NullableInterval::FALSE),
             (is_unknown(zero.clone()), NullableInterval::FALSE),
             (is_unknown(one.clone()), NullableInterval::FALSE),
+            (is_unknown(binary_expr(null.clone(), Eq, null.clone())), NullableInterval::TRUE),
             (is_not_unknown(null.clone()), NullableInterval::FALSE),
             (is_not_unknown(t.clone()), NullableInterval::TRUE),
             (is_not_unknown(f.clone()), NullableInterval::TRUE),
             (is_not_unknown(zero.clone()), NullableInterval::TRUE),
             (is_not_unknown(one.clone()), NullableInterval::TRUE),
+            (is_not_unknown(binary_expr(null.clone(), Eq, null.clone())), NullableInterval::FALSE),
         ];
 
         for case in cases {
@@ -562,14 +457,181 @@ mod tests {
         let cases = vec![
             (is_null(col.clone()), &nullable_schema, NullableInterval::TRUE_OR_FALSE),
             (is_null(col.clone()), &not_nullable_schema, NullableInterval::FALSE),
+            (is_null(binary_expr(col.clone(), Eq, col.clone())), &nullable_schema, NullableInterval::TRUE_OR_FALSE),
+            (is_null(binary_expr(col.clone(), Eq, col.clone())), &not_nullable_schema, NullableInterval::FALSE),
             (is_not_null(col.clone()), &nullable_schema, NullableInterval::TRUE_OR_FALSE),
             (is_not_null(col.clone()), &not_nullable_schema, NullableInterval::TRUE),
+            (is_not_null(binary_expr(col.clone(), Eq, col.clone())), &nullable_schema, NullableInterval::TRUE_OR_FALSE),
+            (is_not_null(binary_expr(col.clone(), Eq, col.clone())), &not_nullable_schema, NullableInterval::TRUE),
         ];
 
         for case in cases {
             assert_eq!(
                 evaluate_bounds(&case.0, case.1).unwrap(),
                 case.2,
+                "Failed for {}",
+                case.0
+            );
+        }
+    }
+
+    #[test]
+    fn evaluate_bounds_between() {
+        let null = lit(ScalarValue::Null);
+        let zero = lit(0);
+
+        #[rustfmt::skip]
+        let cases = vec![
+            (is_between(zero.clone(), zero.clone(), zero.clone()), NullableInterval::TRUE_OR_FALSE),
+            (is_between(null.clone(), zero.clone(), zero.clone()), NullableInterval::UNKNOWN),
+            (is_between(zero.clone(), null.clone(), zero.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (is_between(zero.clone(), zero.clone(), null.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (is_between(zero.clone(), null.clone(), null.clone()), NullableInterval::UNKNOWN),
+            (is_between(null.clone(), null.clone(), null.clone()), NullableInterval::UNKNOWN),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                eval_bounds(&case.0).unwrap(),
+                case.1,
+                "Failed for {}",
+                case.0
+            );
+        }
+    }
+
+    #[test]
+    fn evaluate_bounds_binary_op() {
+        let null = lit(ScalarValue::Null);
+        let zero = lit(0);
+        let col = col("col");
+        let nullable_schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8,
+            true,
+        )]))
+        .unwrap();
+        let not_nullable_schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8,
+            false,
+        )]))
+        .unwrap();
+
+        #[rustfmt::skip]
+        let cases = vec![
+            (binary_expr(zero.clone(), Eq, zero.clone()), NullableInterval::TRUE_OR_FALSE),
+            (binary_expr(null.clone(), Eq, zero.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(zero.clone(), Eq, null.clone()), NullableInterval::UNKNOWN),
+            (binary_expr(null.clone(), Eq, null.clone()), NullableInterval::UNKNOWN),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                eval_bounds(&case.0).unwrap(),
+                case.1,
+                "Failed for {}",
+                case.0
+            );
+        }
+
+        #[rustfmt::skip]
+        let cases = vec![
+            (binary_expr(zero.clone(), Eq, col.clone()), NullableInterval::TRUE_OR_FALSE),
+            (binary_expr(col.clone(), Eq, zero.clone()), NullableInterval::TRUE_OR_FALSE),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                evaluate_bounds(&case.0, &not_nullable_schema).unwrap(),
+                case.1,
+                "Failed for {}",
+                case.0
+            );
+
+            assert_eq!(
+                evaluate_bounds(&case.0, &nullable_schema).unwrap(),
+                NullableInterval::ANY_TRUTH_VALUE,
+                "Failed for {}",
+                case.0
+            );
+        }
+    }
+
+    #[test]
+    fn evaluate_bounds_negative() {
+        let null = lit(ScalarValue::Null);
+        let zero = lit(0);
+
+        #[rustfmt::skip]
+        let cases = vec![
+            (negative(zero.clone()), NullableInterval::TRUE_OR_FALSE),
+            (negative(null.clone()), NullableInterval::UNKNOWN),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                eval_bounds(&case.0).unwrap(),
+                case.1,
+                "Failed for {}",
+                case.0
+            );
+        }
+    }
+
+    #[test]
+    fn evaluate_bounds_like() {
+        let null = lit(ScalarValue::Null);
+        let expr = lit("foo");
+        let pattern = lit("f.*");
+        let col = col("col");
+        let nullable_schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8,
+            true,
+        )]))
+        .unwrap();
+        let not_nullable_schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8,
+            false,
+        )]))
+        .unwrap();
+
+        #[rustfmt::skip]
+        let cases = vec![
+            (like(expr.clone(), pattern.clone()), NullableInterval::TRUE_OR_FALSE),
+            (like(null.clone(), pattern.clone()), NullableInterval::UNKNOWN),
+            (like(expr.clone(), null.clone()), NullableInterval::UNKNOWN),
+            (like(null.clone(), null.clone()), NullableInterval::UNKNOWN),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                eval_bounds(&case.0).unwrap(),
+                case.1,
+                "Failed for {}",
+                case.0
+            );
+        }
+
+        #[rustfmt::skip]
+        let cases = vec![
+            (like(col.clone(), pattern.clone()), NullableInterval::TRUE_OR_FALSE),
+            (like(expr.clone(), col.clone()), NullableInterval::TRUE_OR_FALSE),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                evaluate_bounds(&case.0, &not_nullable_schema).unwrap(),
+                case.1,
+                "Failed for {}",
+                case.0
+            );
+
+            assert_eq!(
+                evaluate_bounds(&case.0, &nullable_schema).unwrap(),
+                NullableInterval::ANY_TRUTH_VALUE,
                 "Failed for {}",
                 case.0
             );
@@ -584,10 +646,7 @@ mod tests {
         let cases = vec![
             (func.clone(), NullableInterval::ANY_TRUTH_VALUE),
             (not(func.clone()), NullableInterval::ANY_TRUTH_VALUE),
-            (
-                binary_expr(func.clone(), And, func.clone()),
-                NullableInterval::ANY_TRUTH_VALUE,
-            ),
+            (binary_expr(func.clone(), And, func.clone()), NullableInterval::ANY_TRUTH_VALUE),
         ];
 
         for case in cases {

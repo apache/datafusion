@@ -29,8 +29,9 @@ use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LimitEffect, LogicalPlan, Operator, PartitionEvaluator,
-    ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    AggregateUDF, Between, Expr, Like, LimitEffect, LogicalPlan, Operator,
+    PartitionEvaluator, ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF,
+    Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -172,6 +173,55 @@ pub fn qualified_wildcard_with_options(
 /// Return a new expression `left <op> right`
 pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+}
+
+/// Return a new `-<expr>` expression
+pub fn negative(expr: Expr) -> Expr {
+    Expr::Negative(Box::new(expr))
+}
+
+/// Return a `<expr> ~~ <pattern>` expression
+pub fn like(expr: Expr, pattern: Expr) -> Expr {
+    Expr::Like(Like::new(
+        false,
+        Box::new(expr),
+        Box::new(pattern),
+        None,
+        false,
+    ))
+}
+
+/// Return a `<expr> !~~ <pattern>` expression
+pub fn not_like(expr: Expr, pattern: Expr) -> Expr {
+    Expr::Like(Like::new(
+        true,
+        Box::new(expr),
+        Box::new(pattern),
+        None,
+        false,
+    ))
+}
+
+/// Return a `<expr> ~~* <pattern>` expression
+pub fn ilike(expr: Expr, pattern: Expr) -> Expr {
+    Expr::Like(Like::new(
+        false,
+        Box::new(expr),
+        Box::new(pattern),
+        None,
+        true,
+    ))
+}
+
+/// Return a `<expr> !~~* <pattern>` expression
+pub fn not_ilike(expr: Expr, pattern: Expr) -> Expr {
+    Expr::Like(Like::new(
+        true,
+        Box::new(expr),
+        Box::new(pattern),
+        None,
+        true,
+    ))
 }
 
 /// Return a new expression with a logical AND
@@ -374,6 +424,26 @@ pub fn is_unknown(expr: Expr) -> Expr {
 /// Create is not unknown expression
 pub fn is_not_unknown(expr: Expr) -> Expr {
     Expr::IsNotUnknown(Box::new(expr))
+}
+
+/// Create is between expression
+pub fn is_between(expr: Expr, low: Expr, high: Expr) -> Expr {
+    Expr::Between(Between::new(
+        Box::new(expr),
+        false,
+        Box::new(low),
+        Box::new(high),
+    ))
+}
+
+/// Create is not between expression
+pub fn is_not_between(expr: Expr, low: Expr, high: Expr) -> Expr {
+    Expr::Between(Between::new(
+        Box::new(expr),
+        true,
+        Box::new(low),
+        Box::new(high),
+    ))
 }
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
