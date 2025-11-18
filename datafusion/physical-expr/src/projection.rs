@@ -29,6 +29,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
@@ -490,15 +491,10 @@ impl Projector {
     /// # Errors
     /// This function returns an error if any expression evaluation fails.
     pub fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let arrays = self
-            .projection
-            .iter()
-            .map(|expr| {
-                expr.expr
-                    .evaluate(batch)
-                    .and_then(|v| v.into_array_of_size(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let arrays = evaluate_expressions_to_arrays(
+            self.projection.exprs.iter().map(|p| &p.expr),
+            batch,
+        )?;
 
         if arrays.is_empty() {
             let options =
