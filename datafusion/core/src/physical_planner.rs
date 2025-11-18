@@ -2540,8 +2540,13 @@ impl<'a> OptimizationInvariantChecker<'a> {
 }
 
 /// Checks if the change from `old` schema to `new` is allowed or not.
+///
 /// The current implementation only allows nullability of individual fields to change
-/// from 'nullable' to 'not nullable'.
+/// from 'nullable' to 'not nullable'. This can happen due to physical expressions knowing
+/// more about their null-ness than their logical counterparts.
+/// This change is allowed because for any field the non-nullable domain `F` is a strict subset
+/// of the nullable domain `F ∪ { NULL }`. A physical schema that guarantees a stricter subset
+/// of values will not violate any assumptions made based on the less strict schema.
 fn is_allowed_schema_change(old: &Schema, new: &Schema) -> bool {
     if new.metadata != old.metadata {
         return false;
