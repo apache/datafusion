@@ -110,7 +110,7 @@ fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
 /// The [power set] (or powerset) of a set S is the set of all subsets of S,
 /// including the empty set and S itself.
 ///
-/// This is a variant of [`powerset`] that clones elements instead of returning references.
+/// This is a variant of `powerset` that clones elements instead of returning references.
 /// Useful when owned values are needed (e.g., for Substrait conversion).
 ///
 /// # Errors
