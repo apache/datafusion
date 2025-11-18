@@ -1586,13 +1586,11 @@ fn has_sufficient_rows_for_repartition(
     input: &Arc<dyn ExecutionPlan>,
     session_state: &SessionState,
 ) -> Result<bool> {
-    // If user explicitly requests extra parallelism via round-robin flag,
-    // always allow repartition.
     if session_state.config().round_robin_repartition() {
         return Ok(true);
     }
 
-    // Fetch statistics; if unavailable or error, repartition (safe default for large files)
+    // Get partition statistics, default to repartitioning if unavailable
     let stats = match input.partition_statistics(None) {
         Ok(s) => s,
         Err(_) => return Ok(true),
@@ -1600,12 +1598,10 @@ fn has_sufficient_rows_for_repartition(
 
     if let Some(num_rows) = stats.num_rows.get_value().copied() {
         let batch_size = session_state.config().batch_size();
-        // Only skip repartitioning for datasets that are clearly small
-        // Repartition for large datasets or when unsure
+        // Only skip repartitioning for datasets smaller than batch_size * 10
         return Ok(num_rows >= batch_size * 10);
     }
 
-    // No exact row-count available: repartition to be safe
     Ok(true)
 }
 
