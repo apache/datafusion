@@ -31,7 +31,7 @@ pub fn acos_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let valid_domain =
         Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+    if valid_domain.contains(range)? == Interval::TRUE {
         Ok(-arg.sort_properties)
     } else {
         exec_err!("Input range of ACOS contains out-of-domain values")
@@ -72,7 +72,7 @@ pub fn acosh_order(input: &[ExprProperties]) -> Result<SortProperties> {
         ScalarValue::try_from(&range.upper().data_type())?,
     )?;
 
-    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+    if valid_domain.contains(range)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of ACOSH contains out-of-domain values")
@@ -110,7 +110,7 @@ pub fn asin_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let valid_domain =
         Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+    if valid_domain.contains(range)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of ASIN contains out-of-domain values")
@@ -207,7 +207,7 @@ pub fn atanh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let valid_domain =
         Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+    if valid_domain.contains(range)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of ATANH contains out-of-domain values")
@@ -371,9 +371,9 @@ pub fn cosh_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
-    } else if range.lt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    } else if range.lt_eq(&zero_point)? == Interval::TRUE {
         Ok(-arg.sort_properties)
     } else {
         Ok(SortProperties::Unordered)
@@ -498,7 +498,7 @@ pub fn ln_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of LN contains out-of-domain values")
@@ -536,7 +536,7 @@ pub fn log2_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of LOG2 contains out-of-domain values")
@@ -574,7 +574,7 @@ pub fn log10_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of LOG10 contains out-of-domain values")
@@ -701,7 +701,7 @@ pub fn sqrt_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of SQRT contains out-of-domain values")

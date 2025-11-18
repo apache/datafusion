@@ -40,6 +40,7 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
+use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
@@ -171,9 +172,6 @@ where
     }
 }
 
-#[derive(Debug)]
-struct NullHLLAccumulator;
-
 macro_rules! default_accumulator_impl {
     () => {
         fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -269,29 +267,6 @@ where
     default_accumulator_impl!();
 }
 
-impl Accumulator for NullHLLAccumulator {
-    fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
-        // do nothing, all values are null
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
-        Ok(())
-    }
-
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![])
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::UInt64(Some(0)))
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self)
-    }
-}
-
 impl Debug for ApproxDistinct {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApproxDistinct")
@@ -352,12 +327,21 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "hll_registers"),
-            DataType::Binary,
-            false,
-        )
-        .into()])
+        if args.input_fields[0].data_type().is_null() {
+            Ok(vec![Field::new(
+                format_state_name(args.name, self.name()),
+                DataType::Null,
+                true,
+            )
+            .into()])
+        } else {
+            Ok(vec![Field::new(
+                format_state_name(args.name, "hll_registers"),
+                DataType::Binary,
+                false,
+            )
+            .into()])
+        }
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -406,7 +390,9 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Utf8View => Box::new(StringViewHLLAccumulator::<i32>::new()),
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
-            DataType::Null => Box::new(NullHLLAccumulator),
+            DataType::Null => {
+                Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
+            }
             other => {
                 return not_impl_err!(
                 "Support for 'approx_distinct' for data type {other} is not implemented"

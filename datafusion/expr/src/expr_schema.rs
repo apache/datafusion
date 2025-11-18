@@ -814,7 +814,9 @@ mod tests {
     use super::*;
     use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
-    use datafusion_common::{internal_err, DFSchema, ScalarValue};
+    use datafusion_common::{
+        assert_or_internal_err, DFSchema, DataFusionError, ScalarValue,
+    };
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -1170,11 +1172,8 @@ mod tests {
 
     impl ExprSchema for MockExprSchema {
         fn nullable(&self, _col: &Column) -> Result<bool> {
-            if self.error_on_nullable {
-                internal_err!("nullable error")
-            } else {
-                Ok(self.field.is_nullable())
-            }
+            assert_or_internal_err!(!self.error_on_nullable, "nullable error");
+            Ok(self.field.is_nullable())
         }
 
         fn field_from_column(&self, _col: &Column) -> Result<&Field> {

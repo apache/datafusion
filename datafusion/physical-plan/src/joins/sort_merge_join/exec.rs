@@ -45,7 +45,8 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    internal_err, plan_err, JoinSide, JoinType, NullEquality, Result,
+    assert_eq_or_internal_err, internal_err, plan_err, DataFusionError, JoinSide,
+    JoinType, NullEquality, Result,
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -459,12 +460,12 @@ impl ExecutionPlan for SortMergeJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
-        if left_partitions != right_partitions {
-            return internal_err!(
-                "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+        assert_eq_or_internal_err!(
+            left_partitions,
+            right_partitions,
+            "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
                  consider using RepartitionExec"
-            );
-        }
+        );
         let (on_left, on_right) = self.on.iter().cloned().unzip();
         let (streamed, buffered, on_streamed, on_buffered) =
             if SortMergeJoinExec::probe_side(&self.join_type) == JoinSide::Left {

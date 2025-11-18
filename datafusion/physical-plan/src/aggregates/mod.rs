@@ -44,7 +44,10 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints, DataFusionError,
+    Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
@@ -59,6 +62,7 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
 
 pub mod group_values;
@@ -491,9 +495,13 @@ impl AggregateExec {
         schema: SchemaRef,
     ) -> Result<Self> {
         // Make sure arguments are consistent in size
-        if aggr_expr.len() != filter_expr.len() {
-            return internal_err!("Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match", aggr_expr, filter_expr);
-        }
+        assert_eq_or_internal_err!(
+            aggr_expr.len(),
+            filter_expr.len(),
+            "Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match",
+            aggr_expr,
+            filter_expr
+        );
 
         let input_eq_properties = input.equivalence_properties();
         // Get GROUP BY expressions:
@@ -1434,25 +1442,14 @@ pub fn finalize_aggregation(
     }
 }
 
-/// Evaluates expressions against a record batch.
-fn evaluate(
-    expr: &[Arc<dyn PhysicalExpr>],
-    batch: &RecordBatch,
-) -> Result<Vec<ArrayRef>> {
-    expr.iter()
-        .map(|expr| {
-            expr.evaluate(batch)
-                .and_then(|v| v.into_array(batch.num_rows()))
-        })
-        .collect()
-}
-
-/// Evaluates expressions against a record batch.
+/// Evaluates groups of expressions against a record batch.
 pub fn evaluate_many(
     expr: &[Vec<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    expr.iter().map(|expr| evaluate(expr, batch)).collect()
+    expr.iter()
+        .map(|expr| evaluate_expressions_to_arrays(expr, batch))
+        .collect()
 }
 
 fn evaluate_optional(
@@ -1506,23 +1503,14 @@ pub fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    let exprs: Vec<ArrayRef> = group_by
-        .expr
-        .iter()
-        .map(|(expr, _)| {
-            let value = expr.evaluate(batch)?;
-            value.into_array(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let null_exprs: Vec<ArrayRef> = group_by
-        .null_expr
-        .iter()
-        .map(|(expr, _)| {
-            let value = expr.evaluate(batch)?;
-            value.into_array(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let exprs = evaluate_expressions_to_arrays(
+        group_by.expr.iter().map(|(expr, _)| expr),
+        batch,
+    )?;
+    let null_exprs = evaluate_expressions_to_arrays(
+        group_by.null_expr.iter().map(|(expr, _)| expr),
+        batch,
+    )?;
 
     group_by
         .groups

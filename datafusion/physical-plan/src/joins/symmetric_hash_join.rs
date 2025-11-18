@@ -67,7 +67,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
-    internal_err, plan_err, HashSet, JoinSide, JoinType, NullEquality, Result,
+    assert_eq_or_internal_err, plan_err, DataFusionError, HashSet, JoinSide, JoinType,
+    NullEquality, Result,
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -78,6 +79,7 @@ use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use ahash::RandomState;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{ready, Stream, StreamExt};
 use parking_lot::Mutex;
 
@@ -480,12 +482,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
-        if left_partitions != right_partitions {
-            return internal_err!(
-                "Invalid SymmetricHashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+        assert_eq_or_internal_err!(
+            left_partitions,
+            right_partitions,
+            "Invalid SymmetricHashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
                  consider using RepartitionExec"
-            );
-        }
+        );
         // If `filter_state` and `filter` are both present, then calculate sorted
         // filter expressions for both sides, and build an expression graph.
         let (left_sorted_filter_expr, right_sorted_filter_expr, graph) = match (
@@ -1065,14 +1067,8 @@ fn lookup_join_hashmap(
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    let keys_values = probe_on
-        .iter()
-        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
-    let build_join_values = build_on
-        .iter()
-        .map(|c| c.evaluate(build_batch)?.into_array(build_batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
+    let keys_values = evaluate_expressions_to_arrays(probe_on, probe_batch)?;
+    let build_join_values = evaluate_expressions_to_arrays(build_on, build_batch)?;
 
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
@@ -1245,7 +1241,7 @@ impl OneSideHashJoiner {
             filter_intervals.push((expr.node_index(), expr.interval().clone()))
         }
         // Update the physical expression graph using the join filter intervals:
-        graph.update_ranges(&mut filter_intervals, Interval::CERTAINLY_TRUE)?;
+        graph.update_ranges(&mut filter_intervals, Interval::TRUE)?;
         // Extract the new join filter interval for the build side:
         let calculated_build_side_interval = filter_intervals.remove(0).1;
         // If the intervals have not changed, return early without pruning:

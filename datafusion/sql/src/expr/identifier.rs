@@ -17,8 +17,9 @@
 
 use arrow::datatypes::Field;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    Column, DFSchema, Result, Span, TableReference,
+    assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError, Result, Span,
+    TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
@@ -99,9 +100,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        if ids.len() < 2 {
-            return internal_err!("Not a compound identifier: {ids:?}");
-        }
+        assert_or_internal_err!(ids.len() >= 2, "Not a compound identifier: {ids:?}");
 
         let ids_span = Span::union_iter(
             ids.iter()

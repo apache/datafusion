@@ -199,9 +199,8 @@ fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
 
     let expected = [
             "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-            "  GlobalLimitExec: skip=0, fetch=5",
-            "    FilterExec: c3@2 > 0",
-            "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+            "  FilterExec: c3@2 > 0, fetch=5",
+            "    StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
         ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -310,7 +309,7 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> R
 
     let expected = [
             "CoalescePartitionsExec: fetch=5",
-            "  FilterExec: c3@2 > 0",
+            "  FilterExec: c3@2 > 0, fetch=5",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
         ];

@@ -41,6 +41,7 @@ use datafusion_expr::window_state::{
 use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use indexmap::IndexMap;
 
 /// Common trait for [window function] implementations
@@ -90,13 +91,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// Evaluate the window function arguments against the batch and return
     /// array ref, normally the resulting `Vec` is a single element one.
     fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
-        self.expressions()
-            .iter()
-            .map(|e| {
-                e.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect()
+        evaluate_expressions_to_arrays(&self.expressions(), batch)
     }
 
     /// Evaluate the window function values against the batch

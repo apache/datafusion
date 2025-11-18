@@ -102,8 +102,7 @@ use url::Url;
 /// ```
 ///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn parquet_index() -> Result<()> {
     // Demo data has three files, each with schema
     // * file_name (string)
     // * value (int32)

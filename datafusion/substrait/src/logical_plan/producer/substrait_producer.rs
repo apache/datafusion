@@ -67,11 +67,11 @@ use substrait::proto::{
 /// impl SubstraitProducer for CustomSubstraitProducer {
 ///
 ///     fn register_function(&mut self, signature: String) -> u32 {
-///        self.extensions.register_function(signature)
+///        self.extensions.register_function(&signature)
 ///     }
 ///
 ///     fn register_type(&mut self, type_name: String) -> u32 {
-///         self.extensions.register_type(type_name)
+///         self.extensions.register_type(&type_name)
 ///     }
 ///
 ///     fn get_extensions(self) -> Extensions {
@@ -377,11 +377,11 @@ impl<'a> DefaultSubstraitProducer<'a> {
 
 impl SubstraitProducer for DefaultSubstraitProducer<'_> {
     fn register_function(&mut self, fn_name: String) -> u32 {
-        self.extensions.register_function(fn_name)
+        self.extensions.register_function(&fn_name)
     }
 
     fn register_type(&mut self, type_name: String) -> u32 {
-        self.extensions.register_type(type_name)
+        self.extensions.register_type(&type_name)
     }
 
     fn get_extensions(self) -> Extensions {
