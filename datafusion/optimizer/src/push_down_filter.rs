@@ -1372,7 +1372,7 @@ fn insert_below(
     })?;
 
     // make sure we did the actual replacement
-    assert_or_internal_err!(new_child.is_none(), "node had no  inputs");
+    assert_or_internal_err!(new_child.is_none(), "node had no inputs");
 
     Ok(transformed_plan)
 }
