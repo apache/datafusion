@@ -24,6 +24,8 @@ use crate::{
 };
 
 use arrow::datatypes::Schema;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
@@ -108,17 +110,31 @@ pub fn create_physical_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_schema: &Schema = &input_dfschema.into();
+    let input_schema = input_dfschema.as_arrow();
 
     match e {
-        Expr::Alias(Alias { expr, .. }) => {
-            Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+        Expr::Alias(Alias { expr, metadata, .. }) => {
+            if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
+                let new_metadata = FieldMetadata::merge_options(
+                    prior_metadata.as_ref(),
+                    metadata.as_ref(),
+                );
+                Ok(Arc::new(Literal::new_with_metadata(
+                    v.clone(),
+                    new_metadata,
+                )))
+            } else {
+                Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+            }
         }
         Expr::Column(c) => {
             let idx = input_dfschema.index_of_column(c)?;
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
+        Expr::Literal(value, metadata) => Ok(Arc::new(Literal::new_with_metadata(
+            value.clone(),
+            metadata.clone(),
+        ))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
@@ -168,7 +184,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(ScalarValue::Boolean(None), None),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -176,7 +192,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(ScalarValue::Boolean(None), None),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -301,11 +317,16 @@ pub fn create_physical_expr(
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
+            let config_options = match execution_props.config_options.as_ref() {
+                Some(config_options) => Arc::clone(config_options),
+                None => Arc::new(ConfigOptions::default()),
+            };
 
             Ok(Arc::new(ScalarFunctionExpr::try_new(
                 Arc::clone(func),
                 physical_args,
                 input_schema,
+                config_options,
             )?))
         }
         Expr::Between(Between {
@@ -347,7 +368,7 @@ pub fn create_physical_expr(
             list,
             negated,
         }) => match expr.as_ref() {
-            Expr::Literal(ScalarValue::Utf8(None)) => {
+            Expr::Literal(ScalarValue::Utf8(None), _) => {
                 Ok(expressions::lit(ScalarValue::Boolean(None)))
             }
             _ => {
@@ -380,11 +401,12 @@ where
     exprs
         .into_iter()
         .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 /// Convert a logical expression to a physical expression (without any simplification, etc)
 pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+    // TODO this makes a deep copy of the Schema. Should take SchemaRef instead and avoid deep copy
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()

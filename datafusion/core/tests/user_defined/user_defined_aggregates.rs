@@ -20,7 +20,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -32,6 +32,7 @@ use arrow::array::{
     StringArray, StructArray, UInt64Array,
 };
 use arrow::datatypes::{Fields, Schema};
+use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
@@ -52,6 +53,7 @@ use datafusion::{
 };
 use datafusion_common::{assert_contains, exec_datafusion_err};
 use datafusion_common::{cast::as_primitive_array, exec_err};
+
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
     col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, Expr,
@@ -296,10 +298,12 @@ async fn deregister_udaf() -> Result<()> {
     ctx.register_udaf(my_avg);
 
     assert!(ctx.state().aggregate_functions().contains_key("my_avg"));
+    assert!(datafusion_execution::FunctionRegistry::udafs(&ctx).contains("my_avg"));
 
     ctx.deregister_udaf("my_avg");
 
     assert!(!ctx.state().aggregate_functions().contains_key("my_avg"));
+    assert!(!datafusion_execution::FunctionRegistry::udafs(&ctx).contains("my_avg"));
 
     Ok(())
 }
@@ -378,13 +382,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
 
-    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
-    +------------+
-    | dummy(t.i) |
-    +------------+
-    | 1.0        |
-    +------------+
-    "###);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r"
+    +------------------+
+    | dummy_alias(t.i) |
+    +------------------+
+    | 1.0              |
+    +------------------+
+    ");
 
     Ok(())
 }
@@ -572,7 +576,7 @@ impl TimeSum {
         // Returns the same type as its input
         let return_type = timestamp_type.clone();
 
-        let state_fields = vec![Field::new("sum", timestamp_type, true)];
+        let state_fields = vec![Field::new("sum", timestamp_type, true).into()];
 
         let volatility = Volatility::Immutable;
 
@@ -672,7 +676,7 @@ impl FirstSelector {
         let state_fields = state_type
             .into_iter()
             .enumerate()
-            .map(|(i, t)| Field::new(format!("{i}"), t, true))
+            .map(|(i, t)| Field::new(format!("{i}"), t, true).into())
             .collect::<Vec<_>>();
 
         // Possible input signatures
@@ -777,7 +781,7 @@ impl Accumulator for FirstSelector {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TestGroupsAccumulator {
     signature: Signature,
     result: u64,
@@ -814,21 +818,6 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(self.clone()))
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<TestGroupsAccumulator>() {
-            self.result == other.result && self.signature == other.signature
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.signature.hash(hasher);
-        self.result.hash(hasher);
-        hasher.finish()
     }
 }
 
@@ -901,6 +890,32 @@ struct MetadataBasedAggregateUdf {
     metadata: HashMap<String, String>,
 }
 
+impl PartialEq for MetadataBasedAggregateUdf {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            signature,
+            metadata,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && metadata == &other.metadata
+    }
+}
+impl Eq for MetadataBasedAggregateUdf {}
+impl Hash for MetadataBasedAggregateUdf {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            name,
+            signature,
+            metadata: _, // unhashable
+        } = self;
+        std::any::type_name::<Self>().hash(state);
+        name.hash(state);
+        signature.hash(state);
+    }
+}
+
 impl MetadataBasedAggregateUdf {
     fn new(metadata: HashMap<String, String>) -> Self {
         // The name we return must be unique. Otherwise we will not call distinct
@@ -932,19 +947,14 @@ impl AggregateUDFImpl for MetadataBasedAggregateUdf {
         unimplemented!("this should never be called since return_field is implemented");
     }
 
-    fn return_field(&self, _arg_fields: &[Field]) -> Result<Field> {
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
         Ok(Field::new(self.name(), DataType::UInt64, true)
-            .with_metadata(self.metadata.clone()))
+            .with_metadata(self.metadata.clone())
+            .into())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let input_expr = acc_args
-            .exprs
-            .first()
-            .ok_or(exec_datafusion_err!("Expected one argument"))?;
-        let input_field = input_expr.return_field(acc_args.schema)?;
-
-        let double_output = input_field
+        let double_output = acc_args.expr_fields[0]
             .metadata()
             .get("modify_values")
             .map(|v| v == "double_output")
@@ -1104,22 +1114,22 @@ async fn test_metadata_based_aggregate_as_window() -> Result<()> {
         )));
 
     let df = df.select(vec![
-        Expr::WindowFunction(WindowFunction::new(
+        Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(Arc::clone(&no_output_meta_udf)),
             vec![col("no_metadata")],
         ))
         .alias("meta_no_in_no_out"),
-        Expr::WindowFunction(WindowFunction::new(
+        Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(no_output_meta_udf),
             vec![col("with_metadata")],
         ))
         .alias("meta_with_in_no_out"),
-        Expr::WindowFunction(WindowFunction::new(
+        Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(Arc::clone(&with_output_meta_udf)),
             vec![col("no_metadata")],
         ))
         .alias("meta_no_in_with_out"),
-        Expr::WindowFunction(WindowFunction::new(
+        Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(with_output_meta_udf),
             vec![col("with_metadata")],
         ))

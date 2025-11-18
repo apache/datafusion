@@ -20,7 +20,7 @@ use arrow::array::{
     Scalar,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
@@ -75,7 +75,7 @@ use std::sync::Arc;
         description = "The field name in the map or struct to retrieve data for. Must evaluate to a string."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct GetFieldFunc {
     signature: Signature,
 }
@@ -108,8 +108,8 @@ impl ScalarUDFImpl for GetFieldFunc {
         let [base, field_name] = take_function_args(self.name(), args)?;
 
         let name = match field_name {
-            Expr::Literal(name) => name,
-            other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
+            Expr::Literal(name, _) => name.to_string(),
+            other => other.schema_name().to_string(),
         };
 
         Ok(format!("{base}[{name}]"))
@@ -118,8 +118,8 @@ impl ScalarUDFImpl for GetFieldFunc {
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let [base, field_name] = take_function_args(self.name(), args)?;
         let name = match field_name {
-            Expr::Literal(name) => name,
-            other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
+            Expr::Literal(name, _) => name.to_string(),
+            other => other.schema_name().to_string(),
         };
 
         Ok(format!("{}[{}]", base.schema_name(), name))
@@ -133,7 +133,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // Length check handled in the signature
         debug_assert_eq!(args.scalar_arguments.len(), 2);
 
@@ -147,7 +147,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
 
-                        Ok(value_field.as_ref().clone().with_nullable(true))
+                        Ok(value_field.as_ref().clone().with_nullable(true).into())
                     },
                     _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
@@ -168,11 +168,11 @@ impl ScalarUDFImpl for GetFieldFunc {
                         if args.arg_fields[0].is_nullable() {
                             child_field = child_field.with_nullable(true);
                         }
-                        child_field
+                        Arc::new(child_field)
                     })
                 })
             },
-            (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true)),
+            (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true).into()),
             (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
     }
@@ -245,6 +245,46 @@ impl ScalarUDFImpl for GetFieldFunc {
             Ok(ColumnarValue::Array(data))
         }
 
+        fn process_map_with_nested_key(
+            array: Arc<dyn Array>,
+            key_array: Arc<dyn Array>,
+        ) -> Result<ColumnarValue> {
+            let map_array = as_map_array(array.as_ref())?;
+
+            let comparator = make_comparator(
+                map_array.keys().as_ref(),
+                key_array.as_ref(),
+                SortOptions::default(),
+            )?;
+
+            let original_data = map_array.entries().column(1).to_data();
+            let capacity = Capacities::Array(original_data.len());
+            let mut mutable =
+                MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+            for entry in 0..map_array.len() {
+                let start = map_array.value_offsets()[entry] as usize;
+                let end = map_array.value_offsets()[entry + 1] as usize;
+
+                let mut found_match = false;
+                for i in start..end {
+                    if comparator(i, 0).is_eq() {
+                        mutable.extend(0, i, i + 1);
+                        found_match = true;
+                        break;
+                    }
+                }
+
+                if !found_match {
+                    mutable.extend_nulls(1);
+                }
+            }
+
+            let data = mutable.freeze();
+            let data = make_array(data);
+            Ok(ColumnarValue::Array(data))
+        }
+
         match (array.data_type(), name) {
             (DataType::Map(_, _), ScalarValue::List(arr)) => {
                 let key_array: Arc<dyn Array> = arr;
@@ -256,7 +296,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Map(_, _), other) => {
                 let data_type = other.data_type();
                 if data_type.is_nested() {
-                    exec_err!("unsupported type {:?} for map access", data_type)
+                    process_map_with_nested_key(array, other.to_array()?)
                 } else {
                     process_map_array(array, other.to_array()?)
                 }
@@ -275,7 +315,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
             (dt, name) => exec_err!(
                 "get_field is only possible on maps with utf8 indexes or struct \
-                                         with utf8 indexes. Received {dt:?} with {name:?} index"
+                                         with utf8 indexes. Received {dt} with {name:?} index"
             ),
         }
     }

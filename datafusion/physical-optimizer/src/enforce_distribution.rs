@@ -50,7 +50,7 @@ use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -281,7 +281,6 @@ pub type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
 /// 3) If the current plan is RepartitionExec, CoalescePartitionsExec or WindowAggExec, clear all the requirements, return the unchanged plan
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
-///
 pub fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
@@ -295,7 +294,7 @@ pub fn adjust_input_keys_ordering(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
@@ -314,7 +313,7 @@ pub fn adjust_input_keys_ordering(
                         // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
                         projection.clone(),
                         PartitionMode::Partitioned,
-                        *null_equals_null,
+                        *null_equality,
                     )
                     .map(|e| Arc::new(e) as _)
                 };
@@ -334,7 +333,7 @@ pub fn adjust_input_keys_ordering(
                         left.schema().fields().len(),
                     )
                     .unwrap_or_default(),
-                    JoinType::RightSemi | JoinType::RightAnti => {
+                    JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                         requirements.data.clone()
                     }
                     JoinType::Left
@@ -364,7 +363,7 @@ pub fn adjust_input_keys_ordering(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<SortMergeJoinExec>()
     {
@@ -379,7 +378,7 @@ pub fn adjust_input_keys_ordering(
                 filter.clone(),
                 *join_type,
                 new_conditions.1,
-                *null_equals_null,
+                *null_equality,
             )
             .map(|e| Arc::new(e) as _)
         };
@@ -407,7 +406,11 @@ pub fn adjust_input_keys_ordering(
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
         // Construct a mapping from new name to the original Column
-        let new_required = map_columns_before_projection(&requirements.data, expr);
+        let proj_exprs: Vec<_> = expr
+            .iter()
+            .map(|p| (Arc::clone(&p.expr), p.alias.clone()))
+            .collect();
+        let new_required = map_columns_before_projection(&requirements.data, &proj_exprs);
         if new_required.len() == requirements.data.len() {
             requirements.children[0].data = new_required;
         } else {
@@ -544,7 +547,10 @@ pub fn reorder_aggregate_keys(
                         .map(|col| {
                             let name = col.name();
                             let index = agg_schema.index_of(name)?;
-                            Ok((Arc::new(Column::new(name, index)) as _, name.to_owned()))
+                            Ok(ProjectionExpr {
+                                expr: Arc::new(Column::new(name, index)) as _,
+                                alias: name.to_owned(),
+                            })
                         })
                         .collect::<Result<Vec<_>>>()?;
                     let agg_fields = agg_schema.fields();
@@ -553,7 +559,10 @@ pub fn reorder_aggregate_keys(
                     {
                         let name = field.name();
                         let plan = Arc::new(Column::new(name, idx)) as _;
-                        proj_exprs.push((plan, name.clone()))
+                        proj_exprs.push(ProjectionExpr {
+                            expr: plan,
+                            alias: name.clone(),
+                        })
                     }
                     return ProjectionExec::try_new(proj_exprs, new_final_agg).map(|p| {
                         PlanWithKeyRequirements::new(Arc::new(p), vec![], vec![agg_node])
@@ -616,7 +625,7 @@ pub fn reorder_join_keys_to_inputs(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
@@ -642,7 +651,7 @@ pub fn reorder_join_keys_to_inputs(
                     join_type,
                     projection.clone(),
                     PartitionMode::Partitioned,
-                    *null_equals_null,
+                    *null_equality,
                 )?));
             }
         }
@@ -653,7 +662,7 @@ pub fn reorder_join_keys_to_inputs(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<SortMergeJoinExec>()
     {
@@ -681,7 +690,7 @@ pub fn reorder_join_keys_to_inputs(
                     filter.clone(),
                     *join_type,
                     new_sort_options,
-                    *null_equals_null,
+                    *null_equality,
                 )
                 .map(|smj| Arc::new(smj) as _);
             }
@@ -925,34 +934,34 @@ fn add_hash_on_top(
     Ok(input)
 }
 
-/// Adds a [`SortPreservingMergeExec`] operator on top of input executor
-/// to satisfy single distribution requirement.
+/// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
+/// on top of the given plan node to satisfy a single partition requirement
+/// while preserving ordering constraints.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `input`: Current node.
 ///
 /// # Returns
 ///
-/// Updated node with an execution plan, where desired single
-/// distribution is satisfied by adding [`SortPreservingMergeExec`].
-fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
-    // Add SortPreservingMerge only when partition count is larger than 1.
+/// Updated node with an execution plan, where the desired single distribution
+/// requirement is satisfied.
+fn add_merge_on_top(input: DistributionContext) -> DistributionContext {
+    // Apply only when the partition count is larger than one.
     if input.plan.output_partitioning().partition_count() > 1 {
         // When there is an existing ordering, we preserve ordering
         // when decreasing partitions. This will be un-done in the future
         // if any of the following conditions is true
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
-        // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
-        let should_preserve_ordering = input.plan.output_ordering().is_some();
-
-        let new_plan = if should_preserve_ordering {
+        // (determined by flag `config.optimizer.prefer_existing_sort`)
+        let new_plan = if let Some(req) = input.plan.output_ordering() {
             Arc::new(SortPreservingMergeExec::new(
-                input.plan.output_ordering().cloned().unwrap_or_default(),
+                req.clone(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
+            // If there is no input order, we can simply coalesce partitions:
             Arc::new(CoalescePartitionsExec::new(Arc::clone(&input.plan))) as _
         };
 
@@ -1261,10 +1270,11 @@ pub fn ensure_distribution(
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
-                    child = add_spm_on_top(child);
+                    child = add_merge_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    if add_roundrobin {
+                    // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
+                    if add_roundrobin && !hash_necessary {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
@@ -1289,10 +1299,12 @@ pub fn ensure_distribution(
                 // Either:
                 // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
                 // - using order preserving variant is not desirable.
+                let sort_req = required_input_ordering.into_single();
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(&required_input_ordering);
+                    .ordering_satisfy_requirement(sort_req.clone())?;
+
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
                 {
@@ -1303,9 +1315,12 @@ pub fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.clone(),
-                            None,
-                        );
+                            sort_req,
+                            plan.as_any()
+                                .downcast_ref::<OutputRequirementExec>()
+                                .map(|output| output.fetch())
+                                .unwrap_or(None),
+                        )?;
                     }
                 }
                 // Stop tracking distribution changing operators

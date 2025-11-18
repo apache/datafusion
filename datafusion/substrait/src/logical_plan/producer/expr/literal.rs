@@ -18,8 +18,9 @@
 use crate::logical_plan::producer::{to_substrait_type, SubstraitProducer};
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DECIMAL_128_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF, FLOAT_16_TYPE_NAME,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
@@ -29,7 +30,7 @@ use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
     Decimal, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, List,
-    LiteralType, Map, PrecisionTimestamp, Struct,
+    LiteralType, Map, PrecisionTime, PrecisionTimestamp, Struct,
 };
 use substrait::proto::expression::{Literal, RexType};
 use substrait::proto::{r#type, Expression};
@@ -60,6 +61,7 @@ pub(crate) fn to_substrait_literal(
             nullable: true,
             type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
             literal_type: Some(LiteralType::Null(to_substrait_type(
+                producer,
                 &value.data_type(),
                 true,
             )?)),
@@ -93,6 +95,41 @@ pub(crate) fn to_substrait_literal(
             LiteralType::I64(*n as i64),
             UNSIGNED_INTEGER_TYPE_VARIATION_REF,
         ),
+        ScalarValue::Float16(Some(f)) => {
+            // Rules for encoding fp16 Substrait literals are defined as part of Arrow here:
+            //
+            // https://github.com/apache/arrow/blame/bab558061696ddc1841148d6210424b12923d48e/format/substrait/extension_types.yaml#L112
+            //
+            // fp16 literals are encoded as user defined literals with
+            // a google.protobuf.UInt32Value message where the lower 16 bits are
+            // the fp16 value.
+            let type_anchor = producer.register_type(FLOAT_16_TYPE_NAME.to_string());
+
+            // The spec says "lower 16 bits" but neglects to mention the endianness.
+            // Let's just use little-endian for now.
+            //
+            // See https://github.com/apache/arrow/issues/47846
+            let f_bytes = f.to_le_bytes();
+            let value = u32::from_le_bytes([f_bytes[0], f_bytes[1], 0, 0]);
+
+            let value = pbjson_types::UInt32Value { value };
+            let encoded_value = prost::Message::encode_to_vec(&value);
+            (
+                LiteralType::UserDefined(
+                    substrait::proto::expression::literal::UserDefined {
+                        type_reference: type_anchor,
+                        type_parameters: vec![],
+                        val: Some(substrait::proto::expression::literal::user_defined::Val::Value(
+                            pbjson_types::Any {
+                                type_url: "google.protobuf.UInt32Value".to_string(),
+                                value: encoded_value.into(),
+                            },
+                        )),
+                    },
+                ),
+                DEFAULT_TYPE_VARIATION_REF,
+            )
+        }
         ScalarValue::Float32(Some(f)) => {
             (LiteralType::Fp32(*f), DEFAULT_TYPE_VARIATION_REF)
         }
@@ -240,7 +277,7 @@ pub(crate) fn to_substrait_literal(
         ),
         ScalarValue::Map(m) => {
             let map = if m.is_empty() || m.value(0).is_empty() {
-                let mt = to_substrait_type(m.data_type(), m.is_nullable())?;
+                let mt = to_substrait_type(producer, m.data_type(), m.is_nullable())?;
                 let mt = match mt {
                     substrait::proto::Type {
                         kind: Some(r#type::Kind::Map(mt)),
@@ -280,6 +317,34 @@ pub(crate) fn to_substrait_literal(
             };
             (map, DEFAULT_CONTAINER_TYPE_VARIATION_REF)
         }
+        ScalarValue::Time32Second(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 0,
+                value: *t as i64,
+            }),
+            TIME_32_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Time32Millisecond(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 3,
+                value: *t as i64,
+            }),
+            TIME_32_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Time64Microsecond(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 6,
+                value: *t,
+            }),
+            TIME_64_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Time64Nanosecond(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 9,
+                value: *t,
+            }),
+            TIME_64_TYPE_VARIATION_REF,
+        ),
         ScalarValue::Struct(s) => (
             LiteralType::Struct(Struct {
                 fields: s
@@ -325,12 +390,13 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
         .collect::<datafusion::common::Result<Vec<_>>>()?;
 
     if values.is_empty() {
-        let lt = match to_substrait_type(array.data_type(), array.is_nullable())? {
-            substrait::proto::Type {
-                kind: Some(r#type::Kind::List(lt)),
-            } => lt.as_ref().to_owned(),
-            _ => unreachable!(),
-        };
+        let lt =
+            match to_substrait_type(producer, array.data_type(), array.is_nullable())? {
+                substrait::proto::Type {
+                    kind: Some(r#type::Kind::List(lt)),
+                } => lt.as_ref().to_owned(),
+                _ => unreachable!(),
+            };
         Ok(LiteralType::EmptyList(lt))
     } else {
         Ok(LiteralType::List(List { values }))
@@ -397,6 +463,18 @@ mod tests {
             round_trip_literal(ScalarValue::TimestampMicrosecond(ts, tz.clone()))?;
             round_trip_literal(ScalarValue::TimestampNanosecond(ts, tz))?;
         }
+
+        // Test Time32 literals
+        round_trip_literal(ScalarValue::Time32Second(Some(45296)))?;
+        round_trip_literal(ScalarValue::Time32Second(None))?;
+        round_trip_literal(ScalarValue::Time32Millisecond(Some(45296789)))?;
+        round_trip_literal(ScalarValue::Time32Millisecond(None))?;
+
+        // Test Time64 literals
+        round_trip_literal(ScalarValue::Time64Microsecond(Some(45296789123)))?;
+        round_trip_literal(ScalarValue::Time64Microsecond(None))?;
+        round_trip_literal(ScalarValue::Time64Nanosecond(Some(45296789123000)))?;
+        round_trip_literal(ScalarValue::Time64Nanosecond(None))?;
 
         round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],

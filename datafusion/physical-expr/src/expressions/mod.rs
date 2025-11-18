@@ -21,6 +21,7 @@
 mod binary;
 mod case;
 mod cast;
+mod cast_column;
 mod column;
 mod dynamic_filters;
 mod in_list;
@@ -41,8 +42,10 @@ pub use crate::PhysicalSortExpr;
 pub use binary::{binary, similar_to, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{cast, CastExpr};
+pub use cast_column::CastColumnExpr;
 pub use column::{col, with_new_schema, Column};
 pub use datafusion_expr::utils::format_state_name;
+pub use dynamic_filters::DynamicFilterPhysicalExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};

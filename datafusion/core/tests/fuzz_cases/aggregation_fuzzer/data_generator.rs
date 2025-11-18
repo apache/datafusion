@@ -39,7 +39,6 @@ use crate::fuzz_cases::record_batch_generator::{ColumnDescr, RecordBatchGenerato
 ///     will generate one `base dataset` firstly. Then the `base dataset` will be sorted
 ///     based on each `sort_key` respectively. And finally `len(sort_keys) + 1` datasets
 ///     will be returned
-///
 #[derive(Debug, Clone)]
 pub struct DatasetGeneratorConfig {
     /// Descriptions of columns in datasets, it's `required`
@@ -115,7 +114,6 @@ impl DatasetGeneratorConfig {
 ///   
 ///   - Split each batch to multiple batches which each sub-batch in has the randomly `rows num`,
 ///     and this multiple batches will be used to create the `Dataset`.
-///
 pub struct DatasetGenerator {
     batch_generator: RecordBatchGenerator,
     sort_keys_set: Vec<Vec<String>>,
@@ -149,14 +147,14 @@ impl DatasetGenerator {
         for sort_keys in self.sort_keys_set.clone() {
             let sort_exprs = sort_keys
                 .iter()
-                .map(|key| {
-                    let col_expr = col(key, schema)?;
-                    Ok(PhysicalSortExpr::new_default(col_expr))
-                })
-                .collect::<Result<LexOrdering>>()?;
-            let sorted_batch = sort_batch(&base_batch, sort_exprs.as_ref(), None)?;
-
-            let batches = stagger_batch(sorted_batch);
+                .map(|key| col(key, schema).map(PhysicalSortExpr::new_default))
+                .collect::<Result<Vec<_>>>()?;
+            let batch = if let Some(ordering) = LexOrdering::new(sort_exprs) {
+                sort_batch(&base_batch, &ordering, None)?
+            } else {
+                base_batch.clone()
+            };
+            let batches = stagger_batch(batch);
             let dataset = Dataset::new(batches, sort_keys);
             datasets.push(dataset);
         }

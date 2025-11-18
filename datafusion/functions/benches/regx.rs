@@ -21,8 +21,9 @@ use arrow::array::builder::StringBuilder;
 use arrow::array::{ArrayRef, AsArray, Int64Array, StringArray, StringViewArray};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_functions::regex::regexpcount::regexp_count_func;
+use datafusion_functions::regex::regexpinstr::regexp_instr_func;
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
 use datafusion_functions::regex::regexpreplace::regexp_replace;
@@ -30,6 +31,7 @@ use rand::distr::Alphanumeric;
 use rand::prelude::IndexedRandom;
 use rand::rngs::ThreadRng;
 use rand::Rng;
+use std::hint::black_box;
 use std::iter;
 use std::sync::Arc;
 fn data(rng: &mut ThreadRng) -> StringArray {
@@ -71,6 +73,15 @@ fn start(rng: &mut ThreadRng) -> Int64Array {
     Int64Array::from(data)
 }
 
+fn n(rng: &mut ThreadRng) -> Int64Array {
+    let mut data: Vec<i64> = vec![];
+    for _ in 0..1000 {
+        data.push(rng.random_range(1..5));
+    }
+
+    Int64Array::from(data)
+}
+
 fn flags(rng: &mut ThreadRng) -> StringArray {
     let samples = [Some("i".to_string()), Some("im".to_string()), None];
     let mut sb = StringBuilder::new();
@@ -84,6 +95,15 @@ fn flags(rng: &mut ThreadRng) -> StringArray {
     }
 
     sb.finish()
+}
+
+fn subexp(rng: &mut ThreadRng) -> Int64Array {
+    let mut data: Vec<i64> = vec![];
+    for _ in 0..1000 {
+        data.push(rng.random_range(1..5));
+    }
+
+    Int64Array::from(data)
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -123,6 +143,52 @@ fn criterion_benchmark(c: &mut Criterion) {
                     Arc::clone(&flags),
                 ])
                 .expect("regexp_count should work on utf8view"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_instr_1000 string", |b| {
+        let mut rng = rand::rng();
+        let data = Arc::new(data(&mut rng)) as ArrayRef;
+        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
+        let start = Arc::new(start(&mut rng)) as ArrayRef;
+        let n = Arc::new(n(&mut rng)) as ArrayRef;
+        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+        let subexp = Arc::new(subexp(&mut rng)) as ArrayRef;
+
+        b.iter(|| {
+            black_box(
+                regexp_instr_func(&[
+                    Arc::clone(&data),
+                    Arc::clone(&regex),
+                    Arc::clone(&start),
+                    Arc::clone(&n),
+                    Arc::clone(&flags),
+                    Arc::clone(&subexp),
+                ])
+                .expect("regexp_instr should work on utf8"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_instr_1000 utf8view", |b| {
+        let mut rng = rand::rng();
+        let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
+        let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
+        let start = Arc::new(start(&mut rng)) as ArrayRef;
+        let n = Arc::new(n(&mut rng)) as ArrayRef;
+        let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
+
+        b.iter(|| {
+            black_box(
+                regexp_instr_func(&[
+                    Arc::clone(&data),
+                    Arc::clone(&regex),
+                    Arc::clone(&start),
+                    Arc::clone(&n),
+                    Arc::clone(&flags),
+                ])
+                .expect("regexp_instr should work on utf8view"),
             )
         })
     });
@@ -202,11 +268,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_replace::<i32, _, _>(
+                regexp_replace::<i32, _>(
                     data.as_string::<i32>(),
                     regex.as_string::<i32>(),
                     replacement.as_string::<i32>(),
-                    Some(&flags),
+                    Some(flags.as_string::<i32>()),
                 )
                 .expect("regexp_replace should work on valid values"),
             )
@@ -217,19 +283,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut rng = rand::rng();
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
-        // flags are not allowed to be utf8view according to the function
-        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+        let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
         let replacement = Arc::new(StringViewArray::from_iter_values(iter::repeat_n(
             "XX", 1000,
         )));
 
         b.iter(|| {
             black_box(
-                regexp_replace::<i32, _, _>(
+                regexp_replace::<i32, _>(
                     data.as_string_view(),
                     regex.as_string_view(),
-                    &replacement,
-                    Some(&flags),
+                    &*replacement,
+                    Some(flags.as_string_view()),
                 )
                 .expect("regexp_replace should work on valid values"),
             )

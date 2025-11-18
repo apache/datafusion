@@ -51,7 +51,7 @@ use datafusion_macros::user_doc;
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "year",
@@ -66,7 +66,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeDateFunc {
     signature: Signature,
 }
@@ -121,6 +121,13 @@ impl ScalarUDFImpl for MakeDateFunc {
             });
 
         let [years, months, days] = take_function_args(self.name(), args)?;
+
+        if matches!(years, ColumnarValue::Scalar(ScalarValue::Null))
+            || matches!(months, ColumnarValue::Scalar(ScalarValue::Null))
+            || matches!(days, ColumnarValue::Scalar(ScalarValue::Null))
+        {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Null));
+        }
 
         let years = years.cast_to(&Int32, None)?;
         let months = months.cast_to(&Int32, None)?;
@@ -224,6 +231,7 @@ mod tests {
     use crate::datetime::make_date::MakeDateFunc;
     use arrow::array::{Array, Date32Array, Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
@@ -234,13 +242,14 @@ mod tests {
     ) -> Result<ColumnarValue, DataFusionError> {
         let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type(), true))
+            .map(|arg| Field::new("a", arg.data_type(), true).into())
             .collect::<Vec<_>>();
         let args = datafusion_expr::ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows,
-            return_field: &Field::new("f", DataType::Date32, true),
+            return_field: Field::new("f", DataType::Date32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         MakeDateFunc::new().invoke_with_args(args)
     }
@@ -376,5 +385,20 @@ mod tests {
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Can't cast value 4294967295 to type Int32"
         );
+    }
+
+    #[test]
+    fn test_make_date_null_param() {
+        let res = invoke_make_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Null),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+                ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
+            ],
+            1,
+        )
+        .expect("that make_date parsed values without error");
+
+        assert!(matches!(res, ColumnarValue::Scalar(ScalarValue::Null)));
     }
 }

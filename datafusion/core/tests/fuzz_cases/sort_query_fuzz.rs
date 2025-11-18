@@ -25,6 +25,7 @@ use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{instant::Instant, Result};
+use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryPool, UnboundedMemoryPool,
 };
@@ -32,10 +33,7 @@ use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use std::time::Duration;
 
-use datafusion_execution::{
-    disk_manager::DiskManagerConfig, memory_pool::FairSpillPool,
-    runtime_env::RuntimeEnvBuilder,
-};
+use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
 use rand::prelude::IndexedRandom;
 use rand::Rng;
 use rand::{rngs::StdRng, SeedableRng};
@@ -222,7 +220,7 @@ impl SortQueryFuzzer {
                         .test_gen
                         .fuzzer_run(init_seed, query_seed, config_seed)
                         .await?;
-                    println!("\n"); // Seperator between tested runs
+                    println!("\n"); // Separator between tested runs
 
                     if expected_results.is_none() {
                         expected_results = Some(results);
@@ -430,7 +428,7 @@ impl SortFuzzerTestGenerator {
             .collect();
 
         let mut order_by_clauses = Vec::new();
-        for col in selected_columns {
+        for col in &selected_columns {
             let mut clause = col.name.clone();
             if rng.random_bool(0.5) {
                 let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
@@ -465,7 +463,12 @@ impl SortFuzzerTestGenerator {
         let limit_clause = limit.map_or(String::new(), |l| format!(" LIMIT {l}"));
 
         let query = format!(
-            "SELECT * FROM {} ORDER BY {}{}",
+            "SELECT {} FROM {} ORDER BY {}{}",
+            selected_columns
+                .iter()
+                .map(|col| col.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
             self.table_name,
             order_by_clauses.join(", "),
             limit_clause
@@ -548,7 +551,7 @@ impl SortFuzzerTestGenerator {
 
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(memory_pool)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(DiskManagerBuilder::default())
             .build_arc()?;
 
         let ctx = SessionContext::new_with_config_rt(config, runtime);

@@ -20,17 +20,20 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::coop::cooperative;
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_datafusion_err, internal_err, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, internal_datafusion_err, DataFusionError, Result,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -56,7 +59,7 @@ impl ReservedBatches {
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
 /// This table serves as a mirror or buffer between each iteration of a recursive query.
 #[derive(Debug)]
-pub(super) struct WorkTable {
+pub struct WorkTable {
     batches: Mutex<Option<ReservedBatches>>,
 }
 
@@ -131,16 +134,6 @@ impl WorkTableExec {
         Arc::clone(&self.schema)
     }
 
-    pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
-        Self {
-            name: self.name.clone(),
-            schema: Arc::clone(&self.schema),
-            metrics: ExecutionPlanMetricsSet::new(),
-            work_table,
-            cache: self.cache.clone(),
-        }
-    }
-
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         PlanProperties::new(
@@ -149,6 +142,7 @@ impl WorkTableExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -186,14 +180,6 @@ impl ExecutionPlan for WorkTableExec {
         vec![]
     }
 
-    fn maintains_input_order(&self) -> Vec<bool> {
-        vec![false]
-    }
-
-    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![false]
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
@@ -208,16 +194,17 @@ impl ExecutionPlan for WorkTableExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // WorkTable streams must be the plan base.
-        if partition != 0 {
-            return internal_err!(
-                "WorkTableExec got an invalid partition {partition} (expected 0)"
-            );
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "WorkTableExec got an invalid partition {partition} (expected 0)"
+        );
         let batch = self.work_table.take()?;
-        Ok(Box::pin(
+
+        let stream =
             MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
-                .with_reservation(batch.reservation),
-        ))
+                .with_reservation(batch.reservation);
+        Ok(Box::pin(cooperative(stream)))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -230,6 +217,29 @@ impl ExecutionPlan for WorkTableExec {
 
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    /// Injects run-time state into this `WorkTableExec`.
+    ///
+    /// The only state this node currently understands is an [`Arc<WorkTable>`].
+    /// If `state` can be down-cast to that type, a new `WorkTableExec` backed
+    /// by the provided work table is returned.  Otherwise `None` is returned
+    /// so that callers can attempt to propagate the state further down the
+    /// execution plan tree.
+    fn with_new_state(
+        &self,
+        state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        // Down-cast to the expected state type; propagate `None` on failure
+        let work_table = state.downcast::<WorkTable>().ok()?;
+
+        Some(Arc::new(Self {
+            name: self.name.clone(),
+            schema: Arc::clone(&self.schema),
+            metrics: ExecutionPlanMetricsSet::new(),
+            work_table,
+            cache: self.cache.clone(),
+        }))
     }
 }
 

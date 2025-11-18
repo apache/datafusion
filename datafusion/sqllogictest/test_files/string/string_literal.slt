@@ -132,10 +132,10 @@ SELECT substr('Hello🌏世界', 5, 3)
 ----
 o🌏世
 
-statement error The first argument of the substr function can only be a string, but got Int64
+statement error Function 'substr' failed to match any signature
 SELECT substr(1, 3)
 
-statement error The first argument of the substr function can only be a string, but got Int64
+statement error Function 'substr' failed to match any signature
 SELECT substr(1, 3, 4)
 
 statement error Execution error: negative substring length not allowed
@@ -300,6 +300,26 @@ fooxx
 
 query T
 SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace(arrow_cast('foobar', 'LargeUtf8'), 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace(arrow_cast('foobar', 'Utf8View'), 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace('foobar', arrow_cast('bar', 'LargeUtf8'), 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace('foobar', arrow_cast('bar', 'Utf8View'), 'xx', 'gi')
 ----
 fooxx
 

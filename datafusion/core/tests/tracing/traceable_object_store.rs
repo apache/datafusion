@@ -21,7 +21,7 @@ use crate::tracing::asserting_tracer::assert_traceability;
 use futures::stream::BoxStream;
 use object_store::{
     path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
@@ -68,7 +68,7 @@ impl ObjectStore for TraceableObjectStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         assert_traceability().await;
         self.inner.put_multipart_opts(location, opts).await

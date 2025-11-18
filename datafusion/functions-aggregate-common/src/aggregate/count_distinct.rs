@@ -16,9 +16,11 @@
 // under the License.
 
 mod bytes;
+mod dict;
 mod native;
 
 pub use bytes::BytesDistinctCountAccumulator;
 pub use bytes::BytesViewDistinctCountAccumulator;
+pub use dict::DictionaryCountAccumulator;
 pub use native::FloatDistinctCountAccumulator;
 pub use native::PrimitiveDistinctCountAccumulator;

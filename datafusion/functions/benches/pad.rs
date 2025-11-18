@@ -21,11 +21,13 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::{lpad, rpad};
 use rand::distr::{Distribution, Uniform};
 use rand::Rng;
+use std::hint::black_box;
 use std::sync::Arc;
 
 struct Filter<Dist> {
@@ -101,18 +103,19 @@ fn invoke_pad_with_args(
     number_rows: usize,
     left_pad: bool,
 ) -> Result<ColumnarValue, DataFusionError> {
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+    let config_options = Arc::new(ConfigOptions::default());
 
     let scalar_args = ScalarFunctionArgs {
         args: args.clone(),
         arg_fields,
         number_rows,
-        return_field: &Field::new("f", DataType::Utf8, true),
+        return_field: Field::new("f", DataType::Utf8, true).into(),
+        config_options: Arc::clone(&config_options),
     };
 
     if left_pad {
@@ -129,29 +132,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args::<i32>(size, 32, false);
 
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, true).unwrap()))
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, true).unwrap()))
         });
 
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, true).unwrap()))
         });
 
         group.finish();
@@ -160,30 +151,18 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, false);
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, false).unwrap()))
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, false).unwrap()))
         });
 
         // rpad for stringview type
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, false).unwrap()))
         });
 
         group.finish();

@@ -20,13 +20,15 @@ extern crate criterion;
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use criterion::{
-    black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
-    Criterion, SamplingMode,
+    criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup, Criterion,
+    SamplingMode,
 };
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
 use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+use std::hint::black_box;
 use std::{fmt, sync::Arc};
 
 #[derive(Clone, Copy)]
@@ -99,7 +101,6 @@ pub fn create_string_array_and_characters(
 /// Outputs:
 ///   - testing string array
 ///   - trimmed characters
-///
 fn create_args(
     size: usize,
     characters: &str,
@@ -132,12 +133,13 @@ fn run_with_string_type<M: Measurement>(
     string_type: StringArrayType,
 ) {
     let args = create_args(size, characters, trimmed, remaining_len, string_type);
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+    let config_options = Arc::new(ConfigOptions::default());
+
     group.bench_function(
         format!(
             "{string_type} [size={size}, len_before={len}, len_after={remaining_len}]",
@@ -149,7 +151,8 @@ fn run_with_string_type<M: Measurement>(
                     args: args_cloned,
                     arg_fields: arg_fields.clone(),
                     number_rows: size,
-                    return_field: &Field::new("f", DataType::Utf8, true),
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
                 }))
             })
         },

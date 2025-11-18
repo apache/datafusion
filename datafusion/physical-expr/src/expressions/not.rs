@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -101,7 +101,7 @@ impl PhysicalExpr for NotExpr {
         }
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         self.arg.return_field(input_schema)
     }
 
@@ -155,16 +155,16 @@ impl PhysicalExpr for NotExpr {
         match (parent, children[0]) {
             (Bernoulli(parent), Bernoulli(child)) => {
                 let parent_range = parent.range();
-                let result = if parent_range == Interval::CERTAINLY_TRUE {
-                    if child.range() == Interval::CERTAINLY_TRUE {
+                let result = if parent_range == Interval::TRUE {
+                    if child.range() == Interval::TRUE {
                         None
                     } else {
                         Some(vec![Distribution::new_bernoulli(ScalarValue::new_zero(
                             &child.data_type(),
                         )?)?])
                     }
-                } else if parent_range == Interval::CERTAINLY_FALSE {
-                    if child.range() == Interval::CERTAINLY_FALSE {
+                } else if parent_range == Interval::FALSE {
+                    if child.range() == Interval::FALSE {
                         None
                     } else {
                         Some(vec![Distribution::new_bernoulli(ScalarValue::new_one(

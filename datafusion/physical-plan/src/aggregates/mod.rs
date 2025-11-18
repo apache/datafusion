@@ -26,36 +26,55 @@ use crate::aggregates::{
     topk_stream::GroupedTopKAggregateStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::filter_pushdown::{
+    ChildFilterDescription, FilterDescription, FilterPushdownPhase, PushedDownPredicate,
+};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr::utils::collect_columns;
+use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints, DataFusionError,
+    Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
-    ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
-    PhysicalSortRequirement,
+    physical_exprs_contains, ConstExpr, EquivalenceProperties,
+};
+use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
 
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
 
-pub(crate) mod group_values;
+pub mod group_values;
 mod no_grouping;
 pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+
+/// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
+const AGGREGATION_HASH_SEED: ahash::RandomState =
+    ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
 
 /// Aggregation modes
 ///
@@ -260,7 +279,7 @@ impl PhysicalGroupBy {
     }
 
     /// Returns the number expression as grouping keys.
-    fn num_group_exprs(&self) -> usize {
+    pub fn num_group_exprs(&self) -> usize {
         if self.is_single() {
             self.expr.len()
         } else {
@@ -273,7 +292,7 @@ impl PhysicalGroupBy {
     }
 
     /// Returns the fields that are used as the grouping keys.
-    fn group_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
+    fn group_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = Vec::with_capacity(self.num_group_exprs());
         for ((expr, name), group_expr_nullable) in
             self.expr.iter().zip(self.exprs_nullable().into_iter())
@@ -284,15 +303,19 @@ impl PhysicalGroupBy {
                     expr.data_type(input_schema)?,
                     group_expr_nullable || expr.nullable(input_schema)?,
                 )
-                .with_metadata(expr.return_field(input_schema)?.metadata().clone()),
+                .with_metadata(expr.return_field(input_schema)?.metadata().clone())
+                .into(),
             );
         }
         if !self.is_single() {
-            fields.push(Field::new(
-                Aggregate::INTERNAL_GROUPING_ID,
-                Aggregate::grouping_id_type(self.expr.len()),
-                false,
-            ));
+            fields.push(
+                Field::new(
+                    Aggregate::INTERNAL_GROUPING_ID,
+                    Aggregate::grouping_id_type(self.expr.len()),
+                    false,
+                )
+                .into(),
+            );
         }
         Ok(fields)
     }
@@ -301,7 +324,7 @@ impl PhysicalGroupBy {
     ///
     /// This might be different from the `group_fields` that might contain internal expressions that
     /// should not be part of the output schema.
-    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
+    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = self.group_fields(input_schema)?;
         fields.truncate(self.num_output_exprs());
         Ok(fields)
@@ -320,10 +343,17 @@ impl PhysicalGroupBy {
                 )
                 .collect();
         let num_exprs = expr.len();
+        let groups = if self.expr.is_empty() {
+            // No GROUP BY expressions - should have no groups
+            vec![]
+        } else {
+            // Has GROUP BY expressions - create a single group
+            vec![vec![false; num_exprs]]
+        };
         Self {
             expr,
             null_expr: vec![],
-            groups: vec![vec![false; num_exprs]],
+            groups,
         }
     }
 }
@@ -388,7 +418,7 @@ pub struct AggregateExec {
     pub input_schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    required_input_ordering: Option<LexRequirement>,
+    required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
     cache: PlanProperties,
@@ -465,9 +495,13 @@ impl AggregateExec {
         schema: SchemaRef,
     ) -> Result<Self> {
         // Make sure arguments are consistent in size
-        if aggr_expr.len() != filter_expr.len() {
-            return internal_err!("Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match", aggr_expr, filter_expr);
-        }
+        assert_eq_or_internal_err!(
+            aggr_expr.len(),
+            filter_expr.len(),
+            "Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match",
+            aggr_expr,
+            filter_expr
+        );
 
         let input_eq_properties = input.equivalence_properties();
         // Get GROUP BY expressions:
@@ -475,16 +509,13 @@ impl AggregateExec {
         // If existing ordering satisfies a prefix of the GROUP BY expressions,
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
-        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
-        let mut new_requirement = LexRequirement::new(
-            indices
-                .iter()
-                .map(|&idx| PhysicalSortRequirement {
-                    expr: Arc::clone(&groupby_exprs[idx]),
-                    options: None,
-                })
-                .collect::<Vec<_>>(),
-        );
+        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input)?;
+        let mut new_requirements = indices
+            .iter()
+            .map(|&idx| {
+                PhysicalSortRequirement::new(Arc::clone(&groupby_exprs[idx]), None)
+            })
+            .collect::<Vec<_>>();
 
         let req = get_finer_aggregate_exprs_requirement(
             &mut aggr_expr,
@@ -492,8 +523,10 @@ impl AggregateExec {
             input_eq_properties,
             &mode,
         )?;
-        new_requirement.inner.extend(req);
-        new_requirement = new_requirement.collapse();
+        new_requirements.extend(req);
+
+        let required_input_ordering =
+            LexRequirement::new(new_requirements).map(OrderingRequirements::new_soft);
 
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
@@ -518,10 +551,7 @@ impl AggregateExec {
 
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
-            ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
-
-        let required_input_ordering =
-            (!new_requirement.is_empty()).then_some(new_requirement);
+            ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
 
         let cache = Self::compute_properties(
             &input,
@@ -530,7 +560,7 @@ impl AggregateExec {
             &mode,
             &input_order_mode,
             aggr_expr.as_slice(),
-        );
+        )?;
 
         Ok(AggregateExec {
             mode,
@@ -621,7 +651,7 @@ impl AggregateExec {
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
-    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+    pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
         let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
         agg_expr.get_minmax_desc()
     }
@@ -645,7 +675,7 @@ impl AggregateExec {
             return false;
         }
         // ensure there are no order by expressions
-        if self.aggr_expr().iter().any(|e| e.order_bys().is_some()) {
+        if !self.aggr_expr().iter().all(|e| e.order_bys().is_empty()) {
             return false;
         }
         // ensure there is no output ordering; can this rule be relaxed?
@@ -653,8 +683,8 @@ impl AggregateExec {
             return false;
         }
         // ensure no ordering is required on the input
-        if self.required_input_ordering()[0].is_some() {
-            return false;
+        if let Some(requirement) = self.required_input_ordering().swap_remove(0) {
+            return matches!(requirement, OrderingRequirements::Hard(_));
         }
         true
     }
@@ -667,7 +697,7 @@ impl AggregateExec {
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
         aggr_exprs: &[Arc<AggregateFunctionExpr>],
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Construct equivalence properties:
         let mut eq_properties = input
             .equivalence_properties()
@@ -675,13 +705,12 @@ impl AggregateExec {
 
         // If the group by is empty, then we ensure that the operator will produce
         // only one row, and mark the generated result as a constant value.
-        if group_expr_mapping.map.is_empty() {
-            let mut constants = eq_properties.constants().to_vec();
+        if group_expr_mapping.is_empty() {
             let new_constants = aggr_exprs.iter().enumerate().map(|(idx, func)| {
-                ConstExpr::new(Arc::new(Column::new(func.name(), idx)))
+                let column = Arc::new(Column::new(func.name(), idx));
+                ConstExpr::from(column as Arc<dyn PhysicalExpr>)
             });
-            constants.extend(new_constants);
-            eq_properties = eq_properties.with_constants(constants);
+            eq_properties.add_constants(new_constants)?;
         }
 
         // Group by expression will be a distinct value after the aggregation.
@@ -689,13 +718,11 @@ impl AggregateExec {
         let mut constraints = eq_properties.constraints().to_vec();
         let new_constraint = Constraint::Unique(
             group_expr_mapping
-                .map
                 .iter()
-                .filter_map(|(_, target_col)| {
-                    target_col
-                        .as_any()
-                        .downcast_ref::<Column>()
-                        .map(|c| c.index())
+                .flat_map(|(_, target_cols)| {
+                    target_cols.iter().flat_map(|(expr, _)| {
+                        expr.as_any().downcast_ref::<Column>().map(|c| c.index())
+                    })
                 })
                 .collect(),
         );
@@ -722,25 +749,45 @@ impl AggregateExec {
             input.pipeline_behavior()
         };
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             emission_type,
             input.boundedness(),
-        )
+        ))
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
         &self.input_order_mode
     }
 
-    fn statistics_inner(&self) -> Result<Statistics> {
+    fn statistics_inner(&self, child_statistics: Statistics) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
         // - aggregations sometimes also preserve invariants such as min, max...
-        let column_statistics = Statistics::unknown_column(&self.schema());
+
+        let column_statistics = {
+            // self.schema: [<group by exprs>, <aggregate exprs>]
+            let mut column_statistics = Statistics::unknown_column(&self.schema());
+
+            for (idx, (expr, _)) in self.group_by.expr.iter().enumerate() {
+                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                    column_statistics[idx].max_value = child_statistics.column_statistics
+                        [col.index()]
+                    .max_value
+                    .clone();
+
+                    column_statistics[idx].min_value = child_statistics.column_statistics
+                        [col.index()]
+                    .min_value
+                    .clone();
+                }
+            }
+
+            column_statistics
+        };
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
                 if self.group_by.expr.is_empty() =>
@@ -752,28 +799,18 @@ impl AggregateExec {
                 })
             }
             _ => {
-                // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
+                // When the input row count is 1, we can adopt that statistic keeping its reliability.
                 // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
-                let num_rows = if let Some(value) = self
-                    .input()
-                    .partition_statistics(None)?
-                    .num_rows
-                    .get_value()
+                let num_rows = if let Some(value) = child_statistics.num_rows.get_value()
                 {
                     if *value > 1 {
-                        self.input()
-                            .partition_statistics(None)?
-                            .num_rows
-                            .to_inexact()
+                        child_statistics.num_rows.to_inexact()
                     } else if *value == 0 {
-                        // Aggregation on an empty table creates a null row.
-                        self.input()
-                            .partition_statistics(None)?
-                            .num_rows
-                            .add(&Precision::Exact(1))
+                        child_statistics.num_rows
                     } else {
                         // num_rows = 1 case
-                        self.input().partition_statistics(None)?.num_rows
+                        let grouping_set_num = self.group_by.groups.len();
+                        child_statistics.num_rows.map(|x| x * grouping_set_num)
                     }
                 } else {
                     Precision::Absent
@@ -939,7 +976,7 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![self.required_input_ordering.clone()]
     }
 
@@ -992,20 +1029,97 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
+        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            // If the partition is not specified, we can use the statistics of the input plan
-            self.statistics_inner()
-        } else {
-            Ok(Statistics::new_unknown(&self.schema()))
-        }
+        self.statistics_inner(self.input().partition_statistics(partition)?)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    /// Push down parent filters when possible (see implementation comment for details),
+    /// but do not introduce any new self filters.
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // It's safe to push down filters through aggregates when filters only reference
+        // grouping columns, because such filters determine which groups to compute, not
+        // *how* to compute them. Each group's aggregate values (SUM, COUNT, etc.) are
+        // calculated from the same input rows regardless of whether we filter before or
+        // after grouping - filtering before just eliminates entire groups early.
+        // This optimization is NOT safe for filters on aggregated columns (like filtering on
+        // the result of SUM or COUNT), as those require computing all groups first.
+
+        let grouping_columns: HashSet<_> = self
+            .group_by
+            .expr()
+            .iter()
+            .flat_map(|(expr, _)| collect_columns(expr))
+            .collect();
+
+        // Analyze each filter separately to determine if it can be pushed down
+        let mut safe_filters = Vec::new();
+        let mut unsafe_filters = Vec::new();
+
+        for filter in parent_filters {
+            let filter_columns: HashSet<_> =
+                collect_columns(&filter).into_iter().collect();
+
+            // Check if this filter references non-grouping columns
+            let references_non_grouping = !grouping_columns.is_empty()
+                && !filter_columns.is_subset(&grouping_columns);
+
+            if references_non_grouping {
+                unsafe_filters.push(filter);
+                continue;
+            }
+
+            // For GROUPING SETS, verify this filter's columns appear in all grouping sets
+            if self.group_by.groups().len() > 1 {
+                let filter_column_indices: Vec<usize> = filter_columns
+                    .iter()
+                    .filter_map(|filter_col| {
+                        self.group_by.expr().iter().position(|(expr, _)| {
+                            collect_columns(expr).contains(filter_col)
+                        })
+                    })
+                    .collect();
+
+                // Check if any of this filter's columns are missing from any grouping set
+                let has_missing_column = self.group_by.groups().iter().any(|null_mask| {
+                    filter_column_indices
+                        .iter()
+                        .any(|&idx| null_mask.get(idx) == Some(&true))
+                });
+
+                if has_missing_column {
+                    unsafe_filters.push(filter);
+                    continue;
+                }
+            }
+
+            // This filter is safe to push down
+            safe_filters.push(filter);
+        }
+
+        // Build child filter description with both safe and unsafe filters
+        let child = self.children()[0];
+        let mut child_desc = ChildFilterDescription::from_child(&safe_filters, child)?;
+
+        // Add unsafe filters as unsupported
+        child_desc.parent_filters.extend(
+            unsafe_filters
+                .into_iter()
+                .map(PushedDownPredicate::unsupported),
+        );
+
+        Ok(FilterDescription::new().with_child(child_desc))
     }
 }
 
@@ -1052,6 +1166,11 @@ fn create_schema(
 ///   physical GROUP BY expression.
 /// - `agg_mode`: A reference to an `AggregateMode` instance representing the
 ///   mode of aggregation.
+/// - `include_soft_requirement`: When `false`, only hard requirements are
+///   considered, as indicated by [`AggregateFunctionExpr::order_sensitivity`]
+///   returning [`AggregateOrderSensitivity::HardRequirement`].
+///   Otherwise, also soft requirements ([`AggregateOrderSensitivity::SoftRequirement`])
+///   are considered.
 ///
 /// # Returns
 ///
@@ -1061,16 +1180,27 @@ fn get_aggregate_expr_req(
     aggr_expr: &AggregateFunctionExpr,
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
-) -> LexOrdering {
-    // If the aggregation function is ordering requirement is not absolutely
-    // necessary, or the aggregation is performing a "second stage" calculation,
-    // then ignore the ordering requirement.
-    if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
-        return LexOrdering::default();
+    include_soft_requirement: bool,
+) -> Option<LexOrdering> {
+    // If the aggregation is performing a "second stage" calculation,
+    // then ignore the ordering requirement. Ordering requirement applies
+    // only to the aggregation input data.
+    if !agg_mode.is_first_stage() {
+        return None;
     }
 
-    let mut req = aggr_expr.order_bys().cloned().unwrap_or_default();
+    match aggr_expr.order_sensitivity() {
+        AggregateOrderSensitivity::Insensitive => return None,
+        AggregateOrderSensitivity::HardRequirement => {}
+        AggregateOrderSensitivity::SoftRequirement => {
+            if !include_soft_requirement {
+                return None;
+            }
+        }
+        AggregateOrderSensitivity::Beneficial => return None,
+    }
 
+    let mut sort_exprs = aggr_expr.order_bys().to_vec();
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
     // consider the ordering of each partial result. Hence, we do not need to
@@ -1081,38 +1211,11 @@ fn get_aggregate_expr_req(
         // will definitely be satisfied -- Each group by expression will have
         // distinct values per group, hence all requirements are satisfied.
         let physical_exprs = group_by.input_exprs();
-        req.retain(|sort_expr| {
+        sort_exprs.retain(|sort_expr| {
             !physical_exprs_contains(&physical_exprs, &sort_expr.expr)
         });
     }
-    req
-}
-
-/// Computes the finer ordering for between given existing ordering requirement
-/// of aggregate expression.
-///
-/// # Parameters
-///
-/// * `existing_req` - The existing lexical ordering that needs refinement.
-/// * `aggr_expr` - A reference to an aggregate expression trait object.
-/// * `group_by` - Information about the physical grouping (e.g group by expression).
-/// * `eq_properties` - Equivalence properties relevant to the computation.
-/// * `agg_mode` - The mode of aggregation (e.g., Partial, Final, etc.).
-///
-/// # Returns
-///
-/// An `Option<LexOrdering>` representing the computed finer lexical ordering,
-/// or `None` if there is no finer ordering; e.g. the existing requirement and
-/// the aggregator requirement is incompatible.
-fn finer_ordering(
-    existing_req: &LexOrdering,
-    aggr_expr: &AggregateFunctionExpr,
-    group_by: &PhysicalGroupBy,
-    eq_properties: &EquivalenceProperties,
-    agg_mode: &AggregateMode,
-) -> Option<LexOrdering> {
-    let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-    eq_properties.get_finer_ordering(existing_req, aggr_req.as_ref())
+    LexOrdering::new(sort_exprs)
 }
 
 /// Concatenates the given slices.
@@ -1120,7 +1223,23 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
     [lhs, rhs].concat()
 }
 
-/// Get the common requirement that satisfies all the aggregate expressions.
+// Determines if the candidate ordering is finer than the current ordering.
+// Returns `None` if they are incomparable, `Some(true)` if there is no current
+// ordering or candidate ordering is finer, and `Some(false)` otherwise.
+fn determine_finer(
+    current: &Option<LexOrdering>,
+    candidate: &LexOrdering,
+) -> Option<bool> {
+    if let Some(ordering) = current {
+        candidate.partial_cmp(ordering).map(|cmp| cmp.is_gt())
+    } else {
+        Some(true)
+    }
+}
+
+/// Gets the common requirement that satisfies all the aggregate expressions.
+/// When possible, chooses the requirement that is already satisfied by the
+/// equivalence properties.
 ///
 /// # Parameters
 ///
@@ -1135,75 +1254,91 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 ///
 /// # Returns
 ///
-/// A `LexRequirement` instance, which is the requirement that satisfies all the
-/// aggregate requirements. Returns an error in case of conflicting requirements.
+/// A `Result<Vec<PhysicalSortRequirement>>` instance, which is the requirement
+/// that satisfies all the aggregate requirements. Returns an error in case of
+/// conflicting requirements.
 pub fn get_finer_aggregate_exprs_requirement(
     aggr_exprs: &mut [Arc<AggregateFunctionExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
-) -> Result<LexRequirement> {
-    let mut requirement = LexOrdering::default();
-    for aggr_expr in aggr_exprs.iter_mut() {
-        if let Some(finer_ordering) =
-            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
-        {
-            if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
-                // Requirement is satisfied by existing ordering
-                requirement = finer_ordering;
-                continue;
-            }
-        }
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if let Some(finer_ordering) = finer_ordering(
-                &requirement,
-                &reverse_aggr_expr,
+) -> Result<Vec<PhysicalSortRequirement>> {
+    let mut requirement = None;
+
+    // First try and find a match for all hard and soft requirements.
+    // If a match can't be found, try a second time just matching hard
+    // requirements.
+    for include_soft_requirement in [false, true] {
+        for aggr_expr in aggr_exprs.iter_mut() {
+            let Some(aggr_req) = get_aggregate_expr_req(
+                aggr_expr,
                 group_by,
-                eq_properties,
                 agg_mode,
-            ) {
-                if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
-                    // Reverse requirement is satisfied by exiting ordering.
-                    // Hence reverse the aggregator
-                    requirement = finer_ordering;
-                    *aggr_expr = Arc::new(reverse_aggr_expr);
+                include_soft_requirement,
+            )
+            .and_then(|o| eq_properties.normalize_sort_exprs(o)) else {
+                // There is no aggregate ordering requirement, or it is trivially
+                // satisfied -- we can skip this expression.
+                continue;
+            };
+            // If the common requirement is finer than the current expression's,
+            // we can skip this expression. If the latter is finer than the former,
+            // adopt it if it is satisfied by the equivalence properties. Otherwise,
+            // defer the analysis to the reverse expression.
+            let forward_finer = determine_finer(&requirement, &aggr_req);
+            if let Some(finer) = forward_finer {
+                if !finer {
+                    continue;
+                } else if eq_properties.ordering_satisfy(aggr_req.clone())? {
+                    requirement = Some(aggr_req);
                     continue;
                 }
             }
-        }
-        if let Some(finer_ordering) =
-            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
-        {
-            // There is a requirement that both satisfies existing requirement and current
-            // aggregate requirement. Use updated requirement
-            requirement = finer_ordering;
-            continue;
-        }
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if let Some(finer_ordering) = finer_ordering(
-                &requirement,
-                &reverse_aggr_expr,
-                group_by,
-                eq_properties,
-                agg_mode,
-            ) {
-                // There is a requirement that both satisfies existing requirement and reverse
-                // aggregate requirement. Use updated requirement
-                requirement = finer_ordering;
-                *aggr_expr = Arc::new(reverse_aggr_expr);
-                continue;
+            if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+                let Some(rev_aggr_req) = get_aggregate_expr_req(
+                    &reverse_aggr_expr,
+                    group_by,
+                    agg_mode,
+                    include_soft_requirement,
+                )
+                .and_then(|o| eq_properties.normalize_sort_exprs(o)) else {
+                    // The reverse requirement is trivially satisfied -- just reverse
+                    // the expression and continue with the next one:
+                    *aggr_expr = Arc::new(reverse_aggr_expr);
+                    continue;
+                };
+                // If the common requirement is finer than the reverse expression's,
+                // just reverse it and continue the loop with the next aggregate
+                // expression. If the latter is finer than the former, adopt it if
+                // it is satisfied by the equivalence properties. Otherwise, adopt
+                // the forward expression.
+                if let Some(finer) = determine_finer(&requirement, &rev_aggr_req) {
+                    if !finer {
+                        *aggr_expr = Arc::new(reverse_aggr_expr);
+                    } else if eq_properties.ordering_satisfy(rev_aggr_req.clone())? {
+                        *aggr_expr = Arc::new(reverse_aggr_expr);
+                        requirement = Some(rev_aggr_req);
+                    } else {
+                        requirement = Some(aggr_req);
+                    }
+                } else if forward_finer.is_some() {
+                    requirement = Some(aggr_req);
+                } else {
+                    // Neither the existing requirement nor the current aggregate
+                    // requirement satisfy the other (forward or reverse), this
+                    // means they are conflicting. This is a problem only for hard
+                    // requirements. Unsatisfied soft requirements can be ignored.
+                    if !include_soft_requirement {
+                        return not_impl_err!(
+                            "Conflicting ordering requirements in aggregate functions is not supported"
+                        );
+                    }
+                }
             }
         }
-
-        // Neither the existing requirement and current aggregate requirement satisfy the other, this means
-        // requirements are conflicting. Currently, we do not support
-        // conflicting requirements.
-        return not_impl_err!(
-            "Conflicting ordering requirements in aggregate functions is not supported"
-        );
     }
 
-    Ok(LexRequirement::from(requirement))
+    Ok(requirement.map_or_else(Vec::new, |o| o.into_iter().map(Into::into).collect()))
 }
 
 /// Returns physical expressions for arguments to evaluate against a batch.
@@ -1226,9 +1361,7 @@ pub fn aggregate_expressions(
                 // Append ordering requirements to expressions' results. This
                 // way order sensitive aggregators can satisfy requirement
                 // themselves.
-                if let Some(ordering_req) = agg.order_bys() {
-                    result.extend(ordering_req.iter().map(|item| Arc::clone(&item.expr)));
-                }
+                result.extend(agg.order_bys().iter().map(|item| Arc::clone(&item.expr)));
                 result
             })
             .collect()),
@@ -1309,25 +1442,14 @@ pub fn finalize_aggregation(
     }
 }
 
-/// Evaluates expressions against a record batch.
-fn evaluate(
-    expr: &[Arc<dyn PhysicalExpr>],
-    batch: &RecordBatch,
-) -> Result<Vec<ArrayRef>> {
-    expr.iter()
-        .map(|expr| {
-            expr.evaluate(batch)
-                .and_then(|v| v.into_array(batch.num_rows()))
-        })
-        .collect()
-}
-
-/// Evaluates expressions against a record batch.
-pub(crate) fn evaluate_many(
+/// Evaluates groups of expressions against a record batch.
+pub fn evaluate_many(
     expr: &[Vec<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    expr.iter().map(|expr| evaluate(expr, batch)).collect()
+    expr.iter()
+        .map(|expr| evaluate_expressions_to_arrays(expr, batch))
+        .collect()
 }
 
 fn evaluate_optional(
@@ -1377,27 +1499,18 @@ fn group_id_array(group: &[bool], batch: &RecordBatch) -> Result<ArrayRef> {
 /// The outer Vec appears to be for grouping sets
 /// The inner Vec contains the results per expression
 /// The inner-inner Array contains the results per row
-pub(crate) fn evaluate_group_by(
+pub fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    let exprs: Vec<ArrayRef> = group_by
-        .expr
-        .iter()
-        .map(|(expr, _)| {
-            let value = expr.evaluate(batch)?;
-            value.into_array(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let null_exprs: Vec<ArrayRef> = group_by
-        .null_expr
-        .iter()
-        .map(|(expr, _)| {
-            let value = expr.evaluate(batch)?;
-            value.into_array(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let exprs = evaluate_expressions_to_arrays(
+        group_by.expr.iter().map(|(expr, _)| expr),
+        batch,
+    )?;
+    let null_exprs = evaluate_expressions_to_arrays(
+        group_by.null_expr.iter().map(|(expr, _)| expr),
+        batch,
+    )?;
 
     group_by
         .groups
@@ -2235,14 +2348,14 @@ mod tests {
         schema: &Schema,
         sort_options: SortOptions,
     ) -> Result<Arc<AggregateFunctionExpr>> {
-        let ordering_req = [PhysicalSortExpr {
+        let order_bys = vec![PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
         }];
         let args = [col("b", schema)?];
 
         AggregateExprBuilder::new(first_value_udaf(), args.to_vec())
-            .order_by(LexOrdering::new(ordering_req.to_vec()))
+            .order_by(order_bys)
             .schema(Arc::new(schema.clone()))
             .alias(String::from("first_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
@@ -2254,13 +2367,13 @@ mod tests {
         schema: &Schema,
         sort_options: SortOptions,
     ) -> Result<Arc<AggregateFunctionExpr>> {
-        let ordering_req = [PhysicalSortExpr {
+        let order_bys = vec![PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
         }];
         let args = [col("b", schema)?];
         AggregateExprBuilder::new(last_value_udaf(), args.to_vec())
-            .order_by(LexOrdering::new(ordering_req.to_vec()))
+            .order_by(order_bys)
             .schema(Arc::new(schema.clone()))
             .alias(String::from("last_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
@@ -2382,9 +2495,7 @@ mod tests {
     async fn test_get_finest_requirements() -> Result<()> {
         let test_schema = create_test_schema()?;
 
-        // Assume column a and b are aliases
-        // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
-        let options1 = SortOptions {
+        let options = SortOptions {
             descending: false,
             nulls_first: false,
         };
@@ -2393,58 +2504,51 @@ mod tests {
         let col_c = &col("c", &test_schema)?;
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
         // Columns a and b are equal.
-        eq_properties.add_equal_conditions(col_a, col_b)?;
+        eq_properties.add_equal_conditions(Arc::clone(col_a), Arc::clone(col_b))?;
         // Aggregate requirements are
         // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
         let order_by_exprs = vec![
-            None,
-            Some(vec![PhysicalSortExpr {
+            vec![],
+            vec![PhysicalSortExpr {
                 expr: Arc::clone(col_a),
-                options: options1,
-            }]),
-            Some(vec![
+                options,
+            }],
+            vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_a),
-                    options: options1,
+                    options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
-                    options: options1,
+                    options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_c),
-                    options: options1,
+                    options,
                 },
-            ]),
-            Some(vec![
+            ],
+            vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_a),
-                    options: options1,
+                    options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
-                    options: options1,
+                    options,
                 },
-            ]),
+            ],
         ];
 
-        let common_requirement = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(col_a),
-                options: options1,
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(col_c),
-                options: options1,
-            },
-        ]);
+        let common_requirement = vec![
+            PhysicalSortRequirement::new(Arc::clone(col_a), Some(options)),
+            PhysicalSortRequirement::new(Arc::clone(col_c), Some(options)),
+        ];
         let mut aggr_exprs = order_by_exprs
             .into_iter()
             .map(|order_by_expr| {
-                let ordering_req = order_by_expr.unwrap_or_default();
                 AggregateExprBuilder::new(array_agg_udaf(), vec![Arc::clone(col_a)])
                     .alias("a")
-                    .order_by(LexOrdering::new(ordering_req.to_vec()))
+                    .order_by(order_by_expr)
                     .schema(Arc::clone(&test_schema))
                     .build()
                     .map(Arc::new)
@@ -2452,14 +2556,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let group_by = PhysicalGroupBy::new_single(vec![]);
-        let res = get_finer_aggregate_exprs_requirement(
+        let result = get_finer_aggregate_exprs_requirement(
             &mut aggr_exprs,
             &group_by,
             &eq_properties,
             &AggregateMode::Partial,
         )?;
-        let res = LexOrdering::from(res);
-        assert_eq!(res, common_requirement);
+        assert_eq!(result, common_requirement);
         Ok(())
     }
 

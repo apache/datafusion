@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::{generate_test_files, verify_sort_integrity};
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
 use std::time::Duration;
+
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::{generate_test_files, verify_sort_integrity};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
     let file_schema = Arc::new(Schema::new(vec![Field::new(
@@ -31,13 +33,8 @@ pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
         false,
     )]));
 
-    let sort_expr = PhysicalSortExpr {
-        expr: Arc::new(datafusion_physical_expr::expressions::Column::new(
-            "value", 0,
-        )),
-        options: arrow::compute::SortOptions::default(),
-    };
-    let sort_ordering = LexOrdering::from(vec![sort_expr]);
+    let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("value", 0)));
+    let sort_ordering = LexOrdering::from([sort_expr]);
 
     // Small, medium, large number of files
     let file_counts = [10, 100, 1000];

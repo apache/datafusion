@@ -1,0 +1,196 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ./init_data.slt.part
+
+query I
+SELECT regexp_instr('123123123123123', '(12)3');
+----
+1
+
+query I
+SELECT regexp_instr('123123123123', '123', 1);
+----
+1
+
+query I
+SELECT regexp_instr('123123123123', '123', 3);
+----
+4
+
+query I
+SELECT regexp_instr('123123123123', '123', 33);
+----
+0
+
+query I
+SELECT regexp_instr('ABCABCABCABC', 'Abc', 1, 2, '');
+----
+0
+
+query I
+SELECT regexp_instr('ABCABCABCABC', 'Abc', 1, 2, 'i');
+----
+4
+
+query I
+SELECT
+    regexp_instr(
+        'The quick brown fox jumps over the lazy dog.',
+        ' (quick) (brown) (fox)',
+        1,
+        1,
+        'i',
+        2   -- subexpression_number (2 for second group)
+    );
+----
+11
+
+statement error
+External error: query failed: DataFusion error: Arrow error: Compute error: regexp_instr() requires start to be 1 based
+SELECT regexp_instr('123123123123', '123', 0);
+
+statement error
+External error: query failed: DataFusion error: Arrow error: Compute error: regexp_instr() requires start to be 1 based
+SELECT regexp_instr('123123123123', '123', -3);
+
+query I
+SELECT regexp_instr(str, pattern) FROM regexp_test_data;
+----
+NULL
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+1
+
+query I
+SELECT regexp_instr(str, pattern, start) FROM regexp_test_data;
+----
+NULL
+1
+1
+0
+0
+0
+0
+0
+3
+4
+1
+2
+
+
+statement ok
+CREATE TABLE t_stringview AS
+SELECT
+  arrow_cast(str, 'Utf8View') AS str,
+  arrow_cast(pattern, 'Utf8View') AS pattern,
+  arrow_cast(start, 'Int64') AS start
+FROM regexp_test_data;
+
+query I
+SELECT regexp_instr(str, pattern, start) FROM t_stringview;
+----
+NULL
+1
+1
+0
+0
+0
+0
+0
+3
+4
+1
+2
+
+query I
+SELECT regexp_instr(
+  arrow_cast(str, 'Utf8'),
+  arrow_cast(pattern, 'LargeUtf8'),
+  arrow_cast(start, 'Int32')
+) FROM t_stringview;
+----
+NULL
+1
+1
+0
+0
+0
+0
+0
+3
+4
+1
+2
+
+query I
+SELECT regexp_instr(NULL, NULL);
+----
+NULL
+
+query I
+SELECT regexp_instr(NULL, 'a');
+----
+NULL
+
+query I
+SELECT regexp_instr('a', NULL);
+----
+NULL
+
+query I
+SELECT regexp_instr('😀abcdef', 'abc');
+----
+2
+
+
+statement ok
+CREATE TABLE empty_table (str varchar, pattern varchar, start int);
+
+query I
+SELECT regexp_instr(str, pattern, start) FROM empty_table;
+----
+
+statement ok
+INSERT INTO empty_table VALUES
+  ('a', NULL, 1),
+  (NULL, 'a', 1),
+  (NULL, NULL, 1),
+  (NULL, NULL, NULL);
+
+query I
+SELECT regexp_instr(str, pattern, start) FROM empty_table;
+----
+NULL
+NULL
+NULL
+NULL
+
+statement ok
+DROP TABLE t_stringview;
+
+statement ok
+DROP TABLE empty_table;

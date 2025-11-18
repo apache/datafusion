@@ -25,7 +25,6 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -111,11 +110,12 @@ impl TopKAggregation {
                 }
             } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
                 // track renames due to successive projections
-                for (src_expr, proj_name) in proj.expr() {
-                    let Some(src_col) = src_expr.as_any().downcast_ref::<Column>() else {
+                for proj_expr in proj.expr() {
+                    let Some(src_col) = proj_expr.expr.as_any().downcast_ref::<Column>()
+                    else {
                         continue;
                     };
-                    if *proj_name == cur_col_name {
+                    if proj_expr.alias == cur_col_name {
                         cur_col_name = src_col.name().to_string();
                     }
                 }
@@ -131,7 +131,7 @@ impl TopKAggregation {
             Ok(Transformed::no(plan))
         };
         let child = Arc::clone(child).transform_down(closure).data().ok()?;
-        let sort = SortExec::new(LexOrdering::new(sort.expr().to_vec()), child)
+        let sort = SortExec::new(sort.expr().clone(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
         Some(Arc::new(sort))

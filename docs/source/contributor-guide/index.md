@@ -37,14 +37,15 @@ You can find how to setup build and testing environment [here](https://datafusio
 ## Finding and Creating Issues to Work On
 
 You can find a curated [good-first-issue] list to help you get started.
+You can read about how we plan larger projects in the [Roadmap and Improvement Proposals](roadmap.md) section.
 
 [good-first-issue]: https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 
 ### Open Contribution and Assigning tickets
 
 DataFusion is an open contribution project, and thus there is no particular
-project imposed deadline for completing any issue or any restriction on who can
-work on an issue, nor how many people can work on an issue at the same time.
+project imposed deadline for completing issues or restrictions on who can
+work on an issue, nor limits to how many people can work on an issue at the same time.
 
 Contributors drive the project forward based on their own priorities and
 interests and thus you are free to work on any issue that interests you.
@@ -61,52 +62,6 @@ comment `take`. This will assign the issue to yourself. However, if you are
 unable to make progress you should unassign the issue by using the `unassign me`
 link at the top of the issue page (and ask for help if are stuck) so that
 someone else can get involved in the work.
-
-### Discussing New Features
-
-If you plan to work on a new feature that doesn't have an existing ticket, it is
-a good idea to open a ticket to discuss the feature. Advanced discussion often
-helps avoid wasted effort by determining early if the feature is a good fit for
-DataFusion before too much time is invested. Discussion on a ticket can help
-gather feedback from the community and is likely easier to discuss than a 1000
-line PR.
-
-If you open a ticket and it doesn't get any response, you can try `@`-mentioning
-recently active community members in the ticket to get their attention.
-
-### What Contributions are Good Fits?
-
-DataFusion is designed to be highly extensible, and many features can be
-implemented as extensions without changes or additions to the core. Support for
-new functions, data formats, and similar functionality can be added using those
-extension APIs, and there are already many existing community supported
-extensions listed in the [extensions list].
-
-Query engines are complex pieces of software to develop and maintain. Given our
-limited maintenance bandwidth, we try to keep the DataFusion core as simple and
-focused as possible, while still satisfying the [design goal] of an easy to
-start initial experience.
-
-With that in mind, contributions that meet the following criteria are more likely
-to be accepted:
-
-1. Bug fixes for existing features
-2. Test coverage for existing features
-3. Documentation improvements / examples
-4. Performance improvements to existing features (with benchmarks)
-5. "Small" functional improvements to existing features (if they don't change existing behavior)
-6. Additional APIs for extending DataFusion's capabilities
-7. CI improvements
-
-Contributions that will likely involve more discussion (see Discussing New
-Features above) prior to acceptance include:
-
-1. Major new functionality (even if it is part of the "standard SQL")
-2. New functions, especially if they aren't part of "standard SQL"
-3. New data sources (e.g. support for Apache ORC)
-
-[extensions list]: ../library-user-guide/extensions.md
-[design goal]: https://docs.rs/datafusion/latest/datafusion/index.html#design-goals
 
 # Developer's guide
 
@@ -158,7 +113,7 @@ do take priority over the conventional commit approach, allowing maintainers to 
 
 [conventional commits]: https://www.conventionalcommits.org/en/v1.0.0/
 
-# Reviewing Pull Requests
+## Reviewing Pull Requests
 
 Some helpful links:
 
@@ -220,3 +175,27 @@ The good thing about open code and open development is that any issues in one ch
 
 Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
+
+## AI-Assisted contributions
+
+DataFusion has the following policy for AI-assisted PRs:
+
+- The PR author should **understand the core ideas** behind the implementation **end-to-end**, and be able to justify the design and code during review.
+- **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. You should comment on these cases and point them out to reviewers so that they can use their knowledge of the codebase to clear up any concerns. For example, you might comment "calling this function here seems to work but I'm not familiar with how it works internally, I wonder if there's a race condition if it is called concurrently".
+
+### Why fully AI-generated PRs without understanding are not helpful
+
+Today, AI tools cannot reliably make complex changes to DataFusion on their own, which is why we rely on pull requests and code review.
+
+The purposes of code review are:
+
+1. Finish the intended task.
+2. Share knowledge between authors and reviewers, as a long-term investment in the project. For this reason, even if someone familiar with the codebase can finish a task quickly, we're still happy to help a new contributor work on it even if it takes longer.
+
+An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.
+
+Please understand the reviewing capacity is **very limited** for the project, so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.
+
+### Better ways to contribute than an “AI dump”
+
+It's recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.

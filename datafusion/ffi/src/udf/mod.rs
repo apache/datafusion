@@ -31,6 +31,8 @@ use arrow::{
     error::ArrowError,
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
+use arrow_schema::FieldRef;
+use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::ReturnFieldArgs;
 use datafusion::{
     error::DataFusionError,
@@ -45,6 +47,7 @@ use datafusion::{
 use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
+use std::hash::{Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
 pub mod return_type_args;
@@ -92,7 +95,7 @@ pub struct FFI_ScalarUDF {
     /// See [`ScalarUDFImpl`] for details on short_circuits
     pub short_circuits: bool,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`ScalarUDF`]
@@ -149,7 +152,7 @@ unsafe extern "C" fn return_field_from_args_fn_wrapper(
 
     let return_type = udf
         .return_field_from_args((&args_ref).into())
-        .and_then(|f| FFI_ArrowSchema::try_from(f).map_err(DataFusionError::from))
+        .and_then(|f| FFI_ArrowSchema::try_from(&f).map_err(DataFusionError::from))
         .map(WrappedSchema);
 
     rresult!(return_type)
@@ -188,20 +191,25 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         .collect::<std::result::Result<_, _>>();
 
     let args = rresult_return!(args);
-    let return_field = rresult_return!(Field::try_from(&return_field.0));
+    let return_field = rresult_return!(Field::try_from(&return_field.0)).into();
 
-    let arg_fields_owned = arg_fields
+    let arg_fields = arg_fields
         .into_iter()
-        .map(|wrapped_field| (&wrapped_field.0).try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<Field>>>();
-    let arg_fields_owned = rresult_return!(arg_fields_owned);
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+        .map(|wrapped_field| {
+            Field::try_from(&wrapped_field.0)
+                .map(Arc::new)
+                .map_err(DataFusionError::from)
+        })
+        .collect::<Result<Vec<FieldRef>>>();
+    let arg_fields = rresult_return!(arg_fields);
 
     let args = ScalarFunctionArgs {
         args,
         arg_fields,
         number_rows,
-        return_field: &return_field,
+        return_field,
+        // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = rresult_return!(udf
@@ -282,6 +290,37 @@ pub struct ForeignScalarUDF {
 unsafe impl Send for ForeignScalarUDF {}
 unsafe impl Sync for ForeignScalarUDF {}
 
+impl PartialEq for ForeignScalarUDF {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        name == &other.name
+            && aliases == &other.aliases
+            && std::ptr::eq(udf, &other.udf)
+            && signature == &other.signature
+    }
+}
+impl Eq for ForeignScalarUDF {}
+
+impl Hash for ForeignScalarUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        name.hash(state);
+        aliases.hash(state);
+        std::ptr::hash(udf, state);
+        signature.hash(state);
+    }
+}
+
 impl TryFrom<&FFI_ScalarUDF> for ForeignScalarUDF {
     type Error = DataFusionError;
 
@@ -323,14 +362,18 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let args: FFI_ReturnFieldArgs = args.try_into()?;
 
         let result = unsafe { (self.udf.return_field_from_args)(&self.udf, args) };
 
         let result = df_result!(result);
 
-        result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
+        result.and_then(|r| {
+            Field::try_from(&r.0)
+                .map(Arc::new)
+                .map_err(DataFusionError::from)
+        })
     }
 
     fn invoke_with_args(&self, invoke_args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -339,6 +382,8 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
+            // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
+            config_options: _config_options,
         } = invoke_args;
 
         let args = args
@@ -357,7 +402,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
         let arg_fields_wrapped = arg_fields
             .iter()
-            .map(|field| FFI_ArrowSchema::try_from(*field))
+            .map(FFI_ArrowSchema::try_from)
             .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
 
         let arg_fields = arg_fields_wrapped
@@ -365,6 +410,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             .map(WrappedSchema)
             .collect::<RVec<_>>();
 
+        let return_field = return_field.as_ref().clone();
         let return_field = WrappedSchema(FFI_ArrowSchema::try_from(return_field)?);
 
         let result = unsafe {

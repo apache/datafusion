@@ -18,7 +18,6 @@
 //! IS NOT NULL expression
 
 use crate::PhysicalExpr;
-use arrow::datatypes::Field;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -92,10 +91,6 @@ impl PhysicalExpr for IsNotNullExpr {
                 ScalarValue::Boolean(Some(!scalar.is_null())),
             )),
         }
-    }
-
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
-        self.arg.return_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

@@ -229,15 +229,6 @@ impl Operator {
         )
     }
 
-    /// Return true if the comparison operator can be used in interval arithmetic and constraint
-    /// propagation
-    ///
-    /// For example, 'Binary(a, >, b)' expression supports propagation.
-    #[deprecated(since = "43.0.0", note = "please use `supports_propagation` instead")]
-    pub fn is_comparison_operator(&self) -> bool {
-        self.supports_propagation()
-    }
-
     /// Return true if the operator is a logic operator.
     ///
     /// For example, 'Binary(Binary(a, >, b), AND, Binary(a, <, b + 3))' would
@@ -335,6 +326,60 @@ impl Operator {
             | Operator::QuestionPipe => 30,
             Operator::Plus | Operator::Minus => 40,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 45,
+        }
+    }
+
+    /// Returns true if the `Expr::BinaryOperator` with this operator
+    /// is guaranteed to return null if either side is null.
+    pub fn returns_null_on_null(&self) -> bool {
+        match self {
+            Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq
+            | Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+            | Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseXor
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseShiftLeft
+            | Operator::AtArrow
+            | Operator::ArrowAt
+            | Operator::Arrow
+            | Operator::LongArrow
+            | Operator::HashArrow
+            | Operator::HashLongArrow
+            | Operator::AtAt
+            | Operator::IntegerDivide
+            | Operator::HashMinus
+            | Operator::AtQuestion
+            | Operator::Question
+            | Operator::QuestionAnd
+            | Operator::QuestionPipe => true,
+
+            // E.g. `TRUE OR NULL` is `TRUE`
+            Operator::Or
+            // E.g. `FALSE AND NULL` is `FALSE`
+            | Operator::And
+            // IS DISTINCT FROM and IS NOT DISTINCT FROM always return a TRUE/FALSE value, never NULL
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            // DataFusion string concatenation operator treats NULL as an empty string
+            | Operator::StringConcat => false,
         }
     }
 }

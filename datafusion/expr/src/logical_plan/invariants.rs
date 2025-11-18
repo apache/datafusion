@@ -16,9 +16,9 @@
 // under the License.
 
 use datafusion_common::{
-    internal_err, plan_err,
+    assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    DFSchemaRef, Result,
+    DFSchemaRef, DataFusionError, Result,
 };
 
 use crate::{
@@ -74,7 +74,7 @@ pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
 fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Result<()> {
     plan.apply_with_subqueries(|plan: &LogicalPlan| {
         if let LogicalPlan::Extension(Extension { node }) = plan {
-            node.check_invariants(check, plan)?;
+            node.check_invariants(check)?;
         }
         plan.apply_expressions(|expr| {
             // recursively look for subqueries
@@ -102,7 +102,7 @@ fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
     plan.schema().check_names()
 }
 
-/// Returns an error if the plan is not sematically valid.
+/// Returns an error if the plan is not semantically valid.
 fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
     assert_subqueries_are_valid(plan)?;
 
@@ -114,15 +114,13 @@ fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
 pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Result<()> {
     let compatible = plan.schema().logically_equivalent_names_and_types(schema);
 
-    if !compatible {
-        internal_err!(
-            "Failed due to a difference in schemas: original schema: {:?}, new schema: {:?}",
-            schema,
-            plan.schema()
-        )
-    } else {
-        Ok(())
-    }
+    assert_or_internal_err!(
+        compatible,
+        "Failed due to a difference in schemas: original schema: {:?}, new schema: {:?}",
+        schema,
+        plan.schema()
+    );
+    Ok(())
 }
 
 /// Asserts that the subqueries are structured properly with valid node placement.
@@ -315,7 +313,10 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
                 check_inner_plan(left)?;
                 check_no_outer_references(right)
             }
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
                 check_no_outer_references(left)?;
                 check_inner_plan(right)
             }

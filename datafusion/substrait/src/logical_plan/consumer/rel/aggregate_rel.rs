@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
+use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use datafusion::common::{not_impl_err, DFSchemaRef};
 use datafusion::logical_expr::{Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder};
 use substrait::proto::aggregate_function::AggregationInvocation;
@@ -40,6 +40,7 @@ pub async fn from_aggregate_rel(
         let mut aggr_exprs = vec![];
 
         match agg.groupings.len() {
+            0 => {}
             1 => {
                 group_exprs.extend_from_slice(
                     &from_substrait_grouping(
@@ -88,14 +89,8 @@ pub async fn from_aggregate_rel(
                         _ if f.invocation == AggregationInvocation::All as i32 => false,
                         _ => false,
                     };
-                    let order_by = if !f.sorts.is_empty() {
-                        Some(
-                            from_substrait_sorts(consumer, &f.sorts, input.schema())
-                                .await?,
-                        )
-                    } else {
-                        None
-                    };
+                    let order_by =
+                        from_substrait_sorts(consumer, &f.sorts, input.schema()).await?;
 
                     from_substrait_agg_func(
                         consumer,
@@ -113,6 +108,14 @@ pub async fn from_aggregate_rel(
             };
             aggr_exprs.push(agg_func?.as_ref().clone());
         }
+
+        // Ensure that all expressions have a unique name
+        let mut name_tracker = NameTracker::new();
+        let group_exprs = group_exprs
+            .iter()
+            .map(|e| name_tracker.get_uniquely_named_expr(e.clone()))
+            .collect::<Result<Vec<Expr>, _>>()?;
+
         input.aggregate(group_exprs, aggr_exprs)?.build()
     } else {
         not_impl_err!("Aggregate without an input is not valid")

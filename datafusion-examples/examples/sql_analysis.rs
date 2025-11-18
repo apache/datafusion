@@ -274,7 +274,10 @@ from
     for table in tables {
         ctx.register_table(
             table.name,
-            Arc::new(MemTable::try_new(Arc::new(table.schema.clone()), vec![])?),
+            Arc::new(MemTable::try_new(
+                Arc::new(table.schema.clone()),
+                vec![vec![]],
+            )?),
         )?;
     }
     // We can create a LogicalPlan from a SQL query like this

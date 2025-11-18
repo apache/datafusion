@@ -1,0 +1,132 @@
+{
+    "extensionUris": [
+      {
+        "extensionUriAnchor": 1,
+        "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_boolean.yaml"
+      }
+    ],
+    "extensions": [
+      {
+        "extensionFunction": {
+          "extensionUriReference": 1,
+          "functionAnchor": 1,
+          "name": "xor:bool_bool"
+        }
+      }
+    ],
+    "relations": [
+      {
+        "root": {
+          "input": {
+            "project": {
+              "common": {
+                "direct": {}
+              },
+              "expressions": [
+                {
+                  "scalarFunction": {
+                    "arguments": [{
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 0
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }
+                    }, {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }
+                    }],
+                    "functionReference": 1,
+                    "outputType": {
+                      "bool": {
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    }
+                  }
+                }
+              ],
+              "input": {
+                "read": {
+                  "baseSchema": {
+                    "names": [
+                      "a", "b"
+                    ],
+                    "struct": {
+                      "types": [
+                        {
+                          "bool": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        {
+                          "bool": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        }
+                      ],
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "common": {
+                    "direct": {}
+                  },
+                  "virtualTable": {
+                    "values": [{
+                      "fields": [{
+                        "boolean": true,
+                        "nullable": false
+                      }, {
+                        "boolean": true,
+                        "nullable": false
+                      }]
+                    }, {
+                      "fields": [{
+                        "boolean": true,
+                        "nullable": false
+                      }, {
+                        "boolean": false,
+                        "nullable": false
+                      }]
+                    }, {
+                      "fields": [{
+                        "boolean": false,
+                        "nullable": false
+                      }, {
+                        "boolean": true,
+                        "nullable": false
+                      }]
+                    }, {
+                      "fields": [{
+                        "boolean": false,
+                        "nullable": false
+                      }, {
+                        "boolean": false,
+                        "nullable": false
+                      }]
+                    }]
+                  }
+                }
+              }
+            }
+          },
+          "names": [
+            "a", "b", "result"
+          ]
+        }
+      }
+    ]
+  }

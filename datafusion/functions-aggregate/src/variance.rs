@@ -18,15 +18,13 @@
 //! [`VarianceSample`]: variance sample aggregations.
 //! [`VariancePopulation`]: variance population aggregations.
 
+use arrow::datatypes::FieldRef;
 use arrow::{
     array::{Array, ArrayRef, BooleanArray, Float64Array, UInt64Array},
     buffer::NullBuffer,
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
-use std::mem::{size_of, size_of_val};
-use std::{fmt::Debug, sync::Arc};
-
 use datafusion_common::{downcast_value, not_impl_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -38,6 +36,8 @@ use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
 };
 use datafusion_macros::user_doc;
+use std::mem::{size_of, size_of_val};
+use std::{fmt::Debug, sync::Arc};
 
 make_udaf_expr_and_func!(
     VarianceSample,
@@ -61,6 +61,7 @@ make_udaf_expr_and_func!(
     syntax_example = "var(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct VarianceSample {
     signature: Signature,
     aliases: Vec<String>,
@@ -107,13 +108,16 @@ impl AggregateUDFImpl for VarianceSample {
         Ok(DataType::Float64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
             Field::new(format_state_name(name, "mean"), DataType::Float64, true),
             Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -150,6 +154,7 @@ impl AggregateUDFImpl for VarianceSample {
     syntax_example = "var_pop(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct VariancePopulation {
     signature: Signature,
     aliases: Vec<String>,
@@ -200,13 +205,16 @@ impl AggregateUDFImpl for VariancePopulation {
         Ok(DataType::Float64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
             Field::new(format_state_name(name, "mean"), DataType::Float64, true),
             Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

@@ -21,6 +21,8 @@ use std::task::Poll;
 
 use arrow::record_batch::RecordBatch;
 
+use crate::spill::get_record_batch_memory_size;
+
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
 use datafusion_common::Result;
 
@@ -45,7 +47,7 @@ use datafusion_common::Result;
 /// ```
 #[derive(Debug, Clone)]
 pub struct BaselineMetrics {
-    /// end_time is set when `ExecutionMetrics::done()` is called
+    /// end_time is set when `BaselineMetrics::done()` is called
     end_time: Timestamp,
 
     /// amount of time the operator was actively trying to use the CPU
@@ -53,6 +55,19 @@ pub struct BaselineMetrics {
 
     /// output rows: the total output rows
     output_rows: Count,
+
+    /// Memory usage of all output batches.
+    ///
+    /// Note: This value may be overestimated. If multiple output `RecordBatch`
+    /// instances share underlying memory buffers, their sizes will be counted
+    /// multiple times.
+    /// Issue: <https://github.com/apache/datafusion/issues/16841>
+    output_bytes: Count,
+
+    /// output batches: the total output batch count
+    output_batches: Count,
+    // Remember to update `docs/source/user-guide/metrics.md` when updating comments
+    // or adding new metrics
 }
 
 impl BaselineMetrics {
@@ -62,9 +77,21 @@ impl BaselineMetrics {
         start_time.record();
 
         Self {
-            end_time: MetricBuilder::new(metrics).end_timestamp(partition),
-            elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
-            output_rows: MetricBuilder::new(metrics).output_rows(partition),
+            end_time: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .end_timestamp(partition),
+            elapsed_compute: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .elapsed_compute(partition),
+            output_rows: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .output_rows(partition),
+            output_bytes: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .output_bytes(partition),
+            output_batches: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::DEV)
+                .output_batches(partition),
         }
     }
 
@@ -78,6 +105,8 @@ impl BaselineMetrics {
             end_time: Default::default(),
             elapsed_compute: self.elapsed_compute.clone(),
             output_rows: Default::default(),
+            output_bytes: Default::default(),
+            output_batches: Default::default(),
         }
     }
 
@@ -89,6 +118,11 @@ impl BaselineMetrics {
     /// return the metric for the total number of output rows produced
     pub fn output_rows(&self) -> &Count {
         &self.output_rows
+    }
+
+    /// return the metric for the total number of output batches produced
+    pub fn output_batches(&self) -> &Count {
+        &self.output_batches
     }
 
     /// Records the fact that this operator's execution is complete
@@ -117,9 +151,10 @@ impl BaselineMetrics {
         }
     }
 
-    /// Process a poll result of a stream producing output for an
-    /// operator, recording the output rows and stream done time and
-    /// returning the same poll result
+    /// Process a poll result of a stream producing output for an operator.
+    ///
+    /// Note: this method only updates `output_rows` and `end_time` metrics.
+    /// Remember to update `elapsed_compute` and other metrics manually.
     pub fn record_poll(
         &self,
         poll: Poll<Option<Result<RecordBatch>>>,
@@ -150,7 +185,7 @@ pub struct SpillMetrics {
     /// count of spills during the execution of the operator
     pub spill_file_count: Count,
 
-    /// total spilled bytes during the execution of the operator
+    /// total bytes actually written to disk during the execution of the operator
     pub spilled_bytes: Count,
 
     /// total spilled rows during the execution of the operator
@@ -164,6 +199,23 @@ impl SpillMetrics {
             spill_file_count: MetricBuilder::new(metrics).spill_count(partition),
             spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
             spilled_rows: MetricBuilder::new(metrics).spilled_rows(partition),
+        }
+    }
+}
+
+/// Metrics for tracking [`crate::stream::BatchSplitStream`] activity
+#[derive(Debug, Clone)]
+pub struct SplitMetrics {
+    /// Number of times an input [`RecordBatch`] was split
+    pub batches_split: Count,
+}
+
+impl SplitMetrics {
+    /// Create a new [`SplitMetrics`]
+    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self {
+            batches_split: MetricBuilder::new(metrics)
+                .counter("batches_split", partition),
         }
     }
 }
@@ -187,6 +239,9 @@ impl RecordOutput for usize {
 impl RecordOutput for RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
+        let n_bytes = get_record_batch_memory_size(&self);
+        bm.output_bytes.add(n_bytes);
+        bm.output_batches.add(1);
         self
     }
 }
@@ -194,6 +249,9 @@ impl RecordOutput for RecordBatch {
 impl RecordOutput for &RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
+        let n_bytes = get_record_batch_memory_size(self);
+        bm.output_bytes.add(n_bytes);
+        bm.output_batches.add(1);
         self
     }
 }

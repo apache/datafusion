@@ -49,7 +49,7 @@ use datafusion_macros::user_doc;
         description = "String expression to operate on. Must be a constant."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UnionExtractFun {
     signature: Signature,
 }
@@ -86,7 +86,7 @@ impl ScalarUDFImpl for UnionExtractFun {
         internal_err!("union_extract should return type from args")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         if args.arg_fields.len() != 2 {
             return exec_err!(
                 "union_extract expects 2 arguments, got {} instead",
@@ -110,7 +110,7 @@ impl ScalarUDFImpl for UnionExtractFun {
 
         let field = find_field(fields, field_name)?.1;
 
-        Ok(Field::new(self.name(), field.data_type().clone(), true))
+        Ok(Field::new(self.name(), field.data_type().clone(), true).into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -169,10 +169,11 @@ fn find_field<'a>(fields: &'a UnionFields, name: &str) -> Result<(i8, &'a FieldR
 
 #[cfg(test)]
 mod tests {
-
     use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use std::sync::Arc;
 
     use super::UnionExtractFun;
 
@@ -199,14 +200,15 @@ mod tests {
         ];
         let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
 
         let result = fun.invoke_with_args(ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 1,
-            return_field: &Field::new("f", DataType::Utf8, true),
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -221,14 +223,15 @@ mod tests {
         ];
         let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
 
         let result = fun.invoke_with_args(ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 1,
-            return_field: &Field::new("f", DataType::Utf8, true),
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -243,13 +246,14 @@ mod tests {
         ];
         let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
         let result = fun.invoke_with_args(ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 1,
-            return_field: &Field::new("f", DataType::Utf8, true),
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::new_utf8("42"));

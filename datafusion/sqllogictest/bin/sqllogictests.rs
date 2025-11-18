@@ -18,10 +18,11 @@
 use clap::Parser;
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
-use datafusion::common::{exec_err, DataFusionError, Result};
+use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_sqllogictest::{
     df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
-    should_skip_record, value_normalizer, DataFusion, Filter, TestContext,
+    should_skip_record, value_normalizer, DataFusion, DataFusionSubstraitRoundTrip,
+    Filter, TestContext,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -41,6 +42,7 @@ use crate::postgres_container::{
 };
 use datafusion::common::runtime::SpawnedTask;
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "postgres")]
@@ -102,6 +104,7 @@ async fn run_tests() -> Result<()> {
         // to stdout and return OK so they can continue listing other tests.
         return Ok(());
     }
+
     options.warn_on_ignored();
 
     #[cfg(feature = "postgres")]
@@ -122,6 +125,20 @@ async fn run_tests() -> Result<()> {
     let start = Instant::now();
 
     let test_files = read_test_files(&options)?;
+
+    // Perform scratch file sanity check
+    let scratch_errors = scratch_file_check(&test_files)?;
+    if !scratch_errors.is_empty() {
+        eprintln!("Scratch file sanity check failed:");
+        for error in &scratch_errors {
+            eprintln!("  {error}");
+        }
+
+        eprintln!("\nTemporary file check failed. Please ensure that within each test file, any scratch file created is placed under a folder with the same name as the test file (without extension).\nExample: inside `join.slt`, temporary files must be created under `.../scratch/join/`\n");
+
+        return exec_err!("sqllogictests scratch file check failed");
+    }
+
     let num_tests = test_files.len();
     let errors: Vec<_> = futures::stream::iter(test_files)
         .map(|test_file| {
@@ -138,8 +155,22 @@ async fn run_tests() -> Result<()> {
             let filters = options.filters.clone();
 
             SpawnedTask::spawn(async move {
-                match (options.postgres_runner, options.complete) {
-                    (false, false) => {
+                match (
+                    options.postgres_runner,
+                    options.complete,
+                    options.substrait_round_trip,
+                ) {
+                    (_, _, true) => {
+                        run_test_file_substrait_round_trip(
+                            test_file,
+                            validator,
+                            m_clone,
+                            m_style_clone,
+                            filters.as_ref(),
+                        )
+                        .await?
+                    }
+                    (false, false, _) => {
                         run_test_file(
                             test_file,
                             validator,
@@ -149,11 +180,11 @@ async fn run_tests() -> Result<()> {
                         )
                         .await?
                     }
-                    (false, true) => {
+                    (false, true, _) => {
                         run_complete_file(test_file, validator, m_clone, m_style_clone)
                             .await?
                     }
-                    (true, false) => {
+                    (true, false, _) => {
                         run_test_file_with_postgres(
                             test_file,
                             validator,
@@ -163,7 +194,7 @@ async fn run_tests() -> Result<()> {
                         )
                         .await?
                     }
-                    (true, true) => {
+                    (true, true, _) => {
                         run_complete_file_with_postgres(
                             test_file,
                             validator,
@@ -178,7 +209,7 @@ async fn run_tests() -> Result<()> {
             .join()
         })
         // run up to num_cpus streams in parallel
-        .buffer_unordered(get_available_parallelism())
+        .buffer_unordered(options.test_threads)
         .flat_map(|result| {
             // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {
@@ -208,6 +239,45 @@ async fn run_tests() -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+async fn run_test_file_substrait_round_trip(
+    test_file: TestFile,
+    validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
+    filters: &[Filter],
+) -> Result<()> {
+    let TestFile {
+        path,
+        relative_path,
+    } = test_file;
+    let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
+        info!("Skipping: {}", path.display());
+        return Ok(());
+    };
+    setup_scratch_dir(&relative_path)?;
+
+    let count: u64 = get_record_count(&path, "DatafusionSubstraitRoundTrip".to_string());
+    let pb = mp.add(ProgressBar::new(count));
+
+    pb.set_style(mp_style);
+    pb.set_message(format!("{:?}", &relative_path));
+
+    let mut runner = sqllogictest::Runner::new(|| async {
+        Ok(DataFusionSubstraitRoundTrip::new(
+            test_ctx.session_ctx().clone(),
+            relative_path.clone(),
+            pb.clone(),
+        ))
+    });
+    runner.add_label("DatafusionSubstraitRoundTrip");
+    runner.with_column_validator(strict_column_validator);
+    runner.with_normalizer(value_normalizer);
+    runner.with_validator(validator);
+    let res = run_file_in_runner(path, runner, filters).await;
+    pb.finish_and_clear();
+    res
 }
 
 async fn run_test_file(
@@ -414,9 +484,7 @@ async fn run_complete_file(
         )
         .await
         // Can't use e directly because it isn't marked Send, so turn it into a string.
-        .map_err(|e| {
-            DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
-        });
+        .map_err(|e| exec_datafusion_err!("Error completing {relative_path:?}: {e}"));
 
     pb.finish_and_clear();
 
@@ -466,9 +534,7 @@ async fn run_complete_file_with_postgres(
         )
         .await
         // Can't use e directly because it isn't marked Send, so turn it into a string.
-        .map_err(|e| {
-            DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
-        });
+        .map_err(|e| exec_datafusion_err!("Error completing {relative_path:?}: {e}"));
 
     pb.finish_and_clear();
 
@@ -578,6 +644,14 @@ struct Options {
     )]
     postgres_runner: bool,
 
+    #[clap(
+        long,
+        conflicts_with = "complete",
+        conflicts_with = "postgres_runner",
+        help = "Before executing each query, convert its logical plan to Substrait and from Substrait back to its logical plan"
+    )]
+    substrait_round_trip: bool,
+
     #[clap(long, env = "INCLUDE_SQLITE", help = "Include sqlite files")]
     include_sqlite: bool,
 
@@ -626,6 +700,13 @@ struct Options {
         help = "IGNORED (for compatibility with built-in rust test runner)"
     )]
     nocapture: bool,
+
+    #[clap(
+        long,
+        help = "Number of threads used for running tests in parallel",
+        default_value_t = get_available_parallelism()
+    )]
+    test_threads: usize,
 }
 
 impl Options {
@@ -667,4 +748,68 @@ impl Options {
             eprintln!("WARNING: Ignoring `--show-output` compatibility option");
         }
     }
+}
+
+/// Performs scratch file check for all test files.
+///
+/// Scratch file rule: In each .slt test file, the temporary file created must
+/// be under a folder that is has the same name as the test file.
+/// e.g. In `join.slt`, temporary files must be created under `.../scratch/join/`
+///
+/// See: <https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-scratchdir>
+///
+/// This function searches for `scratch/[target]/...` patterns and verifies
+/// that the target matches the file name.
+///
+/// Returns a vector of error strings for incorrectly created scratch files.
+fn scratch_file_check(test_files: &[TestFile]) -> Result<Vec<String>> {
+    let mut errors = Vec::new();
+
+    // Search for any scratch/[target]/... patterns and check if they match the file name
+    let scratch_pattern = regex::Regex::new(r"scratch/([^/]+)/").unwrap();
+
+    for test_file in test_files {
+        // Get the file content
+        let content = match fs::read_to_string(&test_file.path) {
+            Ok(content) => content,
+            Err(e) => {
+                errors.push(format!(
+                    "Failed to read file {}: {}",
+                    test_file.path.display(),
+                    e
+                ));
+                continue;
+            }
+        };
+
+        // Get the expected target name (file name without extension)
+        let expected_target = match test_file.path.file_stem() {
+            Some(stem) => stem.to_string_lossy().to_string(),
+            None => {
+                errors.push(format!("File {} has no stem", test_file.path.display()));
+                continue;
+            }
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+
+        for (line_num, line) in lines.iter().enumerate() {
+            if let Some(captures) = scratch_pattern.captures(line) {
+                if let Some(found_target) = captures.get(1) {
+                    let found_target = found_target.as_str();
+                    if found_target != expected_target {
+                        errors.push(format!(
+                            "File {}:{}: scratch target '{}' does not match file name '{}'",
+                            test_file.path.display(),
+                            line_num + 1,
+                            found_target,
+                            expected_target
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(errors)
 }

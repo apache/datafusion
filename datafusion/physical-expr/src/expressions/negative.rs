@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
@@ -104,7 +104,7 @@ impl PhysicalExpr for NegativeExpr {
         }
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         self.arg.return_field(input_schema)
     }
 

@@ -17,11 +17,11 @@
 
 //! Defines physical expressions for APPROX_MEDIAN that can be evaluated MEDIAN at runtime during query execution
 
+use arrow::datatypes::DataType::{Float64, UInt64};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use std::any::Any;
 use std::fmt::Debug;
-
-use arrow::datatypes::DataType::{Float64, UInt64};
-use arrow::datatypes::{DataType, Field};
+use std::sync::Arc;
 
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -57,6 +57,7 @@ make_udaf_expr_and_func!(
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxMedian {
     signature: Signature,
 }
@@ -91,7 +92,7 @@ impl AggregateUDFImpl for ApproxMedian {
         self
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new(format_state_name(args.name, "max_size"), UInt64, false),
             Field::new(format_state_name(args.name, "sum"), Float64, false),
@@ -103,7 +104,10 @@ impl AggregateUDFImpl for ApproxMedian {
                 Field::new_list_field(Float64, true),
                 false,
             ),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn name(&self) -> &str {
@@ -130,7 +134,7 @@ impl AggregateUDFImpl for ApproxMedian {
 
         Ok(Box::new(ApproxPercentileAccumulator::new(
             0.5_f64,
-            acc_args.exprs[0].data_type(acc_args.schema)?,
+            acc_args.expr_fields[0].data_type().clone(),
         )))
     }
 

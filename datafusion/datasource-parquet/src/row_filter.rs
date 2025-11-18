@@ -76,7 +76,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor}
 use datafusion_common::Result;
 use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::reassign_predicate_columns;
+use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 
 use datafusion_physical_plan::metrics;
@@ -119,9 +119,8 @@ impl DatafusionArrowPredicate {
         rows_matched: metrics::Count,
         time: metrics::Time,
     ) -> Result<Self> {
-        let projected_schema = Arc::clone(&candidate.filter_schema);
         let physical_expr =
-            reassign_predicate_columns(candidate.expr, &projected_schema, true)?;
+            reassign_expr_columns(candidate.expr, &candidate.filter_schema)?;
 
         Ok(Self {
             physical_expr,
@@ -184,7 +183,7 @@ pub(crate) struct FilterCandidate {
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
     /// The projection to read from the file schema to get the columns
-    /// required to pass thorugh a `SchemaMapper` to the table schema
+    /// required to pass through a `SchemaMapper` to the table schema
     /// upon which we then evaluate the filter expression.
     projection: Vec<usize>,
     ///  A `SchemaMapper` used to map batches read from the file schema to
@@ -426,7 +425,7 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     physical_file_schema: &SchemaRef,
-    logical_file_schema: &SchemaRef,
+    predicate_file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
@@ -447,7 +446,7 @@ pub fn build_row_filter(
             FilterCandidateBuilder::new(
                 Arc::clone(expr),
                 Arc::clone(physical_file_schema),
-                Arc::clone(logical_file_schema),
+                Arc::clone(predicate_file_schema),
                 Arc::clone(schema_adapter_factory),
             )
             .build(metadata)
@@ -557,6 +556,7 @@ mod test {
         // Test all should fail
         let expr = col("timestamp_col").lt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
+            None,
         ));
         let expr = logical2physical(&expr, &table_schema);
         let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
@@ -597,6 +597,7 @@ mod test {
         // Test all should pass
         let expr = col("timestamp_col").gt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
+            None,
         ));
         let expr = logical2physical(&expr, &table_schema);
         let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
@@ -660,7 +661,7 @@ mod test {
 
         let expr = col("string_col")
             .is_not_null()
-            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)))));
+            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)), None)));
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));

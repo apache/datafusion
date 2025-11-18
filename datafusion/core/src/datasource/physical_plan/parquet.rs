@@ -39,7 +39,7 @@ mod tests {
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
         ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
-        StringViewArray, StructArray,
+        StringViewArray, StructArray, TimestampNanosecondArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
@@ -50,12 +50,11 @@ mod tests {
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{assert_contains, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
-    use datafusion_datasource::{FileRange, PartitionedFile};
+    use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
@@ -65,7 +64,9 @@ mod tests {
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::analyze::AnalyzeExec;
     use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+    use datafusion_physical_plan::metrics::{
+        ExecutionPlanMetricsSet, MetricType, MetricValue, MetricsSet,
+    };
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use chrono::{TimeZone, Utc};
@@ -160,7 +161,7 @@ mod tests {
                 .as_ref()
                 .map(|p| logical2physical(p, &table_schema));
 
-            let mut source = ParquetSource::default();
+            let mut source = ParquetSource::new(table_schema);
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
             }
@@ -185,23 +186,19 @@ mod tests {
                 source = source.with_bloom_filter_on_read(false);
             }
 
-            source.with_schema(Arc::clone(&table_schema))
+            Arc::new(source)
         }
 
         fn build_parquet_exec(
             &self,
-            file_schema: SchemaRef,
             file_group: FileGroup,
             source: Arc<dyn FileSource>,
         ) -> Arc<DataSourceExec> {
-            let base_config = FileScanConfigBuilder::new(
-                ObjectStoreUrl::local_filesystem(),
-                file_schema,
-                source,
-            )
-            .with_file_group(file_group)
-            .with_projection(self.projection.clone())
-            .build();
+            let base_config =
+                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                    .with_file_group(file_group)
+                    .with_projection_indices(self.projection.clone())
+                    .build();
             DataSourceExec::from_data_source(base_config)
         }
 
@@ -230,18 +227,15 @@ mod tests {
 
             // build a ParquetExec to return the results
             let parquet_source = self.build_file_source(Arc::clone(table_schema));
-            let parquet_exec = self.build_parquet_exec(
-                Arc::clone(table_schema),
-                file_group.clone(),
-                Arc::clone(&parquet_source),
-            );
+            let parquet_exec =
+                self.build_parquet_exec(file_group.clone(), Arc::clone(&parquet_source));
 
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
                 false,
+                vec![MetricType::SUMMARY, MetricType::DEV],
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
-                    Arc::clone(table_schema),
                     file_group.clone(),
                     self.build_file_source(Arc::clone(table_schema)),
                 ),
@@ -332,7 +326,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -390,7 +384,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -452,7 +446,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -514,7 +508,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c3").eq(lit(7_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -961,6 +955,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn evolved_schema_column_type_filter_timestamp_units() {
+        // The table and filter have a common data type
+        // The table schema is in milliseconds, but the file schema is in nanoseconds
+        let c1: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
+            Some(1_000_000_000), // 1970-01-01T00:00:01Z
+            Some(2_000_000_000), // 1970-01-01T00:00:02Z
+            Some(3_000_000_000), // 1970-01-01T00:00:03Z
+            Some(4_000_000_000), // 1970-01-01T00:00:04Z
+        ]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+            false,
+        )]));
+        // One row should match, 2 pruned via page index, 1 pruned via filter pushdown
+        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(
+            Some(1_000),
+            Some("UTC".into()),
+        )));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_page_index_predicate() // produces pages with 2 rows each (2 pages total for our data)
+            .with_table_schema(table_schema.clone())
+            .round_trip(vec![batch.clone()])
+            .await;
+        // There should be no predicate evaluation errors and we keep 1 row
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 1, "Expected 1 rows to match the predicate");
+        assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
+        // If we filter with a value that is completely out of the range of the data
+        // we prune at the row group level.
+        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(
+            Some(5_000),
+            Some("UTC".into()),
+        )));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_table_schema(table_schema)
+            .round_trip(vec![batch])
+            .await;
+        // There should be no predicate evaluation errors and we keep 0 rows
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 0, "Expected 0 rows to match the predicate");
+        assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 1);
+    }
+
+    #[tokio::test]
     async fn evolved_schema_disjoint_schema_filter() {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
@@ -1107,8 +1167,10 @@ mod tests {
         // There are 4 rows pruned in each of batch2, batch3, and
         // batch4 for a total of 12. batch1 had no pruning as c2 was
         // filled in as null
-        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 12);
-        assert_eq!(get_value(&metrics, "page_index_rows_matched"), 6);
+        let (page_index_pruned, page_index_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_pruned, 12);
+        assert_eq!(page_index_matched, 6);
     }
 
     #[tokio::test]
@@ -1480,8 +1542,7 @@ mod tests {
         ) -> Result<()> {
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
-                file_schema,
-                Arc::new(ParquetSource::default()),
+                Arc::new(ParquetSource::new(file_schema)),
             )
             .with_file_groups(file_groups)
             .build();
@@ -1583,23 +1644,26 @@ mod tests {
             ),
         ]);
 
-        let source = Arc::new(ParquetSource::default());
-        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
-            .with_file(partitioned_file)
-            // file has 10 cols so index 12 should be month and 13 should be day
-            .with_projection(Some(vec![0, 1, 2, 12, 13]))
-            .with_table_partition_cols(vec![
-                Field::new("year", DataType::Utf8, false),
-                Field::new("month", DataType::UInt8, false),
-                Field::new(
+        let table_schema = TableSchema::new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Field::new("year", DataType::Utf8, false)),
+                Arc::new(Field::new("month", DataType::UInt8, false)),
+                Arc::new(Field::new(
                     "day",
                     DataType::Dictionary(
                         Box::new(DataType::UInt16),
                         Box::new(DataType::Utf8),
                     ),
                     false,
-                ),
-            ])
+                )),
+            ],
+        );
+        let source = Arc::new(ParquetSource::new(table_schema.clone()));
+        let config = FileScanConfigBuilder::new(object_store_url, source)
+            .with_file(partitioned_file)
+            // file has 10 cols so index 12 should be month and 13 should be day
+            .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
             .build();
 
         let parquet_exec = DataSourceExec::from_data_source(config);
@@ -1661,8 +1725,7 @@ mod tests {
         let file_schema = Arc::new(Schema::empty());
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
-            file_schema,
-            Arc::new(ParquetSource::default()),
+            Arc::new(ParquetSource::new(file_schema)),
         )
         .with_file(partitioned_file)
         .build();
@@ -1708,8 +1771,10 @@ mod tests {
             | 5   |
             +-----+
         "###);
-        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 4);
-        assert_eq!(get_value(&metrics, "page_index_rows_matched"), 2);
+        let (page_index_pruned, page_index_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_pruned, 4);
+        assert_eq!(page_index_matched, 2);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
@@ -1798,8 +1863,10 @@ mod tests {
         assert_contains!(&explain, "predicate=c1@0 != bar");
 
         // there's a single row group, but we can check that it matched
-        // if no pruning was done this would be 0 instead of 1
-        assert_contains!(&explain, "row_groups_matched_statistics=1");
+        assert_contains!(
+            &explain,
+            "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+        );
 
         // check the projection
         assert_contains!(&explain, "projection=[c1]");
@@ -1830,8 +1897,10 @@ mod tests {
 
         // When both matched and pruned are 0, it means that the pruning predicate
         // was not used at all.
-        assert_contains!(&explain, "row_groups_matched_statistics=0");
-        assert_contains!(&explain, "row_groups_pruned_statistics=0");
+        assert_contains!(
+            &explain,
+            "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
+        );
 
         // But pushdown predicate should be present
         assert_contains!(
@@ -1884,12 +1953,31 @@ mod tests {
     /// Panics if no such metric.
     fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
         match metrics.sum_by_name(metric_name) {
-            Some(v) => v.as_usize(),
+            Some(v) => match v {
+                MetricValue::PruningMetrics {
+                    pruning_metrics, ..
+                } => pruning_metrics.pruned(),
+                _ => v.as_usize(),
+            },
             _ => {
                 panic!(
                     "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
                 );
             }
+        }
+    }
+
+    fn get_pruning_metric(metrics: &MetricsSet, metric_name: &str) -> (usize, usize) {
+        match metrics.sum_by_name(metric_name) {
+            Some(MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            }) => (pruning_metrics.pruned(), pruning_metrics.matched()),
+            Some(_) => panic!(
+                "Metric '{metric_name}' is not a pruning metric in\n\n{metrics:#?}"
+            ),
+            None => panic!(
+                "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+            ),
         }
     }
 
@@ -1952,14 +2040,14 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         fs::create_dir(&out_dir).unwrap();
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        let schema: Schema = df.schema().into();
+        let schema = Arc::clone(df.schema().inner());
         // Register a listing table - this will use all files in the directory as data sources
         // for the query
         ctx.register_listing_table(
             "my_table",
             &out_dir,
             listing_options,
-            Some(Arc::new(schema)),
+            Some(schema),
             None,
         )
         .await
@@ -2141,7 +2229,7 @@ mod tests {
         fn create_reader(
             &self,
             partition_index: usize,
-            file_meta: FileMeta,
+            partitioned_file: PartitionedFile,
             metadata_size_hint: Option<usize>,
             metrics: &ExecutionPlanMetricsSet,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
@@ -2152,7 +2240,7 @@ mod tests {
                 .push(metadata_size_hint);
             self.inner.create_reader(
                 partition_index,
-                file_meta,
+                partitioned_file,
                 metadata_size_hint,
                 metrics,
             )
@@ -2184,11 +2272,11 @@ mod tests {
         let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
 
         let source = Arc::new(
-            ParquetSource::default()
+            ParquetSource::new(Arc::clone(&schema))
                 .with_parquet_file_reader_factory(reader_factory)
                 .with_metadata_size_hint(456),
         );
-        let config = FileScanConfigBuilder::new(store_url, schema, source)
+        let config = FileScanConfigBuilder::new(store_url, source)
             .with_file(
                 PartitionedFile {
                     object_meta: ObjectMeta {

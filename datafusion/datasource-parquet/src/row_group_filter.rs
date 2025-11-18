@@ -24,7 +24,7 @@ use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
-use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
@@ -58,6 +58,11 @@ impl RowGroupAccessPlanFilter {
     /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.access_plan.is_empty()
+    }
+
+    /// Return the number of row groups that are currently expected to be scanned
+    pub fn remaining_row_group_count(&self) -> usize {
+        self.access_plan.row_group_index_iter().count()
     }
 
     /// Returns the inner access plan
@@ -134,9 +139,9 @@ impl RowGroupAccessPlanFilter {
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
                     if !value {
                         self.access_plan.skip(*idx);
-                        metrics.row_groups_pruned_statistics.add(1);
+                        metrics.row_groups_pruned_statistics.add_pruned(1);
                     } else {
-                        metrics.row_groups_matched_statistics.add(1);
+                        metrics.row_groups_pruned_statistics.add_matched(1);
                     }
                 }
             }
@@ -215,10 +220,10 @@ impl RowGroupAccessPlanFilter {
             };
 
             if prune_group {
-                metrics.row_groups_pruned_bloom_filter.add(1);
+                metrics.row_groups_pruned_bloom_filter.add_pruned(1);
                 self.access_plan.skip(idx)
-            } else if !stats.column_sbbf.is_empty() {
-                metrics.row_groups_matched_bloom_filter.add(1);
+            } else {
+                metrics.row_groups_pruned_bloom_filter.add_matched(1);
             }
         }
     }
@@ -492,6 +497,18 @@ mod tests {
             self.byte_len = Some(byte_len);
             self
         }
+    }
+
+    #[test]
+    fn remaining_row_group_count_reports_non_skipped_groups() {
+        let mut filter = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(4));
+        assert_eq!(filter.remaining_row_group_count(), 4);
+
+        filter.access_plan.skip(1);
+        assert_eq!(filter.remaining_row_group_count(), 3);
+
+        filter.access_plan.skip(3);
+        assert_eq!(filter.remaining_row_group_count(), 2);
     }
 
     #[test]
@@ -1242,12 +1259,16 @@ mod tests {
             .run(
                 lit("1").eq(lit("1")).and(
                     col(r#""String""#)
-                        .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
-                            "Hello_Not_Exists",
-                        )))))
-                        .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
-                            Some(String::from("Hello_Not_Exists2")),
-                        )))),
+                        .eq(Expr::Literal(
+                            ScalarValue::Utf8View(Some(String::from("Hello_Not_Exists"))),
+                            None,
+                        ))
+                        .or(col(r#""String""#).eq(Expr::Literal(
+                            ScalarValue::Utf8View(Some(String::from(
+                                "Hello_Not_Exists2",
+                            ))),
+                            None,
+                        ))),
                 ),
             )
             .await
@@ -1327,15 +1348,18 @@ mod tests {
             // generate pruning predicate `(String = "Hello") OR (String = "the quick") OR (String = "are you")`
             .run(
                 col(r#""String""#)
-                    .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
-                        "Hello",
-                    )))))
-                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
-                        Some(String::from("the quick")),
-                    ))))
-                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
-                        Some(String::from("are you")),
-                    )))),
+                    .eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("Hello"))),
+                        None,
+                    ))
+                    .or(col(r#""String""#).eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("the quick"))),
+                        None,
+                    )))
+                    .or(col(r#""String""#).eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("are you"))),
+                        None,
+                    ))),
             )
             .await
     }
@@ -1509,6 +1533,7 @@ mod tests {
         data: bytes::Bytes,
         pruning_predicate: &PruningPredicate,
     ) -> Result<RowGroupAccessPlanFilter> {
+        use datafusion_datasource::PartitionedFile;
         use object_store::{ObjectMeta, ObjectStore};
 
         let object_meta = ObjectMeta {
@@ -1527,12 +1552,23 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
-        let inner = ParquetObjectReader::new(Arc::new(in_memory), object_meta.location)
-            .with_file_size(object_meta.size);
+        let inner =
+            ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
+                .with_file_size(object_meta.size);
+
+        let partitioned_file = PartitionedFile {
+            object_meta,
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+            extensions: None,
+            metadata_size_hint: None,
+        };
 
         let reader = ParquetFileReader {
             inner,
             file_metrics: file_metrics.clone(),
+            partitioned_file,
         };
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 

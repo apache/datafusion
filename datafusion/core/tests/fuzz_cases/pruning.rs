@@ -201,7 +201,7 @@ impl Utf8Test {
         }
     }
 
-    ///  all combinations of interesting charactes  with lengths ranging from 1 to 4
+    ///  all combinations of interesting characters  with lengths ranging from 1 to 4
     fn values() -> &'static [String] {
         &VALUES
     }
@@ -276,13 +276,12 @@ async fn execute_with_predicate(
     ctx: &SessionContext,
 ) -> Vec<String> {
     let parquet_source = if prune_stats {
-        ParquetSource::default().with_predicate(predicate.clone())
+        ParquetSource::new(schema.clone()).with_predicate(predicate.clone())
     } else {
-        ParquetSource::default()
+        ParquetSource::new(schema.clone())
     };
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("memory://").unwrap(),
-        schema.clone(),
         Arc::new(parquet_source),
     )
     .with_file_group(
@@ -319,14 +318,9 @@ async fn write_parquet_file(
     row_groups: Vec<Vec<String>>,
 ) -> Bytes {
     let mut buf = BytesMut::new().writer();
-    let mut props = WriterProperties::builder();
-    if let Some(truncation_length) = truncation_length {
-        props = {
-            #[allow(deprecated)]
-            props.set_max_statistics_size(truncation_length)
-        }
-    }
-    props = props.set_statistics_enabled(EnabledStatistics::Chunk); // row group level
+    let props = WriterProperties::builder()
+        .set_statistics_enabled(EnabledStatistics::Chunk) // row group level
+        .set_statistics_truncate_length(truncation_length);
     let props = props.build();
     {
         let mut writer =

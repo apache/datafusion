@@ -94,6 +94,98 @@ NULL three
 1 one
 2 two
 
+statement ok
+set datafusion.sql_parser.default_null_ordering = 'nulls_min';
+
+# test asc with `nulls_min` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+NULL three
+1 one
+2 two
+
+# test desc with `nulls_min` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+2 two
+1 one
+NULL three
+
+statement ok
+set datafusion.sql_parser.default_null_ordering = 'nulls_first';
+
+# test asc with `nulls_first` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+NULL three
+1 one
+2 two
+
+# test desc with `nulls_first` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+NULL three
+2 two
+1 one
+
+
+statement ok
+set datafusion.sql_parser.default_null_ordering = 'nulls_last';
+
+# test asc with `nulls_last` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+1 one
+2 two
+NULL three
+
+# test desc with `nulls_last` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+2 two
+1 one
+NULL three
+
+statement ok
+set datafusion.sql_parser.default_null_ordering = '';
+
+# test asc with an empty `default_null_ordering`. Expected to use the default null ordering which is `nulls_max`
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+1 one
+2 two
+NULL three
+
+# test desc with an empty `default_null_ordering`. Expected to use the default null ordering which is `nulls_max`
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+NULL three
+2 two
+1 one
+
+statement error DataFusion error: Error during planning: Unsupported value Null
+set datafusion.sql_parser.default_null_ordering = null;
+
+# reset to default null ordering
+statement ok
+set datafusion.sql_parser.default_null_ordering = 'nulls_max';
+
 # sort
 
 statement ok
@@ -583,11 +675,11 @@ query TT
 ----
 logical_plan
 01)Sort: log_c11_base_c12 ASC NULLS LAST
-02)--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c11_base_c12
+02)--Projection: log(aggregate_test_100.c12, aggregate_test_100.c11) AS log_c11_base_c12
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
 01)SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c11_base_c12]
+02)--ProjectionExec: expr=[log(c12@1, c11@0) as log_c11_base_c12]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
 
@@ -598,11 +690,11 @@ ORDER BY log_c12_base_c11 DESC NULLS LAST;
 ----
 logical_plan
 01)Sort: log_c12_base_c11 DESC NULLS LAST
-02)--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c12_base_c11
+02)--Projection: log(aggregate_test_100.c11, aggregate_test_100.c12) AS log_c12_base_c11
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
 01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC NULLS LAST]
-02)--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c12_base_c11]
+02)--ProjectionExec: expr=[log(c11@0, c12@1) as log_c12_base_c11]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
 
@@ -673,6 +765,13 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 # When columns are missing the query is expected to fail
 query error DataFusion error: Error during planning: Column a is not in schema
 CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';
+
+
+# Create external table with order column expression that can't be planned
+# This is currently expected to fail, but should not panic
+query error DataFusion error: Schema error: No field named a\.
+CREATE EXTERNAL TABLE dt STORED AS CSV WITH ORDER (a || b) LOCATION 'file://path/to/table';
+
 
 # Sort with duplicate sort expressions
 # Table is sorted multiple times on the same column name and should not fail
@@ -795,19 +894,17 @@ physical_plan
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-09)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
-10)------------------ProjectionExec: expr=[column1@0 as t]
-11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
-12)------ProjectionExec: expr=[1 as m, t@0 as t]
-13)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
-14)----------CoalesceBatchesExec: target_batch_size=8192
-15)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
-16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-17)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
-18)------------------ProjectionExec: expr=[column1@0 as t]
-19)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+09)----------------ProjectionExec: expr=[column1@0 as t]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)------ProjectionExec: expr=[1 as m, t@0 as t]
+12)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
+13)----------CoalesceBatchesExec: target_batch_size=8192
+14)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
+15)--------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+16)----------------ProjectionExec: expr=[column1@0 as t]
+17)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 #####
 # Multi column sorting with lists
@@ -925,10 +1022,10 @@ ORDER BY SUM(column1)
 
 # ORDER BY with a GROUP BY clause
 query I
-SELECT SUM(column1) 
-  FROM foo 
-GROUP BY column2 
-ORDER BY SUM(column1) 
+SELECT SUM(column1)
+  FROM foo
+GROUP BY column2
+ORDER BY SUM(column1)
 ----
 0
 2
@@ -940,12 +1037,12 @@ ORDER BY SUM(column1)
 
 # ORDER BY with a GROUP BY clause and a HAVING clause
 query I
-SELECT 
-  SUM(column1) 
-FROM foo 
-GROUP BY column2 
-HAVING SUM(column1) < 3 
-ORDER BY SUM(column1) 
+SELECT
+  SUM(column1)
+FROM foo
+GROUP BY column2
+HAVING SUM(column1) < 3
+ORDER BY SUM(column1)
 ----
 0
 2
@@ -1040,12 +1137,12 @@ limit 5;
 ----
 logical_plan
 01)Sort: c_str ASC NULLS LAST, fetch=5
-02)--Projection: CAST(ordered_table.c AS Utf8) AS c_str
+02)--Projection: CAST(ordered_table.c AS Utf8View) AS c_str
 03)----TableScan: ordered_table projection=[c]
 physical_plan
 01)SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
 02)--SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[CAST(c@0 AS Utf8) as c_str]
+03)----ProjectionExec: expr=[CAST(c@0 AS Utf8View) as c_str]
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
@@ -1080,7 +1177,7 @@ physical_plan
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-drop table ordered_table; 
+drop table ordered_table;
 
 
 # ABS(x) breaks the ordering if x's range contains both negative and positive values.
@@ -1116,7 +1213,7 @@ physical_plan
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-drop table ordered_table; 
+drop table ordered_table;
 
 # ABS(x) preserves the ordering if x's range falls into positive values.
 # Since x is defined as INT UNSIGNED, its range is assumed to be from 0 to INF.
@@ -1258,13 +1355,12 @@ logical_plan
 08)--------TableScan: ordered_table projection=[a0, b, c, d]
 physical_plan
 01)SortPreservingMergeExec: [d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], fetch=2
-02)--UnionExec
-03)----SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----UnionExec
 04)------ProjectionExec: expr=[b@1 as b, c@2 as c, a@0 as a, NULL as a0, d@3 as d]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[c@2 ASC NULLS LAST], file_type=csv, has_header=true
-06)----SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[false]
-07)------ProjectionExec: expr=[b@1 as b, c@2 as c, NULL as a, a0@0 as a0, d@3 as d]
-08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, b, c, d], output_ordering=[c@2 ASC NULLS LAST], file_type=csv, has_header=true
+06)------ProjectionExec: expr=[b@1 as b, c@2 as c, NULL as a, a0@0 as a0, d@3 as d]
+07)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, b, c, d], output_ordering=[c@2 ASC NULLS LAST], file_type=csv, has_header=true
 
 # Test: run the query from above
 query IIIII
@@ -1299,9 +1395,9 @@ logical_plan
 02)--Projection: CASE WHEN name = Utf8("name1") THEN Float64(0) WHEN name = Utf8("name2") THEN Float64(0.5) END AS a
 03)----Union
 04)------Projection: Utf8("name1") AS name
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Projection: Utf8("name2") AS name
-07)--------EmptyRelation
+07)--------EmptyRelation: rows=1
 physical_plan
 01)SortPreservingMergeExec: [a@0 DESC]
 02)--ProjectionExec: expr=[CASE WHEN name@0 = name1 THEN 0 WHEN name@0 = name2 THEN 0.5 END as a]
@@ -1419,3 +1515,40 @@ SELECT address, zip FROM addresses ORDER BY ALL;
 111 Duck Duck Goose Ln 11111
 111 Duck Duck Goose Ln 11111-0001
 123 Quack Blvd 11111
+
+# Create a table with an order clause that's not a simple column reference
+statement ok
+CREATE EXTERNAL TABLE ordered (
+  a  BIGINT NOT NULL,
+  b  BIGINT NOT NULL
+)
+STORED AS CSV
+LOCATION 'data/composite_order.csv'
+OPTIONS ('format.has_header' 'true')
+WITH ORDER (a + b);
+
+# Simple query should be just a table scan
+query TT
+EXPLAIN SELECT * from ordered;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Query ordered by the declared order should be just a table scan
+query TT
+EXPLAIN SELECT * from ordered ORDER BY (a + b);
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Order equivalence handling should make this query a simple table scan
+query TT
+EXPLAIN SELECT * from ordered ORDER BY -(a + b) desc nulls last;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Ordering by another column requires a sort
+query TT
+EXPLAIN SELECT * from ordered ORDER BY a;
+----
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true

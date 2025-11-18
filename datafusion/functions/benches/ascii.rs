@@ -19,9 +19,12 @@ extern crate criterion;
 mod helper;
 
 use arrow::datatypes::{DataType, Field};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
+use std::hint::black_box;
+use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let ascii = datafusion_functions::string::ascii();
@@ -41,19 +44,22 @@ fn criterion_benchmark(c: &mut Criterion) {
             UTF8_DENSITY_OF_ALL_ASCII,
             false,
         );
+
+        let arg_fields =
+            vec![Field::new("a", args_string_ascii[0].data_type(), true).into()];
+        let return_field = Field::new("f", DataType::Utf8, true).into();
+        let config_options = Arc::new(ConfigOptions::default());
+
         c.bench_function(
             format!("ascii/string_ascii_only (null_density={null_density})").as_str(),
             |b| {
                 b.iter(|| {
                     black_box(ascii.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_ascii.clone(),
-                        arg_fields: vec![&Field::new(
-                            "a",
-                            args_string_ascii[0].data_type(),
-                            true,
-                        )],
+                        arg_fields: arg_fields.clone(),
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -62,19 +68,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringArray UTF8
         let args_string_utf8 =
             gen_string_array(N_ROWS, STR_LEN, null_density, NORMAL_UTF8_DENSITY, false);
+        let arg_fields =
+            vec![Field::new("a", args_string_utf8[0].data_type(), true).into()];
+        let return_field = Field::new("f", DataType::Utf8, true).into();
         c.bench_function(
             format!("ascii/string_utf8 (null_density={null_density})").as_str(),
             |b| {
                 b.iter(|| {
                     black_box(ascii.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_utf8.clone(),
-                        arg_fields: vec![&Field::new(
-                            "a",
-                            args_string_utf8[0].data_type(),
-                            true,
-                        )],
+                        arg_fields: arg_fields.clone(),
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -88,6 +94,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             UTF8_DENSITY_OF_ALL_ASCII,
             true,
         );
+        let arg_fields =
+            vec![Field::new("a", args_string_view_ascii[0].data_type(), true).into()];
+        let return_field = Field::new("f", DataType::Utf8, true).into();
         c.bench_function(
             format!("ascii/string_view_ascii_only (null_density={null_density})")
                 .as_str(),
@@ -95,13 +104,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(ascii.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_ascii.clone(),
-                        arg_fields: vec![&Field::new(
-                            "a",
-                            args_string_view_ascii[0].data_type(),
-                            true,
-                        )],
+                        arg_fields: arg_fields.clone(),
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -110,19 +116,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringViewArray UTF8
         let args_string_view_utf8 =
             gen_string_array(N_ROWS, STR_LEN, null_density, NORMAL_UTF8_DENSITY, true);
+        let arg_fields =
+            vec![Field::new("a", args_string_view_utf8[0].data_type(), true).into()];
+        let return_field = Field::new("f", DataType::Utf8, true).into();
         c.bench_function(
             format!("ascii/string_view_utf8 (null_density={null_density})").as_str(),
             |b| {
                 b.iter(|| {
                     black_box(ascii.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_utf8.clone(),
-                        arg_fields: vec![&Field::new(
-                            "a",
-                            args_string_view_utf8[0].data_type(),
-                            true,
-                        )],
+                        arg_fields: arg_fields.clone(),
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },

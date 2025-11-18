@@ -15,8 +15,13 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
-.. image:: _static/images/2x_bgwhite_original.png
-  :alt: DataFusion Logo
+.. image:: _static/images/original.svg
+   :alt: DataFusion Logo
+   :class: light-logo
+
+.. image:: _static/images/original_dark.svg
+   :alt: DataFusion Logo
+   :class: dark-logo
 
 =================
 Apache DataFusion
@@ -49,16 +54,16 @@ The following related subprojects target end users and have separate documentati
 
 - `DataFusion Python <https://datafusion.apache.org/python/>`_ offers a Python interface for SQL and DataFrame
   queries.
-- `DataFusion Ray <https://github.com/apache/datafusion-ray/>`_ provides a distributed version of DataFusion
-  that scales out on `Ray <https://www.ray.io>`_ clusters.
 - `DataFusion Comet <https://datafusion.apache.org/comet/>`_ is an accelerator for Apache Spark based on
   DataFusion.
+- `DataFusion Ballista <https://datafusion.apache.org/ballista/>`_ is distributed processing extension for DataFusion.
 
 "Out of the box," DataFusion offers `SQL <https://datafusion.apache.org/user-guide/sql/index.html>`_
 and `Dataframe <https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html>`_ APIs,
 excellent `performance <https://benchmark.clickhouse.com/>`_, built-in support for CSV, Parquet, JSON, and Avro,
 extensive customization, and a great community.
 `Python Bindings <https://github.com/apache/datafusion-python>`_ are also available.
+`Ballista <https://datafusion.apache.org/ballista/>`_ is Apache DataFusion extension enabling the parallelized execution of workloads across multiple nodes in a distributed environment.
 
 DataFusion features a full query planner, a columnar, streaming, multi-threaded,
 vectorized execution engine, and partitioned data sources. You can
@@ -113,11 +118,12 @@ To get started, see
    user-guide/crate-configuration
    user-guide/cli/index
    user-guide/dataframe
+   user-guide/arrow-introduction
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
-   user-guide/runtime_configs
    user-guide/explain-usage
+   user-guide/metrics
    user-guide/faq
 
 .. _toc.library-user-guide:
@@ -127,18 +133,19 @@ To get started, see
    :caption: Library User Guide
    
    library-user-guide/index
+   library-user-guide/upgrading
    library-user-guide/extensions
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
    library-user-guide/using-the-dataframe-api
    library-user-guide/building-logical-plans
    library-user-guide/catalogs
-   library-user-guide/adding-udfs
+   library-user-guide/functions/index
    library-user-guide/custom-table-providers
+   library-user-guide/table-constraints
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
-   library-user-guide/upgrading
 
 .. .. _toc.contributor-guide:
 
@@ -157,8 +164,7 @@ To get started, see
    contributor-guide/governance
    contributor-guide/inviting
    contributor-guide/specification/index
-   contributor-guide/gsoc_application_guidelines
-   contributor-guide/gsoc_project_ideas
+   contributor-guide/gsoc/index
 
 .. _toc.subprojects:
 
@@ -166,6 +172,6 @@ To get started, see
    :maxdepth: 1
    :caption: DataFusion Subprojects
 
-   DataFusion Ballista <https://arrow.apache.org/ballista/>
+   DataFusion Ballista <https://datafusion.apache.org/ballista/>
    DataFusion Comet <https://datafusion.apache.org/comet/>
    DataFusion Python <https://datafusion.apache.org/python/>

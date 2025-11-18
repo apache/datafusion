@@ -48,7 +48,7 @@ COPY aggregate_test_100_by_sql
 ###
 ## Setup test for datafusion
 ###
-onlyif DataFusion
+skipif postgres
 statement ok
 CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
   c1  VARCHAR NOT NULL,

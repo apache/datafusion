@@ -25,15 +25,20 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
-use arrow::datatypes::SchemaRef;
+use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, Statistics};
+use datafusion_common::{not_impl_err, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
+use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
+
+/// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
+pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
+    Arc::new(source)
+}
 
 /// file format specific behaviors for elements in [`DataSource`]
 ///
@@ -55,14 +60,20 @@ pub trait FileSource: Send + Sync {
     ) -> Arc<dyn FileOpener>;
     /// Any
     fn as_any(&self) -> &dyn Any;
+    /// Returns the table schema for this file source.
+    ///
+    /// This always returns the unprojected schema (the full schema of the data).
+    fn table_schema(&self) -> &crate::table_schema::TableSchema;
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
-    /// Initialize new instance with a new schema
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource>;
     /// Initialize new instance with projection information
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
     /// Initialize new instance with projected statistics
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
+    /// Returns the filter expression that will be applied during the file scan.
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        None
+    }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics
@@ -114,6 +125,34 @@ pub trait FileSource: Send + Sync {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
-        Ok(FilterPushdownPropagation::unsupported(filters))
+        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+            vec![PushedDown::No; filters.len()],
+        ))
+    }
+
+    /// Set optional schema adapter factory.
+    ///
+    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
+    /// file get mapped to that of the table schema.  If you implement this
+    /// method, you should also implement [`schema_adapter_factory`].
+    ///
+    /// The default implementation returns a not implemented error.
+    ///
+    /// [`schema_adapter_factory`]: Self::schema_adapter_factory
+    fn with_schema_adapter_factory(
+        &self,
+        _factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        not_impl_err!(
+            "FileSource {} does not support schema adapter factory",
+            self.file_type()
+        )
+    }
+
+    /// Returns the current schema adapter factory if set
+    ///
+    /// Default implementation returns `None`.
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        None
     }
 }

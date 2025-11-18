@@ -23,7 +23,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
+    assert_eq_or_internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
@@ -79,7 +79,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 },
         }) = expr
         {
-            if filter.is_some() || order_by.is_some() {
+            if filter.is_some() || !order_by.is_empty() {
                 return Ok(false);
             }
             aggregate_count += 1;
@@ -183,15 +183,21 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .map(|aggr_expr| match aggr_expr {
                         Expr::AggregateFunction(AggregateFunction {
                             func,
-                            params: AggregateFunctionParams { mut args, distinct, .. }
+                            params:
+                                AggregateFunctionParams {
+                                    mut args, distinct, ..
+                                },
                         }) => {
                             if distinct {
-                                if args.len() != 1 {
-                                    return internal_err!("DISTINCT aggregate should have exactly one argument");
-                                }
+                                assert_eq_or_internal_err!(
+                                    args.len(),
+                                    1,
+                                    "DISTINCT aggregate should have exactly one argument"
+                                );
                                 let arg = args.swap_remove(0);
 
-                                if group_fields_set.insert(arg.schema_name().to_string()) {
+                                if group_fields_set.insert(arg.schema_name().to_string())
+                                {
                                     inner_group_exprs
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));
                                 }
@@ -200,7 +206,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
                                     None,
-                                    None,
+                                    vec![],
                                     None,
                                 )))
                                 // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
@@ -213,7 +219,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         args,
                                         false,
                                         None,
-                                        None,
+                                        vec![],
                                         None,
                                     ))
                                     .alias(&alias_str),
@@ -223,7 +229,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     vec![col(&alias_str)],
                                     false,
                                     None,
-                                    None,
+                                    vec![],
                                     None,
                                 )))
                             }
@@ -296,7 +302,7 @@ mod tests {
             vec![expr],
             true,
             None,
-            None,
+            vec![],
             None,
         ))
     }
@@ -627,7 +633,7 @@ mod tests {
             vec![col("a")],
             false,
             Some(Box::new(col("a").gt(lit(5)))),
-            None,
+            vec![],
             None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -678,7 +684,7 @@ mod tests {
             vec![col("a")],
             false,
             None,
-            Some(vec![col("a").sort(true, false)]),
+            vec![col("a").sort(true, false)],
             None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)

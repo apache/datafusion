@@ -20,7 +20,7 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_month_day_nano_config, IntervalParseConfig, IntervalUnit,
 };
 use arrow::datatypes::{
-    i256, DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    i256, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
@@ -45,12 +45,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_value(
         &self,
         value: Value,
-        param_data_types: &[DataType],
+        param_data_types: &[FieldRef],
     ) -> Result<Expr> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
-            Value::Null => Ok(Expr::Literal(ScalarValue::Null)),
+            Value::Null => Ok(Expr::Literal(ScalarValue::Null, None)),
             Value::Boolean(n) => Ok(lit(n)),
             Value::Placeholder(param) => {
                 Self::create_placeholder_expr(param, param_data_types)
@@ -104,13 +104,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Create a placeholder expression
-    /// This is the same as Postgres's prepare statement syntax in which a placeholder starts with `$` sign and then
-    /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
+    /// Both named (`$foo`) and positional (`$1`, `$2`, ...) placeholder styles are supported.
     fn create_placeholder_expr(
         param: String,
-        param_data_types: &[DataType],
+        param_data_types: &[FieldRef],
     ) -> Result<Expr> {
-        // Parse the placeholder as a number because it is the only support from sqlparser and postgres
+        // Try to parse the placeholder as a number. If the placeholder does not have a valid
+        // positional value, assume we have a named placeholder.
         let index = param[1..].parse::<usize>();
         let idx = match index {
             Ok(0) => {
@@ -121,19 +121,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Ok(index) => index - 1,
             Err(_) => {
                 return if param_data_types.is_empty() {
-                    Ok(Expr::Placeholder(Placeholder::new(param, None)))
+                    Ok(Expr::Placeholder(Placeholder::new_with_field(param, None)))
                 } else {
-                    // when PREPARE Statement, param_data_types length is always 0
-                    plan_err!("Invalid placeholder, not a number: {param}")
+                    // FIXME: This branch is shared by params from PREPARE and CREATE FUNCTION, but
+                    // only CREATE FUNCTION currently supports named params. For now, we rewrite
+                    // these to positional params.
+                    let named_param_pos = param_data_types
+                        .iter()
+                        .position(|v| v.name() == &param[1..]);
+                    match named_param_pos {
+                        Some(pos) => Ok(Expr::Placeholder(Placeholder::new_with_field(
+                            format!("${}", pos + 1),
+                            param_data_types.get(pos).cloned(),
+                        ))),
+                        None => plan_err!("Unknown placeholder: {param}"),
+                    }
                 };
             }
         };
         // Check if the placeholder is in the parameter list
+        // FIXME: In the CREATE FUNCTION branch, param_type = None should raise an error
         let param_type = param_data_types.get(idx);
         // Data type of the parameter
         debug!("type of param {param} param_data_types[idx]: {param_type:?}");
 
-        Ok(Expr::Placeholder(Placeholder::new(
+        Ok(Expr::Placeholder(Placeholder::new_with_field(
             param,
             param_type.cloned(),
         )))
@@ -380,11 +392,10 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
                 int_val
             )
         })?;
-        Ok(Expr::Literal(ScalarValue::Decimal128(
-            Some(val),
-            precision as u8,
-            scale as i8,
-        )))
+        Ok(Expr::Literal(
+            ScalarValue::Decimal128(Some(val), precision as u8, scale as i8),
+            None,
+        ))
     } else if precision <= DECIMAL256_MAX_PRECISION as u64 {
         let val = bigint_to_i256(&int_val).ok_or_else(|| {
             // Failures are unexpected here as we have already checked the precision
@@ -393,11 +404,10 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
                 int_val
             )
         })?;
-        Ok(Expr::Literal(ScalarValue::Decimal256(
-            Some(val),
-            precision as u8,
-            scale as i8,
-        )))
+        Ok(Expr::Literal(
+            ScalarValue::Decimal256(Some(val), precision as u8, scale as i8),
+            None,
+        ))
     } else {
         not_impl_err!(
             "Decimal precision {} exceeds the maximum supported precision: {}",
@@ -483,10 +493,13 @@ mod tests {
         ];
         for (input, expect) in cases {
             let output = parse_decimal(input, true).unwrap();
-            assert_eq!(output, Expr::Literal(expect.arithmetic_negate().unwrap()));
+            assert_eq!(
+                output,
+                Expr::Literal(expect.arithmetic_negate().unwrap(), None)
+            );
 
             let output = parse_decimal(input, false).unwrap();
-            assert_eq!(output, Expr::Literal(expect));
+            assert_eq!(output, Expr::Literal(expect, None));
         }
 
         // scale < i8::MIN

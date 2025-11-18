@@ -20,13 +20,21 @@
 # This script runs all the Rust lints locally the same way the
 # DataFusion CI does
 
+# For `.toml` format checking
 set -e
 if ! command -v taplo &> /dev/null; then
     echo "Installing taplo using cargo"
     cargo install taplo-cli
 fi
 
+# For Apache licence header checking
+if ! command -v hawkeye &> /dev/null; then
+    echo "Installing hawkeye using cargo"
+    cargo install hawkeye --locked
+fi
+
 ci/scripts/rust_fmt.sh
 ci/scripts/rust_clippy.sh
 ci/scripts/rust_toml_fmt.sh
 ci/scripts/rust_docs.sh
+ci/scripts/license_header.sh

@@ -64,7 +64,7 @@ make_udf_expr_and_func!(
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayDims {
     signature: Signature,
     aliases: Vec<String>,
@@ -143,7 +143,7 @@ make_udf_expr_and_func!(
     ),
     argument(name = "element", description = "Array element.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayNdims {
     signature: Signature,
     aliases: Vec<String>,

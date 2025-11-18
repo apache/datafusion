@@ -19,8 +19,10 @@ use crate::arrow_wrappers::WrappedSchema;
 use abi_stable::std_types::RVec;
 use arrow::datatypes::Field;
 use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
+use arrow_schema::FieldRef;
+use std::sync::Arc;
 
-/// This macro is a helpful conversion utility to conver from an abi_stable::RResult to a
+/// This macro is a helpful conversion utility to convert from an abi_stable::RResult to a
 /// DataFusion result.
 #[macro_export]
 macro_rules! df_result {
@@ -28,13 +30,13 @@ macro_rules! df_result {
         match $x {
             abi_stable::std_types::RResult::ROk(v) => Ok(v),
             abi_stable::std_types::RResult::RErr(e) => {
-                Err(datafusion::error::DataFusionError::Execution(e.to_string()))
+                datafusion_common::exec_err!("FFI error: {}", e)
             }
         }
     };
 }
 
-/// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
+/// This macro is a helpful conversion utility to convert from a DataFusion Result to an abi_stable::RResult
 #[macro_export]
 macro_rules! rresult {
     ( $x:expr ) => {
@@ -47,7 +49,7 @@ macro_rules! rresult {
     };
 }
 
-/// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
+/// This macro is a helpful conversion utility to convert from a DataFusion Result to an abi_stable::RResult
 /// and to also call return when it is an error. Since you cannot use `?` on an RResult, this is designed
 /// to mimic the pattern.
 #[macro_export]
@@ -66,8 +68,8 @@ macro_rules! rresult_return {
 
 /// This is a utility function to convert a slice of [`Field`] to its equivalent
 /// FFI friendly counterpart, [`WrappedSchema`]
-pub fn vec_field_to_rvec_wrapped(
-    fields: &[Field],
+pub fn vec_fieldref_to_rvec_wrapped(
+    fields: &[FieldRef],
 ) -> Result<RVec<WrappedSchema>, arrow::error::ArrowError> {
     Ok(fields
         .iter()
@@ -80,10 +82,13 @@ pub fn vec_field_to_rvec_wrapped(
 
 /// This is a utility function to convert an FFI friendly vector of [`WrappedSchema`]
 /// to their equivalent [`Field`].
-pub fn rvec_wrapped_to_vec_field(
+pub fn rvec_wrapped_to_vec_fieldref(
     fields: &RVec<WrappedSchema>,
-) -> Result<Vec<Field>, arrow::error::ArrowError> {
-    fields.iter().map(|d| Field::try_from(&d.0)).collect()
+) -> Result<Vec<FieldRef>, arrow::error::ArrowError> {
+    fields
+        .iter()
+        .map(|d| Field::try_from(&d.0).map(Arc::new))
+        .collect()
 }
 
 /// This is a utility function to convert a slice of [`DataType`] to its equivalent
@@ -137,21 +142,21 @@ mod tests {
         let returned_err_result = df_result!(err_r_result);
         assert!(returned_err_result.is_err());
         assert!(
-            returned_err_result.unwrap_err().to_string()
-                == format!("Execution error: {ERROR_VALUE}")
+            returned_err_result.unwrap_err().strip_backtrace()
+                == format!("Execution error: FFI error: {ERROR_VALUE}")
         );
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
         let err_result: Result<String, DataFusionError> =
-            Err(DataFusionError::Execution(ERROR_VALUE.to_string()));
+            datafusion_common::exec_err!("{ERROR_VALUE}");
 
         let returned_ok_r_result = wrap_result(ok_result);
         assert!(returned_ok_r_result == RResult::ROk(VALID_VALUE.into()));
 
         let returned_err_r_result = wrap_result(err_result);
-        assert!(
-            returned_err_r_result
-                == RResult::RErr(format!("Execution error: {ERROR_VALUE}").into())
-        );
+        assert!(returned_err_r_result.is_err());
+        assert!(returned_err_r_result
+            .unwrap_err()
+            .starts_with(format!("Execution error: {ERROR_VALUE}").as_str()));
     }
 }

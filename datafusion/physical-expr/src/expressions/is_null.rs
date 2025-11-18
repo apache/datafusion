@@ -19,7 +19,7 @@
 
 use crate::PhysicalExpr;
 use arrow::{
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::Result;
@@ -90,10 +90,6 @@ impl PhysicalExpr for IsNullExpr {
                 ScalarValue::Boolean(Some(scalar.is_null())),
             )),
         }
-    }
-
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
-        self.arg.return_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

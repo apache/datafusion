@@ -23,25 +23,22 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::TableProvider;
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
-use datafusion_expr::Expr;
-use datafusion_expr::TableType;
-use datafusion_physical_expr::create_physical_sort_exprs;
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+use datafusion_common_runtime::JoinSet;
+use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
+use datafusion_datasource::sink::DataSinkExec;
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::{Expr, SortExpr, TableType};
+use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{
     common, ExecutionPlan, ExecutionPlanProperties, Partitioning,
 };
-
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
-use datafusion_common_runtime::JoinSet;
-use datafusion_datasource::memory::MemSink;
-use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_datasource::sink::DataSinkExec;
-use datafusion_datasource::source::DataSourceExec;
-use datafusion_expr::dml::InsertOp;
-use datafusion_expr::SortExpr;
 use datafusion_session::Session;
 
 use async_trait::async_trait;
@@ -70,8 +67,16 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    /// Create a new in-memory table from the provided schema and record batches
+    /// Create a new in-memory table from the provided schema and record batches.
+    ///
+    /// Requires at least one partition. To construct an empty `MemTable`, pass
+    /// `vec![vec![]]` as the `partitions` argument, this represents one partition with
+    /// no batches.
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
+        if partitions.is_empty() {
+            return plan_err!("No partitions provided, expected at least one partition");
+        }
+
         for batches in partitions.iter().flatten() {
             let batches_schema = batches.schema();
             if !schema.contains(&batches_schema) {
@@ -89,7 +94,7 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             sort_order: Arc::new(Mutex::new(vec![])),
         })
@@ -237,18 +242,15 @@ impl TableProvider for MemTable {
         // add sort information if present
         let sort_order = self.sort_order.lock();
         if !sort_order.is_empty() {
-            let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
+            let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
-            let file_sort_order = sort_order
-                .iter()
-                .map(|sort_exprs| {
-                    create_physical_sort_exprs(
-                        sort_exprs,
-                        &df_schema,
-                        state.execution_props(),
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let eqp = state.execution_props();
+            let mut file_sort_order = vec![];
+            for sort_exprs in sort_order.iter() {
+                let physical_exprs =
+                    create_physical_sort_exprs(sort_exprs, &df_schema, eqp)?;
+                file_sort_order.extend(LexOrdering::new(physical_exprs));
+            }
             source = source.try_with_sort_information(file_sort_order)?;
         }
 

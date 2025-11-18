@@ -354,6 +354,7 @@ mod test {
     use std::ops::Add;
 
     use super::*;
+    use crate::literal::lit_with_metadata;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeRewriter;
@@ -383,13 +384,13 @@ mod test {
         // rewrites all "foo" string literals to "bar"
         let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
+                Expr::Literal(ScalarValue::Utf8(Some(utf8_val)), metadata) => {
                     let utf8_val = if utf8_val == "foo" {
                         "bar".to_string()
                     } else {
                         utf8_val
                     };
-                    Ok(Transformed::yes(lit(utf8_val)))
+                    Ok(Transformed::yes(lit_with_metadata(utf8_val, metadata)))
                 }
                 // otherwise, return None
                 _ => Ok(Transformed::no(expr)),
@@ -433,7 +434,7 @@ mod test {
             vec![Some("tableC".into()), Some("tableC".into())],
             vec!["f", "ff"],
         );
-        let schemas = vec![schema_c, schema_f, schema_b, schema_a];
+        let schemas = [schema_c, schema_f, schema_b, schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
         let normalized_expr =
@@ -476,7 +477,7 @@ mod test {
     ) -> DFSchema {
         let fields = fields
             .iter()
-            .map(|f| Arc::new(Field::new(f.to_string(), DataType::Int8, false)))
+            .map(|f| Arc::new(Field::new((*f).to_string(), DataType::Int8, false)))
             .collect::<Vec<_>>();
         let schema = Arc::new(Schema::new(fields));
         DFSchema::from_field_specific_qualified_schema(qualifiers, &schema).unwrap()

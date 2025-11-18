@@ -56,7 +56,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context.append_outer_query_schema(input_schema.clone().into());
 
         let mut spans = Spans::new();
-        if let SetExpr::Select(select) = subquery.body.as_ref() {
+        if let SetExpr::Select(select) = &subquery.body.as_ref() {
             for item in &select.projection {
                 if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item {
                     if let Some(span) = Span::try_from_sqlparser_span(ident.span) {
@@ -72,7 +72,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         self.validate_single_column(
             &sub_plan,
-            spans.clone(),
+            &spans,
             "Too many columns! The subquery should only return one column",
             "Select only one column in the subquery",
         )?;
@@ -114,7 +114,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         self.validate_single_column(
             &sub_plan,
-            spans.clone(),
+            &spans,
             "Too many columns! The subquery should only return one column",
             "Select only one column in the subquery",
         )?;
@@ -129,7 +129,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn validate_single_column(
         &self,
         sub_plan: &LogicalPlan,
-        spans: Spans,
+        spans: &Spans,
         error_message: &str,
         help_message: &str,
     ) -> Result<()> {
@@ -146,7 +146,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn build_multi_column_diagnostic(
         &self,
-        spans: Spans,
+        spans: &Spans,
         error_message: &str,
         help_message: &str,
     ) -> Diagnostic {

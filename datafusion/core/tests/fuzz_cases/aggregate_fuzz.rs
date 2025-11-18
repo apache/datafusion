@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use super::record_batch_generator::get_supported_types_columns;
 use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, DatasetGeneratorConfig,
@@ -26,38 +27,34 @@ use arrow::array::{
     types::Int64Type, Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch,
     StringArray,
 };
-use arrow::compute::{concat_batches, SortOptions};
+use arrow::compute::concat_batches;
 use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{Field, Schema, SchemaRef};
-use datafusion::common::Result;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
-};
-use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::HashMap;
+use datafusion_common::{HashMap, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::{col, lit, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
 use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
 use datafusion_physical_plan::metrics::MetricValue;
+use datafusion_physical_plan::{collect, displayable, ExecutionPlan};
 use rand::rngs::StdRng;
 use rand::{random, rng, Rng, SeedableRng};
-
-use super::record_batch_generator::get_supported_types_columns;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -254,6 +251,12 @@ fn baseline_config() -> DatasetGeneratorConfig {
             // low cardinality to try and get many repeated runs
             vec![String::from("u8_low")],
             vec![String::from("utf8_low"), String::from("u8_low")],
+            vec![String::from("dictionary_utf8_low")],
+            vec![
+                String::from("dictionary_utf8_low"),
+                String::from("utf8_low"),
+                String::from("u8_low"),
+            ],
         ],
     }
 }
@@ -303,13 +306,9 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::new_with_config(session_config);
-    let mut sort_keys = LexOrdering::default();
-    for ordering_col in ["a", "b", "c"] {
-        sort_keys.push(PhysicalSortExpr {
-            expr: col(ordering_col, &schema).unwrap(),
-            options: SortOptions::default(),
-        })
-    }
+    let sort_keys = ["a", "b", "c"].map(|ordering_col| {
+        PhysicalSortExpr::new_default(col(ordering_col, &schema).unwrap())
+    });
 
     let concat_input_record = concat_batches(&schema, &input1).unwrap();
 
@@ -321,9 +320,9 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     .unwrap();
 
     let running_source = DataSourceExec::from_data_source(
-        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
+        MemorySourceConfig::try_new(std::slice::from_ref(&input1), schema.clone(), None)
             .unwrap()
-            .try_with_sort_information(vec![sort_keys])
+            .try_with_sort_information(vec![sort_keys.into()])
             .unwrap(),
     );
 
@@ -338,7 +337,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         ];
     let expr = group_by_columns
         .iter()
-        .map(|elem| (col(elem, &schema).unwrap(), elem.to_string()))
+        .map(|elem| (col(elem, &schema).unwrap(), (*elem).to_string()))
         .collect::<Vec<_>>();
     let group_by = PhysicalGroupBy::new_single(expr);
 
@@ -404,7 +403,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
              Left Plan:\n{}\n\
              Right Plan:\n{}\n\
              schema:\n{schema}\n\
-             Left Ouptut:\n{}\n\
+             Left Output:\n{}\n\
              Right Output:\n{}\n\
              input:\n{}\n\
              ",
@@ -633,8 +632,11 @@ fn extract_result_counts(results: Vec<RecordBatch>) -> HashMap<Option<String>, i
     output
 }
 
-fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<AggregateExec>) {
-    if let Some(metrics_set) = single_aggregate.metrics() {
+pub(crate) fn assert_spill_count_metric(
+    expect_spill: bool,
+    plan_that_spills: Arc<dyn ExecutionPlan>,
+) -> usize {
+    if let Some(metrics_set) = plan_that_spills.metrics() {
         let mut spill_count = 0;
 
         // Inspect metrics for SpillCount
@@ -650,6 +652,8 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
         } else if !expect_spill && spill_count > 0 {
             panic!("Expected no spill but found SpillCount metric with value greater than 0.");
         }
+
+        spill_count
     } else {
         panic!("No metrics returned from the operator; cannot verify spilling.");
     }
@@ -657,7 +661,7 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
 
 // Fix for https://github.com/apache/datafusion/issues/15530
 #[tokio::test]
-async fn test_single_mode_aggregate_with_spill() -> Result<()> {
+async fn test_single_mode_aggregate_single_mode_aggregate_with_spill() -> Result<()> {
     let scan_schema = Arc::new(Schema::new(vec![
         Field::new("col_0", DataType::Int64, true),
         Field::new("col_1", DataType::Utf8, true),

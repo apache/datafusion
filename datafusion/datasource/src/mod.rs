@@ -19,10 +19,14 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+// Enforce lint rule to prevent needless pass by value
+// https://github.com/apache/datafusion/issues/18503
+#![deny(clippy::needless_pass_by_value)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
@@ -33,7 +37,6 @@ pub mod file;
 pub mod file_compression_type;
 pub mod file_format;
 pub mod file_groups;
-pub mod file_meta;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
@@ -42,22 +45,24 @@ pub mod schema_adapter;
 pub mod sink;
 pub mod source;
 mod statistics;
+pub mod table_schema;
 
 #[cfg(test)]
 pub mod test_util;
 
 pub mod url;
 pub mod write;
+pub use self::file::as_file_source;
 pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
 use datafusion_common::{ScalarValue, Statistics};
-use file_meta::FileMeta;
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
 #[allow(deprecated)]
 pub use statistics::add_row_stats;
@@ -101,9 +106,9 @@ pub struct PartitionedFile {
     /// You may use [`wrap_partition_value_in_dict`] to wrap them if you have used [`wrap_partition_type_in_dict`] to wrap the column type.
     ///
     ///
-    /// [`wrap_partition_type_in_dict`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_scan_config.rs#L55
-    /// [`wrap_partition_value_in_dict`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_scan_config.rs#L62
-    /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L190
+    /// [`wrap_partition_type_in_dict`]: crate::file_scan_config::wrap_partition_type_in_dict
+    /// [`wrap_partition_value_in_dict`]: crate::file_scan_config::wrap_partition_value_in_dict
+    /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L87
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
@@ -197,6 +202,23 @@ impl PartitionedFile {
         self.statistics = Some(statistics);
         self
     }
+
+    /// Check if this file has any statistics.
+    /// This returns `true` if the file has any Exact or Inexact statistics
+    /// and `false` if all statistics are `Precision::Absent`.
+    pub fn has_statistics(&self) -> bool {
+        if let Some(stats) = &self.statistics {
+            stats.column_statistics.iter().any(|col_stats| {
+                col_stats.null_count != Precision::Absent
+                    || col_stats.max_value != Precision::Absent
+                    || col_stats.min_value != Precision::Absent
+                    || col_stats.sum_value != Precision::Absent
+                    || col_stats.distinct_count != Precision::Absent
+            })
+        } else {
+            false
+        }
+    }
 }
 
 impl From<ObjectMeta> for PartitionedFile {
@@ -233,23 +255,23 @@ pub enum RangeCalculation {
 /// Calculates an appropriate byte range for reading from an object based on the
 /// provided metadata.
 ///
-/// This asynchronous function examines the `FileMeta` of an object in an object store
+/// This asynchronous function examines the [`PartitionedFile`] of an object in an object store
 /// and determines the range of bytes to be read. The range calculation may adjust
 /// the start and end points to align with meaningful data boundaries (like newlines).
 ///
-/// Returns a `Result` wrapping a `RangeCalculation`, which is either a calculated byte range or an indication to terminate early.
+/// Returns a `Result` wrapping a [`RangeCalculation`], which is either a calculated byte range or an indication to terminate early.
 ///
 /// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
 pub async fn calculate_range(
-    file_meta: &FileMeta,
+    file: &PartitionedFile,
     store: &Arc<dyn ObjectStore>,
     terminator: Option<u8>,
 ) -> Result<RangeCalculation> {
-    let location = file_meta.location();
-    let file_size = file_meta.object_meta.size;
+    let location = &file.object_meta.location;
+    let file_size = file.object_meta.size;
     let newline = terminator.unwrap_or(b'\n');
 
-    match file_meta.range {
+    match file.range {
         None => Ok(RangeCalculation::Range(None)),
         Some(FileRange { start, end }) => {
             let start: u64 = start.try_into().map_err(|_| {
@@ -292,7 +314,6 @@ pub async fn calculate_range(
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
 ///
 /// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
-///
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,

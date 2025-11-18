@@ -17,7 +17,7 @@
 
 use super::binary::binary_numeric_coercion;
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
@@ -36,6 +36,7 @@ use datafusion_expr_common::{
     type_coercion::binary::comparison_coercion_numeric,
     type_coercion::binary::string_coercion,
 };
+use itertools::Itertools as _;
 use std::sync::Arc;
 
 /// Performs type coercion for scalar function arguments.
@@ -84,9 +85,9 @@ pub fn data_types_with_scalar_udf(
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn fields_with_aggregate_udf(
-    current_fields: &[Field],
+    current_fields: &[FieldRef],
     func: &AggregateUDF,
-) -> Result<Vec<Field>> {
+) -> Result<Vec<FieldRef>> {
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
@@ -121,7 +122,10 @@ pub fn fields_with_aggregate_udf(
     Ok(current_fields
         .iter()
         .zip(updated_types)
-        .map(|(current_field, new_type)| current_field.clone().with_data_type(new_type))
+        .map(|(current_field, new_type)| {
+            current_field.as_ref().clone().with_data_type(new_type)
+        })
+        .map(Arc::new)
         .collect())
 }
 
@@ -133,9 +137,9 @@ pub fn fields_with_aggregate_udf(
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn fields_with_window_udf(
-    current_fields: &[Field],
+    current_fields: &[FieldRef],
     func: &WindowUDF,
-) -> Result<Vec<Field>> {
+) -> Result<Vec<FieldRef>> {
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
@@ -170,7 +174,10 @@ pub fn fields_with_window_udf(
     Ok(current_fields
         .iter()
         .zip(updated_types)
-        .map(|(current_field, new_type)| current_field.clone().with_data_type(new_type))
+        .map(|(current_field, new_type)| {
+            current_field.as_ref().clone().with_data_type(new_type)
+        })
+        .map(Arc::new)
         .collect())
 }
 
@@ -272,7 +279,8 @@ fn try_coerce_types(
 
     // none possible -> Error
     plan_err!(
-        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {current_types:?} to the signature {type_signature:?} failed"
+        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {} to the signature {type_signature:?} failed",
+        current_types.iter().join(", ")
     )
 }
 
@@ -395,25 +403,35 @@ fn get_valid_types(
         let mut fixed_size = array_coercion != Some(&ListCoercion::FixedSizedListToList);
         let mut list_sizes = Vec::with_capacity(arguments.len());
         let mut element_types = Vec::with_capacity(arguments.len());
+        let mut nested_item_nullability = Vec::with_capacity(arguments.len());
         for (argument, current_type) in arguments.iter().zip(current_types.iter()) {
             match argument {
-                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => (),
+                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => {
+                    nested_item_nullability.push(None);
+                }
                 ArrayFunctionArgument::Element => {
-                    element_types.push(current_type.clone())
+                    element_types.push(current_type.clone());
+                    nested_item_nullability.push(None);
                 }
                 ArrayFunctionArgument::Array => match current_type {
-                    DataType::Null => element_types.push(DataType::Null),
+                    DataType::Null => {
+                        element_types.push(DataType::Null);
+                        nested_item_nullability.push(None);
+                    }
                     DataType::List(field) => {
                         element_types.push(field.data_type().clone());
+                        nested_item_nullability.push(Some(field.is_nullable()));
                         fixed_size = false;
                     }
                     DataType::LargeList(field) => {
                         element_types.push(field.data_type().clone());
+                        nested_item_nullability.push(Some(field.is_nullable()));
                         large_list = true;
                         fixed_size = false;
                     }
                     DataType::FixedSizeList(field, size) => {
                         element_types.push(field.data_type().clone());
+                        nested_item_nullability.push(Some(field.is_nullable()));
                         list_sizes.push(*size)
                     }
                     arg_type => {
@@ -423,33 +441,49 @@ fn get_valid_types(
             }
         }
 
+        debug_assert_eq!(nested_item_nullability.len(), arguments.len());
+
         let Some(element_type) = type_union_resolution(&element_types) else {
             return Ok(vec![vec![]]);
         };
 
         if !fixed_size {
             list_sizes.clear()
-        }
+        };
 
         let mut list_sizes = list_sizes.into_iter();
-        let valid_types = arguments.iter().zip(current_types.iter()).map(
-            |(argument_type, current_type)| match argument_type {
-                ArrayFunctionArgument::Index => DataType::Int64,
-                ArrayFunctionArgument::String => DataType::Utf8,
-                ArrayFunctionArgument::Element => element_type.clone(),
-                ArrayFunctionArgument::Array => {
-                    if current_type.is_null() {
-                        DataType::Null
-                    } else if large_list {
-                        DataType::new_large_list(element_type.clone(), true)
-                    } else if let Some(size) = list_sizes.next() {
-                        DataType::new_fixed_size_list(element_type.clone(), size, true)
-                    } else {
-                        DataType::new_list(element_type.clone(), true)
+        let valid_types = arguments
+            .iter()
+            .zip(current_types.iter())
+            .zip(nested_item_nullability)
+            .map(|((argument_type, current_type), is_nested_item_nullable)| {
+                match argument_type {
+                    ArrayFunctionArgument::Index => DataType::Int64,
+                    ArrayFunctionArgument::String => DataType::Utf8,
+                    ArrayFunctionArgument::Element => element_type.clone(),
+                    ArrayFunctionArgument::Array => {
+                        if current_type.is_null() {
+                            DataType::Null
+                        } else if large_list {
+                            DataType::new_large_list(
+                                element_type.clone(),
+                                is_nested_item_nullable.unwrap_or(true),
+                            )
+                        } else if let Some(size) = list_sizes.next() {
+                            DataType::new_fixed_size_list(
+                                element_type.clone(),
+                                size,
+                                is_nested_item_nullable.unwrap_or(true),
+                            )
+                        } else {
+                            DataType::new_list(
+                                element_type.clone(),
+                                is_nested_item_nullable.unwrap_or(true),
+                            )
+                        }
                     }
                 }
-            },
-        );
+            });
 
         Ok(vec![valid_types.collect()])
     }
@@ -497,7 +531,7 @@ fn get_valid_types(
                     new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::String but received {logical_data_type}"
+                        "Function '{function_name}' expects NativeType::String but NativeType::received NativeType::{logical_data_type}"
                     );
                 }
             }
@@ -557,7 +591,7 @@ fn get_valid_types(
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
+                        "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
                     );
                 }
 
@@ -578,7 +612,7 @@ fn get_valid_types(
                 valid_type = DataType::Float64;
             } else if !logical_data_type.is_numeric() {
                 return plan_err!(
-                    "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
+                    "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
                 );
             }
 
@@ -625,7 +659,7 @@ fn get_valid_types(
                     new_types.push(casted_type);
                 } else {
                     return internal_err!(
-                        "Expect {} but received {}, DataType: {}",
+                        "Expect {} but received NativeType::{}, DataType: {}",
                         param.desired_type(),
                         current_native_type,
                         current_type
@@ -845,7 +879,10 @@ fn coerced_from<'a>(
             | UInt64
             | Float32
             | Float64
-            | Decimal128(_, _),
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _),
         ) => Some(type_into.clone()),
         (
             Timestamp(TimeUnit::Nanosecond, None),
@@ -1335,6 +1372,18 @@ mod tests {
         assert_eq!(
             get_valid_types(function, &signature.type_signature, &data_types)?,
             vec![vec![]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Int64, 3, false),
+            DataType::new_list(DataType::Int32, false),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int64, false),
+                DataType::new_list(DataType::Int64, false),
+            ]]
         );
 
         Ok(())

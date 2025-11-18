@@ -26,7 +26,7 @@ use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::types::{logical_date, NativeType};
 
 use datafusion_common::{
@@ -68,9 +68,10 @@ use datafusion_macros::user_doc;
     - millisecond
     - microsecond
     - nanosecond
-    - dow (day of the week)
+    - dow (day of the week where Sunday is 0)
     - doy (day of the year)
     - epoch (seconds since Unix epoch)
+    - isodow (day of the week where Monday is 0)
 "#
     ),
     argument(
@@ -78,7 +79,7 @@ use datafusion_macros::user_doc;
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DatePartFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -145,7 +146,7 @@ impl ScalarUDFImpl for DatePartFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
 
         field
@@ -161,6 +162,7 @@ impl ScalarUDFImpl for DatePartFunc {
                         }
                     })
             })
+            .map(Arc::new)
             .map_or_else(
                 || exec_err!("{} requires non-empty constant string", self.name()),
                 Ok,
@@ -216,6 +218,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+                "isodow" => date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?,
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
@@ -231,6 +234,7 @@ impl ScalarUDFImpl for DatePartFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

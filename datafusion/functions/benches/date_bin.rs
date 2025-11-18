@@ -17,17 +17,18 @@
 
 extern crate criterion;
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
 use arrow::datatypes::Field;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
-use rand::rngs::ThreadRng;
-use rand::Rng;
-
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_bin;
+use rand::rngs::ThreadRng;
+use rand::Rng;
 
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
     let mut seconds = vec![];
@@ -49,18 +50,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         let return_type = udf
             .return_type(&[interval.data_type(), timestamps.data_type()])
             .unwrap();
-        let return_field = Field::new("f", return_type, true);
+        let return_field = Arc::new(Field::new("f", return_type, true));
+
+        let arg_fields = vec![
+            Field::new("a", interval.data_type(), true).into(),
+            Field::new("b", timestamps.data_type(), true).into(),
+        ];
+        let config_options = Arc::new(ConfigOptions::default());
 
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![interval.clone(), timestamps.clone()],
-                    arg_fields: vec![
-                        &Field::new("a", interval.data_type(), true),
-                        &Field::new("b", timestamps.data_type(), true),
-                    ],
+                    arg_fields: arg_fields.clone(),
                     number_rows: batch_len,
-                    return_field: &return_field,
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::clone(&config_options),
                 })
                 .expect("date_bin should work on valid values"),
             )

@@ -31,9 +31,10 @@ struct RowGroupPruningTest {
     expected_errors: Option<usize>,
     expected_row_group_matched_by_statistics: Option<usize>,
     expected_row_group_pruned_by_statistics: Option<usize>,
+    expected_files_pruned_by_statistics: Option<usize>,
     expected_row_group_matched_by_bloom_filter: Option<usize>,
     expected_row_group_pruned_by_bloom_filter: Option<usize>,
-    expected_results: usize,
+    expected_rows: usize,
 }
 impl RowGroupPruningTest {
     // Start building the test configuration
@@ -44,9 +45,10 @@ impl RowGroupPruningTest {
             expected_errors: None,
             expected_row_group_matched_by_statistics: None,
             expected_row_group_pruned_by_statistics: None,
+            expected_files_pruned_by_statistics: None,
             expected_row_group_matched_by_bloom_filter: None,
             expected_row_group_pruned_by_bloom_filter: None,
-            expected_results: 0,
+            expected_rows: 0,
         }
     }
 
@@ -80,6 +82,11 @@ impl RowGroupPruningTest {
         self
     }
 
+    fn with_pruned_files(mut self, pruned_files: Option<usize>) -> Self {
+        self.expected_files_pruned_by_statistics = pruned_files;
+        self
+    }
+
     // Set the expected matched row groups by bloom filter
     fn with_matched_by_bloom_filter(mut self, matched_by_bf: Option<usize>) -> Self {
         self.expected_row_group_matched_by_bloom_filter = matched_by_bf;
@@ -92,9 +99,9 @@ impl RowGroupPruningTest {
         self
     }
 
-    // Set the expected rows for the test
+    /// Set the number of expected rows from the output of this test
     fn with_expected_rows(mut self, rows: usize) -> Self {
-        self.expected_results = rows;
+        self.expected_rows = rows;
         self
     }
 
@@ -122,19 +129,27 @@ impl RowGroupPruningTest {
             "mismatched row_groups_pruned_statistics",
         );
         assert_eq!(
-            output.row_groups_matched_bloom_filter(),
+            output.files_ranges_pruned_statistics(),
+            self.expected_files_pruned_by_statistics,
+            "mismatched files_ranges_pruned_statistics",
+        );
+        let bloom_filter_metrics = output.row_groups_bloom_filter();
+        assert_eq!(
+            bloom_filter_metrics.map(|(_pruned, matched)| matched),
             self.expected_row_group_matched_by_bloom_filter,
             "mismatched row_groups_matched_bloom_filter",
         );
         assert_eq!(
-            output.row_groups_pruned_bloom_filter(),
+            bloom_filter_metrics.map(|(pruned, _matched)| pruned),
             self.expected_row_group_pruned_by_bloom_filter,
             "mismatched row_groups_pruned_bloom_filter",
         );
         assert_eq!(
             output.result_rows,
-            self.expected_results,
-            "mismatched expected rows: {}",
+            self.expected_rows,
+            "Expected {} rows, got {}: {}",
+            output.result_rows,
+            self.expected_rows,
             output.description(),
         );
     }
@@ -148,7 +163,8 @@ async fn prune_timestamps_nanos() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -165,7 +181,8 @@ async fn prune_timestamps_micros() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -182,7 +199,8 @@ async fn prune_timestamps_millis() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -199,7 +217,8 @@ async fn prune_timestamps_seconds() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -214,7 +233,8 @@ async fn prune_date32() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(3))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -243,8 +263,9 @@ async fn prune_date64() {
     println!("{}", output.description());
     // This should prune out groups  without error
     assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_matched(), Some(1));
-    assert_eq!(output.row_groups_pruned(), Some(3));
+    // 'dates' table has 4 row groups, and only the first one is matched by the predicate
+    assert_eq!(output.row_groups_matched_statistics(), Some(1));
+    assert_eq!(output.row_groups_pruned_statistics(), Some(3));
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
 
@@ -256,7 +277,8 @@ async fn prune_disabled() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -276,7 +298,7 @@ async fn prune_disabled() {
 
     // This should not prune any
     assert_eq!(output.predicate_evaluation_errors(), Some(0));
-    assert_eq!(output.row_groups_matched(), Some(0));
+    assert_eq!(output.row_groups_matched(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(
         output.result_rows,
@@ -301,7 +323,8 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(3))
                     .with_pruned_by_stats(Some(1))
-                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_files(Some(0))
+                    .with_matched_by_bloom_filter(Some(3))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(11)
                     .test_row_group_prune()
@@ -315,7 +338,8 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(3))
                     .with_pruned_by_stats(Some(1))
-                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_files(Some(0))
+                    .with_matched_by_bloom_filter(Some(3))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(11)
                     .test_row_group_prune()
@@ -330,6 +354,7 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(1))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(1)
@@ -344,6 +369,7 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(1))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(1)
@@ -357,9 +383,10 @@ macro_rules! int_tests {
                     .with_scenario(Scenario::Int)
                     .with_query(&format!("SELECT * FROM t where abs(i{}) = 1", $bits))
                     .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(0))
+                    .with_matched_by_stats(Some(4))
                     .with_pruned_by_stats(Some(0))
-                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_files(Some(0))
+                    .with_matched_by_bloom_filter(Some(4))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(3)
                     .test_row_group_prune()
@@ -372,9 +399,10 @@ macro_rules! int_tests {
                     .with_scenario(Scenario::Int)
                     .with_query(&format!("SELECT * FROM t where i{}+1 = 1", $bits))
                     .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(0))
+                    .with_matched_by_stats(Some(4))
                     .with_pruned_by_stats(Some(0))
-                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_files(Some(0))
+                    .with_matched_by_bloom_filter(Some(4))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(2)
                     .test_row_group_prune()
@@ -387,9 +415,10 @@ macro_rules! int_tests {
                     .with_scenario(Scenario::Int)
                     .with_query(&format!("SELECT * FROM t where 1-i{} > 1", $bits))
                     .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(0))
+                    .with_matched_by_stats(Some(4))
                     .with_pruned_by_stats(Some(0))
-                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_files(Some(0))
+                    .with_matched_by_bloom_filter(Some(4))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(9)
                     .test_row_group_prune()
@@ -405,6 +434,7 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(1))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(1)
@@ -421,7 +451,8 @@ macro_rules! int_tests {
                     .with_query(&format!("SELECT * FROM t where i{} in (100)", $bits))
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(0))
-                    .with_pruned_by_stats(Some(4))
+                    .with_pruned_by_stats(Some(0))
+                    .with_pruned_files(Some(1))
                     .with_matched_by_bloom_filter(Some(0))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(0)
@@ -438,6 +469,7 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(4))
                     .with_pruned_by_stats(Some(0))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(4))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(19)
@@ -467,7 +499,8 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(3))
                     .with_pruned_by_stats(Some(1))
-                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_files(Some(0))
+                    .with_matched_by_bloom_filter(Some(3))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(11)
                     .test_row_group_prune()
@@ -482,6 +515,7 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(1))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(1)
@@ -496,6 +530,7 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(1))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(1)
@@ -509,9 +544,10 @@ macro_rules! uint_tests {
                     .with_scenario(Scenario::UInt)
                     .with_query(&format!("SELECT * FROM t where power(u{}, 2) = 25", $bits))
                     .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(0))
+                    .with_matched_by_stats(Some(4))
                     .with_pruned_by_stats(Some(0))
-                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_files(Some(0))
+                    .with_matched_by_bloom_filter(Some(4))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(2)
                     .test_row_group_prune()
@@ -524,9 +560,10 @@ macro_rules! uint_tests {
                     .with_scenario(Scenario::UInt)
                     .with_query(&format!("SELECT * FROM t where u{}+1 = 6", $bits))
                     .with_expected_errors(Some(0))
-                    .with_matched_by_stats(Some(0))
+                    .with_matched_by_stats(Some(4))
                     .with_pruned_by_stats(Some(0))
-                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_files(Some(0))
+                    .with_matched_by_bloom_filter(Some(4))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(2)
                     .test_row_group_prune()
@@ -542,6 +579,7 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(1))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(1)
@@ -559,6 +597,7 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(0))
                     .with_pruned_by_stats(Some(4))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(0))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(0)
@@ -575,6 +614,7 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(4))
                     .with_pruned_by_stats(Some(0))
+                    .with_pruned_files(Some(0))
                     .with_matched_by_bloom_filter(Some(4))
                     .with_pruned_by_bloom_filter(Some(0))
                     .with_expected_rows(19)
@@ -604,6 +644,7 @@ async fn prune_int32_eq_large_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(0)
@@ -626,6 +667,7 @@ async fn prune_uint32_eq_large_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(0)
@@ -641,7 +683,8 @@ async fn prune_f64_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -652,7 +695,8 @@ async fn prune_f64_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -669,7 +713,8 @@ async fn prune_f64_scalar_fun_and_gt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(2))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -683,9 +728,10 @@ async fn prune_f64_scalar_fun() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where abs(f-1) <= 0.000001")
         .with_expected_errors(Some(0))
-        .with_matched_by_stats(Some(0))
+        .with_matched_by_stats(Some(4))
         .with_pruned_by_stats(Some(0))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(4))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -699,9 +745,10 @@ async fn prune_f64_complex_expr() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where f+1 > 1.1")
         .with_expected_errors(Some(0))
-        .with_matched_by_stats(Some(0))
+        .with_matched_by_stats(Some(4))
         .with_pruned_by_stats(Some(0))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(4))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(9)
         .test_row_group_prune()
@@ -715,9 +762,10 @@ async fn prune_f64_complex_expr_subtract() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where 1-f > 1")
         .with_expected_errors(Some(0))
-        .with_matched_by_stats(Some(0))
+        .with_matched_by_stats(Some(4))
         .with_pruned_by_stats(Some(0))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(4))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(9)
         .test_row_group_prune()
@@ -735,7 +783,8 @@ async fn prune_decimal_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -746,7 +795,8 @@ async fn prune_decimal_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(8)
         .test_row_group_prune()
@@ -757,7 +807,8 @@ async fn prune_decimal_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -768,7 +819,8 @@ async fn prune_decimal_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(8)
         .test_row_group_prune()
@@ -786,6 +838,7 @@ async fn prune_decimal_eq() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
@@ -797,6 +850,7 @@ async fn prune_decimal_eq() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
@@ -809,6 +863,7 @@ async fn prune_decimal_eq() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
@@ -820,6 +875,7 @@ async fn prune_decimal_eq() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
@@ -839,7 +895,8 @@ async fn prune_decimal_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
         .test_row_group_prune()
@@ -850,7 +907,8 @@ async fn prune_decimal_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -861,7 +919,8 @@ async fn prune_decimal_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
         .test_row_group_prune()
@@ -872,7 +931,8 @@ async fn prune_decimal_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -885,6 +945,7 @@ async fn prune_decimal_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(2))
         .with_expected_rows(1)
@@ -898,6 +959,7 @@ async fn prune_decimal_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(2))
         .with_expected_rows(1)
@@ -911,6 +973,7 @@ async fn prune_decimal_in_list() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(2))
         .with_expected_rows(1)
@@ -929,6 +992,7 @@ async fn prune_string_eq_match() {
         // false positive on 'all backends' batch: 'backend five' < 'backend one' < 'backend three'
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(1)
@@ -947,6 +1011,7 @@ async fn prune_string_eq_no_match() {
         // false positive on 'all backends' batch: 'backend five' < 'backend one' < 'backend three'
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(0)
@@ -963,6 +1028,7 @@ async fn prune_string_eq_no_match() {
         // false positive on 'mixed' batch: 'backend one' < 'frontend nine' < 'frontend six'
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(2))
         .with_expected_rows(0)
@@ -980,6 +1046,7 @@ async fn prune_string_neq() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(14)
@@ -998,7 +1065,8 @@ async fn prune_string_lt() {
         // matches 'all backends' only
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(3)
         .test_row_group_prune()
@@ -1012,7 +1080,8 @@ async fn prune_string_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         // all backends from 'mixed' and 'all backends'
         .with_expected_rows(8)
@@ -1031,6 +1100,7 @@ async fn prune_binary_eq_match() {
         // false positive on 'all backends' batch: 'backend five' < 'backend one' < 'backend three'
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(1)
@@ -1049,6 +1119,7 @@ async fn prune_binary_eq_no_match() {
         // false positive on 'all backends' batch: 'backend five' < 'backend one' < 'backend three'
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(0)
@@ -1065,6 +1136,7 @@ async fn prune_binary_eq_no_match() {
         // false positive on 'mixed' batch: 'backend one' < 'frontend nine' < 'frontend six'
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(2))
         .with_expected_rows(0)
@@ -1082,6 +1154,7 @@ async fn prune_binary_neq() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(14)
@@ -1100,7 +1173,8 @@ async fn prune_binary_lt() {
         // matches 'all backends' only
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(3)
         .test_row_group_prune()
@@ -1114,7 +1188,8 @@ async fn prune_binary_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         // all backends from 'mixed' and 'all backends'
         .with_expected_rows(8)
@@ -1133,6 +1208,7 @@ async fn prune_fixedsizebinary_eq_match() {
         // false positive on 'all frontends' batch: 'fe1' < 'fe6' < 'fe7'
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(1)
@@ -1148,6 +1224,7 @@ async fn prune_fixedsizebinary_eq_match() {
         // false positive on 'all frontends' batch: 'fe1' < 'fe6' < 'fe7'
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(1)
@@ -1166,6 +1243,7 @@ async fn prune_fixedsizebinary_eq_no_match() {
         // false positive on 'mixed' batch: 'be1' < 'be9' < 'fe4'
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(0)
@@ -1183,6 +1261,7 @@ async fn prune_fixedsizebinary_neq() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(3))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(14)
@@ -1201,7 +1280,8 @@ async fn prune_fixedsizebinary_lt() {
         // matches 'all backends' only
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
@@ -1215,7 +1295,8 @@ async fn prune_fixedsizebinary_lt() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         // all backends from 'mixed' and 'all backends'
         .with_expected_rows(8)
@@ -1235,6 +1316,7 @@ async fn prune_periods_in_column_names() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(7)
@@ -1246,6 +1328,7 @@ async fn prune_periods_in_column_names() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
@@ -1257,6 +1340,7 @@ async fn prune_periods_in_column_names() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
+        .with_pruned_files(Some(0))
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
@@ -1277,9 +1361,10 @@ async fn test_row_group_with_null_values() {
         .with_query("SELECT * FROM t WHERE \"i8\" <= 5")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_pruned_by_stats(Some(2))
         .with_expected_rows(5)
-        .with_matched_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .test_row_group_prune()
         .await;
@@ -1290,9 +1375,10 @@ async fn test_row_group_with_null_values() {
         .with_query("SELECT * FROM t WHERE \"i8\" is Null")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
+        .with_pruned_files(Some(0))
         .with_pruned_by_stats(Some(1))
         .with_expected_rows(10)
-        .with_matched_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .test_row_group_prune()
         .await;
@@ -1303,9 +1389,10 @@ async fn test_row_group_with_null_values() {
         .with_query("SELECT * FROM t WHERE \"i16\" is Not Null")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_pruned_by_stats(Some(2))
         .with_expected_rows(5)
-        .with_matched_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .test_row_group_prune()
         .await;
@@ -1316,7 +1403,8 @@ async fn test_row_group_with_null_values() {
         .with_query("SELECT * FROM t WHERE \"i32\" > 7")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(0))
-        .with_pruned_by_stats(Some(3))
+        .with_pruned_by_stats(Some(0))
+        .with_pruned_files(Some(1))
         .with_expected_rows(0)
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
@@ -1332,6 +1420,7 @@ async fn test_bloom_filter_utf8_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(1)
         .with_pruned_by_bloom_filter(Some(0))
         .with_matched_by_bloom_filter(Some(1))
@@ -1344,6 +1433,7 @@ async fn test_bloom_filter_utf8_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_pruned_by_bloom_filter(Some(1))
         .with_matched_by_bloom_filter(Some(0))
@@ -1356,6 +1446,7 @@ async fn test_bloom_filter_utf8_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(1)
         .with_pruned_by_bloom_filter(Some(0))
         .with_matched_by_bloom_filter(Some(1))
@@ -1368,6 +1459,7 @@ async fn test_bloom_filter_utf8_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_pruned_by_bloom_filter(Some(1))
         .with_matched_by_bloom_filter(Some(0))
@@ -1383,6 +1475,7 @@ async fn test_bloom_filter_integer_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(1)
         .with_pruned_by_bloom_filter(Some(0))
         .with_matched_by_bloom_filter(Some(1))
@@ -1395,6 +1488,7 @@ async fn test_bloom_filter_integer_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_pruned_by_bloom_filter(Some(1))
         .with_matched_by_bloom_filter(Some(0))
@@ -1407,6 +1501,7 @@ async fn test_bloom_filter_integer_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(1)
         .with_pruned_by_bloom_filter(Some(0))
         .with_matched_by_bloom_filter(Some(1))
@@ -1419,6 +1514,7 @@ async fn test_bloom_filter_integer_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_pruned_by_bloom_filter(Some(1))
         .with_matched_by_bloom_filter(Some(0))
@@ -1434,6 +1530,7 @@ async fn test_bloom_filter_unsigned_integer_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(1)
         .with_pruned_by_bloom_filter(Some(0))
         .with_matched_by_bloom_filter(Some(1))
@@ -1446,6 +1543,7 @@ async fn test_bloom_filter_unsigned_integer_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_pruned_by_bloom_filter(Some(1))
         .with_matched_by_bloom_filter(Some(0))
@@ -1461,6 +1559,7 @@ async fn test_bloom_filter_binary_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(1)
         .with_pruned_by_bloom_filter(Some(0))
         .with_matched_by_bloom_filter(Some(1))
@@ -1473,6 +1572,7 @@ async fn test_bloom_filter_binary_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_pruned_by_bloom_filter(Some(1))
         .with_matched_by_bloom_filter(Some(0))
@@ -1485,6 +1585,7 @@ async fn test_bloom_filter_binary_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(1)
         .with_pruned_by_bloom_filter(Some(0))
         .with_matched_by_bloom_filter(Some(1))
@@ -1499,6 +1600,7 @@ async fn test_bloom_filter_binary_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_pruned_by_bloom_filter(Some(1))
         .with_matched_by_bloom_filter(Some(0))
@@ -1514,6 +1616,7 @@ async fn test_bloom_filter_decimal_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(1)
         .with_pruned_by_bloom_filter(Some(0))
         .with_matched_by_bloom_filter(Some(1))
@@ -1526,6 +1629,7 @@ async fn test_bloom_filter_decimal_dict() {
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
         .with_expected_rows(0)
         .with_pruned_by_bloom_filter(Some(1))
         .with_matched_by_bloom_filter(Some(0))

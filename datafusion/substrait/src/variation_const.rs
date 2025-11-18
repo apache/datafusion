@@ -50,11 +50,24 @@ pub const TIMESTAMP_NANO_TYPE_VARIATION_REF: u32 = 3;
 
 pub const DATE_32_TYPE_VARIATION_REF: u32 = 0;
 pub const DATE_64_TYPE_VARIATION_REF: u32 = 1;
+pub const TIME_32_TYPE_VARIATION_REF: u32 = 0;
+pub const TIME_64_TYPE_VARIATION_REF: u32 = 1;
 pub const DEFAULT_CONTAINER_TYPE_VARIATION_REF: u32 = 0;
 pub const LARGE_CONTAINER_TYPE_VARIATION_REF: u32 = 1;
 pub const VIEW_CONTAINER_TYPE_VARIATION_REF: u32 = 2;
+pub const DEFAULT_MAP_TYPE_VARIATION_REF: u32 = 0;
+pub const DICTIONARY_MAP_TYPE_VARIATION_REF: u32 = 1;
 pub const DECIMAL_128_TYPE_VARIATION_REF: u32 = 0;
 pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
+/// Used for the arrow type [`DataType::Interval`] with [`IntervalUnit::DayTime`].
+///
+/// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
+/// [`IntervalUnit::DayTime`]: datafusion::arrow::datatypes::IntervalUnit::DayTime
+pub const DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF: u32 = 0;
+/// Used for the arrow type [`DataType::Duration`].
+///
+/// [`DataType::Duration`]: datafusion::arrow::datatypes::DataType::Duration
+pub const DURATION_INTERVAL_DAY_TYPE_VARIATION_REF: u32 = 1;
 
 // For [user-defined types](https://substrait.io/types/type_classes/#user-defined-types).
 /// For [`DataType::Interval`] with [`IntervalUnit::YearMonth`].
@@ -96,7 +109,7 @@ pub const INTERVAL_DAY_TIME_TYPE_REF: u32 = 2;
 /// [`ScalarValue::IntervalMonthDayNano`]: datafusion::common::ScalarValue::IntervalMonthDayNano
 #[deprecated(
     since = "41.0.0",
-    note = "Use Substrait `IntervalCompund` type instead"
+    note = "Use Substrait `IntervalCompound` type instead"
 )]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
 
@@ -106,6 +119,14 @@ pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
 /// [`IntervalUnit::MonthDayNano`]: datafusion::arrow::datatypes::IntervalUnit::MonthDayNano
 #[deprecated(
     since = "43.0.0",
-    note = "Use Substrait `IntervalCompund` type instead"
+    note = "Use Substrait `IntervalCompound` type instead"
 )]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_NAME: &str = "interval-month-day-nano";
+
+/// Defined in <https://github.com/apache/arrow/blame/main/format/substrait/extension_types.yaml>
+pub const FLOAT_16_TYPE_NAME: &str = "fp16";
+
+/// For [`DataType::Null`]
+///
+/// [`DataType::Null`]: datafusion::arrow::datatypes::DataType::Null
+pub const NULL_TYPE_NAME: &str = "null";

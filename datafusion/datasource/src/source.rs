@@ -22,12 +22,17 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, SchedulingType,
+};
+use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
+use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
@@ -36,7 +41,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPropagation,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
 
 /// A source of data, typically a list of files or memory
@@ -58,8 +63,60 @@ use datafusion_physical_plan::filter_pushdown::{
 /// Requires `Debug` to assist debugging
 ///
 /// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
-/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest//datafusion/datasource/memory/struct.MemorySourceConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemorySourceConfig.html
 /// [`FileSource`]: crate::file::FileSource
+/// [`FileFormat``]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/index.html
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+///
+/// The following diagram shows how DataSource, FileSource, and DataSourceExec are related
+/// ```text
+///                       ┌─────────────────────┐                              -----► execute path
+///                       │                     │                              ┄┄┄┄┄► init path
+///                       │   DataSourceExec    │  
+///                       │                     │    
+///                       └───────▲─────────────┘
+///                               ┊  │
+///                               ┊  │
+///                       ┌──────────▼──────────┐                            ┌──────────-──────────┐
+///                       │                     │                            |                     |
+///                       │  DataSource(trait)  │                            | TableProvider(trait)|
+///                       │                     │                            |                     |
+///                       └───────▲─────────────┘                            └─────────────────────┘
+///                               ┊  │                                                  ┊
+///               ┌───────────────┿──┴────────────────┐                                 ┊
+///               |   ┌┄┄┄┄┄┄┄┄┄┄┄┘                   |                                 ┊
+///               |   ┊                               |                                 ┊
+///    ┌──────────▼──────────┐             ┌──────────▼──────────┐                      ┊
+///    │                     │             │                     │           ┌──────────▼──────────┐
+///    │   FileScanConfig    │             │ MemorySourceConfig  │           |                     |
+///    │                     │             │                     │           |  FileFormat(trait)  |
+///    └──────────────▲──────┘             └─────────────────────┘           |                     |
+///               │   ┊                                                      └─────────────────────┘
+///               │   ┊                                                                 ┊
+///               │   ┊                                                                 ┊
+///    ┌──────────▼──────────┐                                               ┌──────────▼──────────┐
+///    │                     │                                               │     ArrowSource     │
+///    │ FileSource(trait)   ◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│          ...        │
+///    │                     │                                               │    ParquetSource    │
+///    └─────────────────────┘                                               └─────────────────────┘
+///               │
+///               │
+///               │
+///               │
+///    ┌──────────▼──────────┐
+///    │     ArrowSource     │
+///    │          ...        │
+///    │    ParquetSource    │
+///    └─────────────────────┘
+///               |
+/// FileOpener (called by FileStream)
+///               │
+///    ┌──────────▼──────────┐
+///    │                     │
+///    │     RecordBatch     │
+///    │                     │
+///    └─────────────────────┘
+/// ```
 pub trait DataSource: Send + Sync + Debug {
     fn open(
         &self,
@@ -91,7 +148,24 @@ pub trait DataSource: Send + Sync + Debug {
 
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
-    fn statistics(&self) -> Result<Statistics>;
+    fn scheduling_type(&self) -> SchedulingType {
+        SchedulingType::NonCooperative
+    }
+
+    /// Returns statistics for a specific partition, or aggregate statistics
+    /// across all partitions if `partition` is `None`.
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
+
+    /// Returns aggregate statistics across all partitions.
+    ///
+    /// # Deprecated
+    /// Use [`Self::partition_statistics`] instead, which provides more fine-grained
+    /// control over statistics retrieval (per-partition or aggregate).
+    #[deprecated(since = "51.0.0", note = "Use partition_statistics instead")]
+    fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
@@ -100,8 +174,8 @@ pub trait DataSource: Send + Sync + Debug {
     }
     fn try_swapping_with_projection(
         &self,
-        _projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
+        _projection: &[ProjectionExpr],
+    ) -> Result<Option<Arc<dyn DataSource>>>;
     /// Try to push down filters into this DataSource.
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
@@ -111,7 +185,9 @@ pub trait DataSource: Send + Sync + Debug {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-        Ok(FilterPushdownPropagation::unsupported(filters))
+        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+            vec![PushedDown::No; filters.len()],
+        ))
     }
 }
 
@@ -204,33 +280,26 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, context)
+        let stream = self.data_source.open(partition, Arc::clone(&context))?;
+        let batch_size = context.session_config().batch_size();
+        log::debug!(
+            "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
+        );
+        let metrics = self.data_source.metrics();
+        let split_metrics = SplitMetrics::new(&metrics, partition);
+        Ok(Box::pin(BatchSplitStream::new(
+            stream,
+            batch_size,
+            split_metrics,
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.data_source.metrics().clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.data_source.statistics()
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if let Some(partition) = partition {
-            let mut statistics = Statistics::new_unknown(&self.schema());
-            if let Some(file_config) =
-                self.data_source.as_any().downcast_ref::<FileScanConfig>()
-            {
-                if let Some(file_group) = file_config.file_groups.get(partition) {
-                    if let Some(stat) = file_group.file_statistics(None) {
-                        statistics = stat.clone();
-                    }
-                }
-            }
-            Ok(statistics)
-        } else {
-            Ok(self.data_source.statistics()?)
-        }
+        self.data_source.partition_statistics(partition)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -248,25 +317,39 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.data_source.try_swapping_with_projection(projection)
+        match self
+            .data_source
+            .try_swapping_with_projection(projection.expr())?
+        {
+            Some(new_data_source) => {
+                Ok(Some(Arc::new(DataSourceExec::new(new_data_source))))
+            }
+            None => Ok(None),
+        }
     }
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
-        let res = self.data_source.try_pushdown_filters(
-            child_pushdown_result.parent_filters.collect_all(),
-            config,
-        )?;
+        let parent_filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|f| f.filter)
+            .collect_vec();
+        let res = self
+            .data_source
+            .try_pushdown_filters(parent_filters.clone(), config)?;
         match res.updated_node {
             Some(data_source) => {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
-                new_node.cache =
-                    Self::compute_properties(Arc::clone(&new_node.data_source));
+                // Re-compute properties since we have new filters which will impact equivalence info
+                new_node.cache = Self::compute_properties(&new_node.data_source);
+
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
                     updated_node: Some(Arc::new(new_node)),
@@ -285,8 +368,9 @@ impl DataSourceExec {
         Arc::new(Self::new(Arc::new(data_source)))
     }
 
+    // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&data_source));
+        let cache = Self::compute_properties(&data_source);
         Self { data_source, cache }
     }
 
@@ -296,7 +380,7 @@ impl DataSourceExec {
     }
 
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(Arc::clone(&data_source));
+        self.cache = Self::compute_properties(&data_source);
         self.data_source = data_source;
         self
     }
@@ -313,13 +397,14 @@ impl DataSourceExec {
         self
     }
 
-    fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
+    fn compute_properties(data_source: &Arc<dyn DataSource>) -> PlanProperties {
         PlanProperties::new(
             data_source.eq_properties(),
             data_source.output_partitioning(),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(data_source.scheduling_type())
     }
 
     /// Downcast the `DataSourceExec`'s `data_source` to a specific file source

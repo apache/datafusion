@@ -33,7 +33,7 @@ EXPLAIN WITH "NUMBERS" AS (SELECT 1 as a, 2 as b, 3 as c) SELECT "NUMBERS".* FRO
 logical_plan
 01)SubqueryAlias: NUMBERS
 02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -107,20 +107,19 @@ logical_plan
 01)SubqueryAlias: nodes
 02)--RecursiveQuery: is_distinct=false
 03)----Projection: Int64(1) AS id
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)----Projection: nodes.id + Int64(1) AS id
 06)------Filter: nodes.id < Int64(10)
-07)--------TableScan: nodes
+07)--------TableScan: nodes projection=[id]
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
 02)--ProjectionExec: expr=[1 as id]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[id@0 + 1 as id]
-06)------CoalesceBatchesExec: target_batch_size=8192
-07)--------FilterExec: id@0 < 10
-08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)------------WorkTableExec: name=nodes
+06)------FilterExec: id@0 < 10
+07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)----------WorkTableExec: name=nodes
 
 # setup
 statement ok
@@ -152,21 +151,19 @@ logical_plan
 01)Sort: balances.time ASC NULLS LAST, balances.name ASC NULLS LAST, balances.account_balance ASC NULLS LAST
 02)--SubqueryAlias: balances
 03)----RecursiveQuery: is_distinct=false
-04)------Projection: balance.time, balance.name, balance.account_balance
-05)--------TableScan: balance
-06)------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
-07)--------Filter: balances.time < Int64(10)
-08)----------TableScan: balances
+04)------TableScan: balance projection=[time, name, account_balance]
+05)------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
+06)--------Filter: balances.time < Int64(10)
+07)----------TableScan: balances projection=[time, name, account_balance]
 physical_plan
 01)SortExec: expr=[time@0 ASC NULLS LAST, name@1 ASC NULLS LAST, account_balance@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--RecursiveQueryExec: name=balances, is_distinct=false
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/balance.csv]]}, projection=[time, name, account_balance], file_type=csv, has_header=true
 04)----CoalescePartitionsExec
 05)------ProjectionExec: expr=[time@0 + 1 as time, name@1 as name, account_balance@2 + 10 as account_balance]
-06)--------CoalesceBatchesExec: target_batch_size=2
-07)----------FilterExec: time@0 < 10
-08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)--------------WorkTableExec: name=balances
+06)--------FilterExec: time@0 < 10
+07)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)------------WorkTableExec: name=balances
 
 # recursive CTE with static term derived from table works
 # note that this is run with batch size set to 2. This should produce multiple batches per iteration since the input
@@ -720,14 +717,14 @@ logical_plan
 01)SubqueryAlias: recursive_cte
 02)--RecursiveQuery: is_distinct=false
 03)----Projection: Int64(1) AS val
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)----Projection: Int64(2) AS val
 06)------Cross Join: 
 07)--------Filter: recursive_cte.val < Int64(2)
 08)----------TableScan: recursive_cte
 09)--------SubqueryAlias: sub_cte
 10)----------Projection: Int64(2) AS val
-11)------------EmptyRelation
+11)------------EmptyRelation: rows=1
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]
@@ -735,12 +732,11 @@ physical_plan
 04)--ProjectionExec: expr=[2 as val]
 05)----CrossJoinExec
 06)------CoalescePartitionsExec
-07)--------CoalesceBatchesExec: target_batch_size=8182
-08)----------FilterExec: val@0 < 2
-09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)--------------WorkTableExec: name=recursive_cte
-11)------ProjectionExec: expr=[2 as val]
-12)--------PlaceholderRowExec
+07)--------FilterExec: val@0 < 2
+08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------------WorkTableExec: name=recursive_cte
+10)------ProjectionExec: expr=[2 as val]
+11)--------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
@@ -765,7 +761,7 @@ WITH RECURSIVE my_cte AS (
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types, and cannot be casted
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'abc' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'abc' to value of Int64 type
 WITH RECURSIVE my_cte AS (
     SELECT 1 AS a
     UNION ALL
@@ -869,7 +865,7 @@ explain with numbers(a,b,c) as (select 1 as x, 2 as y, 3 as z) select * from num
 logical_plan
 01)SubqueryAlias: numbers
 02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -880,7 +876,7 @@ explain with numbers(a,b,c) as (select 1,2,3) select * from numbers;
 logical_plan
 01)SubqueryAlias: numbers
 02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -891,7 +887,7 @@ explain with numbers as (select 1 as a, 2 as b, 3 as c) select * from numbers;
 logical_plan
 01)SubqueryAlias: numbers
 02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -931,7 +927,7 @@ logical_plan
 02)--TableScan: j1 projection=[a]
 03)--SubqueryAlias: j2
 04)----Projection: Int64(1)
-05)------EmptyRelation
+05)------EmptyRelation: rows=1
 physical_plan
 01)CrossJoinExec
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
@@ -955,20 +951,19 @@ logical_plan
 01)SubqueryAlias: numbers
 02)--RecursiveQuery: is_distinct=false
 03)----Projection: Int64(1) AS n
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)----Projection: numbers.n + Int64(1)
 06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers
+07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
-06)------CoalesceBatchesExec: target_batch_size=8182
-07)--------FilterExec: n@0 < 10
-08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)------------WorkTableExec: name=numbers
+06)------FilterExec: n@0 < 10
+07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)----------WorkTableExec: name=numbers
 
 query TT
 explain WITH RECURSIVE numbers AS (
@@ -981,20 +976,73 @@ logical_plan
 01)SubqueryAlias: numbers
 02)--RecursiveQuery: is_distinct=false
 03)----Projection: Int64(1) AS n
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)----Projection: numbers.n + Int64(1)
 06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers
+07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
-06)------CoalesceBatchesExec: target_batch_size=8182
-07)--------FilterExec: n@0 < 10
-08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)------------WorkTableExec: name=numbers
+06)------FilterExec: n@0 < 10
+07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)----------WorkTableExec: name=numbers
+
+# Test for issue #16998: SortExec shares DynamicFilterPhysicalExpr across multiple executions
+query II
+with recursive r as (
+  select 0 as k, 0 as v
+  union all
+  (
+    select *
+    from r
+    order by v
+    limit 1
+  )
+)
+select *
+from r
+limit 5;
+----
+0 0
+0 0
+0 0
+0 0
+0 0
+
+query TT
+explain
+with recursive r as (
+  select 0 as k, 0 as v
+  union all
+  (
+    select *
+    from r
+    order by v
+    limit 1
+  )
+)
+select *
+from r
+limit 5;
+----
+logical_plan
+01)SubqueryAlias: r
+02)--Limit: skip=0, fetch=5
+03)----RecursiveQuery: is_distinct=false
+04)------Projection: Int64(0) AS k, Int64(0) AS v
+05)--------EmptyRelation: rows=1
+06)------Sort: r.v ASC NULLS LAST, fetch=1
+07)--------TableScan: r projection=[k, v]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--RecursiveQueryExec: name=r, is_distinct=false
+03)----ProjectionExec: expr=[0 as k, 0 as v]
+04)------PlaceholderRowExec
+05)----SortExec: TopK(fetch=1), expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
+06)------WorkTableExec: name=r
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;

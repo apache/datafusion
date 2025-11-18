@@ -520,28 +520,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_expressions_in_virtual_table() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("virtual_table_with_expressions.substrait.json").await?;
+
+        assert_snapshot!(
+        plan_str,
+        @r#"
+            Projection: dummy1 AS result1, dummy2 AS result2
+              Values: (Int64(0), Utf8("temp")), (Int64(1), Utf8("test"))
+            "#
+                );
+        Ok(())
+    }
+
+    #[tokio::test]
+    //There are some Substrait functions that can be represented with nested built-in expressions
+    //xor:bool_bool is implemented in the consumer with binary expressions
+    //This tests that the consumer correctly builds the nested expressions for this function
+    async fn test_built_in_binary_exprs_for_xor() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("scalar_fn_to_built_in_binary_expr_xor.substrait.json")
+                .await?;
+
+        //Test correct plan structure
+        assert_snapshot!(plan_str,
+          @r#"
+        Projection: a, b, (a OR b) AND NOT a AND b AS result
+          Values: (Boolean(true), Boolean(true)), (Boolean(true), Boolean(false)), (Boolean(false), Boolean(true)), (Boolean(false), Boolean(false))
+        "#
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    //There are some Substrait functions that can be represented with nested built-in expressions
+    //and_not:bool_bool is implemented in the consumer as binary expressions
+    //This tests that the consumer correctly builds the nested expressions for this function
+    async fn test_built_in_binary_exprs_for_and_not() -> Result<()> {
+        let plan_str = test_plan_to_string(
+            "scalar_fn_to_built_in_binary_expr_and_not.substrait.json",
+        )
+        .await?;
+
+        //Test correct plan structure
+        assert_snapshot!(plan_str,
+          @r#"
+        Projection: a, b, a AND NOT b AS result
+          Values: (Boolean(true), Boolean(true)), (Boolean(true), Boolean(false)), (Boolean(false), Boolean(true)), (Boolean(false), Boolean(false))
+        "#
+        );
+
+        Ok(())
+    }
+
+    //The between:any_any_any function is implemented as Expr::Between in the Substrait consumer
+    //This test tests that the consumer correctly builds the Expr::Between expression for this function
+    #[tokio::test]
+    async fn test_between_expr() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("scalar_fn_to_between_expr.substrait.json").await?;
+        assert_snapshot!(plan_str,
+          @r#"
+          Projection: expr BETWEEN low AND high AS result
+            Values: (Int8(2), Int8(1), Int8(3)), (Int8(4), Int8(1), Int8(2))
+          "#
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_logb_expr() -> Result<()> {
+        let plan_str = test_plan_to_string("scalar_fn_logb_expr.substrait.json").await?;
+        assert_snapshot!(plan_str,
+          @r#"
+          Projection: x, base, log(base, x) AS result
+            Values: (Float32(1), Float32(10)), (Float32(100), Float32(10))
+          "#
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_multiple_joins() -> Result<()> {
         let plan_str = test_plan_to_string("multiple_joins.json").await?;
-        assert_eq!(
+        assert_snapshot!(
             plan_str,
-            "Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS count_third\
-            \n  Left Join: left.id = right.id\
-            \n    SubqueryAlias: left\
-            \n      Left Join: left.id = right.id\
-            \n        SubqueryAlias: left\
-            \n          Left Join: left.id = right.id\
-            \n            SubqueryAlias: left\
-            \n              Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
-            \n                Values: (Int64(1)), (Int64(2))\
-            \n            SubqueryAlias: right\
-            \n              Aggregate: groupBy=[[id, category]], aggr=[[]]\
-            \n                Values: (Int64(1), Utf8(\"info\")), (Int64(2), Utf8(\"low\"))\
-            \n        SubqueryAlias: right\
-            \n          Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
-            \n            Values: (Int64(1)), (Int64(2))\
-            \n    SubqueryAlias: right\
-            \n      Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
-            \n        Values: (Int64(1)), (Int64(2))"
+            @r#"
+        Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS count_third
+          Left Join: left.id = right.id
+            SubqueryAlias: left
+              Projection: left.id, left.count(Int64(1)), left.id:1, left.category, right.id AS id:2, right.count(Int64(1)) AS count(Int64(1)):1
+                Left Join: left.id = right.id
+                  SubqueryAlias: left
+                    Projection: left.id, left.count(Int64(1)), right.id AS id:1, right.category
+                      Left Join: left.id = right.id
+                        SubqueryAlias: left
+                          Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]
+                            Values: (Int64(1)), (Int64(2))
+                        SubqueryAlias: right
+                          Aggregate: groupBy=[[id, category]], aggr=[[]]
+                            Values: (Int64(1), Utf8("info")), (Int64(2), Utf8("low"))
+                  SubqueryAlias: right
+                    Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]
+                      Values: (Int64(1)), (Int64(2))
+            SubqueryAlias: right
+              Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]
+                Values: (Int64(1)), (Int64(2))
+        "#
         );
         Ok(())
     }
@@ -564,21 +651,58 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_unions() -> Result<()> {
         let plan_str = test_plan_to_string("multiple_unions.json").await?;
+
+        let mut settings = insta::Settings::clone_current();
+        settings.add_filter(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            "[UUID]",
+        );
+        settings.bind(|| {
+            assert_snapshot!(
+            plan_str,
+            @r#"
+            Projection: [UUID] AS product_category, [UUID] AS product_type, product_key
+              Union
+                Projection: Utf8("people") AS [UUID], Utf8("people") AS [UUID], sales.product_key
+                  Left Join: sales.product_key = food.@food_id
+                    TableScan: sales
+                    TableScan: food
+                Union
+                  Projection: people.$f3, people.$f5, people.product_key0
+                    Left Join: people.product_key0 = food.@food_id
+                      TableScan: people
+                      TableScan: food
+                  TableScan: more_products
+            "#
+        );
+        });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_join_with_expression_key() -> Result<()> {
+        let plan_str = test_plan_to_string("join_with_expression_key.json").await?;
         assert_snapshot!(
         plan_str,
         @r#"
-        Projection: Utf8("people") AS product_category, Utf8("people")__temp__0 AS product_type, product_key
-          Union
-            Projection: Utf8("people"), Utf8("people") AS Utf8("people")__temp__0, sales.product_key
-              Left Join: sales.product_key = food.@food_id
-                TableScan: sales
-                TableScan: food
-            Union
-              Projection: people.$f3, people.$f5, people.product_key0
-                Left Join: people.product_key0 = food.@food_id
-                  TableScan: people
-                  TableScan: food
-              TableScan: more_products
+        Projection: left.index_name AS index, right.upper(host) AS host, left.max(size_bytes) AS idx_size, right.max(total_bytes) AS db_size, CAST(left.max(size_bytes) AS Float64) / CAST(right.max(total_bytes) AS Float64) * Float64(100) AS pct_of_db
+          Inner Join: left.upper(host) = right.upper(host)
+            SubqueryAlias: left
+              Aggregate: groupBy=[[index_name, upper(host)]], aggr=[[max(size_bytes)]]
+                Projection: size_bytes, index_name, upper(host)
+                  Filter: index_name = Utf8("aaa")
+                    Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
+            SubqueryAlias: right
+              Aggregate: groupBy=[[upper(host)]], aggr=[[max(total_bytes)]]
+                Projection: total_bytes, upper(host)
+                  Inner Join:  Filter: upper(host) = upper(host)
+                    Values: (Utf8("host-a"), Int64(107)), (Utf8("host-b"), Int64(214))
+                    Projection: upper(host)
+                      Aggregate: groupBy=[[index_name, upper(host)]], aggr=[[max(size_bytes)]]
+                        Projection: size_bytes, index_name, upper(host)
+                          Filter: index_name = Utf8("aaa")
+                            Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
         "#
         );
 

@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// https://github.com/apache/datafusion/issues/18503
+#![deny(clippy::needless_pass_by_value)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 extern crate wasm_bindgen;
 
@@ -92,7 +95,8 @@ mod test {
     };
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::{
-        config::SessionConfig, disk_manager::DiskManagerConfig,
+        config::SessionConfig,
+        disk_manager::{DiskManagerBuilder, DiskManagerMode},
         runtime_env::RuntimeEnvBuilder,
     };
     use datafusion_physical_plan::collect;
@@ -112,7 +116,9 @@ mod test {
 
     fn get_ctx() -> Arc<SessionContext> {
         let rt = RuntimeEnvBuilder::new()
-            .with_disk_manager(DiskManagerConfig::Disabled)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
             .build_arc()
             .unwrap();
         let session_config = SessionConfig::new().with_target_partitions(1);

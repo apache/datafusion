@@ -424,10 +424,12 @@ SELECT chr(CAST(NULL AS int))
 ----
 NULL
 
-statement error DataFusion error: Execution error: null character not permitted.
+query T
 SELECT chr(CAST(0 AS int))
+----
+\0
 
-statement error DataFusion error: Execution error: requested character too large for encoding.
+statement error DataFusion error: Execution error: invalid Unicode scalar value: 9223372036854775807
 SELECT chr(CAST(9223372036854775807 AS bigint))
 
 query T
@@ -695,6 +697,11 @@ NULL
 
 query T
 SELECT to_hex(2147483647)
+----
+7fffffff
+
+query T
+SELECT to_hex(CAST(2147483647 as BIGINT UNSIGNED))
 ----
 7fffffff
 
@@ -2073,9 +2080,6 @@ host2 2.2 202
 host3 3.3 303
 
 statement ok
-set datafusion.sql_parser.dialect = 'Postgres';
-
-statement ok
 create table t (a float) as values (1), (2), (3);
 
 query TT
@@ -2093,9 +2097,6 @@ physical_plan
 
 statement ok
 drop table t;
-
-statement ok
-set datafusion.sql_parser.dialect = 'Generic';
 
 # test between expression with null
 query I
@@ -2126,3 +2127,26 @@ query T
 select E'foo\t\tbar';
 ----
 foo		bar
+
+statement ok
+create table t (a float) as values (1), (null), (3);
+
+# https://github.com/apache/datafusion/issues/17055
+# is not null did not correctly infer as boolean in udf argument position
+query B
+select greatest(a is not null, false) from t;
+----
+true
+false
+true
+
+# same for is null
+query B
+select greatest(a is null, false) from t;
+----
+false
+true
+false
+
+statement ok
+drop table t;

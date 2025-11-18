@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -22,7 +23,7 @@ use arrow::array::{
     PrimitiveArray,
 };
 use arrow::datatypes::{Field, Int64Type};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
@@ -45,7 +46,7 @@ fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
             black_box(
                 ArrayAggAccumulator::try_new(&list_item_data_type, false)
                     .unwrap()
-                    .merge_batch(&[values.clone()])
+                    .merge_batch(std::slice::from_ref(&values))
                     .unwrap(),
             )
         })

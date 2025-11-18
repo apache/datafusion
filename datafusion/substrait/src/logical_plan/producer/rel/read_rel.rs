@@ -48,7 +48,7 @@ pub fn from_table_scan(
     });
 
     let table_schema = scan.source.schema().to_dfschema_ref()?;
-    let base_schema = to_substrait_named_struct(&table_schema)?;
+    let base_schema = to_substrait_named_struct(producer, &table_schema)?;
 
     let filter_option = if scan.filters.is_empty() {
         None
@@ -83,7 +83,10 @@ pub fn from_table_scan(
     }))
 }
 
-pub fn from_empty_relation(e: &EmptyRelation) -> datafusion::common::Result<Box<Rel>> {
+pub fn from_empty_relation(
+    producer: &mut impl SubstraitProducer,
+    e: &EmptyRelation,
+) -> datafusion::common::Result<Box<Rel>> {
     if e.produce_one_row {
         return not_impl_err!("Producing a row from empty relation is unsupported");
     }
@@ -91,7 +94,7 @@ pub fn from_empty_relation(e: &EmptyRelation) -> datafusion::common::Result<Box<
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
-            base_schema: Some(to_substrait_named_struct(&e.schema)?),
+            base_schema: Some(to_substrait_named_struct(producer, &e.schema)?),
             filter: None,
             best_effort_filter: None,
             projection: None,
@@ -115,10 +118,10 @@ pub fn from_values(
             let fields = row
                 .iter()
                 .map(|v| match v {
-                    Expr::Literal(sv) => to_substrait_literal(producer, sv),
+                    Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
                     Expr::Alias(alias) => match alias.expr.as_ref() {
                         // The schema gives us the names, so we can skip aliases
-                        Expr::Literal(sv) => to_substrait_literal(producer, sv),
+                        Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
                         _ => Err(substrait_datafusion_err!(
                                     "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
                                 )),
@@ -135,7 +138,7 @@ pub fn from_values(
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
-            base_schema: Some(to_substrait_named_struct(&v.schema)?),
+            base_schema: Some(to_substrait_named_struct(producer, &v.schema)?),
             filter: None,
             best_effort_filter: None,
             projection: None,

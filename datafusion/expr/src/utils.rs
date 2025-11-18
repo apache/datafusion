@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction, WindowFunctionParams};
+use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
@@ -38,7 +38,10 @@ use datafusion_common::{
     Result, TableReference,
 };
 
+#[cfg(not(feature = "sql"))]
+use crate::expr::{ExceptSelectItem, ExcludeSelectItem};
 use indexmap::IndexSet;
+#[cfg(feature = "sql")]
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -276,7 +279,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Unnest(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
@@ -351,7 +354,7 @@ fn get_excluded_columns(
 /// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
 fn get_exprs_except_skipped(
     schema: &DFSchema,
-    columns_to_skip: HashSet<Column>,
+    columns_to_skip: &HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema.iter().map(Expr::from).collect::<Vec<Expr>>()
@@ -416,7 +419,7 @@ pub fn expand_wildcard(
     };
     // Add each excluded `Column` to columns_to_skip
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(schema, columns_to_skip))
+    Ok(get_exprs_except_skipped(schema, &columns_to_skip))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
@@ -461,7 +464,7 @@ pub fn expand_qualified_wildcard(
     columns_to_skip.extend(excluded_columns);
     Ok(get_exprs_except_skipped(
         &qualified_dfschema,
-        columns_to_skip,
+        &columns_to_skip,
     ))
 }
 
@@ -579,7 +582,8 @@ pub fn group_window_expr_by_sort_keys(
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
     window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction( WindowFunction{ params: WindowFunctionParams { partition_by, order_by, ..}, .. }) => {
+        Expr::WindowFunction(window_fun) => {
+            let WindowFunctionParams{ partition_by, order_by, ..} = &window_fun.as_ref().params;
             let sort_key = generate_sort_key(partition_by, order_by)?;
             if let Some((_, values)) = result.iter_mut().find(
                 |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
@@ -608,7 +612,7 @@ pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Ve
 
 /// Collect all deeply nested `Expr::WindowFunction`. They are returned in order of occurrence
 /// (depth first), with duplicates omitted.
-pub fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
+pub fn find_window_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::WindowFunction { .. })
     })
@@ -689,7 +693,23 @@ where
     err
 }
 
-/// Create field meta-data from an expression, for use in a result set schema
+/// Create schema fields from an expression list, for use in result set schema construction
+///
+/// This function converts a list of expressions into a list of complete schema fields,
+/// making comprehensive determinations about each field's properties including:
+/// - **Data type**: Resolved based on expression type and input schema context
+/// - **Nullability**: Determined by expression-specific nullability rules
+/// - **Metadata**: Computed based on expression type (preserving, merging, or generating new metadata)
+/// - **Table reference scoping**: Establishing proper qualified field references
+///
+/// Each expression is converted to a field by calling [`Expr::to_field`], which performs
+/// the complete field resolution process for all field properties.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of `(Option<TableReference>, Arc<Field>)` tuples,
+/// where each Field contains complete schema information (type, nullability, metadata)
+/// and proper table reference scoping for the corresponding expression.
 pub fn exprlist_to_fields<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
@@ -784,7 +804,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
                     indexes.push(idx);
                 }
             }
-            Expr::Literal(_) => {
+            Expr::Literal(_, _) => {
                 indexes.push(usize::MAX);
             }
             _ => {}
@@ -813,6 +833,8 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Float16 => true,
         DataType::Float32 => true,
         DataType::Float64 => true,
+        DataType::Decimal32(_, _) => true,
+        DataType::Decimal64(_, _) => true,
         DataType::Decimal128(_, _) => true,
         DataType::Decimal256(_, _) => true,
         DataType::Timestamp(_, _) => true,
@@ -868,7 +890,6 @@ pub fn check_all_columns_from_schema(
 ///    all referenced column of the right side is from the right schema.
 /// 2. Or opposite. All referenced column of the left side is from the right schema,
 ///    and the right side is from the left schema.
-///
 pub fn find_valid_equijoin_key_pair(
     left_key: &Expr,
     right_key: &Expr,
@@ -907,6 +928,7 @@ pub fn find_valid_equijoin_key_pair(
 ///     round(Float64)
 ///     round(Float32)
 /// ```
+#[expect(clippy::needless_pass_by_value)]
 pub fn generate_signature_error_msg(
     func_name: &str,
     func_signature: Signature,
@@ -914,7 +936,7 @@ pub fn generate_signature_error_msg(
 ) -> String {
     let candidate_signatures = func_signature
         .type_signature
-        .to_string_repr()
+        .to_string_repr_with_names(func_signature.parameter_names.as_deref())
         .iter()
         .map(|args_str| format!("\t{func_name}({args_str})"))
         .collect::<Vec<String>>()
@@ -1012,10 +1034,7 @@ pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
 /// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use split_conjunction_owned to split them
 /// assert_eq!(split_conjunction_owned(expr), split);
@@ -1038,10 +1057,7 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
 /// let expr = col("a").eq(lit(1)).add(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use split_binary_owned to split them
 /// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
@@ -1109,10 +1125,7 @@ fn split_binary_impl<'a>(
 /// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use conjunction to join them together with `AND`
 /// assert_eq!(conjunction(split), Some(expr));
@@ -1135,10 +1148,7 @@ pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
 /// let expr = col("a").eq(lit(1)).or(col("b").eq(lit(2)));
 ///
 /// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
+/// let split = vec![col("a").eq(lit(1)), col("b").eq(lit(2))];
 ///
 /// // use disjunction to join them together with `OR`
 /// assert_eq!(disjunction(split), Some(expr));
@@ -1222,6 +1232,9 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 }
 
 /// merge inputs schema into a single schema.
+///
+/// This function merges schemas from multiple logical plan inputs using [`DFSchema::merge`].
+/// Refer to that documentation for details on precedence and metadata handling.
 pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
     if inputs.len() == 1 {
         inputs[0].schema().as_ref().clone()
@@ -1263,11 +1276,14 @@ pub fn collect_subquery_cols(
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr_vec_fmt, grouping_set, lit, rollup,
-        test::function_stub::max_udaf, test::function_stub::min_udaf,
-        test::function_stub::sum_udaf, Cast, ExprFunctionExt, WindowFunctionDefinition,
+        col, cube,
+        expr::WindowFunction,
+        expr_vec_fmt, grouping_set, lit, rollup,
+        test::function_stub::{max_udaf, min_udaf, sum_udaf},
+        Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
+    use datafusion_expr_common::signature::{TypeSignature, Volatility};
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -1279,19 +1295,19 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_window() -> Result<()> {
-        let max1 = Expr::WindowFunction(WindowFunction::new(
+        let max1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let max2 = Expr::WindowFunction(WindowFunction::new(
+        let max2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(WindowFunction::new(
+        let min3 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ));
-        let sum4 = Expr::WindowFunction(WindowFunction::new(
+        let sum4 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ));
@@ -1309,25 +1325,25 @@ mod tests {
         let age_asc = Sort::new(col("age"), true, true);
         let name_desc = Sort::new(col("name"), false, true);
         let created_at_desc = Sort::new(col("created_at"), false, true);
-        let max1 = Expr::WindowFunction(WindowFunction::new(
+        let max1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let max2 = Expr::WindowFunction(WindowFunction::new(
+        let max2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(WindowFunction::new(
+        let min3 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let sum4 = Expr::WindowFunction(WindowFunction::new(
+        let sum4 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ))
@@ -1686,5 +1702,53 @@ mod tests {
         let list_union_type =
             DataType::List(Arc::new(Field::new("my_union", union_type, true)));
         assert!(!can_hash(&list_union_type));
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_with_parameter_names() {
+        let sig = Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Int64,
+                ]),
+            ],
+            Volatility::Immutable,
+        )
+        .with_parameter_names(vec![
+            "str".to_string(),
+            "start_pos".to_string(),
+            "length".to_string(),
+        ])
+        .expect("valid parameter names");
+
+        // Generate error message with only 1 argument provided
+        let error_msg = generate_signature_error_msg("substr", sig, &[DataType::Utf8]);
+
+        assert!(
+            error_msg.contains("str: Utf8, start_pos: Int64"),
+            "Expected 'str: Utf8, start_pos: Int64' in error message, got: {error_msg}"
+        );
+        assert!(
+            error_msg.contains("str: Utf8, start_pos: Int64, length: Int64"),
+            "Expected 'str: Utf8, start_pos: Int64, length: Int64' in error message, got: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_without_parameter_names() {
+        let sig = Signature::one_of(
+            vec![TypeSignature::Any(2), TypeSignature::Any(3)],
+            Volatility::Immutable,
+        );
+
+        let error_msg = generate_signature_error_msg("my_func", sig, &[DataType::Int32]);
+
+        assert!(
+            error_msg.contains("Any, Any"),
+            "Expected 'Any, Any' without parameter names, got: {error_msg}"
+        );
     }
 }

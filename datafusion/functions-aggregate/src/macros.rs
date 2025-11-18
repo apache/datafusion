@@ -28,7 +28,7 @@ macro_rules! make_udaf_expr {
                 vec![$($arg),*],
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ))
         }
@@ -52,7 +52,7 @@ macro_rules! make_udaf_expr_and_func {
                 args,
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ))
         }

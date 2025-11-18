@@ -38,3 +38,13 @@ SELECT hex(a) from VALUES ('foo'), (NULL), ('foobarbaz') AS t(a);
 666F6F
 NULL
 666F6F62617262617A
+
+statement ok
+CREATE TABLE t_utf8view as VALUES (arrow_cast('foo', 'Utf8View')), (NULL), (arrow_cast('foobarbaz', 'Utf8View'));
+
+query T
+SELECT hex(column1) FROM t_utf8view;
+----
+666F6F
+NULL
+666F6F62617262617A

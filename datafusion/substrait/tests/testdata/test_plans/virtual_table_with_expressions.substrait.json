@@ -1,0 +1,75 @@
+{
+    "relations": [
+      {
+        "root": {
+          "input": {
+            "read": {
+              "common": {
+                "direct": {
+                }
+              },
+              "baseSchema": {
+                "names": [
+                  "dummy1", "dummy2"
+                ],
+                "struct": {
+                  "types": [
+                    {
+                      "i64": {
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    },
+                    {
+                      "string": {
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    }
+                  ],
+                  "nullability": "NULLABILITY_REQUIRED"
+                }
+              },
+              "virtualTable": {
+                "expressions": [
+                  {
+                    "fields": [
+                      {
+                          "literal": {
+                              "i64": "0",
+                              "nullable": false
+                          }
+                      },
+                      {
+                        "literal": {
+                            "string": "temp",
+                            "nullable": false
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "fields": [
+                      {
+                          "literal": {
+                              "i64": "1",
+                              "nullable": false
+                          }
+                      },
+                      {
+                        "literal": {
+                            "string": "test",
+                            "nullable": false
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "names": [
+            "result1", "result2"
+          ]
+        }
+      }
+    ]
+  }

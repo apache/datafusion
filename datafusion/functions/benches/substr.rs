@@ -22,10 +22,12 @@ use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn create_args_without_count<O: OffsetSizeTrait>(
@@ -101,18 +103,19 @@ fn invoke_substr_with_args(
     args: Vec<ColumnarValue>,
     number_rows: usize,
 ) -> Result<ColumnarValue, DataFusionError> {
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+    let config_options = Arc::new(ConfigOptions::default());
 
     unicode::substr().invoke_with_args(ScalarFunctionArgs {
         args: args.clone(),
         arg_fields,
         number_rows,
-        return_field: &Field::new("f", DataType::Utf8View, true),
+        return_field: Field::new("f", DataType::Utf8View, true).into(),
+        config_options: Arc::clone(&config_options),
     })
 }
 

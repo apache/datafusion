@@ -41,12 +41,11 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_group_by_constant::EliminateGroupByConstant;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
-use crate::eliminate_nested_union::EliminateNestedUnion;
-use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::optimize_projections::OptimizeProjections;
+use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
@@ -107,7 +106,7 @@ pub trait OptimizerConfig {
     /// Return alias generator used to generate unique aliases for subqueries
     fn alias_generator(&self) -> &Arc<AliasGenerator>;
 
-    fn options(&self) -> &ConfigOptions;
+    fn options(&self) -> Arc<ConfigOptions>;
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
         None
@@ -125,7 +124,7 @@ pub struct OptimizerContext {
     /// Alias generator used to generate unique aliases for subqueries
     alias_generator: Arc<AliasGenerator>,
 
-    options: ConfigOptions,
+    options: Arc<ConfigOptions>,
 }
 
 impl OptimizerContext {
@@ -134,6 +133,11 @@ impl OptimizerContext {
         let mut options = ConfigOptions::default();
         options.optimizer.filter_null_join_keys = true;
 
+        Self::new_with_config_options(Arc::new(options))
+    }
+
+    /// Create a optimizer config with provided [ConfigOptions].
+    pub fn new_with_config_options(options: Arc<ConfigOptions>) -> Self {
         Self {
             query_execution_start_time: Utc::now(),
             alias_generator: Arc::new(AliasGenerator::new()),
@@ -143,7 +147,9 @@ impl OptimizerContext {
 
     /// Specify whether to enable the filter_null_keys rule
     pub fn filter_null_keys(mut self, filter_null_keys: bool) -> Self {
-        self.options.optimizer.filter_null_join_keys = filter_null_keys;
+        Arc::make_mut(&mut self.options)
+            .optimizer
+            .filter_null_join_keys = filter_null_keys;
         self
     }
 
@@ -160,13 +166,13 @@ impl OptimizerContext {
     /// Specify whether the optimizer should skip rules that produce
     /// errors, or fail the query
     pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
-        self.options.optimizer.skip_failed_rules = b;
+        Arc::make_mut(&mut self.options).optimizer.skip_failed_rules = b;
         self
     }
 
     /// Specify how many times to attempt to optimize the plan
     pub fn with_max_passes(mut self, v: u8) -> Self {
-        self.options.optimizer.max_passes = v as usize;
+        Arc::make_mut(&mut self.options).optimizer.max_passes = v as usize;
         self
     }
 }
@@ -187,8 +193,8 @@ impl OptimizerConfig for OptimizerContext {
         &self.alias_generator
     }
 
-    fn options(&self) -> &ConfigOptions {
-        &self.options
+    fn options(&self) -> Arc<ConfigOptions> {
+        Arc::clone(&self.options)
     }
 }
 
@@ -221,7 +227,7 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            Arc::new(EliminateNestedUnion::new()),
+            Arc::new(OptimizeUnions::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
@@ -234,8 +240,6 @@ impl Optimizer {
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
-            // Must be after PropagateEmptyRelation
-            Arc::new(EliminateOneUnion::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit

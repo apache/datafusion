@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::regex::{compile_and_cache_regex, compile_regex};
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -29,7 +30,6 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use itertools::izip;
 use regex::Regex;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -61,7 +61,7 @@ use std::sync::Arc;
   - **U**: swap the meaning of x* and x*?"#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexpCountFunc {
     signature: Signature,
 }
@@ -550,42 +550,6 @@ where
     }
 }
 
-fn compile_and_cache_regex<'strings, 'cache>(
-    regex: &'strings str,
-    flags: Option<&'strings str>,
-    regex_cache: &'cache mut HashMap<(&'strings str, Option<&'strings str>), Regex>,
-) -> Result<&'cache Regex, ArrowError>
-where
-    'strings: 'cache,
-{
-    let result = match regex_cache.entry((regex, flags)) {
-        Entry::Occupied(occupied_entry) => occupied_entry.into_mut(),
-        Entry::Vacant(vacant_entry) => {
-            let compiled = compile_regex(regex, flags)?;
-            vacant_entry.insert(compiled)
-        }
-    };
-    Ok(result)
-}
-
-fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
-    let pattern = match flags {
-        None | Some("") => regex.to_string(),
-        Some(flags) => {
-            if flags.contains("g") {
-                return Err(ArrowError::ComputeError(
-                    "regexp_count() does not support global flag".to_string(),
-                ));
-            }
-            format!("(?{flags}){regex}")
-        }
-    };
-
-    Regex::new(&pattern).map_err(|_| {
-        ArrowError::ComputeError(format!("Regular expression did not compile: {pattern}"))
-    })
-}
-
 fn count_matches(
     value: Option<&str>,
     pattern: &Regex,
@@ -617,6 +581,7 @@ mod tests {
     use super::*;
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarFunctionArgs;
 
     #[test]
@@ -651,18 +616,18 @@ mod tests {
             .map(|sv| ColumnarValue::Scalar(sv.clone()))
             .collect();
 
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
             .enumerate()
-            .map(|(idx, a)| Field::new(format!("arg_{idx}"), a.data_type(), true))
-            .collect::<Vec<Field>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+            .map(|(idx, a)| Field::new(format!("arg_{idx}"), a.data_type(), true).into())
+            .collect::<Vec<_>>();
 
         RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
             args: args_values,
             arg_fields,
             number_rows: args.len(),
-            return_field: &Field::new("f", Int64, true),
+            return_field: Field::new("f", Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })
     }
 
@@ -877,9 +842,9 @@ mod tests {
         values.iter().enumerate().for_each(|(pos, &v)| {
             // utf8
             let v_sv = ScalarValue::Utf8(Some(v.to_string()));
-            let regex_sv = ScalarValue::Utf8(regex.get(pos).map(|s| s.to_string()));
+            let regex_sv = ScalarValue::Utf8(regex.get(pos).map(|s| (*s).to_string()));
             let start_sv = ScalarValue::Int64(Some(start));
-            let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| f.to_string()));
+            let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| (*f).to_string()));
             let expected = expected.get(pos).cloned();
             let re = regexp_count_with_scalar_values(&[
                 v_sv,
@@ -896,8 +861,10 @@ mod tests {
 
             // largeutf8
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
-            let regex_sv = ScalarValue::LargeUtf8(regex.get(pos).map(|s| s.to_string()));
-            let flags_sv = ScalarValue::LargeUtf8(flags.get(pos).map(|f| f.to_string()));
+            let regex_sv =
+                ScalarValue::LargeUtf8(regex.get(pos).map(|s| (*s).to_string()));
+            let flags_sv =
+                ScalarValue::LargeUtf8(flags.get(pos).map(|f| (*f).to_string()));
             let re = regexp_count_with_scalar_values(&[
                 v_sv,
                 regex_sv,
@@ -913,8 +880,10 @@ mod tests {
 
             // utf8view
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
-            let regex_sv = ScalarValue::Utf8View(regex.get(pos).map(|s| s.to_string()));
-            let flags_sv = ScalarValue::Utf8View(flags.get(pos).map(|f| f.to_string()));
+            let regex_sv =
+                ScalarValue::Utf8View(regex.get(pos).map(|s| (*s).to_string()));
+            let flags_sv =
+                ScalarValue::Utf8View(flags.get(pos).map(|f| (*f).to_string()));
             let re = regexp_count_with_scalar_values(&[
                 v_sv,
                 regex_sv,

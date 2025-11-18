@@ -68,7 +68,7 @@ fn observer(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
 ## Writing Optimization Rules
 
 Please refer to the
-[optimizer_rule.rs](../../../datafusion-examples/examples/optimizer_rule.rs)
+[optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/optimizer_rule.rs)
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.
 
@@ -428,7 +428,7 @@ Each of these statistics is wrapped in a `Precision` type that indicates whether
 exact or estimated, allowing the optimizer to make informed decisions about the reliability
 of its cardinality estimates.
 
-### Boundary Analaysis Flow
+### Boundary Analysis Flow
 
 The boundary analysis process flows through several stages, with each stage building
 upon the information gathered in previous stages. The `AnalysisContext` is continuously

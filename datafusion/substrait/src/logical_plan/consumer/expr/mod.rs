@@ -38,9 +38,9 @@ pub use subquery::*;
 pub use window_function::*;
 
 use crate::extensions::Extensions;
-use crate::logical_plan::consumer::utils::rename_field;
 use crate::logical_plan::consumer::{
-    from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer,
+    from_substrait_named_struct, rename_field, DefaultSubstraitConsumer,
+    SubstraitConsumer,
 };
 use datafusion::arrow::datatypes::Field;
 use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, DFSchemaRef};
@@ -93,7 +93,7 @@ pub async fn from_substrait_rex(
                 consumer.consume_dynamic_parameter(expr, input_schema).await
             }
         },
-        None => substrait_err!("Expression must set rex_type: {:?}", expression),
+        None => substrait_err!("Expression must set rex_type: {expression:?}"),
     }
 }
 
@@ -152,7 +152,6 @@ pub async fn from_substrait_extended_expr(
             &substrait_expr.output_names,
             expr_idx,
             &mut names_idx,
-            /*rename_self=*/ true,
         )?;
         exprs.push((expr, output_field));
     }
@@ -222,7 +221,7 @@ mod tests {
         // Just registering a single function (index 0) so that the plan
         // does not throw a "function not found" error.
         let mut extensions = Extensions::default();
-        extensions.register_function("count".to_string());
+        extensions.register_function("count");
         consumer.extensions = &extensions;
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
@@ -249,7 +248,7 @@ mod tests {
         let mut consumer = test_consumer();
 
         let mut extensions = Extensions::default();
-        extensions.register_function("count".to_string());
+        extensions.register_function("count");
         consumer.extensions = &extensions;
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {

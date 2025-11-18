@@ -24,9 +24,7 @@ use std::{cmp::Ordering, sync::atomic, sync::Arc};
 
 mod pool;
 pub mod proxy {
-    pub use datafusion_common::utils::proxy::{
-        HashTableAllocExt, RawTableAllocExt, VecAllocExt,
-    };
+    pub use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 }
 
 pub use pool::*;
@@ -57,8 +55,8 @@ pub use pool::*;
 /// `GroupByHashExec`. It does NOT track and limit memory used internally by
 /// other operators such as `DataSourceExec` or the `RecordBatch`es that flow
 /// between operators. Furthermore, operators should not reserve memory for the
-/// batches they produce. Instead, if a parent operator needs to hold batches
-/// from its children in memory for an extended period, it is the parent
+/// batches they produce. Instead, if a consumer operator needs to hold batches
+/// from its producers in memory for an extended period, it is the consumer
 /// operator's responsibility to reserve the necessary memory for those batches.
 ///
 /// In order to avoid allocating memory until the OS or the container system
@@ -97,6 +95,67 @@ pub use pool::*;
 /// reached the memory limit, it will return an error. Then, `Aggregate`
 /// operator will spill the intermediate buffers to disk, and release memory
 /// from the memory pool, and continue to retry memory reservation.
+///
+/// # Related Structs
+///
+/// To better understand memory management in DataFusion, here are the key structs
+/// and their relationships:
+///
+/// - [`MemoryConsumer`]: A named allocation traced by a particular operator. If an
+///   execution is parallelized, and there are multiple partitions of the same
+///   operator, each partition will have a separate `MemoryConsumer`.
+/// - `SharedRegistration`: A registration of a `MemoryConsumer` with a `MemoryPool`.
+///   `SharedRegistration` and `MemoryPool` have a many-to-one relationship. `MemoryPool`
+///   implementation can decide how to allocate memory based on the registered consumers.
+///   (e.g. `FairSpillPool` will try to share available memory evenly among all registered
+///   consumers)
+/// - [`MemoryReservation`]: Each `MemoryConsumer`/operator can have multiple
+///   `MemoryReservation`s for different internal data structures. The relationship
+///   between `MemoryConsumer` and `MemoryReservation` is one-to-many. This design
+///   enables cleaner operator implementations:
+///   - Different `MemoryReservation`s can be used for different purposes
+///   - `MemoryReservation` follows RAII principles - to release a reservation,
+///     simply drop the `MemoryReservation` object. When all `MemoryReservation`s
+///     for a `SharedRegistration` are dropped, the `SharedRegistration` is dropped
+///     when its reference count reaches zero, automatically unregistering the
+///     `MemoryConsumer` from the `MemoryPool`.
+///
+/// ## Relationship Diagram
+///
+/// ```text
+/// ┌──────────────────┐     ┌──────────────────┐
+/// │MemoryReservation │     │MemoryReservation │
+/// └───┬──────────────┘     └──────────────────┘ ......
+///     │belongs to                    │
+///     │      ┌───────────────────────┘           │  │
+///     │      │                                   │  │
+///     ▼      ▼                                   ▼  ▼
+/// ┌────────────────────────┐       ┌────────────────────────┐
+/// │   SharedRegistration   │       │   SharedRegistration   │
+/// │   ┌────────────────┐   │       │   ┌────────────────┐   │
+/// │   │                │   │       │   │                │   │
+/// │   │ MemoryConsumer │   │       │   │ MemoryConsumer │   │
+/// │   │                │   │       │   │                │   │
+/// │   └────────────────┘   │       │   └────────────────┘   │
+/// └────────────┬───────────┘       └────────────┬───────────┘
+///              │                                │
+///              │                        register│into
+///              │                                │
+///              └─────────────┐   ┌──────────────┘
+///                            │   │
+///                            ▼   ▼
+///    ╔═══════════════════════════════════════════════════╗
+///    ║                                                   ║
+///    ║                    MemoryPool                     ║
+///    ║                                                   ║
+///    ╚═══════════════════════════════════════════════════╝
+/// ```
+///
+/// For example, there are two parallel partitions of an operator X: each partition
+/// corresponds to a `MemoryConsumer` in the above diagram. Inside each partition of
+/// operator X, there are typically several `MemoryReservation`s - one for each
+/// internal data structure that needs memory tracking (e.g., 1 reservation for the hash
+/// table, and 1 reservation for buffered input, etc.).
 ///
 /// # Implementing `MemoryPool`
 ///
@@ -442,6 +501,56 @@ pub fn human_readable_size(size: usize) -> String {
     format!("{value:.1} {unit}")
 }
 
+/// Present count in human-readable form with K, M, B, T suffixes
+pub fn human_readable_count(count: usize) -> String {
+    let count = count as u64;
+    let (value, unit) = {
+        if count >= 1_000_000_000_000 {
+            (count as f64 / 1_000_000_000_000.0, " T")
+        } else if count >= 1_000_000_000 {
+            (count as f64 / 1_000_000_000.0, " B")
+        } else if count >= 1_000_000 {
+            (count as f64 / 1_000_000.0, " M")
+        } else if count >= 1_000 {
+            (count as f64 / 1_000.0, " K")
+        } else {
+            return count.to_string();
+        }
+    };
+
+    // Format with appropriate precision
+    // For values >= 100, show 1 decimal place (e.g., 123.4 K)
+    // For values < 100, show 2 decimal places (e.g., 10.12 K)
+    if value >= 100.0 {
+        format!("{value:.1}{unit}")
+    } else {
+        format!("{value:.2}{unit}")
+    }
+}
+
+/// Present duration in human-readable form with 2 decimal places
+pub fn human_readable_duration(nanos: u64) -> String {
+    const NANOS_PER_SEC: f64 = 1_000_000_000.0;
+    const NANOS_PER_MILLI: f64 = 1_000_000.0;
+    const NANOS_PER_MICRO: f64 = 1_000.0;
+
+    let nanos_f64 = nanos as f64;
+
+    if nanos >= 1_000_000_000 {
+        // >= 1 second: show in seconds
+        format!("{:.2}s", nanos_f64 / NANOS_PER_SEC)
+    } else if nanos >= 1_000_000 {
+        // >= 1 millisecond: show in milliseconds
+        format!("{:.2}ms", nanos_f64 / NANOS_PER_MILLI)
+    } else if nanos >= 1_000 {
+        // >= 1 microsecond: show in microseconds
+        format!("{:.2}µs", nanos_f64 / NANOS_PER_MICRO)
+    } else {
+        // < 1 microsecond: show in nanoseconds
+        format!("{nanos}ns")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,5 +646,58 @@ mod tests {
         assert_eq!(r1.size(), 3);
         assert_eq!(r2.size(), 25);
         assert_eq!(pool.reserved(), 28);
+    }
+
+    #[test]
+    fn test_human_readable_count() {
+        // Test small numbers (< 1000) - should display as-is
+        assert_eq!(human_readable_count(0), "0");
+        assert_eq!(human_readable_count(1), "1");
+        assert_eq!(human_readable_count(999), "999");
+
+        // Test thousands (K)
+        assert_eq!(human_readable_count(1_000), "1.00 K");
+        assert_eq!(human_readable_count(10_100), "10.10 K");
+        assert_eq!(human_readable_count(1_532), "1.53 K");
+        assert_eq!(human_readable_count(99_999), "100.00 K");
+
+        // Test millions (M)
+        assert_eq!(human_readable_count(1_000_000), "1.00 M");
+        assert_eq!(human_readable_count(1_532_000), "1.53 M");
+        assert_eq!(human_readable_count(99_000_000), "99.00 M");
+        assert_eq!(human_readable_count(123_456_789), "123.5 M");
+
+        // Test billions (B)
+        assert_eq!(human_readable_count(1_000_000_000), "1.00 B");
+        assert_eq!(human_readable_count(1_532_000_000), "1.53 B");
+        assert_eq!(human_readable_count(999_999_999_999), "1000.0 B");
+
+        // Test trillions (T)
+        assert_eq!(human_readable_count(1_000_000_000_000), "1.00 T");
+        assert_eq!(human_readable_count(42_000_000_000_000), "42.00 T");
+    }
+
+    #[test]
+    fn test_human_readable_duration() {
+        // Test nanoseconds (< 1µs)
+        assert_eq!(human_readable_duration(0), "0ns");
+        assert_eq!(human_readable_duration(1), "1ns");
+        assert_eq!(human_readable_duration(999), "999ns");
+
+        // Test microseconds (1µs to < 1ms)
+        assert_eq!(human_readable_duration(1_000), "1.00µs");
+        assert_eq!(human_readable_duration(1_234), "1.23µs");
+        assert_eq!(human_readable_duration(999_999), "1000.00µs");
+
+        // Test milliseconds (1ms to < 1s)
+        assert_eq!(human_readable_duration(1_000_000), "1.00ms");
+        assert_eq!(human_readable_duration(11_295_377), "11.30ms");
+        assert_eq!(human_readable_duration(1_234_567), "1.23ms");
+        assert_eq!(human_readable_duration(999_999_999), "1000.00ms");
+
+        // Test seconds (>= 1s)
+        assert_eq!(human_readable_duration(1_000_000_000), "1.00s");
+        assert_eq!(human_readable_duration(1_234_567_890), "1.23s");
+        assert_eq!(human_readable_duration(42_000_000_000), "42.00s");
     }
 }

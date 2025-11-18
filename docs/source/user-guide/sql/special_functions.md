@@ -69,6 +69,7 @@ Expands an array or map into rows.
 ### `unnest (struct)`
 
 Expand a struct fields into individual columns.
+Each field of the struct will be prefixed with `__unnest_placeholder` and could be accessed via `"__unnest_placeholder(<struct>).<field>"`.
 
 #### Arguments
 
@@ -91,10 +92,10 @@ Expand a struct fields into individual columns.
 +---------------------------+
 
 > select unnest(struct_column) from foov;
-+------------------------------------------+------------------------------------------+
-| unnest_placeholder(foov.struct_column).a | unnest_placeholder(foov.struct_column).b |
-+------------------------------------------+------------------------------------------+
-| 5                                        | a string                                 |
-| 6                                        | another string                           |
-+------------------------------------------+------------------------------------------+
++--------------------------------------------+--------------------------------------------+
+| __unnest_placeholder(foov.struct_column).a | __unnest_placeholder(foov.struct_column).b |
++--------------------------------------------+--------------------------------------------+
+| 5                                          | a string                                   |
+| 6                                          | another string                             |
++--------------------------------------------+--------------------------------------------+
 ```

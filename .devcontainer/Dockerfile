@@ -4,10 +4,12 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     # Remove imagemagick due to https://security-tracker.debian.org/tracker/CVE-2019-10131
     && apt-get purge -y imagemagick imagemagick-6-common
 
-# Add protoc
-# https://datafusion.apache.org/contributor-guide/getting_started.html#protoc-installation
-RUN curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-linux-x86_64.zip \
-    && unzip protoc-25.1-linux-x86_64.zip -d $HOME/.local \
-    && rm protoc-25.1-linux-x86_64.zip
+# setup the containers WORKDIR so npm install works
+# https://stackoverflow.com/questions/57534295/npm-err-tracker-idealtree-already-exists-while-creating-the-docker-image-for
+WORKDIR /root
 
-ENV PATH="$PATH:$HOME/.local/bin"
+# Add protoc, npm, prettier
+# https://datafusion.apache.org/contributor-guide/development_environment.html#protoc-installation
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev npm nodejs\
+    && rm -rf /var/lib/apt/lists/*

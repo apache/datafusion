@@ -17,20 +17,15 @@
 
 mod kernels;
 
-use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
-use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
-use arrow::compute::kernels::cmp::*;
-use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
+use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use arrow::compute::{
-    cast, filter_record_batch, ilike, like, nilike, nlike, SlicesIterator,
-};
+use arrow::compute::{cast, filter_record_batch, SlicesIterator};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
@@ -44,12 +39,13 @@ use datafusion_expr::statistics::{
     new_generic_from_binary_op, Distribution,
 };
 use datafusion_expr::{ColumnarValue, Operator};
-use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
+use datafusion_physical_expr_common::datum::{apply, apply_cmp};
 
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
+    concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
 };
 
 /// Binary expression
@@ -160,181 +156,10 @@ fn boolean_op(
     left: &dyn Array,
     right: &dyn Array,
     op: impl FnOnce(&BooleanArray, &BooleanArray) -> Result<BooleanArray, ArrowError>,
-) -> Result<Arc<(dyn Array + 'static)>, ArrowError> {
+) -> Result<Arc<dyn Array + 'static>, ArrowError> {
     let ll = as_boolean_array(left).expect("boolean_op failed to downcast left array");
     let rr = as_boolean_array(right).expect("boolean_op failed to downcast right array");
     op(ll, rr).map(|t| Arc::new(t) as _)
-}
-
-macro_rules! binary_string_array_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
-        match $LEFT.data_type() {
-            DataType::Utf8 => {
-                compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
-            },
-            DataType::Utf8View => {
-                compute_utf8view_flag_op!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
-            }
-            DataType::LargeUtf8 => {
-                compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
-            },
-            other => internal_err!(
-                "Data type {:?} not supported for binary_string_array_flag_op operation '{}' on string array",
-                other, stringify!($OP)
-            ),
-        }
-    }};
-}
-
-/// Invoke a compute kernel on a pair of binary data arrays with flags
-macro_rules! compute_utf8_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8_flag_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8_flag_op failed to downcast array");
-
-        let flag = if $FLAG {
-            Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
-        } else {
-            None
-        };
-        let mut array = $OP(ll, rr, flag.as_ref())?;
-        if $NOT {
-            array = not(&array).unwrap();
-        }
-        Ok(Arc::new(array))
-    }};
-}
-
-/// Invoke a compute kernel on a pair of binary data arrays with flags
-macro_rules! compute_utf8view_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8view_flag_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8view_flag_op failed to downcast array");
-
-        let flag = if $FLAG {
-            Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
-        } else {
-            None
-        };
-        let mut array = $OP(ll, rr, flag.as_ref())?;
-        if $NOT {
-            array = not(&array).unwrap();
-        }
-        Ok(Arc::new(array))
-    }};
-}
-
-macro_rules! binary_string_array_flag_op_scalar {
-    ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
-        // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
-        // the query can be optimized in such a way that operands will be dicts, so we need to support it here
-        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Utf8 => {
-                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
-            },
-            DataType::Utf8View => {
-                compute_utf8view_flag_op_scalar!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
-            }
-            DataType::LargeUtf8 => {
-                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
-            },
-            DataType::Dictionary(_, _) => {
-                let values = $LEFT.as_any_dictionary().values();
-
-                match values.data_type() {
-                    DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
-                    DataType::Utf8View => compute_utf8view_flag_op_scalar!(values, $RIGHT, $OP, StringViewArray, $NOT, $FLAG),
-                    DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
-                    other => internal_err!(
-                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
-                        other, stringify!($OP)
-                    ),
-                }.map(
-                    // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
-                    |evaluated_values| downcast_dictionary_array! {
-                        $LEFT => {
-                            let unpacked_dict = evaluated_values.take_iter($LEFT.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
-                            Arc::new(unpacked_dict) as _
-                        },
-                        _ => unreachable!(),
-                    }
-                )
-            },
-            other => internal_err!(
-                "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
-                other, stringify!($OP)
-            ),
-        };
-        Some(result)
-    }};
-}
-
-/// Invoke a compute kernel on a data array and a scalar value with flag
-macro_rules! compute_utf8_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8_flag_op_scalar failed to downcast array");
-
-        let string_value = match $RIGHT.try_as_str() {
-            Some(Some(string_value)) => string_value,
-            // null literal or non string
-            _ => return internal_err!(
-                        "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                        $RIGHT, stringify!($OP)
-                    )
-        };
-
-        let flag = $FLAG.then_some("i");
-        let mut array =
-            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
-        if $NOT {
-            array = not(&array).unwrap();
-        }
-
-        Ok(Arc::new(array))
-    }};
-}
-
-/// Invoke a compute kernel on a data array and a scalar value with flag
-macro_rules! compute_utf8view_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8view_flag_op_scalar failed to downcast array");
-
-        let string_value = match $RIGHT.try_as_str() {
-            Some(Some(string_value)) => string_value,
-            // null literal or non string
-            _ => return internal_err!(
-                        "compute_utf8view_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                        $RIGHT, stringify!($OP)
-                    )
-        };
-
-        let flag = $FLAG.then_some("i");
-        let mut array =
-            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
-        if $NOT {
-            array = not(&array).unwrap();
-        }
-
-        Ok(Arc::new(array))
-    }};
 }
 
 impl PhysicalExpr for BinaryExpr {
@@ -375,7 +200,44 @@ impl PhysicalExpr for BinaryExpr {
                 // as it takes into account cases where the selection contains null values.
                 let batch = filter_record_batch(batch, selection)?;
                 let right_ret = self.right.evaluate(&batch)?;
-                return pre_selection_scatter(selection, right_ret);
+
+                match &right_ret {
+                    ColumnarValue::Array(array) => {
+                        // When the array on the right is all true or all false, skip the scatter process
+                        let boolean_array = array.as_boolean();
+                        let true_count = boolean_array.true_count();
+                        let length = boolean_array.len();
+                        if true_count == length {
+                            return Ok(lhs);
+                        } else if true_count == 0 && boolean_array.null_count() == 0 {
+                            // If the right-hand array is returned at this point,the lengths will be inconsistent;
+                            // returning a scalar can avoid this issue
+                            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
+                                Some(false),
+                            )));
+                        }
+
+                        return pre_selection_scatter(selection, Some(boolean_array));
+                    }
+                    ColumnarValue::Scalar(scalar) => {
+                        if let ScalarValue::Boolean(v) = scalar {
+                            // When the scalar is true or false, skip the scatter process
+                            if let Some(v) = v {
+                                if *v {
+                                    return Ok(lhs);
+                                } else {
+                                    return Ok(right_ret);
+                                }
+                            } else {
+                                return pre_selection_scatter(selection, None);
+                            }
+                        } else {
+                            return internal_err!(
+                                "Expected boolean scalar value, found: {right_ret:?}"
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -386,13 +248,6 @@ impl PhysicalExpr for BinaryExpr {
         let schema = batch.schema();
         let input_schema = schema.as_ref();
 
-        if left_data_type.is_nested() {
-            if right_data_type != left_data_type {
-                return internal_err!("type mismatch");
-            }
-            return apply_cmp_for_nested(self.op, &lhs, &rhs);
-        }
-
         match self.op {
             Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
@@ -402,18 +257,21 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
             Operator::Divide => return apply(&lhs, &rhs, div),
             Operator::Modulo => return apply(&lhs, &rhs, rem),
-            Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
-            Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
-            Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
-            Operator::Gt => return apply_cmp(&lhs, &rhs, gt),
-            Operator::LtEq => return apply_cmp(&lhs, &rhs, lt_eq),
-            Operator::GtEq => return apply_cmp(&lhs, &rhs, gt_eq),
-            Operator::IsDistinctFrom => return apply_cmp(&lhs, &rhs, distinct),
-            Operator::IsNotDistinctFrom => return apply_cmp(&lhs, &rhs, not_distinct),
-            Operator::LikeMatch => return apply_cmp(&lhs, &rhs, like),
-            Operator::ILikeMatch => return apply_cmp(&lhs, &rhs, ilike),
-            Operator::NotLikeMatch => return apply_cmp(&lhs, &rhs, nlike),
-            Operator::NotILikeMatch => return apply_cmp(&lhs, &rhs, nilike),
+
+            Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::Gt
+            | Operator::LtEq
+            | Operator::GtEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch => {
+                return apply_cmp(self.op, &lhs, &rhs);
+            }
             _ => {}
         }
 
@@ -475,33 +333,27 @@ impl PhysicalExpr for BinaryExpr {
         let right_interval = children[1];
 
         if self.op.eq(&Operator::And) {
-            if interval.eq(&Interval::CERTAINLY_TRUE) {
+            if interval.eq(&Interval::TRUE) {
                 // A certainly true logical conjunction can only derive from possibly
                 // true operands. Otherwise, we prove infeasibility.
-                Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
-                    && !right_interval.eq(&Interval::CERTAINLY_FALSE))
-                .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
-            } else if interval.eq(&Interval::CERTAINLY_FALSE) {
+                Ok((!left_interval.eq(&Interval::FALSE)
+                    && !right_interval.eq(&Interval::FALSE))
+                .then(|| vec![Interval::TRUE, Interval::TRUE]))
+            } else if interval.eq(&Interval::FALSE) {
                 // If the logical conjunction is certainly false, one of the
                 // operands must be false. However, it's not always possible to
                 // determine which operand is false, leading to different scenarios.
 
                 // If one operand is certainly true and the other one is uncertain,
                 // then the latter must be certainly false.
-                if left_interval.eq(&Interval::CERTAINLY_TRUE)
-                    && right_interval.eq(&Interval::UNCERTAIN)
+                if left_interval.eq(&Interval::TRUE)
+                    && right_interval.eq(&Interval::TRUE_OR_FALSE)
                 {
-                    Ok(Some(vec![
-                        Interval::CERTAINLY_TRUE,
-                        Interval::CERTAINLY_FALSE,
-                    ]))
-                } else if right_interval.eq(&Interval::CERTAINLY_TRUE)
-                    && left_interval.eq(&Interval::UNCERTAIN)
+                    Ok(Some(vec![Interval::TRUE, Interval::FALSE]))
+                } else if right_interval.eq(&Interval::TRUE)
+                    && left_interval.eq(&Interval::TRUE_OR_FALSE)
                 {
-                    Ok(Some(vec![
-                        Interval::CERTAINLY_FALSE,
-                        Interval::CERTAINLY_TRUE,
-                    ]))
+                    Ok(Some(vec![Interval::FALSE, Interval::TRUE]))
                 }
                 // If both children are uncertain, or if one is certainly false,
                 // we cannot conclusively refine their intervals. In this case,
@@ -515,33 +367,27 @@ impl PhysicalExpr for BinaryExpr {
                 Ok(Some(vec![]))
             }
         } else if self.op.eq(&Operator::Or) {
-            if interval.eq(&Interval::CERTAINLY_FALSE) {
+            if interval.eq(&Interval::FALSE) {
                 // A certainly false logical disjunction can only derive from certainly
                 // false operands. Otherwise, we prove infeasibility.
-                Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
-                    && !right_interval.eq(&Interval::CERTAINLY_TRUE))
-                .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))
-            } else if interval.eq(&Interval::CERTAINLY_TRUE) {
+                Ok((!left_interval.eq(&Interval::TRUE)
+                    && !right_interval.eq(&Interval::TRUE))
+                .then(|| vec![Interval::FALSE, Interval::FALSE]))
+            } else if interval.eq(&Interval::TRUE) {
                 // If the logical disjunction is certainly true, one of the
                 // operands must be true. However, it's not always possible to
                 // determine which operand is true, leading to different scenarios.
 
                 // If one operand is certainly false and the other one is uncertain,
                 // then the latter must be certainly true.
-                if left_interval.eq(&Interval::CERTAINLY_FALSE)
-                    && right_interval.eq(&Interval::UNCERTAIN)
+                if left_interval.eq(&Interval::FALSE)
+                    && right_interval.eq(&Interval::TRUE_OR_FALSE)
                 {
-                    Ok(Some(vec![
-                        Interval::CERTAINLY_FALSE,
-                        Interval::CERTAINLY_TRUE,
-                    ]))
-                } else if right_interval.eq(&Interval::CERTAINLY_FALSE)
-                    && left_interval.eq(&Interval::UNCERTAIN)
+                    Ok(Some(vec![Interval::FALSE, Interval::TRUE]))
+                } else if right_interval.eq(&Interval::FALSE)
+                    && left_interval.eq(&Interval::TRUE_OR_FALSE)
                 {
-                    Ok(Some(vec![
-                        Interval::CERTAINLY_TRUE,
-                        Interval::CERTAINLY_FALSE,
-                    ]))
+                    Ok(Some(vec![Interval::TRUE, Interval::FALSE]))
                 }
                 // If both children are uncertain, or if one is certainly true,
                 // we cannot conclusively refine their intervals. In this case,
@@ -694,7 +540,7 @@ fn to_result_type_array(
                     Ok(cast(&array, result_type)?)
                 } else {
                     internal_err!(
-                            "Incompatible Dictionary value type {value_type:?} with result type {result_type:?} of Binary operator {op:?}"
+                            "Incompatible Dictionary value type {value_type} with result type {result_type} of Binary operator {op:?}"
                         )
                 }
             }
@@ -715,34 +561,10 @@ impl BinaryExpr {
     ) -> Result<Option<Result<ArrayRef>>> {
         use Operator::*;
         let scalar_result = match &self.op {
-            RegexMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                false,
-                false
-            ),
-            RegexIMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                false,
-                true
-            ),
-            RegexNotMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                true,
-                false
-            ),
-            RegexNotIMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                true,
-                true
-            ),
+            RegexMatch => regex_match_dyn_scalar(array, &scalar, false, false),
+            RegexIMatch => regex_match_dyn_scalar(array, &scalar, false, true),
+            RegexNotMatch => regex_match_dyn_scalar(array, &scalar, true, false),
+            RegexNotIMatch => regex_match_dyn_scalar(array, &scalar, true, true),
             BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
             BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
             BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
@@ -791,24 +613,16 @@ impl BinaryExpr {
                     )
                 }
             }
-            RegexMatch => {
-                binary_string_array_flag_op!(left, right, regexp_is_match, false, false)
-            }
-            RegexIMatch => {
-                binary_string_array_flag_op!(left, right, regexp_is_match, false, true)
-            }
-            RegexNotMatch => {
-                binary_string_array_flag_op!(left, right, regexp_is_match, true, false)
-            }
-            RegexNotIMatch => {
-                binary_string_array_flag_op!(left, right, regexp_is_match, true, true)
-            }
+            RegexMatch => regex_match_dyn(&left, &right, false, false),
+            RegexIMatch => regex_match_dyn(&left, &right, false, true),
+            RegexNotMatch => regex_match_dyn(&left, &right, true, false),
+            RegexNotIMatch => regex_match_dyn(&left, &right, true, true),
             BitwiseAnd => bitwise_and_dyn(left, right),
             BitwiseOr => bitwise_or_dyn(left, right),
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => concat_elements(left, right),
+            StringConcat => concat_elements(&left, &right),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
             | IntegerDivide => {
@@ -974,13 +788,8 @@ fn check_short_circuit<'a>(
 /// However, this is difficult to achieve under the immutable constraints of [`Arc`] and [`BooleanArray`].
 fn pre_selection_scatter(
     left_result: &BooleanArray,
-    right_result: ColumnarValue,
+    right_result: Option<&BooleanArray>,
 ) -> Result<ColumnarValue> {
-    let right_boolean_array = match &right_result {
-        ColumnarValue::Array(array) => array.as_boolean(),
-        ColumnarValue::Scalar(_) => return Ok(right_result),
-    };
-
     let result_len = left_result.len();
 
     let mut result_array_builder = BooleanArray::builder(result_len);
@@ -990,22 +799,39 @@ fn pre_selection_scatter(
 
     // keep track of how much is filled
     let mut last_end = 0;
-    SlicesIterator::new(left_result).for_each(|(start, end)| {
-        // the gap needs to be filled with false
-        if start > last_end {
-            result_array_builder.append_n(start - last_end, false);
+    // reduce if condition in for_each
+    match right_result {
+        Some(right_result) => {
+            SlicesIterator::new(left_result).for_each(|(start, end)| {
+                // the gap needs to be filled with false
+                if start > last_end {
+                    result_array_builder.append_n(start - last_end, false);
+                }
+
+                // copy values from right array for this slice
+                let len = end - start;
+                right_result
+                    .slice(right_array_pos, len)
+                    .iter()
+                    .for_each(|v| result_array_builder.append_option(v));
+
+                right_array_pos += len;
+                last_end = end;
+            });
         }
+        None => SlicesIterator::new(left_result).for_each(|(start, end)| {
+            // the gap needs to be filled with false
+            if start > last_end {
+                result_array_builder.append_n(start - last_end, false);
+            }
 
-        // copy values from right array for this slice
-        let len = end - start;
-        right_boolean_array
-            .slice(right_array_pos, len)
-            .iter()
-            .for_each(|v| result_array_builder.append_option(v));
+            // append nulls for this slice derictly
+            let len = end - start;
+            result_array_builder.append_nulls(len);
 
-        right_array_pos += len;
-        last_end = end;
-    });
+            last_end = end;
+        }),
+    }
 
     // Fill any remaining positions with false
     if last_end < result_len {
@@ -1016,7 +842,7 @@ fn pre_selection_scatter(
     Ok(ColumnarValue::Array(Arc::new(boolean_result)))
 }
 
-fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
+fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),
@@ -5211,7 +5037,6 @@ mod tests {
     /// 4. Test single true at first position
     /// 5. Test single true at last position
     /// 6. Test nulls in right array
-    /// 7. Test scalar right handling
     #[test]
     fn test_pre_selection_scatter() {
         fn create_bool_array(bools: Vec<bool>) -> BooleanArray {
@@ -5222,11 +5047,9 @@ mod tests {
             // Left: [T, F, T, F, T]
             // Right: [F, T, F] (values for 3 true positions)
             let left = create_bool_array(vec![true, false, true, false, true]);
-            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![
-                false, true, false,
-            ])));
+            let right = create_bool_array(vec![false, true, false]);
 
-            let result = pre_selection_scatter(&left, right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, true, false, false]);
@@ -5238,11 +5061,9 @@ mod tests {
             // Right: [T, F, F, T, F]
             let left =
                 create_bool_array(vec![false, true, true, false, true, true, true]);
-            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![
-                true, false, false, true, false,
-            ])));
+            let right = create_bool_array(vec![true, false, false, true, false]);
 
-            let result = pre_selection_scatter(&left, right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected =
@@ -5254,9 +5075,9 @@ mod tests {
             // Left: [T, F, F]
             // Right: [F]
             let left = create_bool_array(vec![true, false, false]);
-            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![false])));
+            let right = create_bool_array(vec![false]);
 
-            let result = pre_selection_scatter(&left, right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, false]);
@@ -5267,9 +5088,9 @@ mod tests {
             // Left: [F, F, T]
             // Right: [F]
             let left = create_bool_array(vec![false, false, true]);
-            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![false])));
+            let right = create_bool_array(vec![false]);
 
-            let result = pre_selection_scatter(&left, right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, false]);
@@ -5280,10 +5101,9 @@ mod tests {
             // Left: [F, T, F, T]
             // Right: [None, Some(false)] (with null at first position)
             let left = create_bool_array(vec![false, true, false, true]);
-            let right_arr = BooleanArray::from(vec![None, Some(false)]);
-            let right = ColumnarValue::Array(Arc::new(right_arr));
+            let right = BooleanArray::from(vec![None, Some(false)]);
 
-            let result = pre_selection_scatter(&left, right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = BooleanArray::from(vec![
@@ -5294,16 +5114,30 @@ mod tests {
             ]);
             assert_eq!(&expected, result_arr.as_boolean());
         }
-        // Test scalar right handling
-        {
-            // Left: [T, F, T]
-            // Right: Scalar true
-            let left = create_bool_array(vec![true, false, true]);
-            let right = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+    }
 
-            let result = pre_selection_scatter(&left, right).unwrap();
-            assert!(matches!(result, ColumnarValue::Scalar(_)));
-        }
+    #[test]
+    fn test_and_true_preselection_returns_lhs() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c", DataType::Boolean, false)]));
+        let c_array = Arc::new(BooleanArray::from(vec![false, true, false, false, false]))
+            as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&c_array)])
+            .unwrap();
+
+        let expr = logical2physical(&logical_col("c").and(expr_lit(true)), &schema);
+
+        let result = expr.evaluate(&batch).unwrap();
+        let ColumnarValue::Array(result_arr) = result else {
+            panic!("Expected ColumnarValue::Array");
+        };
+
+        let expected: Vec<_> = c_array.as_boolean().iter().collect();
+        let actual: Vec<_> = result_arr.as_boolean().iter().collect();
+        assert_eq!(
+            expected, actual,
+            "AND with TRUE must equal LHS even with PreSelection"
+        );
     }
 
     #[test]
@@ -5398,5 +5232,66 @@ mod tests {
             and_bounds,
             Interval::make(Some(false), Some(false)).unwrap()
         );
+    }
+
+    #[test]
+    fn test_evaluate_nested_type() {
+        let batch_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+        ]));
+
+        let mut list_builder_a = ListBuilder::new(Int32Builder::new());
+
+        list_builder_a.append_value([Some(1)]);
+        list_builder_a.append_value([Some(2)]);
+        list_builder_a.append_value([]);
+        list_builder_a.append_value([None]);
+
+        let list_array_a: ArrayRef = Arc::new(list_builder_a.finish());
+
+        let mut list_builder_b = ListBuilder::new(Int32Builder::new());
+
+        list_builder_b.append_value([Some(1)]);
+        list_builder_b.append_value([Some(2)]);
+        list_builder_b.append_value([]);
+        list_builder_b.append_value([None]);
+
+        let list_array_b: ArrayRef = Arc::new(list_builder_b.finish());
+
+        let batch =
+            RecordBatch::try_new(batch_schema, vec![list_array_a, list_array_b]).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::List(Arc::new(Field::new("foo", DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::List(Arc::new(Field::new("bar", DataType::Int32, true))),
+                true,
+            ),
+        ]));
+
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = Arc::new(Column::new("b", 1)) as _;
+
+        let eq_expr =
+            binary_expr(Arc::clone(&a), Operator::Eq, Arc::clone(&b), &schema).unwrap();
+
+        let eq_result = eq_expr.evaluate(&batch).unwrap();
+        let expected =
+            BooleanArray::from_iter(vec![Some(true), Some(true), Some(true), Some(true)]);
+        assert_eq!(eq_result.into_array(4).unwrap().as_boolean(), &expected);
     }
 }

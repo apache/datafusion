@@ -45,7 +45,7 @@ macro_rules! cast_scalar_f64 {
     ($value:expr ) => {
         match &$value {
             ScalarValue::Float64(Some(v)) => *v,
-            v => panic!("invalid type {:?}", v),
+            v => panic!("invalid type {}", v),
         }
     };
 }
@@ -56,7 +56,7 @@ macro_rules! cast_scalar_u64 {
     ($value:expr ) => {
         match &$value {
             ScalarValue::UInt64(Some(v)) => *v,
-            v => panic!("invalid type {:?}", v),
+            v => panic!("invalid type {}", v),
         }
     };
 }
@@ -103,20 +103,6 @@ pub struct Centroid {
     weight: f64,
 }
 
-impl PartialOrd for Centroid {
-    fn partial_cmp(&self, other: &Centroid) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for Centroid {}
-
-impl Ord for Centroid {
-    fn cmp(&self, other: &Centroid) -> Ordering {
-        self.mean.total_cmp(&other.mean)
-    }
-}
-
 impl Centroid {
     pub fn new(mean: f64, weight: f64) -> Self {
         Centroid { mean, weight }
@@ -138,6 +124,10 @@ impl Centroid {
         self.weight = new_weight;
         self.mean = new_sum / new_weight;
         new_sum
+    }
+
+    pub fn cmp_mean(&self, other: &Self) -> Ordering {
+        self.mean.total_cmp(&other.mean)
     }
 }
 
@@ -173,6 +163,7 @@ impl TDigest {
         }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
         TDigest {
             centroids: vec![centroid.clone()],
@@ -331,7 +322,7 @@ impl TDigest {
         result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr);
         compressed.shrink_to_fit();
-        compressed.sort();
+        compressed.sort_by(|a, b| a.cmp_mean(b));
 
         result.centroids = compressed;
         result
@@ -349,7 +340,7 @@ impl TDigest {
         let mut j = middle;
 
         while i < middle && j < last {
-            match centroids[i].cmp(&centroids[j]) {
+            match centroids[i].cmp_mean(&centroids[j]) {
                 Ordering::Less => {
                     result.push(centroids[i].clone());
                     i += 1;
@@ -466,7 +457,7 @@ impl TDigest {
         result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr.clone());
         compressed.shrink_to_fit();
-        compressed.sort();
+        compressed.sort_by(|a, b| a.cmp_mean(b));
 
         result.count = count;
         result.min = min;
@@ -585,7 +576,6 @@ impl TDigest {
     ///                          │└ ─ ─ ─ ┘│
     ///                          │         │
     ///                              ...
-    ///
     /// ```
     ///
     /// The [`TDigest::from_scalar_state()`] method reverses this processes,

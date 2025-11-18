@@ -33,12 +33,13 @@ use arrow::datatypes::Schema;
 use async_trait::async_trait;
 use datafusion::{
     catalog::{Session, TableProvider},
-    error::{DataFusionError, Result},
+    error::Result,
     execution::RecordBatchStream,
     physical_expr::EquivalenceProperties,
     physical_plan::{ExecutionPlan, Partitioning},
     prelude::Expr,
 };
+use datafusion_common::exec_err;
 use futures::Stream;
 use tokio::{
     runtime::Handle,
@@ -59,7 +60,7 @@ fn async_table_provider_thread(
     mut shutdown: mpsc::Receiver<bool>,
     mut batch_request: mpsc::Receiver<bool>,
     batch_sender: broadcast::Sender<Option<RecordBatch>>,
-    tokio_rt: mpsc::Sender<Handle>,
+    tokio_rt: &mpsc::Sender<Handle>,
 ) {
     let runtime = Arc::new(
         tokio::runtime::Builder::new_current_thread()
@@ -106,7 +107,7 @@ pub fn start_async_provider() -> (AsyncTableProvider, Handle) {
             shutdown_rx,
             batch_request_rx,
             record_batch_tx,
-            tokio_rt_tx,
+            &tokio_rt_tx,
         )
     }));
 
@@ -259,9 +260,9 @@ impl Stream for AsyncTestRecordBatchStream {
         });
 
         if let Err(e) = this.batch_request.try_send(true) {
-            return std::task::Poll::Ready(Some(Err(DataFusionError::Execution(
-                format!("Unable to send batch request, {e}"),
-            ))));
+            return std::task::Poll::Ready(Some(exec_err!(
+                "Failed to send batch request: {e}"
+            )));
         }
 
         match this.batch_receiver.blocking_recv() {
@@ -269,9 +270,9 @@ impl Stream for AsyncTestRecordBatchStream {
                 Some(batch) => std::task::Poll::Ready(Some(Ok(batch))),
                 None => std::task::Poll::Ready(None),
             },
-            Err(e) => std::task::Poll::Ready(Some(Err(DataFusionError::Execution(
-                format!("Unable to receive record batch: {e}"),
-            )))),
+            Err(e) => std::task::Poll::Ready(Some(exec_err!(
+                "Failed to receive record batch: {e}"
+            ))),
         }
     }
 }

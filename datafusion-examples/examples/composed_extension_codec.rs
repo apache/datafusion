@@ -32,16 +32,16 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::sync::Arc;
 
+use datafusion::common::internal_err;
 use datafusion::common::Result;
-use datafusion::common::{internal_err, DataFusionError};
-use datafusion::logical_expr::registry::FunctionRegistry;
-use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
+use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
-use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
+use datafusion_proto::physical_plan::{
+    AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec,
+};
 use datafusion_proto::protobuf;
 
 #[tokio::main]
@@ -54,12 +54,12 @@ async fn main() {
     });
     let ctx = SessionContext::new();
 
-    let composed_codec = ComposedPhysicalExtensionCodec {
-        codecs: vec![
-            Arc::new(ParentPhysicalExtensionCodec {}),
-            Arc::new(ChildPhysicalExtensionCodec {}),
-        ],
-    };
+    // Position in this list is important as it will be used for decoding.
+    // If new codec is added it should go to last position.
+    let composed_codec = ComposedPhysicalExtensionCodec::new(vec![
+        Arc::new(ParentPhysicalExtensionCodec {}),
+        Arc::new(ChildPhysicalExtensionCodec {}),
+    ]);
 
     // serialize execution plan to proto
     let proto: protobuf::PhysicalPlanNode =
@@ -70,9 +70,8 @@ async fn main() {
         .expect("to proto");
 
     // deserialize proto back to execution plan
-    let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
+        .try_into_physical_plan(&ctx.task_ctx(), &composed_codec)
         .expect("from proto");
 
     // assert that the original and deserialized execution plans are equal
@@ -123,7 +122,7 @@ impl ExecutionPlan for ParentExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<datafusion::execution::TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
     }
@@ -138,7 +137,7 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if buf == "ParentExec".as_bytes() {
             Ok(Arc::new(ParentExec {
@@ -199,7 +198,7 @@ impl ExecutionPlan for ChildExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<datafusion::execution::TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
     }
@@ -214,7 +213,7 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         &self,
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if buf == "ChildExec".as_bytes() {
             Ok(Arc::new(ChildExec {}))
@@ -230,62 +229,5 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         } else {
             internal_err!("Not supported")
         }
-    }
-}
-
-/// A PhysicalExtensionCodec that tries one of multiple inner codecs
-/// until one works
-#[derive(Debug)]
-struct ComposedPhysicalExtensionCodec {
-    codecs: Vec<Arc<dyn PhysicalExtensionCodec>>,
-}
-
-impl ComposedPhysicalExtensionCodec {
-    fn try_any<T>(
-        &self,
-        mut f: impl FnMut(&dyn PhysicalExtensionCodec) -> Result<T>,
-    ) -> Result<T> {
-        let mut last_err = None;
-        for codec in &self.codecs {
-            match f(codec.as_ref()) {
-                Ok(node) => return Ok(node),
-                Err(err) => last_err = Some(err),
-            }
-        }
-
-        Err(last_err.unwrap_or_else(|| {
-            DataFusionError::NotImplemented("Empty list of composed codecs".to_owned())
-        }))
-    }
-}
-
-impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
-    fn try_decode(
-        &self,
-        buf: &[u8],
-        inputs: &[Arc<dyn ExecutionPlan>],
-        registry: &dyn FunctionRegistry,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.try_any(|codec| codec.try_decode(buf, inputs, registry))
-    }
-
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        self.try_any(|codec| codec.try_encode(node.clone(), buf))
-    }
-
-    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        self.try_any(|codec| codec.try_decode_udf(name, buf))
-    }
-
-    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
-        self.try_any(|codec| codec.try_encode_udf(node, buf))
-    }
-
-    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
-        self.try_any(|codec| codec.try_decode_udaf(name, buf))
-    }
-
-    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        self.try_any(|codec| codec.try_encode_udaf(node, buf))
     }
 }

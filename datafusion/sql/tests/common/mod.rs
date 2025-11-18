@@ -151,6 +151,14 @@ impl ContextProvider for MockContextProvider {
                 ),
                 Field::new("😀", DataType::Int32, false),
             ])),
+            "person_with_uuid_extension" => Ok(Schema::new(vec![
+                Field::new("id", DataType::FixedSizeBinary(16), false).with_metadata(
+                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
+                        .into(),
+                ),
+                Field::new("first_name", DataType::Utf8, false),
+                Field::new("last_name", DataType::Utf8, false),
+            ])),
             "orders" => Ok(Schema::new(vec![
                 Field::new("order_id", DataType::UInt32, false),
                 Field::new("customer_id", DataType::UInt32, false),

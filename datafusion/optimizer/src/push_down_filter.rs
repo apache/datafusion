@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -27,7 +28,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
+    assert_eq_or_internal_err, assert_or_internal_err, internal_err, plan_err,
+    qualified_name, Column, DFSchema, DataFusionError, Result,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -40,6 +42,7 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
+use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -168,7 +171,7 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::RightSemi | JoinType::RightAnti => (false, true),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -191,6 +194,7 @@ pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftAnti => (false, true),
         JoinType::RightAnti => (true, false),
         JoinType::LeftMark => (false, true),
+        JoinType::RightMark => (true, false),
     }
 }
 
@@ -254,7 +258,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
     predicate.apply(|expr| match expr {
         Expr::Column(_)
-        | Expr::Literal(_)
+        | Expr::Literal(_, _)
         | Expr::Placeholder(_)
         | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
@@ -559,7 +563,6 @@ fn push_down_join(
 ///
 /// * `on_filters` filters from the join ON clause that have not already been
 ///   identified as join predicates
-///
 fn infer_join_predicates(
     join: &Join,
     predicates: &[Expr],
@@ -646,7 +649,6 @@ impl InferredPredicates {
 /// * `predicates` the pushed down predicates
 ///
 /// * `inferred_predicates` the inferred results
-///
 fn infer_join_predicates_from_predicates(
     join_col_keys: &[(&Column, &Column)],
     predicates: &[Expr],
@@ -670,7 +672,6 @@ fn infer_join_predicates_from_predicates(
 ///   identified as join predicates
 ///
 /// * `inferred_predicates` the inferred results
-///
 fn infer_join_predicates_from_on_filters(
     join_col_keys: &[(&Column, &Column)],
     join_type: JoinType,
@@ -691,7 +692,7 @@ fn infer_join_predicates_from_on_filters(
                 inferred_predicates,
             )
         }
-        JoinType::Right | JoinType::RightSemi => {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightMark => {
             infer_join_predicates_impl::<false, true>(
                 join_col_keys,
                 on_filters,
@@ -716,7 +717,6 @@ fn infer_join_predicates_from_on_filters(
 ///
 /// * `ENABLE_RIGHT_TO_LEFT` indicates that the left table related predicate can
 ///   be inferred from the right table related predicate
-///
 fn infer_join_predicates_impl<
     const ENABLE_LEFT_TO_RIGHT: bool,
     const ENABLE_RIGHT_TO_LEFT: bool,
@@ -777,6 +777,18 @@ impl OptimizerRule for PushDownFilter {
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
         };
+
+        let predicate = split_conjunction_owned(filter.predicate.clone());
+        let old_predicate_len = predicate.len();
+        let new_predicates = simplify_predicates(predicate)?;
+        if old_predicate_len != new_predicates.len() {
+            let Some(new_predicate) = conjunction(new_predicates) else {
+                // new_predicates is empty - remove the filter entirely
+                // Return the child plan without the filter
+                return Ok(Transformed::yes(Arc::unwrap_or_clone(filter.input)));
+            };
+            filter.predicate = new_predicate;
+        }
 
         match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {
@@ -861,14 +873,37 @@ impl OptimizerRule for PushDownFilter {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
                 let mut non_unnest_predicates = vec![];
                 let mut unnest_predicates = vec![];
+                let mut unnest_struct_columns = vec![];
+
+                for idx in &unnest.struct_type_columns {
+                    let (sub_qualifier, field) =
+                        unnest.input.schema().qualified_field(*idx);
+                    let field_name = field.name().clone();
+
+                    if let DataType::Struct(children) = field.data_type() {
+                        for child in children {
+                            let child_name = child.name().clone();
+                            unnest_struct_columns.push(Column::new(
+                                sub_qualifier.cloned(),
+                                format!("{field_name}.{child_name}"),
+                            ));
+                        }
+                    }
+                }
+
                 for predicate in predicates {
                     // collect all the Expr::Column in predicate recursively
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.list_type_columns.iter().any(|(_, unnest_list)| {
-                        accum.contains(&unnest_list.output_column)
-                    }) {
+                    let contains_list_columns =
+                        unnest.list_type_columns.iter().any(|(_, unnest_list)| {
+                            accum.contains(&unnest_list.output_column)
+                        });
+                    let contains_struct_columns =
+                        unnest_struct_columns.iter().any(|c| accum.contains(c));
+
+                    if contains_list_columns || contains_struct_columns {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);
@@ -940,8 +975,11 @@ impl OptimizerRule for PushDownFilter {
                 let group_expr_columns = agg
                     .group_expr
                     .iter()
-                    .map(|e| Ok(Column::from_qualified_name(e.schema_name().to_string())))
-                    .collect::<Result<HashSet<_>>>()?;
+                    .map(|e| {
+                        let (relation, name) = e.qualified_name();
+                        Column::new(relation, name)
+                    })
+                    .collect::<HashSet<_>>();
 
                 let predicates = split_conjunction_owned(filter.predicate);
 
@@ -1009,7 +1047,10 @@ impl OptimizerRule for PushDownFilter {
                     func.params
                         .partition_by
                         .iter()
-                        .map(|c| Column::from_qualified_name(c.schema_name().to_string()))
+                        .map(|c| {
+                            let (relation, name) = c.qualified_name();
+                            Column::new(relation, name)
+                        })
                         .collect::<HashSet<_>>()
                 };
                 let potential_partition_keys = window
@@ -1101,12 +1142,13 @@ impl OptimizerRule for PushDownFilter {
                 let supported_filters = scan
                     .source
                     .supports_filters_pushdown(non_volatile_filters.as_slice())?;
-                if non_volatile_filters.len() != supported_filters.len() {
-                    return internal_err!(
-                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                        supported_filters.len(),
-                        non_volatile_filters.len());
-                }
+                assert_eq_or_internal_err!(
+                    non_volatile_filters.len(),
+                    supported_filters.len(),
+                    "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                    supported_filters.len(),
+                    non_volatile_filters.len()
+                );
 
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
                 let zip = non_volatile_filters.into_iter().zip(supported_filters);
@@ -1336,9 +1378,7 @@ fn insert_below(
     })?;
 
     // make sure we did the actual replacement
-    if new_child.is_some() {
-        return internal_err!("node had no  inputs");
-    }
+    assert_or_internal_err!(new_child.is_none(), "node had no inputs");
 
     Ok(transformed_plan)
 }
@@ -1543,6 +1583,30 @@ mod tests {
         )
     }
 
+    /// verifies that filters with unusual column names are pushed down through aggregate operators
+    #[test]
+    fn filter_move_agg_special() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("$a", DataType::UInt32, false),
+            Field::new("$b", DataType::UInt32, false),
+            Field::new("$c", DataType::UInt32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("$a")], vec![sum(col("$b")).alias("total_salary")])?
+            .filter(col("$a").gt(lit(10i64)))?
+            .build()?;
+        // filter of key aggregation is commutative
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.$a]], aggr=[[sum(test.$b) AS total_salary]]
+          TableScan: test, full_filters=[test.$a > Int64(10)]
+        "
+        )
+    }
+
     #[test]
     fn filter_complex_group_by() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1598,7 +1662,7 @@ mod tests {
     fn filter_move_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1623,13 +1687,48 @@ mod tests {
         )
     }
 
+    /// verifies that filters with unusual identifier names are pushed down through window functions
+    #[test]
+    fn filter_window_special_identifier() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("$a", DataType::UInt32, false),
+            Field::new("$b", DataType::UInt32, false),
+            Field::new("$c", DataType::UInt32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("$a"), col("$b")])
+        .order_by(vec![col("$c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(col("$b").gt(lit(10i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.$a, test.$b] ORDER BY [test.$c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.$b > Int64(10)]
+        "
+        )
+    }
+
     /// verifies that when partitioning by 'a' and 'b', and filtering by 'a' and 'b', both 'a' and
     /// 'b' are pushed
     #[test]
     fn filter_move_complex_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1659,7 +1758,7 @@ mod tests {
     fn filter_move_partial_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1691,7 +1790,7 @@ mod tests {
     fn filter_expression_keep_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1724,7 +1823,7 @@ mod tests {
     fn filter_order_keep_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1756,7 +1855,7 @@ mod tests {
     fn filter_multiple_windows_common_partitions() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window1 = Expr::WindowFunction(WindowFunction::new(
+        let window1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1767,7 +1866,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let window2 = Expr::WindowFunction(WindowFunction::new(
+        let window2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1798,7 +1897,7 @@ mod tests {
     fn filter_multiple_windows_disjoint_partitions() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window1 = Expr::WindowFunction(WindowFunction::new(
+        let window1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1809,7 +1908,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let window2 = Expr::WindowFunction(WindowFunction::new(
+        let window2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1942,7 +2041,10 @@ mod tests {
     // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoopPlan {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            self.input.partial_cmp(&other.input)
+            self.input
+                .partial_cmp(&other.input)
+                // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -3027,9 +3129,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters,
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from(test_provider.schema())?),
             projection,
             source: Arc::new(test_provider),
             fetch: None,
@@ -3399,7 +3499,7 @@ mod tests {
               Projection: b.a
                 SubqueryAlias: b
                   Projection: Int64(0) AS a
-                    EmptyRelation
+                    EmptyRelation: rows=1
         ",
         );
         // Ensure that the predicate without any columns (0 = 1) is
@@ -3413,7 +3513,7 @@ mod tests {
               SubqueryAlias: b
                 Projection: Int64(0) AS a
                   Filter: Int64(0) = Int64(1)
-                    EmptyRelation
+                    EmptyRelation: rows=1
         "
         )
     }
@@ -3832,7 +3932,7 @@ mod tests {
         )
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
     }

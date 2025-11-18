@@ -22,8 +22,9 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
+use arrow::datatypes::FieldRef;
 use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -48,9 +49,9 @@ use datafusion_expr::ColumnarValue;
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// // Schema with columns a, b, c
 /// let schema = Schema::new(vec![
-///    Field::new("a", DataType::Int32, false),
-///    Field::new("b", DataType::Int32, false),
-///    Field::new("c", DataType::Int32, false),
+///     Field::new("a", DataType::Int32, false),
+///     Field::new("b", DataType::Int32, false),
+///     Field::new("c", DataType::Int32, false),
 /// ]);
 ///
 /// // reference to column b is index 1
@@ -127,8 +128,8 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
-        Ok(input_schema.field(self.index).clone())
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(input_schema.field(self.index).clone().into())
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -203,7 +204,6 @@ mod test {
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
 
     use std::sync::Arc;
 
@@ -213,8 +213,9 @@ mod test {
         let col = Column::new("id", 9);
         let error = col.data_type(&schema).expect_err("error").strip_backtrace();
         assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error))
+             but input schema only has 1 columns: [\"foo\"].\nThis issue was likely caused by a bug \
+             in DataFusion's code. Please help us to resolve this by filing a bug report \
+             in our issue tracker: https://github.com/apache/datafusion/issues".starts_with(&error))
     }
 
     #[test]
@@ -223,20 +224,21 @@ mod test {
         let col = Column::new("id", 9);
         let error = col.nullable(&schema).expect_err("error").strip_backtrace();
         assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error))
+             but input schema only has 1 columns: [\"foo\"].\nThis issue was likely caused by a bug \
+             in DataFusion's code. Please help us to resolve this by filing a bug report \
+             in our issue tracker: https://github.com/apache/datafusion/issues".starts_with(&error));
     }
 
     #[test]
-    fn out_of_bounds_evaluate() -> Result<()> {
+    fn out_of_bounds_evaluate() {
         let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
         let data: StringArray = vec!["data"].into();
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)])?;
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
         let col = Column::new("id", 9);
         let error = col.evaluate(&batch).expect_err("error").strip_backtrace();
         assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error));
-        Ok(())
+             but input schema only has 1 columns: [\"foo\"].\nThis issue was likely caused by a bug \
+             in DataFusion's code. Please help us to resolve this by filing a bug report \
+             in our issue tracker: https://github.com/apache/datafusion/issues".starts_with(&error));
     }
 }

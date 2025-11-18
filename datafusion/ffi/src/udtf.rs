@@ -214,7 +214,7 @@ mod tests {
             let args = args
                 .iter()
                 .map(|arg| {
-                    if let Expr::Literal(scalar) = arg {
+                    if let Expr::Literal(scalar, _) = arg {
                         Ok(scalar)
                     } else {
                         exec_err!("Expected only literal arguments to table udf")
@@ -293,8 +293,7 @@ mod tests {
 
         let foreign_udf: ForeignTableFunction = local_udtf.into();
 
-        let table =
-            foreign_udf.call(&vec![lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
+        let table = foreign_udf.call(&[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
 
         let ctx = SessionContext::default();
         let _ = ctx.register_table("test-table", table)?;

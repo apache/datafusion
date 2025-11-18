@@ -21,7 +21,9 @@ use super::{
     utils::character_length_to_sql, utils::date_part_to_sql,
     utils::sqlite_date_trunc_to_sql, utils::sqlite_from_unixtime_to_sql, Unparser,
 };
+use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
+use chrono::DateTime;
 use datafusion_common::Result;
 use datafusion_expr::Expr;
 use regex::Regex;
@@ -197,6 +199,25 @@ pub trait Dialect: Send + Sync {
     fn unnest_as_table_factor(&self) -> bool {
         false
     }
+
+    /// Allows the dialect to override column alias unparsing if the dialect has specific rules.
+    /// Returns None if the default unparsing should be used, or Some(String) if there is
+    /// a custom implementation for the alias.
+    fn col_alias_overrides(&self, _alias: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Allows the dialect to support the QUALIFY clause
+    ///
+    /// Some dialects, like Postgres, do not support the QUALIFY clause
+    fn supports_qualify(&self) -> bool {
+        true
+    }
+
+    /// Allows the dialect to override logic of formatting datetime with tz into string.
+    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, _unit: TimeUnit) -> String {
+        dt.to_string()
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -260,6 +281,14 @@ impl Dialect for DefaultDialect {
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        true
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('"')
     }
@@ -394,11 +423,26 @@ impl Dialect for DuckDBDialect {
 
         Ok(None)
     }
+
+    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, unit: TimeUnit) -> String {
+        let format = match unit {
+            TimeUnit::Second => "%Y-%m-%d %H:%M:%S%:z",
+            TimeUnit::Millisecond => "%Y-%m-%d %H:%M:%S%.3f%:z",
+            TimeUnit::Microsecond => "%Y-%m-%d %H:%M:%S%.6f%:z",
+            TimeUnit::Nanosecond => "%Y-%m-%d %H:%M:%S%.9f%:z",
+        };
+
+        dt.format(format).to_string()
+    }
 }
 
 pub struct MySqlDialect {}
 
 impl Dialect for MySqlDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -460,6 +504,10 @@ impl Dialect for MySqlDialect {
 pub struct SqliteDialect {}
 
 impl Dialect for SqliteDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -480,6 +528,14 @@ impl Dialect for SqliteDialect {
         false
     }
 
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Text
+    }
+
     fn scalar_function_to_sql_overrides(
         &self,
         unparser: &Unparser,
@@ -497,6 +553,49 @@ impl Dialect for SqliteDialect {
             "date_trunc" => sqlite_date_trunc_to_sql(unparser, args),
             _ => Ok(None),
         }
+    }
+}
+
+#[derive(Default)]
+pub struct BigQueryDialect {}
+
+impl Dialect for BigQueryDialect {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
+        Some('`')
+    }
+
+    fn col_alias_overrides(&self, alias: &str) -> Result<Option<String>> {
+        // Check if alias contains any special characters not supported by BigQuery col names
+        // https://cloud.google.com/bigquery/docs/schemas#flexible-column-names
+        let special_chars: [char; 20] = [
+            '!', '"', '$', '(', ')', '*', ',', '.', '/', ';', '?', '@', '[', '\\', ']',
+            '^', '`', '{', '}', '~',
+        ];
+
+        if alias.chars().any(|c| special_chars.contains(&c)) {
+            let mut encoded_name = String::new();
+            for c in alias.chars() {
+                if special_chars.contains(&c) {
+                    encoded_name.push_str(&format!("_{}", c as u32));
+                } else {
+                    encoded_name.push(c);
+                }
+            }
+            Ok(Some(encoded_name))
+        } else {
+            Ok(Some(alias.to_string()))
+        }
+    }
+
+    fn unnest_as_table_factor(&self) -> bool {
+        true
+    }
+}
+
+impl BigQueryDialect {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
@@ -549,17 +648,6 @@ impl Default for CustomDialect {
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
-        }
-    }
-}
-
-impl CustomDialect {
-    // Create a CustomDialect
-    #[deprecated(since = "41.0.0", note = "please use `CustomDialectBuilder` instead")]
-    pub fn new(identifier_quote_style: Option<char>) -> Self {
-        Self {
-            identifier_quote_style,
-            ..Default::default()
         }
     }
 }

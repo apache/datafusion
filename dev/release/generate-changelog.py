@@ -124,6 +124,9 @@ under the License.
     print(f"This release consists of {commit_count} commits from {contributor_count} contributors. "
           f"See credits at the end of this changelog for more information.\n")
 
+    print("See the [upgrade guide](https://datafusion.apache.org/library-user-guide/upgrading.html) "
+           "for information on how to upgrade from previous versions.\n")
+
     print_pulls(repo_name, "Breaking changes", breaking)
     print_pulls(repo_name, "Performance related", performance)
     print_pulls(repo_name, "Implemented enhancements", enhancements)
