@@ -858,12 +858,12 @@ impl Interval {
         ) {
             (true, true, false) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
             (true, false, false) => {
-                mul_helper_single_zero_inclusive(&dt, self, rhs, zero)
+                mul_helper_single_zero_inclusive(&dt, self, rhs, &zero)
             }
             (false, true, false) => {
-                mul_helper_single_zero_inclusive(&dt, rhs, self, zero)
+                mul_helper_single_zero_inclusive(&dt, rhs, self, &zero)
             }
-            _ => mul_helper_zero_exclusive(&dt, self, rhs, zero),
+            _ => mul_helper_zero_exclusive(&dt, self, rhs, &zero),
         };
         Ok(result)
     }
@@ -1462,10 +1462,10 @@ fn mul_helper_single_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero: ScalarValue,
+    zero: &ScalarValue,
 ) -> Interval {
     // With the following interval bounds, there is no possibility to create an invalid interval.
-    if rhs.upper <= zero && !rhs.upper.is_null() {
+    if rhs.upper <= *zero && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
         let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.lower);
@@ -1514,11 +1514,11 @@ fn mul_helper_zero_exclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero: ScalarValue,
+    zero: &ScalarValue,
 ) -> Interval {
     let (lower, upper) = match (
-        lhs.upper <= zero && !lhs.upper.is_null(),
-        rhs.upper <= zero && !rhs.upper.is_null(),
+        lhs.upper <= *zero && !lhs.upper.is_null(),
+        rhs.upper <= *zero && !rhs.upper.is_null(),
     ) {
         // With the following interval bounds, there is no possibility to create an invalid interval.
         (true, true) => (
