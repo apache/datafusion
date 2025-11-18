@@ -89,7 +89,7 @@ version = "50.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-apache-avro = { version = "0.20", default-features = false }
+apache-avro = { version = "0.21", default-features = false }
 arrow = { version = "56.1.0", features = [
     "prettyprint",
     "chrono-tz",
@@ -154,6 +154,7 @@ hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
 indexmap = "2.11.0"
 itertools = "0.14"
+liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
 object_store = { version = "0.12.3", default-features = false }
 parking_lot = "0.12"
