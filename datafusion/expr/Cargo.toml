@@ -48,7 +48,6 @@ sql = ["sqlparser"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-bitflags = "2.0.0"
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = false }
 datafusion-doc = { workspace = true }
