@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! This example shows how to use the structures that DataFusion provides to perform
 //! Analysis on SQL queries and their plans.
 //!

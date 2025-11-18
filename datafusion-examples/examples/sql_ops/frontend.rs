@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{plan_err, TableReference};
 use datafusion::config::ConfigOptions;
