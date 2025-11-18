@@ -61,7 +61,7 @@ use datafusion::prelude::{
 };
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
-    test_table_with_cache_producer, test_table_with_name,
+    test_table_with_cache_factory, test_table_with_name,
 };
 use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
@@ -2337,7 +2337,7 @@ async fn cache_test() -> Result<()> {
 
 #[tokio::test]
 async fn cache_producer_test() -> Result<()> {
-    let df = test_table_with_cache_producer()
+    let df = test_table_with_cache_factory()
         .await?
         .select_columns(&["c2", "c3"])?
         .limit(0, Some(1))?
