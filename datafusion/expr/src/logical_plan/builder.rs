@@ -1738,23 +1738,53 @@ pub fn requalify_sides_if_needed(
 ) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder, bool)> {
     let left_cols = left.schema().columns();
     let right_cols = right.schema().columns();
-    if left_cols.iter().any(|l| {
-        right_cols.iter().any(|r| {
-            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
-        })
-    }) {
-        // These names have no connection to the original plan, but they'll make the columns
-        // (mostly) unique.
-        Ok((
-            left.alias(TableReference::bare("left"))?,
-            right.alias(TableReference::bare("right"))?,
-            true,
-        ))
-    } else {
-        Ok((left, right, false))
-    }
-}
 
+    // Requalify if merging the schemas would cause an error during join.
+    // This can happen in several cases:
+    // 1. Duplicate qualified fields: both sides have same relation.name
+    // 2. Duplicate unqualified fields: both sides have same unqualified name
+    // 3. Ambiguous reference: one side qualified, other unqualified, same name
+    for l in &left_cols {
+        for r in &right_cols {
+            if l.name != r.name {
+                continue;
+            }
+
+            // Same name - check if this would cause a conflict
+            match (&l.relation, &r.relation) {
+                // Both qualified with same relation - duplicate qualified field
+                (Some(l_rel), Some(r_rel)) if l_rel == r_rel => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // Both unqualified - duplicate unqualified field
+                (None, None) => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // One qualified, one not - ambiguous reference
+                (Some(_), None) | (None, Some(_)) => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // Different qualifiers - OK, no conflict
+                _ => {}
+            }
+        }
+    }
+
+    // No conflicts found
+    Ok((left, right, false))
+}
 /// Add additional "synthetic" group by expressions based on functional
 /// dependencies.
 ///
