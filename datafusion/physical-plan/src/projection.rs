@@ -399,7 +399,7 @@ impl Stream for ProjectionStream {
 impl RecordBatchStream for ProjectionStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.projector.output_schema())
+        Arc::clone(self.projector.output_schema())
     }
 }
 
