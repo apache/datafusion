@@ -66,6 +66,23 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     }
 }
 
+/// Internal helper that generates indices for powerset subsets using bitset iteration.
+/// Returns an iterator of index vectors, where each vector contains the indices
+/// of elements to include in that subset.
+fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
+    (0..(1 << len)).map(move |mask| {
+        let mut indices = vec![];
+        let mut bitset = mask;
+        while bitset > 0 {
+            let rightmost: u64 = bitset & !(bitset - 1);
+            let idx = rightmost.trailing_zeros() as usize;
+            indices.push(idx);
+            bitset &= bitset - 1;
+        }
+        indices
+    })
+}
+
 /// The [power set] (or powerset) of a set S is the set of all subsets of S, \
 /// including the empty set and S itself.
 ///
@@ -88,21 +105,9 @@ fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
         return Err("The size of the set must be less than 64.".into());
     }
 
-    let mut v = Vec::new();
-    for mask in 0..(1 << slice.len()) {
-        let mut ss = vec![];
-        let mut bitset = mask;
-        while bitset > 0 {
-            let rightmost: u64 = bitset & !(bitset - 1);
-            let idx = rightmost.trailing_zeros();
-            let item = slice.get(idx as usize).unwrap();
-            ss.push(item);
-            // zero the trailing bit
-            bitset &= bitset - 1;
-        }
-        v.push(ss);
-    }
-    Ok(v)
+    Ok(powerset_indices(slice.len())
+        .map(|indices| indices.iter().map(|&idx| &slice[idx]).collect())
+        .collect())
 }
 
 /// Generate the power set of a slice, returning owned clones
@@ -132,22 +137,9 @@ pub fn powerset_cloned<T: Clone>(slice: &[T]) -> Result<Vec<Vec<T>>> {
         );
     }
 
-    let mut v = Vec::new();
-    for mask in 0..(1 << slice.len()) {
-        let mut ss = vec![];
-        let mut bitset = mask;
-        while bitset > 0 {
-            let rightmost: u64 = bitset & !(bitset - 1);
-            let idx = rightmost.trailing_zeros();
-            if let Some(item) = slice.get(idx as usize) {
-                ss.push(item.clone());
-            }
-            // zero the trailing bit
-            bitset &= bitset - 1;
-        }
-        v.push(ss);
-    }
-    Ok(v)
+    Ok(powerset_indices(slice.len())
+        .map(|indices| indices.iter().map(|&idx| slice[idx].clone()).collect())
+        .collect())
 }
 
 /// check the number of expressions contained in the grouping_set
