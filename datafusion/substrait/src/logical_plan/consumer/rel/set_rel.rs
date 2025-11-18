@@ -17,9 +17,7 @@
 
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{not_impl_err, substrait_err};
-use datafusion::logical_expr::{
-    requalify_sides_if_needed, LogicalPlan, LogicalPlanBuilder,
-};
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use substrait::proto::set_rel::SetOp;
 use substrait::proto::{Rel, SetRel};
 
@@ -33,15 +31,11 @@ pub async fn from_set_rel(
         match set.op() {
             SetOp::UnionAll => union_rels(consumer, &set.inputs, true).await,
             SetOp::UnionDistinct => union_rels(consumer, &set.inputs, false).await,
-            SetOp::IntersectionPrimary => {
-                let left =
-                    LogicalPlanBuilder::from(consumer.consume_rel(&set.inputs[0]).await?);
-                let right = LogicalPlanBuilder::from(
-                    union_rels(consumer, &set.inputs[1..], true).await?,
-                );
-                let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
-                LogicalPlanBuilder::intersect(left.build()?, right.build()?, false)
-            }
+            SetOp::IntersectionPrimary => LogicalPlanBuilder::intersect(
+                consumer.consume_rel(&set.inputs[0]).await?,
+                union_rels(consumer, &set.inputs[1..], true).await?,
+                false,
+            ),
             SetOp::IntersectionMultiset => {
                 intersect_rels(consumer, &set.inputs, false).await
             }
@@ -83,10 +77,11 @@ async fn intersect_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        let left = LogicalPlanBuilder::from(rel);
-        let right = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
-        rel = LogicalPlanBuilder::intersect(left.build()?, right.build()?, is_all)?
+        rel = LogicalPlanBuilder::intersect(
+            rel,
+            consumer.consume_rel(input).await?,
+            is_all,
+        )?
     }
 
     Ok(rel)
@@ -100,10 +95,7 @@ async fn except_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        let left = LogicalPlanBuilder::from(rel);
-        let right = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
-        rel = LogicalPlanBuilder::except(left.build()?, right.build()?, is_all)?
+        rel = LogicalPlanBuilder::except(rel, consumer.consume_rel(input).await?, is_all)?
     }
 
     Ok(rel)
