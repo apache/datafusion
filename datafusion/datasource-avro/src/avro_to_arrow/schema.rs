@@ -23,22 +23,36 @@ use apache_avro::Schema as AvroSchema;
 use arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit, UnionMode};
 use arrow::datatypes::{Field, UnionFields};
 use datafusion_common::error::Result;
+use datafusion_common::HashSet;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+#[derive(Default)]
+struct SchemaResolver {
+    names_lookup: HashMap<Name, DataType>,
+    in_progress: HashSet<Name>,
+}
 
 /// Converts an avro schema to an arrow schema
 pub fn to_arrow_schema(avro_schema: &apache_avro::Schema) -> Result<Schema> {
     let mut schema_fields = vec![];
     match avro_schema {
-        AvroSchema::Record(RecordSchema { fields, .. }) => {
+        AvroSchema::Record(RecordSchema { fields, name, .. }) => {
+            let mut resolver = SchemaResolver::default();
+            resolver.in_progress.insert(name.clone());
+
             for field in fields {
                 schema_fields.push(schema_to_field_with_props(
                     &field.schema,
                     Some(&field.name),
                     field.is_nullable(),
                     Some(external_props(&field.schema)),
+                    &mut resolver,
                 )?)
             }
+
+            // Not really relevant anymore but for correctness
+            resolver.in_progress.remove(name);
         }
         schema => schema_fields.push(schema_to_field(schema, Some(""), false)?),
     }
@@ -52,7 +66,13 @@ fn schema_to_field(
     name: Option<&str>,
     nullable: bool,
 ) -> Result<Field> {
-    schema_to_field_with_props(schema, name, nullable, Default::default())
+    schema_to_field_with_props(
+        schema,
+        name,
+        nullable,
+        Default::default(),
+        &mut SchemaResolver::default(),
+    )
 }
 
 fn schema_to_field_with_props(
@@ -60,10 +80,29 @@ fn schema_to_field_with_props(
     name: Option<&str>,
     nullable: bool,
     props: Option<HashMap<String, String>>,
+    resolver: &mut SchemaResolver,
 ) -> Result<Field> {
     let mut nullable = nullable;
     let field_type: DataType = match schema {
-        AvroSchema::Ref { .. } => todo!("Add support for AvroSchema::Ref"),
+        AvroSchema::Ref { name } => {
+            // We can't have an infinitely recursing schema in avro,
+            // so return an error for these kinds of references
+            if resolver.in_progress.contains(name) {
+                return Err(apache_avro::Error::new(
+                    apache_avro::error::Details::SchemaResolutionError(name.clone()),
+                )
+                .into());
+            }
+
+            if let Some(dt) = resolver.names_lookup.get(name) {
+                dt.clone()
+            } else {
+                return Err(apache_avro::Error::new(
+                    apache_avro::error::Details::SchemaResolutionError(name.clone()),
+                )
+                .into());
+            }
+        }
         AvroSchema::Null => DataType::Null,
         AvroSchema::Boolean => DataType::Boolean,
         AvroSchema::Int => DataType::Int32,
@@ -72,15 +111,22 @@ fn schema_to_field_with_props(
         AvroSchema::Double => DataType::Float64,
         AvroSchema::Bytes => DataType::Binary,
         AvroSchema::String => DataType::Utf8,
-        AvroSchema::Array(item_schema) => DataType::List(Arc::new(
-            schema_to_field_with_props(&item_schema.items, Some("element"), false, None)?,
-        )),
+        AvroSchema::Array(item_schema) => {
+            DataType::List(Arc::new(schema_to_field_with_props(
+                &item_schema.items,
+                Some("item"),
+                false,
+                None,
+                resolver,
+            )?))
+        }
         AvroSchema::Map(value_schema) => {
             let value_field = schema_to_field_with_props(
                 &value_schema.types,
                 Some("value"),
                 false,
                 None,
+                resolver,
             )?;
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
@@ -103,9 +149,15 @@ fn schema_to_field_with_props(
                     .iter()
                     .find(|&schema| !matches!(schema, AvroSchema::Null))
                 {
-                    schema_to_field_with_props(schema, None, has_nullable, None)?
-                        .data_type()
-                        .clone()
+                    schema_to_field_with_props(
+                        schema,
+                        None,
+                        has_nullable,
+                        None,
+                        resolver,
+                    )?
+                    .data_type()
+                    .clone()
                 } else {
                     return Err(apache_avro::Error::new(
                         apache_avro::error::Details::GetUnionDuplicate,
@@ -115,13 +167,23 @@ fn schema_to_field_with_props(
             } else {
                 let fields = sub_schemas
                     .iter()
-                    .map(|s| schema_to_field_with_props(s, None, has_nullable, None))
+                    .map(|s| {
+                        schema_to_field_with_props(s, None, has_nullable, None, resolver)
+                    })
                     .collect::<Result<Vec<Field>>>()?;
                 let type_ids = 0_i8..fields.len() as i8;
                 DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
             }
         }
-        AvroSchema::Record(RecordSchema { fields, .. }) => {
+        AvroSchema::Record(RecordSchema { fields, name, .. }) => {
+            let inserted = resolver.in_progress.insert(name.clone());
+            if !inserted {
+                return Err(apache_avro::Error::new(
+                    apache_avro::error::Details::SchemaResolutionError(name.clone()),
+                )
+                .into());
+            }
+
             let fields: Result<_> = fields
                 .iter()
                 .map(|field| {
@@ -137,14 +199,49 @@ fn schema_to_field_with_props(
                         Some(&field.name),
                         false,
                         Some(props),
+                        resolver,
                     )
                 })
                 .collect();
-            DataType::Struct(fields?)
+
+            let dtype = DataType::Struct(fields?);
+
+            let previous = resolver.names_lookup.insert(name.clone(), dtype.clone());
+            if previous.is_some() {
+                return Err(apache_avro::Error::new(
+                    apache_avro::error::Details::SchemaResolutionError(name.clone()),
+                )
+                .into());
+            }
+            resolver.in_progress.remove(name);
+
+            dtype
         }
-        AvroSchema::Enum(EnumSchema { .. }) => DataType::Utf8,
-        AvroSchema::Fixed(FixedSchema { size, .. }) => {
-            DataType::FixedSizeBinary(*size as i32)
+        AvroSchema::Enum(EnumSchema { name, .. }) => {
+            let dtype = DataType::Utf8;
+
+            let existing = resolver.names_lookup.insert(name.clone(), dtype.clone());
+            if existing.is_some() {
+                return Err(apache_avro::Error::new(
+                    apache_avro::error::Details::SchemaResolutionError(name.clone()),
+                )
+                .into());
+            }
+
+            dtype
+        }
+        AvroSchema::Fixed(FixedSchema { size, name, .. }) => {
+            let dtype = DataType::FixedSizeBinary(*size as i32);
+
+            let existing = resolver.names_lookup.insert(name.clone(), dtype.clone());
+            if existing.is_some() {
+                return Err(apache_avro::Error::new(
+                    apache_avro::error::Details::SchemaResolutionError(name.clone()),
+                )
+                .into());
+            }
+
+            dtype
         }
         AvroSchema::Decimal(DecimalSchema {
             precision, scale, ..
@@ -314,10 +411,8 @@ mod test {
     use super::{aliased, external_props, to_arrow_schema};
     use apache_avro::schema::{Alias, EnumSchema, FixedSchema, Name, RecordSchema};
     use apache_avro::Schema as AvroSchema;
-    use arrow::datatypes::DataType::{Binary, Float32, Float64, Timestamp, Utf8};
-    use arrow::datatypes::DataType::{Boolean, Int32, Int64};
-    use arrow::datatypes::TimeUnit::Microsecond;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion_common::DataFusionError;
 
     fn alias(name: &str) -> Alias {
         Alias::new(name).unwrap()
@@ -444,17 +539,21 @@ mod test {
         let arrow_schema = to_arrow_schema(&schema.unwrap());
         assert!(arrow_schema.is_ok(), "{arrow_schema:?}");
         let expected = Schema::new(vec![
-            Field::new("id", Int32, true),
-            Field::new("bool_col", Boolean, true),
-            Field::new("tinyint_col", Int32, true),
-            Field::new("smallint_col", Int32, true),
-            Field::new("int_col", Int32, true),
-            Field::new("bigint_col", Int64, true),
-            Field::new("float_col", Float32, true),
-            Field::new("double_col", Float64, true),
-            Field::new("date_string_col", Binary, true),
-            Field::new("string_col", Binary, true),
-            Field::new("timestamp_col", Timestamp(Microsecond, None), true),
+            Field::new("id", DataType::Int32, true),
+            Field::new("bool_col", DataType::Boolean, true),
+            Field::new("tinyint_col", DataType::Int32, true),
+            Field::new("smallint_col", DataType::Int32, true),
+            Field::new("int_col", DataType::Int32, true),
+            Field::new("bigint_col", DataType::Int64, true),
+            Field::new("float_col", DataType::Float32, true),
+            Field::new("double_col", DataType::Float64, true),
+            Field::new("date_string_col", DataType::Binary, true),
+            Field::new("string_col", DataType::Binary, true),
+            Field::new(
+                "timestamp_col",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
         ]);
         assert_eq!(arrow_schema.unwrap(), expected);
     }
@@ -496,10 +595,10 @@ mod test {
         // should not use Avro Record names.
         let expected_arrow_schema = Schema::new(vec![Field::new(
             "col1",
-            arrow::datatypes::DataType::Struct(
+            DataType::Struct(
                 vec![
-                    Field::new("col2", Utf8, false),
-                    Field::new("col3", Utf8, true),
+                    Field::new("col2", DataType::Utf8, false),
+                    Field::new("col3", DataType::Utf8, true),
                 ]
                 .into(),
             ),
@@ -517,7 +616,509 @@ mod test {
         assert!(arrow_schema.is_ok(), "{arrow_schema:?}");
         assert_eq!(
             arrow_schema.unwrap(),
-            Schema::new(vec![Field::new("", Utf8, false)])
+            Schema::new(vec![Field::new("", DataType::Utf8, false)])
         );
+    }
+
+    #[test]
+    fn test_self_referential_record_rejected() {
+        // Self-referential schemas should be rejected
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Person",
+              "fields": [
+                {
+                  "name": "name",
+                  "type": "string"
+                },
+                {
+                  "name": "friend",
+                  "type": ["null", "Person"]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let result = to_arrow_schema(&avro_schema);
+        let DataFusionError::AvroError(err) = result.as_ref().unwrap_err() else {
+            panic!("Expected AvroError but got {result:?}");
+        };
+
+        let apache_avro::error::Details::SchemaResolutionError(name) = err.details()
+        else {
+            panic!("Expected SchemaResolutionError but got {:?}", err.details());
+        };
+
+        assert_eq!(name.name, "Person");
+        assert_eq!(name.namespace, None);
+    }
+
+    #[test]
+    fn test_mutually_recursive_records_rejected() {
+        // Mutually recursive schemas should be rejected
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Node",
+              "fields": [
+                {
+                  "name": "value",
+                  "type": "int"
+                },
+                {
+                  "name": "children",
+                  "type": {
+                    "type": "array",
+                    "items": "Node"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let result = to_arrow_schema(&avro_schema);
+        assert!(
+            result.is_err(),
+            "Self-referential array schemas should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_enum_ref() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Message",
+              "fields": [
+                {
+                  "name": "priority",
+                  "type": {
+                    "type": "enum",
+                    "name": "Priority",
+                    "symbols": ["LOW", "MEDIUM", "HIGH"]
+                  }
+                },
+                {
+                  "name": "fallback_priority",
+                  "type": ["null", "Priority"]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let arrow_schema = to_arrow_schema(&avro_schema).unwrap();
+
+        assert_eq!(arrow_schema.fields().len(), 2);
+        assert_eq!(arrow_schema.field(0).data_type(), &DataType::Utf8);
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+        assert!(arrow_schema.field(1).is_nullable());
+    }
+
+    #[test]
+    fn test_fixed_ref() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "HashRecord",
+              "fields": [
+                {
+                  "name": "primary_hash",
+                  "type": {
+                    "type": "fixed",
+                    "name": "MD5",
+                    "size": 16
+                  }
+                },
+                {
+                  "name": "secondary_hash",
+                  "type": ["null", "MD5"]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let arrow_schema = to_arrow_schema(&avro_schema).unwrap();
+
+        assert_eq!(arrow_schema.fields().len(), 2);
+        assert_eq!(
+            arrow_schema.field(0).data_type(),
+            &DataType::FixedSizeBinary(16)
+        );
+        assert_eq!(
+            arrow_schema.field(1).data_type(),
+            &DataType::FixedSizeBinary(16)
+        );
+        assert!(arrow_schema.field(1).is_nullable());
+    }
+
+    #[test]
+    fn test_multiple_refs_same_type() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Container",
+              "fields": [
+                {
+                  "name": "status1",
+                  "type": {
+                    "type": "enum",
+                    "name": "Status",
+                    "symbols": ["ACTIVE", "INACTIVE"]
+                  }
+                },
+                {
+                  "name": "status2",
+                  "type": "Status"
+                },
+                {
+                  "name": "status3",
+                  "type": ["null", "Status"]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let arrow_schema = to_arrow_schema(&avro_schema).unwrap();
+
+        assert_eq!(arrow_schema.fields().len(), 3);
+        assert_eq!(arrow_schema.field(0).data_type(), &DataType::Utf8);
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+        assert_eq!(arrow_schema.field(2).data_type(), &DataType::Utf8);
+        assert!(arrow_schema.field(2).is_nullable());
+    }
+
+    #[test]
+    fn test_non_recursive_nested_record_ref() {
+        // Non-recursive nested records with refs should work
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Outer",
+              "fields": [
+                {
+                  "name": "id_type",
+                  "type": {
+                    "type": "fixed",
+                    "name": "UUID",
+                    "size": 16
+                  }
+                },
+                {
+                  "name": "nested",
+                  "type": {
+                    "type": "record",
+                    "name": "Inner",
+                    "fields": [
+                      {
+                        "name": "inner_id",
+                        "type": "UUID"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let arrow_schema = to_arrow_schema(&avro_schema).unwrap();
+
+        assert_eq!(arrow_schema.fields().len(), 2);
+        assert_eq!(
+            arrow_schema.field(0).data_type(),
+            &DataType::FixedSizeBinary(16)
+        );
+
+        if let DataType::Struct(fields) = arrow_schema.field(1).data_type() {
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].data_type(), &DataType::FixedSizeBinary(16));
+        } else {
+            panic!("Expected Struct type for nested field");
+        }
+    }
+
+    #[test]
+    fn test_ref_in_array() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "ArrayContainer",
+              "fields": [
+                {
+                  "name": "priority_def",
+                  "type": {
+                    "type": "enum",
+                    "name": "Priority",
+                    "symbols": ["LOW", "HIGH"]
+                  }
+                },
+                {
+                  "name": "priorities",
+                  "type": {
+                    "type": "array",
+                    "items": "Priority"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let arrow_schema = to_arrow_schema(&avro_schema).unwrap();
+
+        assert_eq!(arrow_schema.fields().len(), 2);
+
+        if let DataType::List(item_field) = arrow_schema.field(1).data_type() {
+            assert_eq!(item_field.data_type(), &DataType::Utf8);
+        } else {
+            panic!("Expected List type for array field");
+        }
+    }
+
+    #[test]
+    fn test_invalid_ref() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "BadRecord",
+              "fields": [
+                {
+                  "name": "bad_ref",
+                  "type": "NonExistentType"
+                }
+              ]
+            }"#,
+        );
+
+        // This should either fail during Avro parsing or during Arrow conversion
+        assert!(avro_schema.is_err() || to_arrow_schema(&avro_schema.unwrap()).is_err());
+    }
+
+    #[test]
+    fn test_namespaced_ref() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Container",
+              "namespace": "com.example",
+              "fields": [
+                {
+                  "name": "status_def",
+                  "type": {
+                    "type": "enum",
+                    "name": "Status",
+                    "namespace": "com.example.types",
+                    "symbols": ["OK", "ERROR"]
+                  }
+                },
+                {
+                  "name": "status_ref",
+                  "type": "com.example.types.Status"
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let arrow_schema = to_arrow_schema(&avro_schema).unwrap();
+
+        assert_eq!(arrow_schema.fields().len(), 2);
+        assert_eq!(arrow_schema.field(0).data_type(), &DataType::Utf8);
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn test_complex_non_recursive_ref_graph() {
+        // Multiple types referencing each other without cycles
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Root",
+              "fields": [
+                {
+                  "name": "hash_type",
+                  "type": {
+                    "type": "fixed",
+                    "name": "Hash",
+                    "size": 32
+                  }
+                },
+                {
+                  "name": "status_type",
+                  "type": {
+                    "type": "enum",
+                    "name": "Status",
+                    "symbols": ["PENDING", "COMPLETE"]
+                  }
+                },
+                {
+                  "name": "data",
+                  "type": {
+                    "type": "record",
+                    "name": "Data",
+                    "fields": [
+                      {
+                        "name": "id",
+                        "type": "Hash"
+                      },
+                      {
+                        "name": "state",
+                        "type": "Status"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "backup_hash",
+                  "type": ["null", "Hash"]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let arrow_schema = to_arrow_schema(&avro_schema).unwrap();
+
+        assert_eq!(arrow_schema.fields().len(), 4);
+        assert_eq!(
+            arrow_schema.field(0).data_type(),
+            &DataType::FixedSizeBinary(32)
+        );
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+
+        if let DataType::Struct(fields) = arrow_schema.field(2).data_type() {
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0].data_type(), &DataType::FixedSizeBinary(32));
+            assert_eq!(fields[1].data_type(), &DataType::Utf8);
+        } else {
+            panic!("Expected Struct type for data field");
+        }
+
+        assert_eq!(
+            arrow_schema.field(3).data_type(),
+            &DataType::FixedSizeBinary(32)
+        );
+        assert!(arrow_schema.field(3).is_nullable());
+    }
+
+    #[test]
+    fn test_duplicate_type_name_rejected() {
+        // Defining the same named type twice should be rejected
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Container",
+              "fields": [
+                {
+                  "name": "first",
+                  "type": {
+                    "type": "enum",
+                    "name": "Status",
+                    "symbols": ["OK"]
+                  }
+                },
+                {
+                  "name": "second",
+                  "type": {
+                    "type": "enum",
+                    "name": "Status",
+                    "symbols": ["ERROR"]
+                  }
+                }
+              ]
+            }"#,
+        );
+
+        // Avro parser itself should reject this, or our converter should
+        assert!(avro_schema.is_err() || to_arrow_schema(&avro_schema.unwrap()).is_err());
+    }
+
+    #[test]
+    fn test_deeply_nested_ref_chain() {
+        // Test a chain of references without cycles
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Level1",
+              "fields": [
+                {
+                  "name": "id_type",
+                  "type": {
+                    "type": "fixed",
+                    "name": "ID",
+                    "size": 8
+                  }
+                },
+                {
+                  "name": "level2",
+                  "type": {
+                    "type": "record",
+                    "name": "Level2",
+                    "fields": [
+                      {
+                        "name": "id",
+                        "type": "ID"
+                      },
+                      {
+                        "name": "level3",
+                        "type": {
+                          "type": "record",
+                          "name": "Level3",
+                          "fields": [
+                            {
+                              "name": "id",
+                              "type": "ID"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let arrow_schema = to_arrow_schema(&avro_schema).unwrap();
+
+        assert_eq!(arrow_schema.fields().len(), 2);
+        assert_eq!(
+            arrow_schema.field(0).data_type(),
+            &DataType::FixedSizeBinary(8)
+        );
+
+        // Verify the nested structure
+        if let DataType::Struct(level2_fields) = arrow_schema.field(1).data_type() {
+            assert_eq!(level2_fields.len(), 2);
+            assert_eq!(level2_fields[0].data_type(), &DataType::FixedSizeBinary(8));
+
+            if let DataType::Struct(level3_fields) = level2_fields[1].data_type() {
+                assert_eq!(level3_fields.len(), 1);
+                assert_eq!(level3_fields[0].data_type(), &DataType::FixedSizeBinary(8));
+            } else {
+                panic!("Expected Struct type for level3");
+            }
+        } else {
+            panic!("Expected Struct type for level2");
+        }
     }
 }

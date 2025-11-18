@@ -17,10 +17,11 @@
 
 //! Avro to Arrow array readers
 
-use apache_avro::schema::{EnumSchema, FixedSchema, Name, RecordSchema};
 use apache_avro::{
     error::Details as AvroErrorDetails,
-    schema::{Schema as AvroSchema, SchemaKind},
+    schema::{
+        EnumSchema, FixedSchema, Name, RecordSchema, Schema as AvroSchema, SchemaKind,
+    },
     types::Value,
     Error as AvroError, Reader as AvroReader,
 };
@@ -41,12 +42,11 @@ use arrow::datatypes::{
 };
 use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::{arrow_err, HashMap};
+use datafusion_common::{arrow_err, HashMap, HashSet};
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -54,9 +54,10 @@ use std::sync::Arc;
 
 type RecordSlice<'a> = &'a [&'a Vec<(String, Value)>];
 
+#[derive(Default)]
 pub struct UnresolvedNames {
-    names_map: HashMap<Name, String>,
-    to_resolve: HashMap<String, Name>,
+    in_progress: HashSet<Name>,
+    all_subnames_in_name: HashMap<Name, BTreeMap<String, usize>>,
 }
 
 pub struct AvroArrowArrayReader<'a, R: Read> {
@@ -66,50 +67,11 @@ pub struct AvroArrowArrayReader<'a, R: Read> {
 }
 
 impl<R: Read> AvroArrowArrayReader<'_, R> {
-    fn resolve_refs(
-        unresolved: UnresolvedNames,
-        schema_lookup: &mut BTreeMap<String, usize>,
-    ) -> Result<(), ArrowError> {
-        let UnresolvedNames {
-            names_map,
-            to_resolve,
-        } = unresolved;
-
-        to_resolve.into_iter().try_for_each(|(field_path, name)| {
-            // Get the original schema that was defiend with the name
-            let original_schema_location =
-                names_map.get(&name).ok_or(SchemaError(format!(
-                    "Needed to resolve name {name:?} but it does not exist in schema"
-                )))?;
-
-            // Get all paths that exit in this schema, but replace the initial path with the field_path we wish to resolve
-            let resolved = schema_lookup
-                .iter()
-                .filter(|(path, _)| {
-                    path.starts_with(original_schema_location)
-                        && *path != original_schema_location
-                })
-                .map(|(path, pos)| {
-                    let resolved_path =
-                        path.replacen(original_schema_location, &field_path, 1);
-                    (resolved_path, *pos)
-                })
-                .collect::<BTreeMap<_, _>>();
-
-            // Extend our schema lookup with the resolved paths
-            schema_lookup.extend(resolved);
-
-            Result::<_, ArrowError>::Ok(())
-        })
-    }
-
     pub fn try_new(reader: R, schema: SchemaRef) -> Result<Self> {
         let reader = AvroReader::new(reader)?;
         let writer_schema = reader.writer_schema().clone();
 
-        let (mut schema_lookup, unresolved) = Self::schema_lookup(writer_schema)?;
-
-        Self::resolve_refs(unresolved, &mut schema_lookup)?;
+        let schema_lookup = Self::schema_lookup(writer_schema)?;
 
         Ok(Self {
             reader,
@@ -118,9 +80,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
         })
     }
 
-    pub fn schema_lookup(
-        schema: AvroSchema,
-    ) -> Result<(BTreeMap<String, usize>, UnresolvedNames)> {
+    pub fn schema_lookup(schema: AvroSchema) -> Result<BTreeMap<String, usize>> {
         match schema {
             AvroSchema::Record(RecordSchema {
                 fields,
@@ -128,11 +88,9 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 name,
                 ..
             }) => {
-                // Insert the root into our names map
-                let mut unresolved_names = UnresolvedNames {
-                    names_map: HashMap::from([(name.clone(), "".to_string())]),
-                    to_resolve: HashMap::new(),
-                };
+                let mut unresolved_names = UnresolvedNames::default();
+                unresolved_names.in_progress.insert(name.clone());
+
                 for field in fields {
                     Self::child_schema_lookup(
                         &field.name,
@@ -141,9 +99,13 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         &mut unresolved_names,
                     )?;
                 }
-                Ok((lookup, unresolved_names))
+
+                unresolved_names.in_progress.remove(&name);
+                assert!(unresolved_names.in_progress.is_empty());
+
+                Ok(lookup)
             }
-            _ => arrow_err!(SchemaError(
+            _ => arrow_err!(ArrowError::SchemaError(
                 "expected avro schema to be a record".to_string(),
             )),
         }
@@ -184,24 +146,36 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 name,
                 ..
             }) => {
-                unresolved_names
-                    .names_map
-                    .insert(name.clone(), parent_field_name.to_string());
+                let inserted = unresolved_names.in_progress.insert(name.clone());
+                if !inserted {
+                    return arrow_err!(ArrowError::SchemaError(format!("Detected circular reference while resolving schema lookup for record schema with name: {name}")));
+                }
+
+                let mut inner_lookup = BTreeMap::new();
                 lookup.iter().for_each(|(field_name, pos)| {
-                    schema_lookup
-                        .insert(format!("{parent_field_name}.{field_name}"), *pos);
+                    inner_lookup.insert(field_name.clone(), *pos);
                 });
 
                 for field in fields {
-                    let sub_parent_field_name =
-                        format!("{}.{}", parent_field_name, field.name);
                     Self::child_schema_lookup(
-                        &sub_parent_field_name,
+                        &field.name,
                         &field.schema,
-                        schema_lookup,
+                        &mut inner_lookup,
                         unresolved_names,
                     )?;
                 }
+
+                // Extend the parent schema lookup with the inner lookup entries
+                schema_lookup.extend(inner_lookup.iter().map(|(lookup_entry, pos)| {
+                    (format!("{parent_field_name}.{lookup_entry}"), *pos)
+                }));
+
+                // Store the inner lookup for potential references
+                unresolved_names
+                    .all_subnames_in_name
+                    .insert(name.clone(), inner_lookup);
+
+                unresolved_names.in_progress.remove(name);
             }
             AvroSchema::Array(schema) => {
                 Self::child_schema_lookup(
@@ -222,18 +196,34 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             AvroSchema::Fixed(FixedSchema { name, .. }) => {
                 unresolved_names
-                    .names_map
-                    .insert(name.clone(), parent_field_name.to_string());
+                    .all_subnames_in_name
+                    .insert(name.clone(), BTreeMap::new());
             }
             AvroSchema::Enum(EnumSchema { name, .. }) => {
                 unresolved_names
-                    .names_map
-                    .insert(name.clone(), parent_field_name.to_string());
+                    .all_subnames_in_name
+                    .insert(name.clone(), BTreeMap::new());
             }
             AvroSchema::Ref { name } => {
-                unresolved_names
-                    .to_resolve
-                    .insert(parent_field_name.to_string(), name.clone());
+                // Detect circular references
+                if unresolved_names.in_progress.contains(name) {
+                    return arrow_err!(ArrowError::SchemaError(format!("Detected circular reference while resolving schema lookup for record schema with name: {name}")));
+                }
+
+                let subnames = unresolved_names
+                    .all_subnames_in_name
+                    .get(name)
+                    .ok_or_else(|| {
+                        AvroError::new(AvroErrorDetails::SchemaResolutionError(
+                            name.clone(),
+                        ))
+                    })?;
+
+                schema_lookup.extend(
+                    subnames
+                        .iter()
+                        .map(|(k, v)| (format!("{parent_field_name}.{k}"), *v)),
+                );
             }
             _ => (),
         }
@@ -376,7 +366,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 );
                 self.list_array_string_array_builder::<UInt64Type>(&dtype, col_name, rows)
             }
-            ref e => Err(SchemaError(format!(
+            ref e => Err(ArrowError::SchemaError(format!(
                 "Data type is currently not supported for dictionaries in list : {e}"
             ))),
         }
@@ -403,7 +393,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 Box::new(ListBuilder::new(values_builder))
             }
             e => {
-                return Err(SchemaError(format!(
+                return Err(ArrowError::SchemaError(format!(
                     "Nested list data builder type is not supported: {e}"
                 )))
             }
@@ -426,7 +416,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 } else if !matches!(value, Value::Record(_)) {
                     vec![resolve_string(value)?]
                 } else {
-                    return Err(SchemaError(
+                    return Err(ArrowError::SchemaError(
                         "Only scalars are currently supported in Avro arrays".to_string(),
                     ));
                 };
@@ -438,7 +428,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         let builder = builder
                             .as_any_mut()
                             .downcast_mut::<ListBuilder<StringBuilder>>()
-                            .ok_or_else(||SchemaError(
+                            .ok_or_else(||ArrowError::SchemaError(
                                 "Cast failed for ListBuilder<StringBuilder> during nested data parsing".to_string(),
                             ))?;
                         for val in vals {
@@ -453,7 +443,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         builder.append(true);
                     }
                     DataType::Dictionary(_, _) => {
-                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<D>>>().ok_or_else(||SchemaError(
+                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<D>>>().ok_or_else(||ArrowError::SchemaError(
                             "Cast failed for ListBuilder<StringDictionaryBuilder> during nested data parsing".to_string(),
                         ))?;
                         for val in vals {
@@ -468,7 +458,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         builder.append(true);
                     }
                     e => {
-                        return Err(SchemaError(format!(
+                        return Err(ArrowError::SchemaError(format!(
                             "Nested list data builder type is not supported: {e}"
                         )))
                     }
@@ -537,10 +527,12 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 DataType::UInt64 => {
                     self.build_dictionary_array::<UInt64Type>(rows, col_name)
                 }
-                _ => Err(SchemaError("unsupported dictionary key type".to_string())),
+                _ => Err(ArrowError::SchemaError(
+                    "unsupported dictionary key type".to_string(),
+                )),
             }
         } else {
-            Err(SchemaError(
+            Err(ArrowError::SchemaError(
                 "dictionary types other than UTF-8 not yet supported".to_string(),
             ))
         }
@@ -614,7 +606,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             DataType::UInt32 => self.read_primitive_list_values::<UInt32Type>(rows),
             DataType::UInt64 => self.read_primitive_list_values::<UInt64Type>(rows),
             DataType::Float16 => {
-                return Err(SchemaError("Float16 not supported".to_string()))
+                return Err(ArrowError::SchemaError("Float16 not supported".to_string()))
             }
             DataType::Float32 => self.read_primitive_list_values::<Float32Type>(rows),
             DataType::Float64 => self.read_primitive_list_values::<Float64Type>(rows),
@@ -623,7 +615,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             | DataType::Date64
             | DataType::Time32(_)
             | DataType::Time64(_) => {
-                return Err(SchemaError(
+                return Err(ArrowError::SchemaError(
                     "Temporal types are not yet supported, see ARROW-4803".to_string(),
                 ))
             }
@@ -702,7 +694,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     .unwrap()
             }
             datatype => {
-                return Err(SchemaError(format!(
+                return Err(ArrowError::SchemaError(format!(
                     "Nested list of {datatype} not supported"
                 )));
             }
@@ -810,7 +802,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                                 &field_path,
                             ),
                         t => {
-                            return Err(SchemaError(format!(
+                            return Err(ArrowError::SchemaError(format!(
                                 "TimeUnit {t:?} not supported with Time64"
                             )))
                         }
@@ -824,7 +816,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                                 &field_path,
                             ),
                         t => {
-                            return Err(SchemaError(format!(
+                            return Err(ArrowError::SchemaError(format!(
                                 "TimeUnit {t:?} not supported with Time32"
                             )))
                         }
@@ -923,7 +915,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         make_array(data)
                     }
                     _ => {
-                        return Err(SchemaError(format!(
+                        return Err(ArrowError::SchemaError(format!(
                             "type {} not supported",
                             field.data_type()
                         )))
@@ -1029,7 +1021,7 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
         Value::Null => Ok(None),
         other => Err(AvroError::new(AvroErrorDetails::GetString(other.clone()))),
     }
-    .map_err(|e| SchemaError(format!("expected resolvable string : {e}")))
+    .map_err(|e| ArrowError::SchemaError(format!("expected resolvable string : {e}")))
 }
 
 fn resolve_u8(v: &Value) -> Option<u8> {
@@ -1194,7 +1186,7 @@ mod test {
         let a_array = as_list_array(batch.column(col_id_index)).unwrap();
         assert_eq!(
             *a_array.data_type(),
-            DataType::List(Arc::new(Field::new("element", DataType::Int64, true)))
+            DataType::new_list(DataType::Int64, true)
         );
         let array = a_array.value(0);
         assert_eq!(*array.data_type(), DataType::Int64);
@@ -2702,16 +2694,16 @@ mod test {
         // When Address is used in nullable contexts (like inside nullable Customer),
         // its fields need to be nullable too
         let address_fields = Fields::from(vec![
-            Field::new("street", DataType::Utf8, true), // Changed to true
-            Field::new("city", DataType::Utf8, true),   // Changed to true
+            Field::new("street", DataType::Utf8, true),
+            Field::new("city", DataType::Utf8, true),
         ]);
 
         let customer_fields = Fields::from(vec![
-            Field::new("name", DataType::Utf8, true), // Changed to true
+            Field::new("name", DataType::Utf8, true),
             Field::new(
                 "home_address",
                 DataType::Struct(address_fields.clone()),
-                true, // Changed to true
+                true,
             ),
         ]);
 
