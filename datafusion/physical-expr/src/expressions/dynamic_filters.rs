@@ -57,6 +57,8 @@ struct Inner {
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
     generation: u64,
     expr: Arc<dyn PhysicalExpr>,
+    /// Flag indicating whether all updates have been received and the filter is complete.
+    is_complete: bool,
 }
 
 impl Inner {
@@ -66,6 +68,7 @@ impl Inner {
             // This is not currently used anywhere but it seems useful to have this simple distinction.
             generation: 1,
             expr,
+            is_complete: false,
         }
     }
 
@@ -207,8 +210,24 @@ impl DynamicFilterPhysicalExpr {
         *current = Inner {
             generation: current.generation + 1,
             expr: new_expr,
+            is_complete: current.is_complete,
         };
         Ok(())
+    }
+
+    /// Mark this dynamic filter as complete.
+    ///
+    /// This signals that all expected updates have been received.
+    pub fn mark_complete(&self) {
+        let mut current = self.inner.write();
+        current.is_complete = true;
+    }
+
+    /// Check if this dynamic filter is complete.
+    ///
+    /// Returns `true` if all expected updates have been received via [`Self::mark_complete`].
+    pub fn is_complete(&self) -> bool {
+        self.inner.read().is_complete
     }
 
     fn render(

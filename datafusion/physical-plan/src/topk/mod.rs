@@ -591,9 +591,12 @@ impl TopK {
             common_sort_prefix_converter: _,
             common_sort_prefix: _,
             finished: _,
-            filter: _,
+            filter,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
+
+        // Mark the dynamic filter as complete now that TopK processing is finished.
+        filter.read().expr().mark_complete();
 
         // break into record batches as needed
         let mut batches = vec![];

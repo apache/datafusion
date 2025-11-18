@@ -300,6 +300,7 @@ impl SharedBoundsAccumulator {
                     self.create_filter_from_partition_bounds(&inner.bounds)?;
                 self.dynamic_filter.update(filter_expr)?;
             }
+            self.dynamic_filter.mark_complete();
         }
 
         Ok(())
