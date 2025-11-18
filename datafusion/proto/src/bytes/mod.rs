@@ -316,22 +316,24 @@ pub fn physical_plan_from_json(
     back.try_into_physical_plan(ctx, &extension_codec)
 }
 
-/// Deserialize a PhysicalPlan from bytes
-pub fn physical_plan_from_bytes(
-    bytes: &[u8],
-    ctx: &TaskContext,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let extension_codec = DefaultPhysicalExtensionCodec {};
-    physical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
-}
+// TODO(tsaucer) update the below methods
 
-/// Deserialize a PhysicalPlan from bytes
-pub fn physical_plan_from_bytes_with_extension_codec(
-    bytes: &[u8],
-    ctx: &TaskContext,
-    extension_codec: &dyn PhysicalExtensionCodec,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
-        .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    protobuf.try_into_physical_plan(ctx, extension_codec)
-}
+// /// Deserialize a PhysicalPlan from bytes
+// pub fn physical_plan_from_bytes(
+//     bytes: &[u8],
+//     ctx: &TaskContext,
+// ) -> Result<Arc<dyn ExecutionPlan>> {
+//     let extension_codec = DefaultPhysicalExtensionCodec {};
+//     physical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
+// }
+//
+// /// Deserialize a PhysicalPlan from bytes
+// pub fn physical_plan_from_bytes_with_extension_codec(
+//     bytes: &[u8],
+//     ctx: &TaskContext,
+//     extension_codec: &dyn PhysicalExtensionCodec,
+// ) -> Result<Arc<dyn ExecutionPlan>> {
+//     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
+//         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
+//     protobuf.try_into_physical_plan(extension_codec)
+// }
