@@ -44,7 +44,10 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{IntervalMonthDayNanoType, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::{ConfigOptions, CsvOptions};
-use datafusion_common::{exec_err, internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
+    Result,
+};
 #[cfg(feature = "parquet")]
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -97,10 +100,10 @@ use datafusion_physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr};
 
-use prost::bytes::BufMut;
-use prost::Message;
 use datafusion_execution::TaskContext;
 use datafusion_expr::registry::FunctionRegistry;
+use prost::bytes::BufMut;
+use prost::Message;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -3144,11 +3147,19 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
 }
 
 impl PhysicalExtensionCodec for TaskContext {
-    fn try_decode(&self, _buf: &[u8], _inputs: &[Arc<dyn ExecutionPlan>]) -> Result<Arc<dyn ExecutionPlan>> {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         exec_err!("TaskContext cannot decode physical plan")
     }
 
-    fn try_encode(&self, _node: Arc<dyn ExecutionPlan>, _buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode(
+        &self,
+        _node: Arc<dyn ExecutionPlan>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
         exec_err!("TaskContext cannot encode physical plan")
     }
 
@@ -3160,11 +3171,19 @@ impl PhysicalExtensionCodec for TaskContext {
         todo!()
     }
 
-    fn try_decode_expr(&self, _buf: &[u8], _inputs: &[Arc<dyn PhysicalExpr>]) -> Result<Arc<dyn PhysicalExpr>> {
+    fn try_decode_expr(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         exec_err!("TaskContext cannot decode physical expressions")
     }
 
-    fn try_encode_expr(&self, _node: &Arc<dyn PhysicalExpr>, _buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_expr(
+        &self,
+        _node: &Arc<dyn PhysicalExpr>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
         exec_err!("TaskContext cannot encode physical expressions")
     }
 

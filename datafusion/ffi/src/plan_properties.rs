@@ -181,8 +181,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
         // TODO Extend FFI to get the registry and codex
         let default_ctx = SessionContext::new();
-        let task_context = default_ctx.task_ctx();
-        let codex = DefaultPhysicalExtensionCodec {};
+        let mut task_context = default_ctx.task_ctx().as_ref().clone();
 
         let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
 
@@ -191,9 +190,8 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let sort_exprs = parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
-            &task_context,
+            &mut task_context,
             &schema,
-            &codex,
         )?;
 
         let partitioning_vec =
@@ -203,9 +201,8 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let partitioning = parse_protobuf_partitioning(
             Some(&proto_output_partitioning),
-            &task_context,
+            &mut task_context,
             &schema,
-            &codex,
         )?
         .ok_or(DataFusionError::Plan(
             "Unable to deserialize partitioning protobuf in FFI_PlanProperties"

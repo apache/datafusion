@@ -121,17 +121,12 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
         let schema = Schema::try_from(&value.schema.0)?;
 
         let default_ctx = SessionContext::new();
-        let task_ctx = default_ctx.task_ctx();
-        let codex = DefaultPhysicalExtensionCodec {};
+        let mut task_ctx = default_ctx.task_ctx().as_ref().clone();
 
-        let order_bys = parse_physical_sort_exprs(
-            &proto_def.ordering_req,
-            &task_ctx,
-            &schema,
-            &codex,
-        )?;
+        let order_bys =
+            parse_physical_sort_exprs(&proto_def.ordering_req, &mut task_ctx, &schema)?;
 
-        let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
+        let exprs = parse_physical_exprs(&proto_def.expr, &mut task_ctx, &schema)?;
 
         let expr_fields = exprs
             .iter()
