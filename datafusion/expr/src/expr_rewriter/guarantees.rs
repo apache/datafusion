@@ -15,30 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Simplifier implementation for [`ExprSimplifier::with_guarantees()`]
-//!
-//! [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
+//! Rewrite expressions based on external expression value range guarantees.
 
 use std::{borrow::Cow, collections::HashMap};
 
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use crate::{expr::InList, lit, Between, BinaryExpr, Expr, LogicalPlan};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
-use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
+use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
+use crate::expr::Sort;
 
 /// Rewrite expressions to incorporate guarantees.
 ///
 /// Guarantees are a mapping from an expression (which currently is always a
 /// column reference) to a [NullableInterval]. The interval represents the known
-/// possible values of the column. Using these known values, expressions are
-/// rewritten so they can be simplified using `ConstEvaluator` and `Simplifier`.
+/// possible values of the column.
 ///
 /// For example, if we know that a column is not null and has values in the
 /// range [1, 10), we can rewrite `x IS NULL` to `false` or `x < 10` to `true`.
-///
-/// See a full example in [`ExprSimplifier::with_guarantees()`].
-///
-/// [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
 pub struct GuaranteeRewriter<'a> {
     guarantees: HashMap<&'a Expr, &'a NullableInterval>,
 }
@@ -203,10 +197,10 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
 mod tests {
     use super::*;
 
+    use crate::{col, Operator};
     use arrow::datatypes::DataType;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{col, Operator};
 
     #[test]
     fn test_null_handling() {
