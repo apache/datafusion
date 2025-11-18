@@ -17,7 +17,7 @@
 
 //! Avro to Arrow array readers
 
-use apache_avro::schema::RecordSchema;
+use apache_avro::schema::{EnumSchema, FixedSchema, Name, RecordSchema};
 use apache_avro::{
     error::Details as AvroErrorDetails,
     schema::{Schema as AvroSchema, SchemaKind},
@@ -45,14 +45,19 @@ use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use datafusion_common::arrow_err;
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::{arrow_err, HashMap};
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::Arc;
 
 type RecordSlice<'a> = &'a [&'a Vec<(String, Value)>];
+
+pub struct UnresolvedNames {
+    names_map: HashMap<Name, String>,
+    to_resolve: HashMap<String, Name>,
+}
 
 pub struct AvroArrowArrayReader<'a, R: Read> {
     reader: AvroReader<'a, R>,
@@ -61,10 +66,51 @@ pub struct AvroArrowArrayReader<'a, R: Read> {
 }
 
 impl<R: Read> AvroArrowArrayReader<'_, R> {
+    fn resolve_refs(
+        unresolved: UnresolvedNames,
+        schema_lookup: &mut BTreeMap<String, usize>,
+    ) -> Result<(), ArrowError> {
+        let UnresolvedNames {
+            names_map,
+            to_resolve,
+        } = unresolved;
+
+        to_resolve.into_iter().try_for_each(|(field_path, name)| {
+            // Get the original schema that was defiend with the name
+            let original_schema_location =
+                names_map.get(&name).ok_or(SchemaError(format!(
+                    "Needed to resolve name {name:?} but it does not exist in schema"
+                )))?;
+
+            // Get all paths that exit in this schema, but replace the initial path with the field_path we wish to resolve
+            let resolved = schema_lookup
+                .iter()
+                .filter(|(path, _)| {
+                    path.starts_with(original_schema_location)
+                        && *path != original_schema_location
+                })
+                .map(|(path, pos)| {
+                    let resolved_path =
+                        path.replacen(original_schema_location, &field_path, 1);
+                    (resolved_path, *pos)
+                })
+                .collect::<BTreeMap<_, _>>();
+
+            // Extend our schema lookup with the resolved paths
+            schema_lookup.extend(resolved);
+
+            Result::<_, ArrowError>::Ok(())
+        })
+    }
+
     pub fn try_new(reader: R, schema: SchemaRef) -> Result<Self> {
         let reader = AvroReader::new(reader)?;
         let writer_schema = reader.writer_schema().clone();
-        let schema_lookup = Self::schema_lookup(writer_schema)?;
+
+        let (mut schema_lookup, unresolved) = Self::schema_lookup(writer_schema)?;
+
+        Self::resolve_refs(unresolved, &mut schema_lookup)?;
+
         Ok(Self {
             reader,
             schema,
@@ -72,15 +118,30 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
         })
     }
 
-    pub fn schema_lookup(schema: AvroSchema) -> Result<BTreeMap<String, usize>> {
+    pub fn schema_lookup(
+        schema: AvroSchema,
+    ) -> Result<(BTreeMap<String, usize>, UnresolvedNames)> {
         match schema {
             AvroSchema::Record(RecordSchema {
-                fields, mut lookup, ..
+                fields,
+                mut lookup,
+                name,
+                ..
             }) => {
+                // Insert the root into our names map
+                let mut unresolved_names = UnresolvedNames {
+                    names_map: HashMap::from([(name.clone(), "".to_string())]),
+                    to_resolve: HashMap::new(),
+                };
                 for field in fields {
-                    Self::child_schema_lookup(&field.name, &field.schema, &mut lookup)?;
+                    Self::child_schema_lookup(
+                        &field.name,
+                        &field.schema,
+                        &mut lookup,
+                        &mut unresolved_names,
+                    )?;
                 }
-                Ok(lookup)
+                Ok((lookup, unresolved_names))
             }
             _ => arrow_err!(SchemaError(
                 "expected avro schema to be a record".to_string(),
@@ -92,6 +153,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
         parent_field_name: &str,
         schema: &AvroSchema,
         schema_lookup: &'b mut BTreeMap<String, usize>,
+        unresolved_names: &'b mut UnresolvedNames,
     ) -> Result<&'b BTreeMap<String, usize>> {
         match schema {
             AvroSchema::Union(us) => {
@@ -111,11 +173,20 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                             parent_field_name,
                             sub_schema,
                             schema_lookup,
+                            unresolved_names,
                         )?;
                     }
                 }
             }
-            AvroSchema::Record(RecordSchema { fields, lookup, .. }) => {
+            AvroSchema::Record(RecordSchema {
+                fields,
+                lookup,
+                name,
+                ..
+            }) => {
+                unresolved_names
+                    .names_map
+                    .insert(name.clone(), parent_field_name.to_string());
                 lookup.iter().for_each(|(field_name, pos)| {
                     schema_lookup
                         .insert(format!("{parent_field_name}.{field_name}"), *pos);
@@ -128,6 +199,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         &sub_parent_field_name,
                         &field.schema,
                         schema_lookup,
+                        unresolved_names,
                     )?;
                 }
             }
@@ -136,7 +208,32 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     parent_field_name,
                     &schema.items,
                     schema_lookup,
+                    unresolved_names,
                 )?;
+            }
+            AvroSchema::Map(map_schema) => {
+                let sub_parent_field_name = format!("{parent_field_name}.value");
+                Self::child_schema_lookup(
+                    &sub_parent_field_name,
+                    &map_schema.types,
+                    schema_lookup,
+                    unresolved_names,
+                )?;
+            }
+            AvroSchema::Fixed(FixedSchema { name, .. }) => {
+                unresolved_names
+                    .names_map
+                    .insert(name.clone(), parent_field_name.to_string());
+            }
+            AvroSchema::Enum(EnumSchema { name, .. }) => {
+                unresolved_names
+                    .names_map
+                    .insert(name.clone(), parent_field_name.to_string());
+            }
+            AvroSchema::Ref { name } => {
+                unresolved_names
+                    .to_resolve
+                    .insert(parent_field_name.to_string(), name.clone());
             }
             _ => (),
         }
@@ -1033,7 +1130,7 @@ where
 #[cfg(test)]
 mod test {
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
-    use arrow::array::Array;
+    use arrow::array::{Array, FixedSizeBinaryArray, StringArray};
     use arrow::datatypes::{DataType, Fields};
     use arrow::datatypes::{Field, TimeUnit};
     use datafusion_common::assert_batches_eq;
@@ -1801,6 +1898,852 @@ mod test {
             "+-----------------------------------------------+",
             "| [{id: 1, name: first}, {id: 2, name: second}] |",
             "+-----------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &[batch]);
+    }
+
+    #[test]
+    fn test_avro_record_ref() {
+        // This schema defines an Address record once, then references it multiple times
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+    {
+      "type": "record",
+      "name": "Person",
+      "fields": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "home_address",
+          "type": {
+            "type": "record",
+            "name": "Address",
+            "fields": [
+              {
+                "name": "street",
+                "type": "string"
+              },
+              {
+                "name": "city",
+                "type": "string"
+              },
+              {
+                "name": "zip",
+                "type": "int"
+              }
+            ]
+          }
+        },
+        {
+          "name": "work_address",
+          "type": "Address"
+        },
+        {
+          "name": "billing_address",
+          "type": ["null", "Address"]
+        }
+      ]
+    }"#,
+        )
+        .unwrap();
+
+        let person1 = apache_avro::to_value(serde_json::json!({
+            "name": "Alice",
+            "home_address": {
+                "street": "123 Main St",
+                "city": "Springfield",
+                "zip": 12345
+            },
+            "work_address": {
+                "street": "456 Business Ave",
+                "city": "Metropolis",
+                "zip": 67890
+            },
+            "billing_address": {
+                "street": "789 Payment Ln",
+                "city": "Capital City",
+                "zip": 11111
+            }
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let person2 = apache_avro::to_value(serde_json::json!({
+            "name": "Bob",
+            "home_address": {
+                "street": "321 Oak Dr",
+                "city": "Shelbyville",
+                "zip": 54321
+            },
+            "work_address": {
+                "street": "654 Corporate Blvd",
+                "city": "Tech City",
+                "zip": 98765
+            },
+            "billing_address": null
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(person1).unwrap();
+        w.append(person2).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        // Define the Arrow schema explicitly to avoid schema conversion with Refs
+        let address_fields = Fields::from(vec![
+            Field::new("street", DataType::Utf8, false),
+            Field::new("city", DataType::Utf8, false),
+            Field::new("zip", DataType::Int32, false),
+        ]);
+
+        let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new(
+                "home_address",
+                DataType::Struct(address_fields.clone()),
+                false,
+            ),
+            Field::new(
+                "work_address",
+                DataType::Struct(address_fields.clone()),
+                false,
+            ),
+            Field::new("billing_address", DataType::Struct(address_fields), true),
+        ]));
+
+        let mut reader = ReaderBuilder::new()
+            .with_schema(arrow_schema)
+            .with_batch_size(2)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 4);
+
+        let expected = [
+            "+-------+------------------------------------------------------+-----------------------------------------------------------+----------------------------------------------------------+",
+            "| name  | home_address                                         | work_address                                              | billing_address                                          |",
+            "+-------+------------------------------------------------------+-----------------------------------------------------------+----------------------------------------------------------+",
+            "| Alice | {street: 123 Main St, city: Springfield, zip: 12345} | {street: 456 Business Ave, city: Metropolis, zip: 67890}  | {street: 789 Payment Ln, city: Capital City, zip: 11111} |",
+            "| Bob   | {street: 321 Oak Dr, city: Shelbyville, zip: 54321}  | {street: 654 Corporate Blvd, city: Tech City, zip: 98765} |                                                          |",
+            "+-------+------------------------------------------------------+-----------------------------------------------------------+----------------------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &[batch]);
+    }
+
+    #[test]
+    fn test_avro_enum_ref() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Product",
+              "fields": [
+                {
+                  "name": "name",
+                  "type": "string"
+                },
+                {
+                  "name": "primary_category",
+                  "type": {
+                    "type": "enum",
+                    "name": "Category",
+                    "symbols": ["ELECTRONICS", "CLOTHING", "FOOD", "BOOKS"]
+                  }
+                },
+                {
+                  "name": "secondary_category",
+                  "type": ["null", "Category"]
+                },
+                {
+                  "name": "tertiary_category",
+                  "type": "Category"
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let p1 = apache_avro::to_value(serde_json::json!({
+            "name": "Laptop",
+            "primary_category": "ELECTRONICS",
+            "secondary_category": "ELECTRONICS",
+            "tertiary_category": "ELECTRONICS"
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let p2 = apache_avro::to_value(serde_json::json!({
+            "name": "T-Shirt",
+            "primary_category": "CLOTHING",
+            "secondary_category": null,
+            "tertiary_category": "CLOTHING"
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(p1).unwrap();
+        w.append(p2).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        // Define Arrow schema explicitly since read_schema doesn't support Refs yet
+        let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("primary_category", DataType::Utf8, false),
+            Field::new("secondary_category", DataType::Utf8, true),
+            Field::new("tertiary_category", DataType::Utf8, false),
+        ]));
+
+        let mut reader = ReaderBuilder::new()
+            .with_schema(arrow_schema)
+            .with_batch_size(2)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 4);
+
+        let expected = [
+            "+---------+------------------+--------------------+-------------------+",
+            "| name    | primary_category | secondary_category | tertiary_category |",
+            "+---------+------------------+--------------------+-------------------+",
+            "| Laptop  | ELECTRONICS      | ELECTRONICS        | ELECTRONICS       |",
+            "| T-Shirt | CLOTHING         |                    | CLOTHING          |",
+            "+---------+------------------+--------------------+-------------------+",
+        ];
+        assert_batches_eq!(expected, &[batch]);
+    }
+
+    #[test]
+    fn test_avro_fixed_ref() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "SecurityEvent",
+              "fields": [
+                {
+                  "name": "event_id",
+                  "type": "string"
+                },
+                {
+                  "name": "hash1",
+                  "type": {
+                    "type": "fixed",
+                    "name": "MD5Hash",
+                    "size": 16
+                  }
+                },
+                {
+                  "name": "hash2",
+                  "type": "MD5Hash"
+                },
+                {
+                  "name": "optional_hash",
+                  "type": ["null", "MD5Hash"]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        // For Avro fixed types, we need to use apache_avro::types::Value::Fixed directly
+        use apache_avro::types::Value;
+
+        let hash1_bytes = vec![1u8; 16];
+        let hash2_bytes = vec![2u8; 16];
+        let hash3_bytes = vec![3u8; 16];
+
+        let e1 = Value::Record(vec![
+            ("event_id".to_string(), Value::String("evt001".to_string())),
+            ("hash1".to_string(), Value::Fixed(16, hash1_bytes.clone())),
+            ("hash2".to_string(), Value::Fixed(16, hash2_bytes.clone())),
+            (
+                "optional_hash".to_string(),
+                Value::Union(1, Box::new(Value::Fixed(16, hash3_bytes.clone()))),
+            ),
+        ]);
+
+        let e2 = Value::Record(vec![
+            ("event_id".to_string(), Value::String("evt002".to_string())),
+            ("hash1".to_string(), Value::Fixed(16, hash2_bytes.clone())),
+            ("hash2".to_string(), Value::Fixed(16, hash1_bytes.clone())),
+            (
+                "optional_hash".to_string(),
+                Value::Union(0, Box::new(Value::Null)),
+            ),
+        ]);
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(e1).unwrap();
+        w.append(e2).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        // Define Arrow schema explicitly
+        let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            Field::new("event_id", DataType::Utf8, false),
+            Field::new("hash1", DataType::FixedSizeBinary(16), false),
+            Field::new("hash2", DataType::FixedSizeBinary(16), false),
+            Field::new("optional_hash", DataType::FixedSizeBinary(16), true),
+        ]));
+
+        let mut reader = ReaderBuilder::new()
+            .with_schema(arrow_schema)
+            .with_batch_size(2)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 4);
+
+        // Verify the data types
+        let schema = batch.schema();
+        assert_eq!(schema.field(1).data_type(), &DataType::FixedSizeBinary(16));
+        assert_eq!(schema.field(2).data_type(), &DataType::FixedSizeBinary(16));
+        assert_eq!(schema.field(3).data_type(), &DataType::FixedSizeBinary(16));
+
+        // Verify we can read the data
+        let hash1_array = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(hash1_array.len(), 2);
+        assert_eq!(hash1_array.value(0), hash1_bytes.as_slice());
+        assert_eq!(hash1_array.value(1), hash2_bytes.as_slice());
+    }
+
+    #[test]
+    fn test_avro_nested_record_ref() {
+        // Test record refs nested within arrays and other records
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "Organization",
+              "fields": [
+                {
+                  "name": "name",
+                  "type": "string"
+                },
+                {
+                  "name": "primary_contact",
+                  "type": {
+                    "type": "record",
+                    "name": "Contact",
+                    "fields": [
+                      {
+                        "name": "name",
+                        "type": "string"
+                      },
+                      {
+                        "name": "email",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "secondary_contact",
+                  "type": ["null", "Contact"]
+                },
+                {
+                  "name": "all_contacts",
+                  "type": {
+                    "type": "array",
+                    "items": "Contact"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let o1 = apache_avro::to_value(serde_json::json!({
+            "name": "Acme Corp",
+            "primary_contact": {
+                "name": "Alice",
+                "email": "alice@acme.com"
+            },
+            "secondary_contact": {
+                "name": "Bob",
+                "email": "bob@acme.com"
+            },
+            "all_contacts": [
+                {
+                    "name": "Alice",
+                    "email": "alice@acme.com"
+                },
+                {
+                    "name": "Bob",
+                    "email": "bob@acme.com"
+                },
+                {
+                    "name": "Charlie",
+                    "email": "charlie@acme.com"
+                }
+            ]
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let o2 = apache_avro::to_value(serde_json::json!({
+            "name": "Beta Inc",
+            "primary_contact": {
+                "name": "Dave",
+                "email": "dave@beta.com"
+            },
+            "secondary_contact": null,
+            "all_contacts": [
+                {
+                    "name": "Dave",
+                    "email": "dave@beta.com"
+                }
+            ]
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(o1).unwrap();
+        w.append(o2).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        // Define Arrow schema explicitly
+        let contact_fields = Fields::from(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("email", DataType::Utf8, false),
+        ]);
+
+        let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new(
+                "primary_contact",
+                DataType::Struct(contact_fields.clone()),
+                false,
+            ),
+            Field::new(
+                "secondary_contact",
+                DataType::Struct(contact_fields.clone()),
+                true,
+            ),
+            Field::new(
+                "all_contacts",
+                DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::Struct(contact_fields),
+                    false,
+                ))),
+                false,
+            ),
+        ]));
+
+        let mut reader = ReaderBuilder::new()
+            .with_schema(arrow_schema)
+            .with_batch_size(2)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 4);
+
+        let expected = [
+            "+-----------+--------------------------------------+----------------------------------+--------------------------------------------------------------------------------------------------------------------+",
+            "| name      | primary_contact                      | secondary_contact                | all_contacts                                                                                                       |",
+            "+-----------+--------------------------------------+----------------------------------+--------------------------------------------------------------------------------------------------------------------+",
+            "| Acme Corp | {name: Alice, email: alice@acme.com} | {name: Bob, email: bob@acme.com} | [{name: Alice, email: alice@acme.com}, {name: Bob, email: bob@acme.com}, {name: Charlie, email: charlie@acme.com}] |",
+            "| Beta Inc  | {name: Dave, email: dave@beta.com}   |                                  | [{name: Dave, email: dave@beta.com}]                                                                               |",
+            "+-----------+--------------------------------------+----------------------------------+--------------------------------------------------------------------------------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &[batch]);
+    }
+
+    #[test]
+    fn test_avro_combined_refs() {
+        // Test combining record, enum, and fixed refs in a single schema
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+        {
+          "type": "record",
+          "name": "Transaction",
+          "fields": [
+            {
+              "name": "id",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": {
+                "type": "enum",
+                "name": "Status",
+                "symbols": ["PENDING", "APPROVED", "REJECTED", "CANCELLED"]
+              }
+            },
+            {
+              "name": "previous_status",
+              "type": ["null", "Status"]
+            },
+            {
+              "name": "signature",
+              "type": {
+                "type": "fixed",
+                "name": "Signature",
+                "size": 32
+              }
+            },
+            {
+              "name": "backup_signature",
+              "type": ["null", "Signature"]
+            },
+            {
+              "name": "user",
+              "type": {
+                "type": "record",
+                "name": "User",
+                "fields": [
+                  {
+                    "name": "id",
+                    "type": "string"
+                  },
+                  {
+                    "name": "role",
+                    "type": "Status"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "approver",
+              "type": ["null", "User"]
+            },
+            {
+              "name": "status_history",
+              "type": {
+                "type": "array",
+                "items": "Status"
+              }
+            }
+          ]
+        }"#,
+        )
+        .unwrap();
+
+        use apache_avro::types::Value;
+
+        let sig1 = vec![1u8; 32];
+        let sig2 = vec![2u8; 32];
+
+        let t1 = Value::Record(vec![
+            ("id".to_string(), Value::String("txn001".to_string())),
+            ("status".to_string(), Value::Enum(1, "APPROVED".to_string())),
+            (
+                "previous_status".to_string(),
+                Value::Union(1, Box::new(Value::Enum(0, "PENDING".to_string()))),
+            ),
+            ("signature".to_string(), Value::Fixed(32, sig1.clone())),
+            (
+                "backup_signature".to_string(),
+                Value::Union(1, Box::new(Value::Fixed(32, sig2.clone()))),
+            ),
+            (
+                "user".to_string(),
+                Value::Record(vec![
+                    ("id".to_string(), Value::String("user001".to_string())),
+                    ("role".to_string(), Value::Enum(1, "APPROVED".to_string())),
+                ]),
+            ),
+            (
+                "approver".to_string(),
+                Value::Union(
+                    1,
+                    Box::new(Value::Record(vec![
+                        ("id".to_string(), Value::String("admin001".to_string())),
+                        ("role".to_string(), Value::Enum(1, "APPROVED".to_string())),
+                    ])),
+                ),
+            ),
+            (
+                "status_history".to_string(),
+                Value::Array(vec![
+                    Value::Enum(0, "PENDING".to_string()),
+                    Value::Enum(1, "APPROVED".to_string()),
+                ]),
+            ),
+        ]);
+
+        let t2 = Value::Record(vec![
+            ("id".to_string(), Value::String("txn002".to_string())),
+            ("status".to_string(), Value::Enum(2, "REJECTED".to_string())),
+            (
+                "previous_status".to_string(),
+                Value::Union(0, Box::new(Value::Null)),
+            ),
+            ("signature".to_string(), Value::Fixed(32, sig2.clone())),
+            (
+                "backup_signature".to_string(),
+                Value::Union(0, Box::new(Value::Null)),
+            ),
+            (
+                "user".to_string(),
+                Value::Record(vec![
+                    ("id".to_string(), Value::String("user002".to_string())),
+                    ("role".to_string(), Value::Enum(2, "REJECTED".to_string())),
+                ]),
+            ),
+            (
+                "approver".to_string(),
+                Value::Union(0, Box::new(Value::Null)),
+            ),
+            (
+                "status_history".to_string(),
+                Value::Array(vec![
+                    Value::Enum(0, "PENDING".to_string()),
+                    Value::Enum(2, "REJECTED".to_string()),
+                ]),
+            ),
+        ]);
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(t1).unwrap();
+        w.append(t2).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        // Define Arrow schema explicitly
+        let user_fields = Fields::from(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("role", DataType::Utf8, false),
+        ]);
+
+        let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("status", DataType::Utf8, false),
+            Field::new("previous_status", DataType::Utf8, true),
+            Field::new("signature", DataType::FixedSizeBinary(32), false),
+            Field::new("backup_signature", DataType::FixedSizeBinary(32), true),
+            Field::new("user", DataType::Struct(user_fields.clone()), false),
+            Field::new("approver", DataType::Struct(user_fields), true),
+            Field::new(
+                "status_history",
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+                false,
+            ),
+        ]));
+
+        let mut reader = ReaderBuilder::new()
+            .with_schema(arrow_schema)
+            .with_batch_size(2)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 8);
+
+        // Verify the schema types
+        let schema = batch.schema();
+        assert_eq!(schema.field(1).data_type(), &DataType::Utf8); // enum as string
+        assert_eq!(schema.field(2).data_type(), &DataType::Utf8); // nullable enum as string
+        assert_eq!(schema.field(3).data_type(), &DataType::FixedSizeBinary(32));
+        assert_eq!(schema.field(4).data_type(), &DataType::FixedSizeBinary(32));
+        assert!(matches!(schema.field(5).data_type(), DataType::Struct(_))); // User record
+        assert!(matches!(schema.field(6).data_type(), DataType::Struct(_))); // nullable User
+        assert!(matches!(schema.field(7).data_type(), DataType::List(_))); // status_history
+
+        // Verify data content - check a few key fields
+        let status_array = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(status_array.value(0), "APPROVED");
+        assert_eq!(status_array.value(1), "REJECTED");
+
+        let sig_array = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(sig_array.value(0), sig1.as_slice());
+        assert_eq!(sig_array.value(1), sig2.as_slice());
+    }
+
+    #[test]
+    fn test_avro_multiple_record_refs() {
+        // Test multiple different record types being referenced
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+        {
+          "type": "record",
+          "name": "Order",
+          "fields": [
+            {
+              "name": "order_id",
+              "type": "string"
+            },
+            {
+              "name": "shipping_address",
+              "type": {
+                "type": "record",
+                "name": "Address",
+                "fields": [
+                  {
+                    "name": "street",
+                    "type": "string"
+                  },
+                  {
+                    "name": "city",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "billing_address",
+              "type": "Address"
+            },
+            {
+              "name": "customer",
+              "type": {
+                "type": "record",
+                "name": "Customer",
+                "fields": [
+                  {
+                    "name": "name",
+                    "type": "string"
+                  },
+                  {
+                    "name": "home_address",
+                    "type": "Address"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "gift_recipient",
+              "type": ["null", "Customer"]
+            }
+          ]
+        }"#,
+        )
+        .unwrap();
+
+        let o1 = apache_avro::to_value(serde_json::json!({
+            "order_id": "ord001",
+            "shipping_address": {
+                "street": "123 Ship St",
+                "city": "Shipping City"
+            },
+            "billing_address": {
+                "street": "456 Bill Ave",
+                "city": "Billing Town"
+            },
+            "customer": {
+                "name": "Alice",
+                "home_address": {
+                    "street": "789 Home Rd",
+                    "city": "Home City"
+                }
+            },
+            "gift_recipient": {
+                "name": "Bob",
+                "home_address": {
+                    "street": "321 Gift Ln",
+                    "city": "Gift Town"
+                }
+            }
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let o2 = apache_avro::to_value(serde_json::json!({
+            "order_id": "ord002",
+            "shipping_address": {
+                "street": "111 Main St",
+                "city": "Main City"
+            },
+            "billing_address": {
+                "street": "111 Main St",
+                "city": "Main City"
+            },
+            "customer": {
+                "name": "Charlie",
+                "home_address": {
+                    "street": "111 Main St",
+                    "city": "Main City"
+                }
+            },
+            "gift_recipient": null
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(o1).unwrap();
+        w.append(o2).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        // Define Arrow schema explicitly
+        // When Address is used in nullable contexts (like inside nullable Customer),
+        // its fields need to be nullable too
+        let address_fields = Fields::from(vec![
+            Field::new("street", DataType::Utf8, true), // Changed to true
+            Field::new("city", DataType::Utf8, true),   // Changed to true
+        ]);
+
+        let customer_fields = Fields::from(vec![
+            Field::new("name", DataType::Utf8, true), // Changed to true
+            Field::new(
+                "home_address",
+                DataType::Struct(address_fields.clone()),
+                true, // Changed to true
+            ),
+        ]);
+
+        let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            Field::new("order_id", DataType::Utf8, false),
+            Field::new(
+                "shipping_address",
+                DataType::Struct(address_fields.clone()),
+                false,
+            ),
+            Field::new("billing_address", DataType::Struct(address_fields), false),
+            Field::new("customer", DataType::Struct(customer_fields.clone()), false),
+            Field::new("gift_recipient", DataType::Struct(customer_fields), true),
+        ]));
+
+        let mut reader = ReaderBuilder::new()
+            .with_schema(arrow_schema)
+            .with_batch_size(2)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 5);
+
+        let expected = [
+            "+----------+--------------------------------------------+--------------------------------------------+-----------------------------------------------------------------------+-------------------------------------------------------------------+",
+            "| order_id | shipping_address                           | billing_address                            | customer                                                              | gift_recipient                                                    |",
+            "+----------+--------------------------------------------+--------------------------------------------+-----------------------------------------------------------------------+-------------------------------------------------------------------+",
+            "| ord001   | {street: 123 Ship St, city: Shipping City} | {street: 456 Bill Ave, city: Billing Town} | {name: Alice, home_address: {street: 789 Home Rd, city: Home City}}   | {name: Bob, home_address: {street: 321 Gift Ln, city: Gift Town}} |",
+            "| ord002   | {street: 111 Main St, city: Main City}     | {street: 111 Main St, city: Main City}     | {name: Charlie, home_address: {street: 111 Main St, city: Main City}} |                                                                   |",
+            "+----------+--------------------------------------------+--------------------------------------------+-----------------------------------------------------------------------+-------------------------------------------------------------------+"
         ];
         assert_batches_eq!(expected, &[batch]);
     }
