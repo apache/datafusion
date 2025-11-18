@@ -1560,10 +1560,12 @@ impl SortMergeJoinStream {
             );
 
             let columns = if !matches!(self.join_type, JoinType::Right) {
+                // For left joins, the first columns are the left columns.
+                // Critical: There is a bug here still because the match directions.
                 let mut left_columns = null_joined_batch
                     .columns()
                     .iter()
-                    .take(right_columns_length)
+                    .take(left_columns_length)
                     .cloned()
                     .collect::<Vec<_>>();
 
