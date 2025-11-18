@@ -239,12 +239,12 @@ mod test {
                 expected: sort(col("c1")),
             },
             TestCase {
-                desc: r#"min(c2) --> "min(c2)" -- (column *named* "min(t.c2)"!)"#,
+                desc: r#"min(c2) --> "min(t.c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(min(col("c2"))),
                 expected: sort(derived_col("min(t.c2)")),
             },
             TestCase {
-                desc: r#"c1 + min(c2) --> "c1 + min(c2)" -- (column *named* "min(t.c2)"!)"#,
+                desc: r#"c1 + min(c2) --> "c1 + min(t.c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(col("c1") + min(col("c2"))),
                 // should be "c1" not t.c1
                 expected: sort(col("c1") + derived_col("min(t.c2)")),
