@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap,
-    Result, TableReference,
+    internal_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap, Result,
+    TableReference,
 };
 
 #[cfg(not(feature = "sql"))]
@@ -100,9 +100,9 @@ fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
 ///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
 ///
 /// [power set]: https://en.wikipedia.org/wiki/Power_set
-fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
+fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>> {
     if slice.len() >= 64 {
-        return Err("The size of the set must be less than 64.".into());
+        return plan_err!("The size of the set must be less than 64");
     }
 
     Ok(powerset_indices(slice.len())
@@ -233,8 +233,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     grouping_sets.iter().map(|e| e.iter().collect()).collect()
                 }
                 Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
-                    let grouping_sets = powerset(group_exprs)
-                        .map_err(|e| plan_datafusion_err!("{}", e))?;
+                    let grouping_sets = powerset(group_exprs)?;
                     check_grouping_sets_size_limit(grouping_sets.len())?;
                     grouping_sets
                 }
