@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
-};
 use arrow::array::*;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
@@ -150,42 +147,23 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             | ScalarValue::UInt16(_)
             | ScalarValue::UInt32(_)
             | ScalarValue::UInt64(_) => Ok(args[0].clone()),
-            ScalarValue::Int8(a) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(v, Int8),
-            },
-            ScalarValue::Int16(a) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(v, Int16),
-            },
-            ScalarValue::Int32(a) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(v, Int32),
-            },
-            ScalarValue::Int64(a) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => scalar_compute_op!(v, Int64),
-            },
-            ScalarValue::Float32(a) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(v.abs())))),
-            },
-            ScalarValue::Float64(a) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(v.abs())))),
-            },
-            ScalarValue::Decimal128(a, precision, scale) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => {
-                    scalar_compute_op!(v, *precision, *scale, Decimal128)
-                }
-            },
-            ScalarValue::Decimal256(a, precision, scale) => match a {
-                None => Ok(args[0].clone()),
-                Some(v) => {
-                    scalar_compute_op!(v, *precision, *scale, Decimal256)
-                }
-            },
+            sv if sv.is_null() => Ok(args[0].clone()),
+            ScalarValue::Int8(Some(v)) => scalar_compute_op!(v, Int8),
+            ScalarValue::Int16(Some(v)) => scalar_compute_op!(v, Int16),
+            ScalarValue::Int32(Some(v)) => scalar_compute_op!(v, Int32),
+            ScalarValue::Int64(Some(v)) => scalar_compute_op!(v, Int64),
+            ScalarValue::Float32(Some(v)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(v.abs()))))
+            }
+            ScalarValue::Float64(Some(v)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(v.abs()))))
+            }
+            ScalarValue::Decimal128(Some(v), precision, scale) => {
+                scalar_compute_op!(v, *precision, *scale, Decimal128)
+            }
+            ScalarValue::Decimal256(Some(v), precision, scale) => {
+                scalar_compute_op!(v, *precision, *scale, Decimal256)
+            }
             dt => internal_err!("Not supported datatype for Spark ABS: {dt}"),
         },
     }
