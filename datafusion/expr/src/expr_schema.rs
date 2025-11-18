@@ -21,6 +21,7 @@ use crate::expr::{
     InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
+use crate::expr_rewriter::rewrite_with_guarantees;
 use crate::type_coercion::functions::{
     data_types_with_scalar_udf, fields_with_aggregate_udf, fields_with_window_udf,
 };
@@ -33,6 +34,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
     Result, ScalarValue, Spans, TableReference,
 };
+use datafusion_expr_common::interval_arithmetic::NullableInterval;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::sync::Arc;
@@ -305,9 +307,29 @@ impl ExprSchemable for Expr {
                         // For branches with a nullable 'then' expression, try to determine
                         // if the 'then' expression is ever reachable in the situation where
                         // it would evaluate to null.
+
+                        // First, derive a variant of the 'when' expression, where all occurrences
+                        // of the 'then' expression have been replaced by 'NULL'.
+                        let certainly_null_expr = unwrap_certainly_null_expr(t).clone();
+                        let certainly_null_type =
+                            match certainly_null_expr.get_type(input_schema) {
+                                Err(e) => return Some(Err(e)),
+                                Ok(datatype) => datatype,
+                            };
+                        let null_interval = NullableInterval::Null {
+                            datatype: certainly_null_type,
+                        };
+                        let guarantees = vec![(certainly_null_expr, null_interval)];
+                        let when_with_null =
+                            match rewrite_with_guarantees(*w.clone(), &guarantees) {
+                                Err(e) => return Some(Err(e)),
+                                Ok(e) => e.data,
+                            };
+
+                        // Next, determine the bounds of the derived 'when' expression to see if it
+                        // can ever evaluate to true.
                         let bounds = match predicate_bounds::evaluate_bounds(
-                            w,
-                            Some(t),
+                            &when_with_null,
                             input_schema,
                         ) {
                             Err(e) => return Some(Err(e)),
@@ -322,8 +344,8 @@ impl ExprSchemable for Expr {
                         };
 
                         if !can_be_true {
-                            // The predicate will never evaluate to true, so the 'then' expression
-                            // is never reachable.
+                            // If the derived 'when' expression can never evaluate to true, the
+                            // 'then' expression is not reachable when it would evaluate to NULL.
                             // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
                             None
                         } else {
@@ -685,6 +707,16 @@ impl ExprSchemable for Expr {
         } else {
             plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
         }
+    }
+}
+
+/// Returns the innermost [Expr] that is provably null if `expr` is null.
+fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Not(e) => unwrap_certainly_null_expr(e),
+        Expr::Negative(e) => unwrap_certainly_null_expr(e),
+        Expr::Cast(e) => unwrap_certainly_null_expr(e.expr.as_ref()),
+        _ => expr,
     }
 }
 

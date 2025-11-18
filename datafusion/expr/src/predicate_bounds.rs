@@ -48,29 +48,14 @@ use datafusion_expr_common::operator::Operator;
 ///
 pub(super) fn evaluate_bounds(
     predicate: &Expr,
-    certainly_null_expr: Option<&Expr>,
     input_schema: &dyn ExprSchema,
 ) -> Result<NullableInterval> {
-    let evaluator = PredicateBoundsEvaluator {
-        input_schema,
-        certainly_null_expr: certainly_null_expr.map(unwrap_certainly_null_expr),
-    };
+    let evaluator = PredicateBoundsEvaluator { input_schema };
     evaluator.evaluate_bounds(predicate)
-}
-
-/// Returns the innermost [Expr] that is provably null if `expr` is null.
-fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
-    match expr {
-        Expr::Not(e) => unwrap_certainly_null_expr(e),
-        Expr::Negative(e) => unwrap_certainly_null_expr(e),
-        Expr::Cast(e) => unwrap_certainly_null_expr(e.expr.as_ref()),
-        _ => expr,
-    }
 }
 
 struct PredicateBoundsEvaluator<'a> {
     input_schema: &'a dyn ExprSchema,
-    certainly_null_expr: Option<&'a Expr>,
 }
 
 impl PredicateBoundsEvaluator<'_> {
@@ -180,13 +165,6 @@ impl PredicateBoundsEvaluator<'_> {
             return NullableInterval::FALSE;
         }
 
-        // Check if the expression is the `certainly_null_expr` that was passed in.
-        if let Some(certainly_null_expr) = &self.certainly_null_expr {
-            if expr.eq(certainly_null_expr) {
-                return NullableInterval::TRUE;
-            }
-        }
-
         // `expr` is nullable, so our default answer for `is null` is going to be `{ TRUE, FALSE }`.
         // Try to see if we can narrow it down to just one option.
         match expr {
@@ -258,7 +236,7 @@ mod tests {
 
     fn eval_bounds(predicate: &Expr) -> Result<NullableInterval> {
         let schema = DFSchema::try_from(Schema::empty())?;
-        evaluate_bounds(predicate, None, &schema)
+        evaluate_bounds(predicate, &schema)
     }
 
     #[test]
@@ -582,16 +560,16 @@ mod tests {
 
         #[rustfmt::skip]
         let cases = vec![
-            (is_null(col.clone()), Some(&col), &nullable_schema, NullableInterval::TRUE),
-            (is_null(col.clone()), Some(&col), &not_nullable_schema, NullableInterval::FALSE),
-            (is_not_null(col.clone()), Some(&col), &nullable_schema, NullableInterval::FALSE),
-            (is_not_null(col.clone()), Some(&col), &not_nullable_schema, NullableInterval::TRUE),
+            (is_null(col.clone()), &nullable_schema, NullableInterval::TRUE_OR_FALSE),
+            (is_null(col.clone()), &not_nullable_schema, NullableInterval::FALSE),
+            (is_not_null(col.clone()), &nullable_schema, NullableInterval::TRUE_OR_FALSE),
+            (is_not_null(col.clone()), &not_nullable_schema, NullableInterval::TRUE),
         ];
 
         for case in cases {
             assert_eq!(
-                evaluate_bounds(&case.0, case.1, case.2).unwrap(),
-                case.3,
+                evaluate_bounds(&case.0, case.1).unwrap(),
+                case.2,
                 "Failed for {}",
                 case.0
             );
