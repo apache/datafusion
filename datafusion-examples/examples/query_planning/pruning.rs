@@ -22,6 +22,7 @@ use arrow::array::{ArrayRef, BooleanArray, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{DFSchema, ScalarValue};
+use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
@@ -40,8 +41,7 @@ use datafusion::prelude::*;
 /// one might do as part of a higher level storage engine. See
 /// `parquet_index.rs` for an example that uses pruning in the context of an
 /// individual query.
-#[tokio::main]
-async fn main() {
+pub async fn pruning() -> Result<()> {
     // In this example, we'll use the PruningPredicate to determine if
     // the expression `x = 5 AND y = 10` can never be true based on statistics
 
@@ -69,7 +69,7 @@ async fn main() {
     let predicate = create_pruning_predicate(expr, &my_catalog.schema);
 
     // Evaluate the predicate for the three files in the catalog
-    let prune_results = predicate.prune(&my_catalog).unwrap();
+    let prune_results = predicate.prune(&my_catalog)?;
     println!("Pruning results: {prune_results:?}");
 
     // The result is a `Vec` of bool values, one for each file in the catalog
@@ -93,6 +93,8 @@ async fn main() {
             false
         ]
     );
+
+    Ok(())
 }
 
 /// A simple model catalog that has information about the three files that store

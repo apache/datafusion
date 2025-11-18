@@ -30,8 +30,8 @@ use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, DataFusionError, HashMap, HashSet,
-    Result, ScalarValue,
+    assert_or_internal_err, exec_err, internal_datafusion_err, internal_err,
+    DataFusionError, HashMap, HashSet, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -517,9 +517,10 @@ impl PartialResultIndex {
             return internal_err!("Partial result index exceeds limit");
         };
 
-        if index == NONE_VALUE {
-            return internal_err!("Partial result index exceeds limit");
-        }
+        assert_or_internal_err!(
+            index != NONE_VALUE,
+            "Partial result index exceeds limit"
+        );
 
         Ok(Self { index })
     }
@@ -663,9 +664,10 @@ impl ResultBuilder {
         row_indices: &ArrayRef,
         row_values: ArrayData,
     ) -> Result<()> {
-        if row_indices.null_count() != 0 {
-            return internal_err!("Row indices must not contain nulls");
-        }
+        assert_or_internal_err!(
+            row_indices.null_count() == 0,
+            "Row indices must not contain nulls"
+        );
 
         match &mut self.state {
             Empty => {
@@ -692,9 +694,11 @@ impl ResultBuilder {
                     // `case_when_with_expr` and `case_when_no_expr`, already ensure that
                     // they only calculate a value for each row at most once.
                     #[cfg(debug_assertions)]
-                    if !indices[*row_ix as usize].is_none() {
-                        return internal_err!("Duplicate value for row {}", *row_ix);
-                    }
+                    assert_or_internal_err!(
+                        indices[*row_ix as usize].is_none(),
+                        "Duplicate value for row {}",
+                        *row_ix
+                    );
 
                     indices[*row_ix as usize] = array_index;
                 }

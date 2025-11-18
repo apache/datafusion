@@ -39,7 +39,10 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, internal_err, DataFusionError,
+    Result,
+};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -938,9 +941,10 @@ impl GroupedHashAggregateStream {
                         )?;
                     }
                     _ => {
-                        if opt_filter.is_some() {
-                            return internal_err!("aggregate filter should be applied in partial stage, there should be no filter in final stage");
-                        }
+                        assert_or_internal_err!(
+                            opt_filter.is_none(),
+                            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+                        );
 
                         // if aggregation is over intermediate states,
                         // use merge
@@ -1218,9 +1222,11 @@ impl GroupedHashAggregateStream {
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
-        if group_values.len() != 1 {
-            return internal_err!("group_values expected to have single element");
-        }
+        assert_eq_or_internal_err!(
+            group_values.len(),
+            1,
+            "group_values expected to have single element"
+        );
         let mut output = group_values.swap_remove(0);
 
         let iter = self
