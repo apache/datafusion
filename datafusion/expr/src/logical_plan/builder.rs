@@ -1350,6 +1350,15 @@ impl LogicalPlanBuilder {
             );
         }
 
+        // Requalify sides if needed to avoid duplicate qualified field names
+        // (e.g., when both sides reference the same table)
+        let left_builder = LogicalPlanBuilder::from(left_plan);
+        let right_builder = LogicalPlanBuilder::from(right_plan);
+        let (left_builder, right_builder, _requalified) =
+            requalify_sides_if_needed(left_builder, right_builder)?;
+        let left_plan = left_builder.build()?;
+        let right_plan = right_builder.build()?;
+
         let join_keys = left_plan
             .schema()
             .fields()
