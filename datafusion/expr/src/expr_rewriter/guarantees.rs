@@ -17,13 +17,18 @@
 
 //! Rewrite expressions based on external expression value range guarantees.
 
-use std::{borrow::Cow, collections::HashMap};
+use std::borrow::Cow;
 
-use crate::{expr::InList, lit, Between, BinaryExpr, Expr, LogicalPlan};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion_common::{DataFusionError, Result};
+use crate::{expr::InList, lit, Between, BinaryExpr, Expr};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
+use datafusion_common::{DataFusionError, HashMap, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
-use crate::expr::Sort;
+
+struct GuaranteeRewriter<'a> {
+    guarantees: &'a HashMap<&'a Expr, &'a NullableInterval>,
+}
 
 /// Rewrite expressions to incorporate guarantees.
 ///
@@ -33,26 +38,50 @@ use crate::expr::Sort;
 ///
 /// For example, if we know that a column is not null and has values in the
 /// range [1, 10), we can rewrite `x IS NULL` to `false` or `x < 10` to `true`.
-pub struct GuaranteeRewriter<'a> {
-    guarantees: HashMap<&'a Expr, &'a NullableInterval>,
+///
+/// If the set of guarantees will be used to rewrite multiple expressions consider using
+/// [rewrite_with_guarantees_map] instead.
+pub fn rewrite_with_guarantees<'a>(
+    expr: Expr,
+    guarantees: impl IntoIterator<Item = &'a (Expr, NullableInterval)>,
+) -> Result<Transformed<Expr>> {
+    let guarantees_map: HashMap<&Expr, &NullableInterval> =
+        guarantees.into_iter().map(|(k, v)| (k, v)).collect();
+    rewrite_with_guarantees_map(expr, &guarantees_map)
 }
 
-impl<'a> GuaranteeRewriter<'a> {
-    pub fn new(
-        guarantees: impl IntoIterator<Item = &'a (Expr, NullableInterval)>,
-    ) -> Self {
-        Self {
-            // TODO: Clippy wants the "map" call removed, but doing so generates
-            //       a compilation error. Remove the clippy directive once this
-            //       issue is fixed.
-            #[allow(clippy::map_identity)]
-            guarantees: guarantees.into_iter().map(|(k, v)| (k, v)).collect(),
-        }
-    }
+/// Rewrite expressions to incorporate guarantees.
+///
+/// Guarantees are a mapping from an expression (which currently is always a
+/// column reference) to a [NullableInterval]. The interval represents the known
+/// possible values of the column.
+///
+/// For example, if we know that a column is not null and has values in the
+/// range [1, 10), we can rewrite `x IS NULL` to `false` or `x < 10` to `true`.
+pub fn rewrite_with_guarantees_map<'a>(
+    expr: Expr,
+    guarantees: &'a HashMap<&'a Expr, &'a NullableInterval>,
+) -> Result<Transformed<Expr>> {
+    let mut rewriter = GuaranteeRewriter { guarantees };
+    expr.rewrite(&mut rewriter)
 }
 
 impl TreeNodeRewriter for GuaranteeRewriter<'_> {
     type Node = Expr;
+
+    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if self.guarantees.is_empty() {
+            return Ok(Transformed::no(expr));
+        }
+
+        match self.guarantees.get(&expr) {
+            Some(NullableInterval::Null { datatype }) => {
+                let null = lit(ScalarValue::try_new_null(datatype)?);
+                Ok(Transformed::new(null, true, TreeNodeRecursion::Jump))
+            }
+            _ => Ok(Transformed::no(expr)),
+        }
+    }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if self.guarantees.is_empty() {
@@ -199,7 +228,7 @@ mod tests {
 
     use crate::{col, Operator};
     use arrow::datatypes::DataType;
-    use datafusion_common::tree_node::{TransformedResult, TreeNode};
+    use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
 
     #[test]
@@ -215,26 +244,33 @@ mod tests {
                 },
             ),
         ];
-        let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
         // x IS NULL => guaranteed false
         let expr = col("x").is_null();
-        let output = expr.rewrite(&mut rewriter).data().unwrap();
+        let output = rewrite_with_guarantees(expr, guarantees.iter())
+            .data()
+            .unwrap();
         assert_eq!(output, lit(false));
 
         // x IS NOT NULL => guaranteed true
         let expr = col("x").is_not_null();
-        let output = expr.rewrite(&mut rewriter).data().unwrap();
+        let output = rewrite_with_guarantees(expr, guarantees.iter())
+            .data()
+            .unwrap();
         assert_eq!(output, lit(true));
     }
 
-    fn validate_simplified_cases<T>(rewriter: &mut GuaranteeRewriter, cases: &[(Expr, T)])
-    where
+    fn validate_simplified_cases<T>(
+        guarantees: &[(Expr, NullableInterval)],
+        cases: &[(Expr, T)],
+    ) where
         ScalarValue: From<T>,
         T: Clone,
     {
         for (expr, expected_value) in cases {
-            let output = expr.clone().rewrite(rewriter).data().unwrap();
+            let output = rewrite_with_guarantees(expr.clone(), guarantees.iter())
+                .data()
+                .unwrap();
             let expected = lit(ScalarValue::from(expected_value.clone()));
             assert_eq!(
                 output, expected,
@@ -243,9 +279,11 @@ mod tests {
         }
     }
 
-    fn validate_unchanged_cases(rewriter: &mut GuaranteeRewriter, cases: &[Expr]) {
+    fn validate_unchanged_cases(guarantees: &[(Expr, NullableInterval)], cases: &[Expr]) {
         for expr in cases {
-            let output = expr.clone().rewrite(rewriter).data().unwrap();
+            let output = rewrite_with_guarantees(expr.clone(), guarantees.iter())
+                .data()
+                .unwrap();
             assert_eq!(
                 &output, expr,
                 "{expr} was simplified to {output}, but expected it to be unchanged"
@@ -268,7 +306,6 @@ mod tests {
                 },
             ),
         ];
-        let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
         // (original_expr, expected_simplification)
         let simplified_cases = &[
@@ -310,7 +347,7 @@ mod tests {
             ),
         ];
 
-        validate_simplified_cases(&mut rewriter, simplified_cases);
+        validate_simplified_cases(&guarantees, simplified_cases);
 
         let unchanged_cases = &[
             col("x").lt(lit(ScalarValue::Date32(Some(19000)))),
@@ -329,7 +366,7 @@ mod tests {
             ),
         ];
 
-        validate_unchanged_cases(&mut rewriter, unchanged_cases);
+        validate_unchanged_cases(&guarantees, unchanged_cases);
     }
 
     #[test]
@@ -347,7 +384,6 @@ mod tests {
                 },
             ),
         ];
-        let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
         // (original_expr, expected_simplification)
         let simplified_cases = &[
@@ -369,7 +405,7 @@ mod tests {
             ),
         ];
 
-        validate_simplified_cases(&mut rewriter, simplified_cases);
+        validate_simplified_cases(&guarantees, simplified_cases);
 
         let unchanged_cases = &[
             col("x").lt(lit("z")),
@@ -387,7 +423,7 @@ mod tests {
             }),
         ];
 
-        validate_unchanged_cases(&mut rewriter, unchanged_cases);
+        validate_unchanged_cases(&guarantees, unchanged_cases);
     }
 
     #[test]
@@ -406,9 +442,10 @@ mod tests {
 
         for scalar in scalars {
             let guarantees = [(col("x"), NullableInterval::from(scalar.clone()))];
-            let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
-            let output = col("x").rewrite(&mut rewriter).data().unwrap();
+            let output = rewrite_with_guarantees(col("x"), guarantees.iter())
+                .data()
+                .unwrap();
             assert_eq!(output, Expr::Literal(scalar.clone(), None));
         }
     }
@@ -428,7 +465,6 @@ mod tests {
                 },
             ),
         ];
-        let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
         // These cases should be simplified so the list doesn't contain any
         // values the guarantee says are outside the range.
@@ -452,7 +488,9 @@ mod tests {
                     .collect(),
                 *negated,
             );
-            let output = expr.clone().rewrite(&mut rewriter).data().unwrap();
+            let output = rewrite_with_guarantees(expr.clone(), guarantees.iter())
+                .data()
+                .unwrap();
             let expected_list = expected_list
                 .iter()
                 .map(|v| lit(ScalarValue::Int32(Some(*v))))
