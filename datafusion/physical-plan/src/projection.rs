@@ -67,7 +67,8 @@ use log::trace;
 /// output row for each input row.
 #[derive(Debug, Clone)]
 pub struct ProjectionExec {
-    /// The projection expressions stored as tuples of (expression, output column name)
+    /// A projector specialized to apply the projection to the input schema from the child node
+    /// and produce [`RecordBatch`]es with the output schema of this node.
     projector: Projector,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
