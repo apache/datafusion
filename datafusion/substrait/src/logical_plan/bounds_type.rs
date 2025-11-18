@@ -75,3 +75,63 @@ impl BoundsTypeExt {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_i32_known_values() {
+        // Rows
+        let v = BoundsType::Rows as i32;
+        assert_eq!(BoundsTypeExt::from_i32(v).unwrap(), BoundsTypeExt::Rows);
+
+        // Range
+        let v = BoundsType::Range as i32;
+        assert_eq!(BoundsTypeExt::from_i32(v).unwrap(), BoundsTypeExt::Range);
+
+        // Groups (custom value)
+        let v = SUBSTRAIT_GROUPS_VALUE;
+        assert_eq!(BoundsTypeExt::from_i32(v).unwrap(), BoundsTypeExt::Groups);
+
+        // Unspecified
+        let v = BoundsType::Unspecified as i32;
+        assert_eq!(
+            BoundsTypeExt::from_i32(v).unwrap(),
+            BoundsTypeExt::Unspecified
+        );
+    }
+
+    #[test]
+    fn test_from_i32_invalid() {
+        let invalid = 999;
+        let res = BoundsTypeExt::from_i32(invalid);
+        assert!(res.is_err(), "expected error for invalid bounds type");
+    }
+
+    #[test]
+    fn test_to_i32_roundtrip() {
+        assert_eq!(BoundsTypeExt::Rows.to_i32(), BoundsType::Rows as i32);
+        assert_eq!(BoundsTypeExt::Range.to_i32(), BoundsType::Range as i32);
+        assert_eq!(BoundsTypeExt::Groups.to_i32(), SUBSTRAIT_GROUPS_VALUE);
+        assert_eq!(
+            BoundsTypeExt::Unspecified.to_i32(),
+            BoundsType::Unspecified as i32
+        );
+    }
+
+    #[test]
+    fn test_to_window_frame_units_unspecified_defaulting() {
+        // When order_by_empty = true -> default to Rows
+        assert_eq!(
+            BoundsTypeExt::Unspecified.to_window_frame_units(true),
+            WindowFrameUnits::Rows
+        );
+
+        // When order_by_empty = false -> default to Range
+        assert_eq!(
+            BoundsTypeExt::Unspecified.to_window_frame_units(false),
+            WindowFrameUnits::Range
+        );
+    }
+}
