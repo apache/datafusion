@@ -778,7 +778,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Union(union) => {
                 assert_or_internal_err!(
                     union.inputs.len() >= 2,
-                    "Protobuf deserialization error, Union was require at least two input."
+                    "Protobuf deserialization error, Union requires at least two inputs."
                 );
                 let (first, rest) = union.inputs.split_first().unwrap();
                 let mut builder = LogicalPlanBuilder::from(
