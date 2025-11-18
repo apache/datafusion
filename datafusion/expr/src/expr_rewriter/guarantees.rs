@@ -20,9 +20,7 @@
 use std::borrow::Cow;
 
 use crate::{expr::InList, lit, Between, BinaryExpr, Expr};
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, HashMap, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
 
@@ -69,37 +67,21 @@ pub fn rewrite_with_guarantees_map<'a>(
 impl TreeNodeRewriter for GuaranteeRewriter<'_> {
     type Node = Expr;
 
-    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if self.guarantees.is_empty() {
-            return Ok(Transformed::no(expr));
-        }
-
-        match self.guarantees.get(&expr) {
-            Some(NullableInterval::Null { datatype }) => {
-                let null = lit(ScalarValue::try_new_null(datatype)?);
-                Ok(Transformed::new(null, true, TreeNodeRecursion::Jump))
-            }
-            _ => Ok(Transformed::no(expr)),
-        }
-    }
-
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if self.guarantees.is_empty() {
             return Ok(Transformed::no(expr));
         }
 
-        match &expr {
+        let new_expr = match &expr {
             Expr::IsNull(inner) => match self.guarantees.get(inner.as_ref()) {
-                Some(NullableInterval::Null { .. }) => Ok(Transformed::yes(lit(true))),
-                Some(NullableInterval::NotNull { .. }) => {
-                    Ok(Transformed::yes(lit(false)))
-                }
-                _ => Ok(Transformed::no(expr)),
+                Some(NullableInterval::Null { .. }) => Some(lit(true)),
+                Some(NullableInterval::NotNull { .. }) => Some(lit(false)),
+                _ => None,
             },
             Expr::IsNotNull(inner) => match self.guarantees.get(inner.as_ref()) {
-                Some(NullableInterval::Null { .. }) => Ok(Transformed::yes(lit(false))),
-                Some(NullableInterval::NotNull { .. }) => Ok(Transformed::yes(lit(true))),
-                _ => Ok(Transformed::no(expr)),
+                Some(NullableInterval::Null { .. }) => Some(lit(false)),
+                Some(NullableInterval::NotNull { .. }) => Some(lit(true)),
+                _ => None,
             },
             Expr::Between(Between {
                 expr: inner,
@@ -119,14 +101,14 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                     let contains = expr_interval.contains(*interval)?;
 
                     if contains.is_certainly_true() {
-                        Ok(Transformed::yes(lit(!negated)))
+                        Some(lit(!negated))
                     } else if contains.is_certainly_false() {
-                        Ok(Transformed::yes(lit(*negated)))
+                        Some(lit(*negated))
                     } else {
-                        Ok(Transformed::no(expr))
+                        None
                     }
                 } else {
-                    Ok(Transformed::no(expr))
+                    None
                 }
             }
 
@@ -161,23 +143,23 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                         let result =
                             left_interval.apply_operator(op, right_interval.as_ref())?;
                         if result.is_certainly_true() {
-                            Ok(Transformed::yes(lit(true)))
+                            Some(lit(true))
                         } else if result.is_certainly_false() {
-                            Ok(Transformed::yes(lit(false)))
+                            Some(lit(false))
                         } else {
-                            Ok(Transformed::no(expr))
+                            None
                         }
                     }
-                    _ => Ok(Transformed::no(expr)),
+                    _ => None,
                 }
             }
 
             // Columns (if interval is collapsed to a single value)
             Expr::Column(_) => {
                 if let Some(interval) = self.guarantees.get(&expr) {
-                    Ok(Transformed::yes(interval.single_value().map_or(expr, lit)))
+                    interval.single_value().map(lit)
                 } else {
-                    Ok(Transformed::no(expr))
+                    None
                 }
             }
 
@@ -207,16 +189,27 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                         })
                         .collect::<Result<_, DataFusionError>>()?;
 
-                    Ok(Transformed::yes(Expr::InList(InList {
+                    Some(Expr::InList(InList {
                         expr: inner.clone(),
                         list: new_list,
                         negated: *negated,
-                    })))
+                    }))
                 } else {
-                    Ok(Transformed::no(expr))
+                    None
                 }
             }
 
+            _ => None,
+        };
+
+        if let Some(e) = new_expr {
+            return Ok(Transformed::yes(e));
+        }
+
+        match self.guarantees.get(&expr) {
+            Some(NullableInterval::Null { datatype }) => {
+                Ok(Transformed::yes(lit(ScalarValue::try_new_null(datatype)?)))
+            }
             _ => Ok(Transformed::no(expr)),
         }
     }
