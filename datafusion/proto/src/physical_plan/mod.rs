@@ -3147,59 +3147,58 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     }
 }
 
-// TODO(tsaucer) switch all below to &mut
 pub trait PhysicalDeserializer {
     fn try_decode_execution_plan(
-        &self,
+        &mut self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>>;
+    fn try_decode_udf(&mut self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>>;
 
-    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>>;
+    fn try_decode_udaf(&mut self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>>;
 
-    fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>>;
+    fn try_decode_udwf(&mut self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>>;
 
     fn try_decode_expr(
-        &self,
+        &mut self,
         buf: &[u8],
         inputs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn PhysicalExpr>>;
 
-    fn config_options(&self) -> &Arc<ConfigOptions>;
+    fn config_options(&mut self) -> &Arc<ConfigOptions>;
 }
 
 impl PhysicalDeserializer for Arc<TaskContext> {
     fn try_decode_execution_plan(
-        &self,
+        &mut self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         exec_err!("TaskContext cannot decode physical plan")
     }
 
-    fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+    fn try_decode_udf(&mut self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         self.udf(name)
     }
 
     fn try_decode_expr(
-        &self,
+        &mut self,
         _buf: &[u8],
         _inputs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn PhysicalExpr>> {
         exec_err!("TaskContext cannot decode physical expressions")
     }
 
-    fn try_decode_udaf(&self, name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+    fn try_decode_udaf(&mut self, name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         self.udaf(name)
     }
 
-    fn try_decode_udwf(&self, name: &str, _buf: &[u8]) -> Result<Arc<WindowUDF>> {
+    fn try_decode_udwf(&mut self, name: &str, _buf: &[u8]) -> Result<Arc<WindowUDF>> {
         self.udwf(name)
     }
 
-    fn config_options(&self) -> &Arc<ConfigOptions> {
+    fn config_options(&mut self) -> &Arc<ConfigOptions> {
         self.session_config().options()
     }
 }
@@ -3211,14 +3210,14 @@ pub struct TaskContextWithPhysicalCodec {
 
 impl PhysicalDeserializer for TaskContextWithPhysicalCodec {
     fn try_decode_execution_plan(
-        &self,
+        &mut self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.codec.try_decode(buf, inputs)
     }
 
-    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+    fn try_decode_udf(&mut self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         if buf.is_empty() {
             self.task_ctx
                 .udf(name)
@@ -3228,7 +3227,7 @@ impl PhysicalDeserializer for TaskContextWithPhysicalCodec {
         }
     }
 
-    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+    fn try_decode_udaf(&mut self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         if buf.is_empty() {
             self.task_ctx
                 .udaf(name)
@@ -3238,7 +3237,7 @@ impl PhysicalDeserializer for TaskContextWithPhysicalCodec {
         }
     }
 
-    fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
+    fn try_decode_udwf(&mut self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
         if buf.is_empty() {
             self.task_ctx
                 .udwf(name)
@@ -3249,14 +3248,14 @@ impl PhysicalDeserializer for TaskContextWithPhysicalCodec {
     }
 
     fn try_decode_expr(
-        &self,
+        &mut self,
         buf: &[u8],
         inputs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn PhysicalExpr>> {
         self.codec.try_decode_expr(buf, inputs)
     }
 
-    fn config_options(&self) -> &Arc<ConfigOptions> {
+    fn config_options(&mut self) -> &Arc<ConfigOptions> {
         self.task_ctx.config_options()
     }
 }
