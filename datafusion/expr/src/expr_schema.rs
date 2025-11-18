@@ -31,7 +31,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, Spans, TableReference,
+    Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -314,7 +314,14 @@ impl ExprSchemable for Expr {
                             Ok(b) => b,
                         };
 
-                        if bounds.is_certainly_not_true() {
+                        let can_be_true = match bounds
+                            .contains_value(ScalarValue::Boolean(Some(true)))
+                        {
+                            Err(e) => return Some(Err(e)),
+                            Ok(b) => b,
+                        };
+
+                        if !can_be_true {
                             // The predicate will never evaluate to true, so the 'then' expression
                             // is never reachable.
                             // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
