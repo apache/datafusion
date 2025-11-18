@@ -30,21 +30,11 @@ use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::{take, SortOptions};
 use arrow::datatypes::*;
-use arrow::downcast_dictionary_array;
 use arrow::util::bit_iterator::BitIndexIterator;
-use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use datafusion_common::cast::{
-    as_boolean_array, as_generic_binary_array, as_string_array,
-};
-use datafusion_common::hash_utils::HashValue;
-use datafusion_common::{
-    assert_or_internal_err, exec_err, not_impl_err, DFSchema, DataFusionError, Result,
-    ScalarValue,
-};
-use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::datum::compare_with_eq;
 use datafusion_common::hash_utils::with_hashes;
-use datafusion_common::{exec_err, internal_err, DFSchema, Result, ScalarValue};
+use datafusion_common::{
+    assert_or_internal_err, exec_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{expr_vec_fmt, ColumnarValue};
 
 use ahash::RandomState;
