@@ -489,7 +489,9 @@ impl Projector {
     /// Project a record batch according to this projector's expressions.
     ///
     /// # Errors
-    /// This function returns an error if any expression evaluation fails.
+    /// This function returns an error if any expression evaluation fails
+    /// or if the output schema of the resulting record batch does not match
+    /// the pre-computed output schema of the projector.
     pub fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         let arrays = evaluate_expressions_to_arrays(
             self.projection.exprs.iter().map(|p| &p.expr),
