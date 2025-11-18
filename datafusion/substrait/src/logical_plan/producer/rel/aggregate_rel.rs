@@ -20,6 +20,7 @@ use crate::logical_plan::producer::{
 };
 use datafusion::common::{internal_err, not_impl_err, DFSchemaRef};
 use datafusion::logical_expr::expr::Alias;
+use datafusion::logical_expr::utils::powerset_cloned;
 use datafusion::logical_expr::{Aggregate, Distinct, Expr, GroupingSet};
 use substrait::proto::aggregate_rel::{Grouping, Measure};
 use substrait::proto::rel::RelType;
@@ -93,7 +94,7 @@ pub fn to_substrait_groupings(
             Expr::GroupingSet(gs) => match gs {
                 GroupingSet::Cube(set) => {
                     // Generate power set of grouping expressions
-                    let cube_sets = generate_powerset(set)?;
+                    let cube_sets = powerset_cloned(set)?;
                     cube_sets
                         .iter()
                         .map(|set| {
@@ -150,35 +151,6 @@ pub fn to_substrait_groupings(
         )?]),
     }?;
     Ok((ref_group_exprs, groupings))
-}
-
-/// Generate the power set of grouping expressions for CUBE
-///
-/// The power set of a set S is the set of all subsets of S, including the empty set and S itself.
-/// For example, if S = {a, b}, then powerset(S) = {{}, {a}, {b}, {a, b}}
-fn generate_powerset(exprs: &[Expr]) -> datafusion::common::Result<Vec<Vec<Expr>>> {
-    if exprs.len() >= 64 {
-        return not_impl_err!(
-            "CUBE grouping sets with more than 63 expressions are not supported"
-        );
-    }
-
-    let mut sets = Vec::new();
-    for mask in 0..(1 << exprs.len()) {
-        let mut subset = Vec::new();
-        let mut bitset = mask;
-        while bitset > 0 {
-            let rightmost: u64 = bitset & !(bitset - 1);
-            let idx = rightmost.trailing_zeros();
-            if let Some(expr) = exprs.get(idx as usize) {
-                subset.push(expr.clone());
-            }
-            // zero the trailing bit
-            bitset &= bitset - 1;
-        }
-        sets.push(subset);
-    }
-    Ok(sets)
 }
 
 pub fn parse_flat_grouping_exprs(

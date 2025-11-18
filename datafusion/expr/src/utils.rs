@@ -105,6 +105,50 @@ fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
     Ok(v)
 }
 
+/// Generate the power set of a slice, returning owned clones
+///
+/// The [power set] (or powerset) of a set S is the set of all subsets of S,
+/// including the empty set and S itself.
+///
+/// This is a variant of [`powerset`] that clones elements instead of returning references.
+/// Useful when owned values are needed (e.g., for Substrait conversion).
+///
+/// # Errors
+///
+/// Returns an error if the slice has 64 or more elements (would generate 2^64 subsets).
+///
+/// [power set]: https://en.wikipedia.org/wiki/Power_set
+pub fn powerset_cloned<T: Clone>(slice: &[T]) -> Result<Vec<Vec<T>>> {
+    if slice.len() >= 64 {
+        return plan_err!(
+            "The size of the set must be less than 64 (would generate 2^{} = {} subsets)",
+            slice.len(),
+            if slice.len() == 64 {
+                "2^64"
+            } else {
+                &format!("2^{}", slice.len())
+            }
+        );
+    }
+
+    let mut v = Vec::new();
+    for mask in 0..(1 << slice.len()) {
+        let mut ss = vec![];
+        let mut bitset = mask;
+        while bitset > 0 {
+            let rightmost: u64 = bitset & !(bitset - 1);
+            let idx = rightmost.trailing_zeros();
+            if let Some(item) = slice.get(idx as usize) {
+                ss.push(item.clone());
+            }
+            // zero the trailing bit
+            bitset &= bitset - 1;
+        }
+        v.push(ss);
+    }
+    Ok(v)
+}
+
 /// check the number of expressions contained in the grouping_set
 fn check_grouping_set_size_limit(size: usize) -> Result<()> {
     let max_grouping_set_size = 65535;
