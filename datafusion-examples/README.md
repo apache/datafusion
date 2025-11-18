@@ -93,7 +93,7 @@ cargo run --example dataframe
 - [`sql_analysis.rs`](examples/sql_analysis.rs): Analyse SQL queries with DataFusion structures
 - [`sql_frontend.rs`](examples/sql_frontend.rs): Create LogicalPlans (only) from sql strings
 - [`sql_dialect.rs`](examples/sql_dialect.rs): Example of implementing a custom SQL dialect on top of `DFParser`
-- [`sql_query.rs`](examples/memtable.rs): Query data using SQL (in memory `RecordBatches`, local Parquet files)
+- [`sql_query.rs`](examples/sql_query.rs): Query data using SQL (in memory `RecordBatches`, local Parquet files)
 
 ## Distributed
 
