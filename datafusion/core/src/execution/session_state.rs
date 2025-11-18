@@ -27,9 +27,7 @@ use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
 use crate::datasource::file_format::FileFormatFactory;
 #[cfg(feature = "sql")]
 use crate::datasource::provider_as_source;
-use crate::execution::context::{
-    CacheProducer, EmptySerializerRegistry, FunctionFactory, QueryPlanner,
-};
+use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::{DataType, FieldRef};
@@ -91,6 +89,14 @@ use sqlparser::{
 };
 use url::Url;
 use uuid::Uuid;
+
+/// Used for supplying a custom caching strategy.
+/// A [`CacheFactory`] can be registered via [`SessionState`]
+/// to create a custom logical plan for caching.
+/// Additionally, a custom [`crate::physical_planner::ExtensionPlanner`]/[`QueryPlanner`]
+/// need to be implemented to handle such plans.
+pub type CacheFactory =
+    fn(LogicalPlan, &SessionState) -> datafusion_common::Result<LogicalPlan>;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,
 /// such as configuration, functions, and runtime environment. Please see the
@@ -187,7 +193,7 @@ pub struct SessionState {
     /// It will be invoked on `CREATE FUNCTION` statements.
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
-    cache_producer: Option<Arc<dyn CacheProducer>>,
+    cache_factory: Option<CacheFactory>,
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
@@ -209,7 +215,7 @@ impl Debug for SessionState {
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
-            .field("cache_producer", &self.cache_producer)
+            .field("cache_factory", &self.cache_factory)
             .field("expr_planners", &self.expr_planners);
 
         #[cfg(feature = "sql")]
@@ -359,14 +365,14 @@ impl SessionState {
         self.function_factory.as_ref()
     }
 
-    /// Register a [`CacheProducer`] for custom caching strategy
-    pub fn set_cache_producer(&mut self, cache_producer: Arc<dyn CacheProducer>) {
-        self.cache_producer = Some(cache_producer);
+    /// Register a [`CacheFactory`] for custom caching strategy
+    pub fn set_cache_factory(&mut self, cache_factory: CacheFactory) {
+        self.cache_factory = Some(cache_factory);
     }
 
     /// Get the cache producer
-    pub fn cache_producer(&self) -> Option<&Arc<dyn CacheProducer>> {
-        self.cache_producer.as_ref()
+    pub fn cache_factory(&self) -> Option<&CacheFactory> {
+        self.cache_factory.as_ref()
     }
 
     /// Get the table factories
@@ -955,7 +961,7 @@ pub struct SessionStateBuilder {
     table_factories: Option<HashMap<String, Arc<dyn TableProviderFactory>>>,
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
-    cache_producer: Option<Arc<dyn CacheProducer>>,
+    cache_factory: Option<CacheFactory>,
     // fields to support convenience functions
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
@@ -993,7 +999,7 @@ impl SessionStateBuilder {
             table_factories: None,
             runtime_env: None,
             function_factory: None,
-            cache_producer: None,
+            cache_factory: None,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1046,7 +1052,7 @@ impl SessionStateBuilder {
             table_factories: Some(existing.table_factories),
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
-            cache_producer: existing.cache_producer,
+            cache_factory: existing.cache_factory,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1335,12 +1341,9 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Set a [`CacheProducer`] for custom caching strategy
-    pub fn with_cache_producer(
-        mut self,
-        cache_producer: Option<Arc<dyn CacheProducer>>,
-    ) -> Self {
-        self.cache_producer = cache_producer;
+    /// Set a [`CacheFactory`] for custom caching strategy
+    pub fn with_cache_factory(mut self, cache_factory: Option<CacheFactory>) -> Self {
+        self.cache_factory = cache_factory;
         self
     }
 
@@ -1407,7 +1410,7 @@ impl SessionStateBuilder {
             table_factories,
             runtime_env,
             function_factory,
-            cache_producer,
+            cache_factory,
             analyzer_rules,
             optimizer_rules,
             physical_optimizer_rules,
@@ -1444,7 +1447,7 @@ impl SessionStateBuilder {
             table_factories: table_factories.unwrap_or_default(),
             runtime_env,
             function_factory,
-            cache_producer,
+            cache_factory,
             prepared_plans: HashMap::new(),
         };
 
@@ -1649,8 +1652,8 @@ impl SessionStateBuilder {
     }
 
     /// Returns the cache producer
-    pub fn cache_producer(&mut self) -> &mut Option<Arc<dyn CacheProducer>> {
-        &mut self.cache_producer
+    pub fn cache_factory(&mut self) -> &mut Option<CacheFactory> {
+        &mut self.cache_factory
     }
 
     /// Returns the current analyzer_rules value
@@ -1691,7 +1694,7 @@ impl Debug for SessionStateBuilder {
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
-            .field("cache_producer", &self.cache_producer)
+            .field("cache_factory", &self.cache_factory)
             .field("expr_planners", &self.expr_planners);
         #[cfg(feature = "sql")]
         let ret = ret.field("type_planner", &self.type_planner);

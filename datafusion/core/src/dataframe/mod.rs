@@ -56,7 +56,6 @@ use datafusion_common::{
     ScalarValue, SchemaError, TableReference, UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::Extension;
 use datafusion_expr::{
     case,
     dml::InsertOp,
@@ -2330,7 +2329,7 @@ impl DataFrame {
     }
 
     /// Cache DataFrame as a memory table by default, or use
-    /// a [`crate::execution::context::CacheProducer`] if configured via [`SessionState`].
+    /// a [`crate::execution::session_state::CacheFactory`] if configured via [`SessionState`].
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -2346,12 +2345,11 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        if let Some(cache_producer) = self.session_state.cache_producer() {
-            let node = cache_producer.create(self.plan, self.session_state.as_ref())?;
-            let plan = LogicalPlan::Extension(Extension { node });
+        if let Some(cache_factory) = self.session_state.cache_factory() {
+            let new_plan = cache_factory(self.plan, self.session_state.as_ref())?;
             Ok(Self {
                 session_state: self.session_state,
-                plan,
+                plan: new_plan,
                 projection_requires_validation: self.projection_requires_validation,
             })
         } else {

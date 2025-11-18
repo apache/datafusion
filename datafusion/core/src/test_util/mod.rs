@@ -37,18 +37,17 @@ use crate::dataframe::DataFrame;
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
-use crate::execution::context::CacheProducer;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{CsvReadOptions, SessionContext};
 
-use crate::execution::{SendableRecordBatchStream, SessionState};
+use crate::execution::{SendableRecordBatchStream, SessionState, SessionStateBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::{
-    CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType, UserDefinedLogicalNode,
+    CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType,
     UserDefinedLogicalNodeCore,
 };
 use std::pin::Pin;
@@ -326,22 +325,21 @@ impl UserDefinedLogicalNodeCore for CacheNode {
     }
 }
 
-#[derive(Debug)]
-struct TestCacheProducer {}
-
-impl CacheProducer for TestCacheProducer {
-    fn create(
-        &self,
-        plan: LogicalPlan,
-        _session_state: &SessionState,
-    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
-        Ok(Arc::new(CacheNode { input: plan }))
-    }
+fn cache_factory(
+    plan: LogicalPlan,
+    _session_state: &SessionState,
+) -> Result<LogicalPlan> {
+    Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+        node: Arc::new(CacheNode { input: plan }),
+    }))
 }
 
 /// Create a test table registered to a session context with an associated cache producer
-pub async fn test_table_with_cache_producer() -> Result<DataFrame> {
-    let ctx = SessionContext::new().with_cache_producer(Arc::new(TestCacheProducer {}));
+pub async fn test_table_with_cache_factory() -> Result<DataFrame> {
+    let session_state = SessionStateBuilder::new()
+        .with_cache_factory(Some(cache_factory))
+        .build();
+    let ctx = SessionContext::new_with_state(session_state);
     let name = "aggregate_test_100";
     register_aggregate_csv(&ctx, name).await?;
     ctx.table(name).await
