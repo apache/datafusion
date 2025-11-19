@@ -17,11 +17,11 @@
 
 //! Rewrite expressions based on external expression value range guarantees.
 
-use std::borrow::Cow;
 use crate::{expr::InList, lit, Between, BinaryExpr, Expr};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, HashMap, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
+use std::borrow::Cow;
 
 /// Rewrite expressions to incorporate guarantees.
 ///
@@ -164,13 +164,15 @@ fn rewrite_between(
     let expr_interval = match expr_interval {
         NullableInterval::Null { datatype } => {
             // Value is guaranteed to be null, so we can simplify to null.
-            return Ok(Some(lit(ScalarValue::try_new_null(datatype).unwrap_or(ScalarValue::Null))))
-        },
+            return Ok(Some(lit(
+                ScalarValue::try_new_null(datatype).unwrap_or(ScalarValue::Null)
+            )));
+        }
         NullableInterval::MaybeNull { .. } => {
             // Value may or may not be null, so we can't simplify the expression.
-            return Ok(None)
-        },
-        NullableInterval::NotNull { values } => values
+            return Ok(None);
+        }
+        NullableInterval::NotNull { values } => values,
     };
 
     Ok(if between_interval.lower().is_null() {
@@ -181,7 +183,8 @@ fn rewrite_between(
             Some(lit(between.negated))
         } else if expr_interval.lt_eq(&upper_bound)?.eq(&Interval::TRUE) {
             // if <expr> <= high, then certainly null
-            Some(lit(ScalarValue::try_new_null(&expr_interval.data_type()).unwrap_or(ScalarValue::Null)))
+            Some(lit(ScalarValue::try_new_null(&expr_interval.data_type())
+                .unwrap_or(ScalarValue::Null)))
         } else {
             // otherwise unknown
             None
@@ -194,7 +197,8 @@ fn rewrite_between(
             Some(lit(between.negated))
         } else if expr_interval.gt_eq(&lower_bound)?.eq(&Interval::TRUE) {
             // if <expr> >= low, then certainly null
-            Some(lit(ScalarValue::try_new_null(&expr_interval.data_type()).unwrap_or(ScalarValue::Null)))
+            Some(lit(ScalarValue::try_new_null(&expr_interval.data_type())
+                .unwrap_or(ScalarValue::Null)))
         } else {
             // otherwise unknown
             None
@@ -311,7 +315,6 @@ mod tests {
 
     #[test]
     fn test_not_null_guarantee() {
-
         let guarantees = [
             // Note: AlwaysNull case handled by test_column_single_value test,
             // since it's a special case of a column with a single value.
@@ -328,55 +331,86 @@ mod tests {
             (col("x").is_null(), Some(lit(false))),
             // x IS NOT NULL => guaranteed true
             (col("x").is_not_null(), Some(lit(true))),
-
             // [1, 3] BETWEEN 0 AND 10 => guaranteed true
             (col("x").between(lit(0), lit(10)), Some(lit(true))),
             // x BETWEEN 1 AND -2 => unknown (actually guaranteed false)
             (col("x").between(lit(1), lit(-2)), None),
-
             // [1, 3] BETWEEN NULL AND 0 => guaranteed false
-            (col("x").between(lit(ScalarValue::Null), lit(0)), Some(lit(false))),
+            (
+                col("x").between(lit(ScalarValue::Null), lit(0)),
+                Some(lit(false)),
+            ),
             // [1, 3] BETWEEN NULL AND 1 => unknown
             (col("x").between(lit(ScalarValue::Null), lit(1)), None),
             // [1, 3] BETWEEN NULL AND 2 => unknown
             (col("x").between(lit(ScalarValue::Null), lit(2)), None),
             // [1, 3] BETWEEN NULL AND 3 => guaranteed NULL
-            (col("x").between(lit(ScalarValue::Null), lit(3)), Some(lit(ScalarValue::Int32(None)))),
+            (
+                col("x").between(lit(ScalarValue::Null), lit(3)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
             // [1, 3] BETWEEN NULL AND 4 => guaranteed NULL
-            (col("x").between(lit(ScalarValue::Null), lit(4)), Some(lit(ScalarValue::Int32(None)))),
-
+            (
+                col("x").between(lit(ScalarValue::Null), lit(4)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
             // [1, 3] BETWEEN 1 AND NULL => guaranteed NULL
-            (col("x").between(lit(0), lit(ScalarValue::Null)), Some(lit(ScalarValue::Int32(None)))),
+            (
+                col("x").between(lit(0), lit(ScalarValue::Null)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
             // [1, 3] BETWEEN 1 AND NULL => guaranteed NULL
-            (col("x").between(lit(1), lit(ScalarValue::Null)), Some(lit(ScalarValue::Int32(None)))),
+            (
+                col("x").between(lit(1), lit(ScalarValue::Null)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
             // [1, 3] BETWEEN 2 AND NULL => unknown
             (col("x").between(lit(2), lit(ScalarValue::Null)), None),
             // [1, 3] BETWEEN 3 AND NULL => unknown
             (col("x").between(lit(3), lit(ScalarValue::Null)), None),
             // [1, 3] BETWEEN 4 AND NULL => guaranteed false
-            (col("x").between(lit(4), lit(ScalarValue::Null)), Some(lit(false))),
-
+            (
+                col("x").between(lit(4), lit(ScalarValue::Null)),
+                Some(lit(false)),
+            ),
             // [1, 3] NOT BETWEEN NULL AND 0 => guaranteed false
-            (col("x").not_between(lit(ScalarValue::Null), lit(0)), Some(lit(true))),
+            (
+                col("x").not_between(lit(ScalarValue::Null), lit(0)),
+                Some(lit(true)),
+            ),
             // [1, 3] NOT BETWEEN NULL AND 1 => unknown
             (col("x").not_between(lit(ScalarValue::Null), lit(1)), None),
             // [1, 3] NOT BETWEEN NULL AND 2 => unknown
             (col("x").not_between(lit(ScalarValue::Null), lit(2)), None),
             // [1, 3] NOT BETWEEN NULL AND 3 => guaranteed NULL
-            (col("x").not_between(lit(ScalarValue::Null), lit(3)), Some(lit(ScalarValue::Int32(None)))),
+            (
+                col("x").not_between(lit(ScalarValue::Null), lit(3)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
             // [1, 3] NOT BETWEEN NULL AND 4 => guaranteed NULL
-            (col("x").not_between(lit(ScalarValue::Null), lit(4)), Some(lit(ScalarValue::Int32(None)))),
-
+            (
+                col("x").not_between(lit(ScalarValue::Null), lit(4)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
             // [1, 3] NOT BETWEEN 1 AND NULL => guaranteed NULL
-            (col("x").not_between(lit(0), lit(ScalarValue::Null)), Some(lit(ScalarValue::Int32(None)))),
+            (
+                col("x").not_between(lit(0), lit(ScalarValue::Null)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
             // [1, 3] NOT BETWEEN 1 AND NULL => guaranteed NULL
-            (col("x").not_between(lit(1), lit(ScalarValue::Null)), Some(lit(ScalarValue::Int32(None)))),
+            (
+                col("x").not_between(lit(1), lit(ScalarValue::Null)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
             // [1, 3] NOT BETWEEN 2 AND NULL => unknown
             (col("x").not_between(lit(2), lit(ScalarValue::Null)), None),
             // [1, 3] NOT BETWEEN 3 AND NULL => unknown
             (col("x").not_between(lit(3), lit(ScalarValue::Null)), None),
             // [1, 3] NOT BETWEEN 4 AND NULL => guaranteed false
-            (col("x").not_between(lit(4), lit(ScalarValue::Null)), Some(lit(true))),
+            (
+                col("x").not_between(lit(4), lit(ScalarValue::Null)),
+                Some(lit(true)),
+            ),
         ];
 
         for case in is_null_cases {
