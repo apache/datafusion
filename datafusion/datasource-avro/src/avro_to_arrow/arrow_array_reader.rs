@@ -925,7 +925,7 @@ fn flatten_values<'a>(values: &[&'a Value]) -> Vec<&'a Value> {
         .collect()
 }
 
-/// Flattens a list into string values, dropping Value::Null in the process.
+/// Flattens a list into binary values, dropping Value::Null in the process.
 /// This is useful for interpreting any Avro array as bytes, dropping nulls.
 /// See `resolve_bytes`.
 #[inline]
