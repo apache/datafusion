@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
-    LexOrdering, Statement as DFStatement,
+    LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -49,10 +49,10 @@ use datafusion_expr::{
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
     EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
-    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
-    SortExpr, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
-    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    Volatility, WriteOp,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
+    ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
+    TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp,
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, IndexColumn, IndexType, NullsDistinctOption, OrderByExpr,
@@ -211,6 +211,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 format,
                 statement,
             }) => self.explain_to_plan(verbose, analyze, format, *statement),
+            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement),
         }
     }
 
@@ -1902,6 +1903,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let variable = object_name_to_string(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
+                // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
                 if variable_lower == "timezone" || variable_lower == "time.zone" {
                     variable_lower = "datafusion.execution.time_zone".to_string();
                 }
@@ -1934,6 +1936,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )))
             }
             other => not_impl_err!("SET variant not implemented yet: {other:?}"),
+        }
+    }
+
+    fn reset_statement_to_plan(&self, statement: ResetStatement) -> Result<LogicalPlan> {
+        match statement {
+            ResetStatement::Variable(variable) => {
+                let variable = object_name_to_string(&variable);
+                let mut variable_lower = variable.to_lowercase();
+
+                // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
+                if variable_lower == "timezone" || variable_lower == "time.zone" {
+                    variable_lower = "datafusion.execution.time_zone".to_string();
+                }
+
+                Ok(LogicalPlan::Statement(PlanStatement::ResetVariable(
+                    ResetVariable {
+                        variable: variable_lower,
+                    },
+                )))
+            }
         }
     }
 

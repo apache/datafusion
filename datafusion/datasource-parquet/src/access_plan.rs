@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
 
@@ -269,13 +269,13 @@ impl ParquetAccessPlan {
                 .sum::<usize>();
 
             let row_group_row_count = rg_meta.num_rows();
-            if rows_in_selection as i64 != row_group_row_count {
-                return internal_err!(
-                    "Invalid ParquetAccessPlan Selection. Row group {idx} has {row_group_row_count} rows \
+            assert_eq_or_internal_err!(
+                rows_in_selection as i64,
+                row_group_row_count,
+                "Invalid ParquetAccessPlan Selection. Row group {idx} has {row_group_row_count} rows \
                     but selection only specifies {rows_in_selection} rows. \
                     Selection: {selection:?}"
-                );
-            }
+            );
         }
 
         let total_selection: RowSelection = self
@@ -482,7 +482,10 @@ mod test {
             .unwrap_err()
             .to_string();
         assert_eq!(row_group_indexes, vec![0, 1, 2, 3]);
-        assert_contains!(err, "Internal error: Invalid ParquetAccessPlan Selection. Row group 1 has 20 rows but selection only specifies 12 rows");
+        assert_contains!(
+            err,
+            "Row group 1 has 20 rows but selection only specifies 12 rows"
+        );
     }
 
     #[test]

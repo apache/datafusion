@@ -37,8 +37,7 @@ use std::sync::Arc;
 ///
 /// See [analyzer_rule.rs] for an example of AnalyzerRules, which are for
 /// changing plan semantics.
-#[tokio::main]
-pub async fn main() -> Result<()> {
+pub async fn optimizer_rule() -> Result<()> {
     // DataFusion includes many built in OptimizerRules for tasks such as outer
     // to inner join conversion and constant folding.
     //

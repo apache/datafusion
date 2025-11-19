@@ -928,7 +928,7 @@ pub fn find_valid_equijoin_key_pair(
 ///     round(Float64)
 ///     round(Float32)
 /// ```
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 pub fn generate_signature_error_msg(
     func_name: &str,
     func_signature: Signature,
