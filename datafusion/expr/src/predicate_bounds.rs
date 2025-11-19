@@ -223,9 +223,8 @@ mod tests {
     use crate::expr::ScalarFunction;
     use crate::predicate_bounds::evaluate_bounds;
     use crate::{
-        binary_expr, col, create_udf, is_between, is_false, is_not_false, is_not_null,
-        is_not_true, is_not_unknown, is_null, is_true, is_unknown, like, lit, negative,
-        not, Expr,
+        binary_expr, col, create_udf, is_false, is_not_false, is_not_null, is_not_true,
+        is_not_unknown, is_null, is_true, is_unknown, lit, not, Expr,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{DFSchema, Result, ScalarValue};
@@ -233,6 +232,7 @@ mod tests {
     use datafusion_expr_common::interval_arithmetic::NullableInterval;
     use datafusion_expr_common::operator::Operator::{And, Eq, Or};
     use datafusion_expr_common::signature::Volatility;
+    use std::ops::Neg;
     use std::sync::Arc;
 
     fn eval_bounds(predicate: &Expr) -> Result<NullableInterval> {
@@ -482,12 +482,12 @@ mod tests {
 
         #[rustfmt::skip]
         let cases = vec![
-            (is_between(zero.clone(), zero.clone(), zero.clone()), NullableInterval::TRUE_OR_FALSE),
-            (is_between(null.clone(), zero.clone(), zero.clone()), NullableInterval::UNKNOWN),
-            (is_between(zero.clone(), null.clone(), zero.clone()), NullableInterval::ANY_TRUTH_VALUE),
-            (is_between(zero.clone(), zero.clone(), null.clone()), NullableInterval::ANY_TRUTH_VALUE),
-            (is_between(zero.clone(), null.clone(), null.clone()), NullableInterval::UNKNOWN),
-            (is_between(null.clone(), null.clone(), null.clone()), NullableInterval::UNKNOWN),
+            (zero.clone().between(zero.clone(), zero.clone()), NullableInterval::TRUE_OR_FALSE),
+            (null.clone().between(zero.clone(), zero.clone()), NullableInterval::UNKNOWN),
+            (zero.clone().between(null.clone(), zero.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (zero.clone().between(zero.clone(), null.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (zero.clone().between(null.clone(), null.clone()), NullableInterval::UNKNOWN),
+            (null.clone().between(null.clone(), null.clone()), NullableInterval::UNKNOWN),
         ];
 
         for case in cases {
@@ -565,8 +565,8 @@ mod tests {
 
         #[rustfmt::skip]
         let cases = vec![
-            (negative(zero.clone()), NullableInterval::TRUE_OR_FALSE),
-            (negative(null.clone()), NullableInterval::UNKNOWN),
+            (zero.clone().neg(), NullableInterval::TRUE_OR_FALSE),
+            (null.clone().neg(), NullableInterval::UNKNOWN),
         ];
 
         for case in cases {
@@ -600,10 +600,10 @@ mod tests {
 
         #[rustfmt::skip]
         let cases = vec![
-            (like(expr.clone(), pattern.clone()), NullableInterval::TRUE_OR_FALSE),
-            (like(null.clone(), pattern.clone()), NullableInterval::UNKNOWN),
-            (like(expr.clone(), null.clone()), NullableInterval::UNKNOWN),
-            (like(null.clone(), null.clone()), NullableInterval::UNKNOWN),
+            (expr.clone().like(pattern.clone()), NullableInterval::TRUE_OR_FALSE),
+            (null.clone().like(pattern.clone()), NullableInterval::UNKNOWN),
+            (expr.clone().like(null.clone()), NullableInterval::UNKNOWN),
+            (null.clone().like(null.clone()), NullableInterval::UNKNOWN),
         ];
 
         for case in cases {
@@ -617,8 +617,8 @@ mod tests {
 
         #[rustfmt::skip]
         let cases = vec![
-            (like(col.clone(), pattern.clone()), NullableInterval::TRUE_OR_FALSE),
-            (like(expr.clone(), col.clone()), NullableInterval::TRUE_OR_FALSE),
+            (col.clone().like(pattern.clone()), NullableInterval::TRUE_OR_FALSE),
+            (expr.clone().like(col.clone()), NullableInterval::TRUE_OR_FALSE),
         ];
 
         for case in cases {
