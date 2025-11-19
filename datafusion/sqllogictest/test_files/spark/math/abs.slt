@@ -33,10 +33,17 @@ SELECT abs(-127::TINYINT), abs(-32767::SMALLINT), abs(-2147483647::INT), abs(-92
 
 # See https://github.com/apache/datafusion/issues/18794 for operator precedence
 # abs: signed int minimal values
-query IIII
-select abs((-128)::TINYINT), abs((-32768)::SMALLINT), abs((-2147483648)::INT), abs((-9223372036854775808)::BIGINT)
-----
--128 -32768 -2147483648 -9223372036854775808
+query error DataFusion error: Arrow error: Compute error: Int8 overflow on abs\(\-128\)
+select abs((-128)::TINYINT)
+
+query error DataFusion error: Arrow error: Compute error: Int16 overflow on abs\(\-32768\)
+select abs((-32768)::SMALLINT)
+
+query error DataFusion error: Arrow error: Compute error: Int32 overflow on abs\(\-2147483648\)
+select abs((-2147483648)::INT)
+
+query error DataFusion error: Arrow error: Compute error: Int64 overflow on abs\(\-9223372036854775808\)
+select abs((-9223372036854775808)::BIGINT)
 
 # abs: floats, NULL, NaN, -0, infinity, -infinity
 query RRRRRRRRRRRR
