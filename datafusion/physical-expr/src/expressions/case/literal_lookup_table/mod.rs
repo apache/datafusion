@@ -206,7 +206,9 @@ impl LiteralLookupTable {
         &self,
         keys_array: &ArrayRef,
     ) -> datafusion_common::Result<ArrayRef> {
-        let take_indices = self.lookup.map_to_when_indices(keys_array, self.else_index)?;
+        let take_indices = self
+            .lookup
+            .map_to_when_indices(keys_array, self.else_index)?;
 
         // Zero-copy conversion
         let take_indices = UInt32Array::from(take_indices);
