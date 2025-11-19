@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 /// Demonstrates how to use [`FileStreamProvider`] and [`StreamTable`] to stream data
 /// from a file-like source (FIFO) into DataFusion for continuous querying.
 ///

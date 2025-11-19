@@ -90,10 +90,10 @@ cargo run --example dataframe
 - [`examples/udf/simple_udf.rs`](examples/udf/simple_udf.rs): Define and invoke a User Defined Scalar Function (UDF)
 - [`examples/udf/simple_udtf.rs`](examples/udf/simple_udtf.rs): Define and invoke a User Defined Table Function (UDTF)
 - [`examples/udf/simple_udfw.rs`](examples/udf/simple_udwf.rs): Define and invoke a User Defined Window Function (UDWF)
-- [`sql_analysis.rs`](examples/sql_analysis.rs): Analyse SQL queries with DataFusion structures
-- [`sql_frontend.rs`](examples/sql_frontend.rs): Create LogicalPlans (only) from sql strings
-- [`sql_dialect.rs`](examples/sql_dialect.rs): Example of implementing a custom SQL dialect on top of `DFParser`
-- [`sql_query.rs`](examples/sql_query.rs): Query data using SQL (in memory `RecordBatches`, local Parquet files)
+- [`examples/sql_ops/analysis.rs`](examples/sql_ops/analysis.rs): Analyse SQL queries with DataFusion structures
+- [`examples/sql_ops/frontend.rs`](examples/sql_ops/frontend.rs): Create LogicalPlans (only) from sql strings
+- [`examples/sql_ops/dialect.rs`](examples/sql_ops/dialect.rs): Example of implementing a custom SQL dialect on top of `DFParser`
+- [`examples/sql_ops/query.rs`](examples/sql_ops/query.rs): Query data using SQL (in memory `RecordBatches`, local Parquet files)
 
 ## Distributed
 

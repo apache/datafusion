@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use datafusion::common::test_util::datafusion_test_data;
 use datafusion::error::Result;
 use datafusion::prelude::*;
