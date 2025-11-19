@@ -3277,6 +3277,13 @@ select to_local_time(NULL);
 ----
 NULL
 
+query PT
+select
+  to_local_time(arrow_cast(null, 'Timestamp(s, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast(null, 'Timestamp(s, "Asia/Tokyo")')));
+----
+NULL Timestamp(s)
+
 query PTPT
 select
   time,

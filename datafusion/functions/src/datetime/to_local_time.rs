@@ -204,6 +204,18 @@ fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
     //
     // Then remove the timezone in return type, i.e. return None
     match time_value {
+        ColumnarValue::Scalar(ScalarValue::TimestampSecond(None, Some(_))) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(None, None)),
+        ),
+        ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(None, Some(_))) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(None, None)),
+        ),
+        ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(None, Some(_))) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(None, None)),
+        ),
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(None, Some(_))) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(None, None)),
+        ),
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(ts), Some(_))) => {
             let adjusted_ts = adjust_to_local_time::<TimestampNanosecondType>(*ts, tz)?;
             Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
