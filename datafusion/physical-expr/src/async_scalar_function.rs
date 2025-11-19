@@ -192,10 +192,18 @@ impl AsyncFuncExpr {
             );
         }
 
-        let datas = ColumnarValue::values_to_arrays(&result_batches)?
+        let datas = result_batches
             .iter()
-            .map(|b| b.to_data())
-            .collect::<Vec<_>>();
+            .map(|cv| match cv {
+                ColumnarValue::Array(arr) => Ok(arr.to_data()),
+                ColumnarValue::Scalar(scalar) => {
+                    // This shouldn't happen in practice since async UDFs should return arrays,
+                    // but handle it for completeness
+                    Ok(scalar.to_array_of_size(1)?.to_data())
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let total_len = datas.iter().map(|d| d.len()).sum();
         let mut mutable = MutableArrayData::new(datas.iter().collect(), false, total_len);
         datas.iter().enumerate().for_each(|(i, data)| {
