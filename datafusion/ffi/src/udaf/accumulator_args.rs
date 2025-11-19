@@ -63,11 +63,11 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
-        let codec = DefaultPhysicalExtensionCodec {};
+        let mut codec = DefaultPhysicalExtensionCodec {};
         let ordering_req =
-            serialize_physical_sort_exprs(args.order_bys.to_owned(), &codec)?;
+            serialize_physical_sort_exprs(args.order_bys.to_owned(), &mut codec)?;
 
-        let expr = serialize_physical_exprs(args.exprs, &codec)?;
+        let expr = serialize_physical_exprs(args.exprs, &mut codec)?;
 
         let physical_expr_def = PhysicalAggregateExprNode {
             expr,

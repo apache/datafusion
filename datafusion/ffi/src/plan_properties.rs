@@ -87,9 +87,11 @@ unsafe extern "C" fn output_partitioning_fn_wrapper(
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
 
-    let codec = DefaultPhysicalExtensionCodec {};
-    let partitioning_data =
-        rresult_return!(serialize_partitioning(props.output_partitioning(), &codec));
+    let mut codec = DefaultPhysicalExtensionCodec {};
+    let partitioning_data = rresult_return!(serialize_partitioning(
+        props.output_partitioning(),
+        &mut codec
+    ));
     let output_partitioning = partitioning_data.encode_to_vec();
 
     ROk(output_partitioning.into())
@@ -117,11 +119,11 @@ unsafe extern "C" fn output_ordering_fn_wrapper(
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
 
-    let codec = DefaultPhysicalExtensionCodec {};
+    let mut codec = DefaultPhysicalExtensionCodec {};
     let output_ordering = match props.output_ordering() {
         Some(ordering) => {
             let physical_sort_expr_nodes = rresult_return!(
-                serialize_physical_sort_exprs(ordering.to_owned(), &codec)
+                serialize_physical_sort_exprs(ordering.to_owned(), &mut codec)
             );
             let ordering_data = PhysicalSortExprNodeCollection {
                 physical_sort_expr_nodes,

@@ -21,7 +21,7 @@ use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use crate::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalSerializer,
 };
 use crate::protobuf;
 use datafusion_common::{plan_datafusion_err, Result};
@@ -275,8 +275,8 @@ pub fn logical_plan_from_json_with_extension_codec(
 
 /// Serialize a PhysicalPlan as bytes
 pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
-    let extension_codec = DefaultPhysicalExtensionCodec {};
-    physical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
+    let mut extension_codec = DefaultPhysicalExtensionCodec {};
+    physical_plan_to_bytes_with_extension_codec(plan, &mut extension_codec)
 }
 
 /// Serialize a PhysicalPlan as JSON
@@ -291,12 +291,11 @@ pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
 }
 
 /// Serialize a PhysicalPlan as bytes, using the provided extension codec
-pub fn physical_plan_to_bytes_with_extension_codec(
+pub fn physical_plan_to_bytes_with_extension_codec<S: PhysicalSerializer>(
     plan: Arc<dyn ExecutionPlan>,
-    extension_codec: &dyn PhysicalExtensionCodec,
+    parser: &mut S,
 ) -> Result<Bytes> {
-    let protobuf =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, extension_codec)?;
+    let protobuf = protobuf::PhysicalPlanNode::try_from_physical_plan(plan, parser)?;
     let mut buffer = BytesMut::new();
     protobuf
         .encode(&mut buffer)

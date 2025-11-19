@@ -61,7 +61,7 @@ async fn main() {
         Arc::new(ParentPhysicalExtensionCodec {}),
         Arc::new(ChildPhysicalExtensionCodec {}),
     ]));
-    let mut decoder = TaskContextWithPhysicalCodec {
+    let mut parser = TaskContextWithPhysicalCodec {
         task_ctx,
         codec: Arc::clone(&composed_codec) as Arc<dyn PhysicalExtensionCodec>,
     };
@@ -70,13 +70,13 @@ async fn main() {
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec_plan.clone(),
-            composed_codec.as_ref(),
+            &mut parser,
         )
         .expect("to proto");
 
     // deserialize proto back to execution plan
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&mut decoder)
+        .try_into_physical_plan(&mut parser)
         .expect("from proto");
 
     // assert that the original and deserialized execution plans are equal

@@ -96,8 +96,8 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
 
         let schema = Arc::new(Schema::new(fields));
 
-        let codec = DefaultPhysicalExtensionCodec {};
-        let input_exprs = serialize_physical_exprs(args.input_exprs(), &codec)?
+        let mut codec = DefaultPhysicalExtensionCodec {};
+        let input_exprs = serialize_physical_exprs(args.input_exprs(), &mut codec)?
             .into_iter()
             .map(|expr_node| expr_node.encode_to_vec().into())
             .collect();
