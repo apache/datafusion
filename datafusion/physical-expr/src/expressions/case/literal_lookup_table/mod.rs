@@ -202,11 +202,11 @@ impl LiteralLookupTable {
         })
     }
 
-    pub(in super::super) fn map_input_to_output(
+    pub(in super::super) fn map_keys_to_values(
         &self,
-        expr_array: &ArrayRef,
+        keys_array: &ArrayRef,
     ) -> datafusion_common::Result<ArrayRef> {
-        let take_indices = self.lookup.map_to_indices(expr_array, self.else_index)?;
+        let take_indices = self.lookup.map_to_when_indices(keys_array, self.else_index)?;
 
         // Zero-copy conversion
         let take_indices = UInt32Array::from(take_indices);
@@ -222,21 +222,51 @@ impl LiteralLookupTable {
     }
 }
 
-/// Lookup table for mapping literal values to their corresponding indices in the THEN clauses
+/// Map values that match the WHEN literal to the index of their corresponding WHEN clause
 ///
-/// The else index is used when a value is not found in the lookup table
+/// For example, for this CASE expression:
+///
+/// ```sql
+/// CASE <expr_a>
+///     WHEN <literal_a> THEN <result_e>
+///     WHEN <literal_b> THEN <result_f>
+///     WHEN <literal_c> THEN <result_g>
+///     WHEN <literal_d> THEN <result_h>
+///     ELSE <fallback_result>
+/// END
+/// ```
+///
+/// this will map <literal_a> to 0, <literal_b> to 1, <literal_c> to 2, <literal_d> to 3
 pub(super) trait WhenLiteralIndexMap: Debug + Send + Sync {
-    /// Return indices to take from the literals based on the values in the given array
+    /// Given an array of values, returns a vector of WHEN clause indices corresponding to each value in the provided array.
     ///
-    /// `else_index` is the index to use when a value is not found in the lookup table
-    fn map_to_indices(
+    /// For example, for this CASE expression:
+    ///
+    /// ```sql
+    /// CASE <expr_a>
+    ///     WHEN <literal_a> THEN <result_e>
+    ///     WHEN <literal_b> THEN <result_f>
+    ///     WHEN <literal_c> THEN <result_g>
+    ///     WHEN <literal_d> THEN <result_h>
+    ///     ELSE <fallback_result>
+    /// END
+    /// ```
+    ///
+    /// the array will be the evaluated values of `<expr_a>`
+    /// and if that array is:
+    /// - `[<literal_a>, <literal_c>, <literal_x>, <literal_b>, <literal_a>]`
+    ///
+    /// the returned vector will be:
+    /// - `[0, 2, else_index, 1, 0]`
+    ///
+    fn map_to_when_indices(
         &self,
         array: &ArrayRef,
         else_index: u32,
     ) -> datafusion_common::Result<Vec<u32>>;
 }
 
-pub(crate) fn try_creating_lookup_table(
+fn try_creating_lookup_table(
     unique_non_null_literals: Vec<ScalarValue>,
 ) -> datafusion_common::Result<Box<dyn WhenLiteralIndexMap>> {
     assert_ne!(

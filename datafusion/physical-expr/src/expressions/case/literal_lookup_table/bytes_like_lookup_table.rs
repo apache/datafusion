@@ -239,7 +239,7 @@ impl<Helper: BytesMapHelperWrapperTrait> BytesLikeIndexMap<Helper> {
 impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
     for BytesLikeIndexMap<Helper>
 {
-    fn map_to_indices(
+    fn map_to_when_indices(
         &self,
         array: &ArrayRef,
         else_index: u32,

@@ -1324,12 +1324,12 @@ impl CaseExpr {
         let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
         let evaluated_expression = evaluated_expression.to_array(1)?;
 
-        let output = lookup_table.map_input_to_output(&evaluated_expression)?;
+        let values = lookup_table.map_keys_to_values(&evaluated_expression)?;
 
         let result = if is_scalar {
-            ColumnarValue::Scalar(ScalarValue::try_from_array(output.as_ref(), 0)?)
+            ColumnarValue::Scalar(ScalarValue::try_from_array(values.as_ref(), 0)?)
         } else {
-            ColumnarValue::Array(output)
+            ColumnarValue::Array(values)
         };
 
         Ok(result)
