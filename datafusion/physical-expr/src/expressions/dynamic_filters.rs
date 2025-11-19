@@ -17,6 +17,7 @@
 
 use parking_lot::RwLock;
 use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
+use tokio::sync::watch;
 
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
@@ -44,6 +45,10 @@ pub struct DynamicFilterPhysicalExpr {
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
+    /// Broadcasts completion state changes to all waiters.
+    completion_watch: watch::Sender<bool>,
+    /// Broadcasts update changes to all waiters.
+    update_watch: watch::Sender<u64>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
@@ -57,8 +62,6 @@ struct Inner {
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
     generation: u64,
     expr: Arc<dyn PhysicalExpr>,
-    /// Flag indicating whether all updates have been received and the filter is complete.
-    is_complete: bool,
 }
 
 impl Inner {
@@ -68,7 +71,6 @@ impl Inner {
             // This is not currently used anywhere but it seems useful to have this simple distinction.
             generation: 1,
             expr,
-            is_complete: false,
         }
     }
 
@@ -137,10 +139,14 @@ impl DynamicFilterPhysicalExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
         inner: Arc<dyn PhysicalExpr>,
     ) -> Self {
+        let (completion_watch, _) = watch::channel(false);
+        let (update_watch, _) = watch::channel(1u64);
         Self {
             children,
             remapped_children: None, // Initially no remapped children
             inner: Arc::new(RwLock::new(Inner::new(inner))),
+            completion_watch,
+            update_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
@@ -188,7 +194,7 @@ impl DynamicFilterPhysicalExpr {
         Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
     }
 
-    /// Update the current expression.
+    /// Update the current expression and notify all waiters.
     /// Any children of this expression must be a subset of the original children
     /// passed to the constructor.
     /// This should be called e.g.:
@@ -207,27 +213,48 @@ impl DynamicFilterPhysicalExpr {
 
         // Load the current inner, increment generation, and store the new one
         let mut current = self.inner.write();
+        let new_generation = current.generation + 1;
         *current = Inner {
-            generation: current.generation + 1,
+            generation: new_generation,
             expr: new_expr,
-            is_complete: current.is_complete,
         };
+        drop(current); // Release the lock before broadcasting
+
+        // Broadcast the new generation to all waiters
+        let _ = self.update_watch.send(new_generation);
         Ok(())
     }
 
-    /// Mark this dynamic filter as complete.
+    /// Mark this dynamic filter as complete and broadcast to all waiters.
     ///
     /// This signals that all expected updates have been received.
+    /// Waiters using [`Self::wait_complete`] will be notified.
     pub fn mark_complete(&self) {
-        let mut current = self.inner.write();
-        current.is_complete = true;
+        // Broadcast completion to all waiters
+        let _ = self.completion_watch.send(true);
     }
 
-    /// Check if this dynamic filter is complete.
+    /// Wait asynchronously for any update to this filter.
     ///
-    /// Returns `true` if all expected updates have been received via [`Self::mark_complete`].
-    pub fn is_complete(&self) -> bool {
-        self.inner.read().is_complete
+    /// This method will return when [`Self::update`] is called.
+    /// It does not guarantee that the filter is complete.
+    pub async fn wait_update(&self) {
+        let mut rx = self.update_watch.subscribe();
+        // Wait for the generation to change
+        let _ = rx.changed().await;
+    }
+
+    /// Wait asynchronously until this dynamic filter is marked as complete.
+    ///
+    /// This method returns immediately if the filter is already complete.
+    /// Otherwise, it waits until [`Self::mark_complete`] is called.
+    ///
+    /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
+    /// the filter is fully complete with no more updates expected.
+    pub async fn wait_complete(&self) {
+        let mut rx = self.completion_watch.subscribe();
+        // Wait until the completion flag becomes true
+        let _ = rx.wait_for(|&complete| complete).await;
     }
 
     fn render(
@@ -272,6 +299,8 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             children: self.children.clone(),
             remapped_children: Some(children),
             inner: Arc::clone(&self.inner),
+            completion_watch: self.completion_watch.clone(),
+            update_watch: self.update_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
         }))
