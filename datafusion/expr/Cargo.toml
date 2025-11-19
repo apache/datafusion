@@ -66,4 +66,3 @@ sqlparser = { workspace = true, optional = true }
 ctor = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
-tokio = { workspace = true }

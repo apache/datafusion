@@ -140,97 +140,87 @@ mod tests {
         sync::Arc,
     };
 
-    use arrow::{
-        array::Int32Array,
-        datatypes::{DataType, Field},
-    };
-    use arrow::{
-        array::{Array, RecordBatch, StringArray},
-        datatypes::Schema,
-    };
+    use arrow::datatypes::DataType;
     use async_trait::async_trait;
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::error::Result;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr_common::columnar_value::ColumnarValue;
-    use datafusion_expr_common::signature::{Signature, Volatility};
+    use datafusion_expr_common::{columnar_value::ColumnarValue, signature::Signature};
 
     use crate::{
         async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl},
         ScalarFunctionArgs, ScalarUDFImpl,
     };
 
-    /// Helper function to convert ColumnarValue to Vec<String>
-    fn columnar_to_vec_string(cv: &ColumnarValue) -> Result<Vec<String>> {
-        match cv {
-            ColumnarValue::Array(arr) => {
-                let string_arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
-                Ok(string_arr
-                    .iter()
-                    .map(|s| s.unwrap_or("").to_string())
-                    .collect())
-            }
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(vec![s.clone()]),
-            _ => panic!("Unexpected type"),
-        }
-    }
-
-    /// Simulates calling an async external service
-    async fn call_external_service(arg1: &ColumnarValue) -> Result<Vec<String>> {
-        let vec1 = columnar_to_vec_string(arg1)?;
-
-        Ok(vec1)
-    }
-
     #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-    struct TestAsyncUDFImpl {
-        batch_size: usize,
-        signature: Signature,
+    struct TestAsyncUDFImpl1 {
+        a: i32,
     }
 
-    impl TestAsyncUDFImpl {
-        fn new(batch_size: usize) -> Self {
-            Self {
-                batch_size,
-                signature: Signature::exact(vec![DataType::Utf8], Volatility::Volatile),
-            }
-        }
-    }
-
-    impl ScalarUDFImpl for TestAsyncUDFImpl {
+    impl ScalarUDFImpl for TestAsyncUDFImpl1 {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
 
         fn name(&self) -> &str {
-            "test_async_udf"
+            todo!()
         }
 
         fn signature(&self) -> &Signature {
-            &self.signature
+            todo!()
         }
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Utf8)
+            todo!()
         }
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            panic!("Call invoke_async_with_args instead")
+            todo!()
         }
     }
 
     #[async_trait]
-    impl AsyncScalarUDFImpl for TestAsyncUDFImpl {
-        fn ideal_batch_size(&self) -> Option<usize> {
-            Some(self.batch_size)
-        }
+    impl AsyncScalarUDFImpl for TestAsyncUDFImpl1 {
         async fn invoke_async_with_args(
             &self,
-            args: ScalarFunctionArgs,
+            _args: ScalarFunctionArgs,
         ) -> Result<ColumnarValue> {
-            let arg1 = &args.args[0];
-            let results = call_external_service(arg1).await?;
-            Ok(ColumnarValue::Array(Arc::new(StringArray::from(results))))
+            todo!()
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash, Clone)]
+    struct TestAsyncUDFImpl2 {
+        a: i32,
+    }
+
+    impl ScalarUDFImpl for TestAsyncUDFImpl2 {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            todo!()
+        }
+
+        fn signature(&self) -> &Signature {
+            todo!()
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            todo!()
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            todo!()
+        }
+    }
+
+    #[async_trait]
+    impl AsyncScalarUDFImpl for TestAsyncUDFImpl2 {
+        async fn invoke_async_with_args(
+            &self,
+            _args: ScalarFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            todo!()
         }
     }
 
@@ -243,62 +233,28 @@ mod tests {
     #[test]
     fn test_async_udf_partial_eq_and_hash() {
         // Inner is same cloned arc -> equal
-        let inner = Arc::new(TestAsyncUDFImpl::new(1));
+        let inner = Arc::new(TestAsyncUDFImpl1 { a: 1 });
         let a = AsyncScalarUDF::new(Arc::clone(&inner) as Arc<dyn AsyncScalarUDFImpl>);
         let b = AsyncScalarUDF::new(inner);
         assert_eq!(a, b);
         assert_eq!(hash(&a), hash(&b));
 
         // Inner is distinct arc -> still equal
-        let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(1)));
-        let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(1)));
+        let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
+        let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
         assert_eq!(a, b);
         assert_eq!(hash(&a), hash(&b));
 
         // Negative case: inner is different value -> not equal
-        let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(1)));
-        let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(2)));
+        let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
+        let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 2 }));
         assert_ne!(a, b);
         assert_ne!(hash(&a), hash(&b));
 
         // Negative case: different functions -> not equal
-        let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(1)));
-        let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(1)));
+        let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
+        let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl2 { a: 1 }));
         assert_ne!(a, b);
         assert_ne!(hash(&a), hash(&b));
-    }
-
-    #[tokio::test]
-    async fn test_async_udf_with_ideal_batch_size() {
-        // Create async UDF with ideal batch size of 2
-        let udf = TestAsyncUDFImpl::new(2);
-        assert_eq!(udf.ideal_batch_size(), Some(2));
-
-        // Create test data with 3 rows, because 3 % 2 != 0
-        let test_data = vec!["a", "b", "c"];
-        let input = ColumnarValue::Array(Arc::new(StringArray::from(test_data.clone())));
-
-        let args = ScalarFunctionArgs {
-            args: vec![input],
-            arg_fields: vec![Arc::new(Field::new("arg", DataType::Utf8, false))],
-            number_rows: test_data.len(),
-            return_field: Arc::new(Field::new("result", DataType::Utf8, false)),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-
-        // Invoke the async function - it should handle all rows
-        let result = udf.invoke_async_with_args(args).await.unwrap();
-
-        // Verify all rows are processed
-        match result {
-            ColumnarValue::Array(arr) => {
-                let string_arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
-                assert_eq!(string_arr.len(), 3);
-                for (i, expected) in test_data.iter().enumerate() {
-                    assert_eq!(string_arr.value(i), *expected);
-                }
-            }
-            _ => panic!("Expected array result"),
-        }
     }
 }

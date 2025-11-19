@@ -2273,7 +2273,6 @@ dependencies = [
  "recursive",
  "serde_json",
  "sqlparser",
- "tokio",
 ]
 
 [[package]]
