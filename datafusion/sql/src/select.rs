@@ -41,7 +41,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning,
+    LogicalPlanBuilderOptions, Partitioning, SortExpr,
 };
 
 use indexmap::IndexMap;
@@ -219,11 +219,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .transpose()?;
 
         // The outer expressions we will search through for aggregates.
-        // Aggregates may be sourced from the SELECT list or from the HAVING expression.
+        // Aggregates may be sourced from the SELECT list, HAVING, QUALIFY, or ORDER BY.
         let aggr_expr_haystack = select_exprs
             .iter()
             .chain(having_expr_opt.iter())
-            .chain(qualify_expr_opt.iter());
+            .chain(qualify_expr_opt.iter())
+            .chain(order_by_rex.iter().map(|s| &s.expr));
+
         // All of the aggregate expressions (deduplicated).
         let aggr_exprs = find_aggregate_exprs(aggr_expr_haystack);
 
@@ -233,19 +235,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             mut select_exprs_post_aggr,
             having_expr_post_aggr,
             qualify_expr_post_aggr,
+            order_by_rex,
         ) = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
                 &select_exprs,
                 having_expr_opt.as_ref(),
                 qualify_expr_opt.as_ref(),
+                &order_by_rex,
                 &group_by_exprs,
                 &aggr_exprs,
             )?
         } else {
             match having_expr_opt {
                 Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
-                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt, qualify_expr_opt)
+                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt, qualify_expr_opt, order_by_rex)
             }
         };
 
@@ -872,16 +876,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///   the aggregate
     /// * `qualify_expr_post_aggr`  - The "qualify" expression rewritten to reference a column from
     ///   the aggregate
-    #[allow(clippy::type_complexity)]
+    /// * `order_by_post_aggr`     - The ORDER BY expressions rewritten to reference columns from
+    ///   the aggregate
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn aggregate(
         &self,
         input: &LogicalPlan,
         select_exprs: &[Expr],
         having_expr_opt: Option<&Expr>,
         qualify_expr_opt: Option<&Expr>,
+        order_by_exprs: &[SortExpr],
         group_by_exprs: &[Expr],
         aggr_exprs: &[Expr],
-    ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>, Option<Expr>)> {
+    ) -> Result<(
+        LogicalPlan,
+        Vec<Expr>,
+        Option<Expr>,
+        Option<Expr>,
+        Vec<SortExpr>,
+    )> {
         // create the aggregate plan
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
@@ -988,11 +1001,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             None
         };
 
+        // Rewrite the ORDER BY expressions to use the columns produced by the
+        // aggregation.
+        let order_by_post_aggr = order_by_exprs
+            .iter()
+            .map(|sort_expr| {
+                let rewritten_expr =
+                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, input)?;
+                Ok(sort_expr.with_expr(rewritten_expr))
+            })
+            .collect::<Result<Vec<SortExpr>>>()?;
+
         Ok((
             plan,
             select_exprs_post_aggr,
             having_expr_post_aggr,
             qualify_expr_post_aggr,
+            order_by_post_aggr,
         ))
     }
 
