@@ -321,6 +321,14 @@ impl InListExpr {
         &self.list
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
     /// Is this negated e.g. NOT IN LIST
     pub fn negated(&self) -> bool {
         self.negated
