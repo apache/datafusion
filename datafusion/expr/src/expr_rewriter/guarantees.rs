@@ -120,7 +120,12 @@ impl GuaranteeRewriter<'_> {
             return Ok(None);
         };
 
-        let values = Interval::try_new(low.clone(), high.clone())?;
+        let Ok(values) = Interval::try_new(low.clone(), high.clone()) else {
+            // If we can't create an interval from the literals, be conservative and simply leave
+            // the expression unmodified.
+            return Ok(None);
+        };
+
         let expr_interval = NullableInterval::NotNull { values };
 
         let contains = expr_interval.contains(*interval)?;
@@ -239,6 +244,7 @@ mod tests {
             (col("x").is_null(), Some(lit(false))),
             (col("x").is_not_null(), Some(lit(true))),
             (col("x").between(lit(1), lit(2)), None),
+            (col("x").between(lit(1), lit(-2)), None),
         ];
 
         for case in is_null_cases {
