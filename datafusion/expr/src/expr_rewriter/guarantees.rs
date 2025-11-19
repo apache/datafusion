@@ -17,28 +17,46 @@
 
 //! Rewrite expressions based on external expression value range guarantees.
 
-use std::borrow::Cow;
-
 use crate::{expr::InList, lit, Between, BinaryExpr, Expr};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion_common::{DataFusionError, HashMap, Result};
+use datafusion_common::{DataFusionError, HashMap, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
+use std::borrow::Cow;
 
-struct GuaranteeRewriter<'a> {
-    guarantees: &'a HashMap<&'a Expr, &'a NullableInterval>,
+/// Rewrite expressions to incorporate guarantees.
+///
+/// See [`rewrite_with_guarantees`] for more information
+pub struct GuaranteeRewriter<'a> {
+    guarantees: HashMap<&'a Expr, &'a NullableInterval>,
+}
+
+impl<'a> GuaranteeRewriter<'a> {
+    pub fn new(
+        guarantees: impl IntoIterator<Item = &'a (Expr, NullableInterval)>,
+    ) -> Self {
+        Self {
+            guarantees: guarantees.into_iter().map(|(k, v)| (k, v)).collect(),
+        }
+    }
 }
 
 /// Rewrite expressions to incorporate guarantees.
 ///
 /// Guarantees are a mapping from an expression (which currently is always a
-/// column reference) to a [NullableInterval]. The interval represents the known
-/// possible values of the column.
+/// column reference) to a [NullableInterval] that represents the known possible
+/// values of the expression.
+///
+/// Rewriting expressions using this type of guarantee can make the work of other expression
+/// simplifications, like const evaluation, easier.
 ///
 /// For example, if we know that a column is not null and has values in the
 /// range [1, 10), we can rewrite `x IS NULL` to `false` or `x < 10` to `true`.
 ///
-/// If the set of guarantees will be used to rewrite multiple expressions consider using
+/// If the set of guarantees will be used to rewrite more than one expression, consider using
 /// [rewrite_with_guarantees_map] instead.
+///
+/// A full example of using this rewrite rule can be found in
+/// [`ExprSimplifier::with_guarantees()`](https://docs.rs/datafusion/latest/datafusion/optimizer/simplify_expressions/struct.ExprSimplifier.html#method.with_guarantees).
 pub fn rewrite_with_guarantees<'a>(
     expr: Expr,
     guarantees: impl IntoIterator<Item = &'a (Expr, NullableInterval)>,
@@ -60,8 +78,11 @@ pub fn rewrite_with_guarantees_map<'a>(
     expr: Expr,
     guarantees: &'a HashMap<&'a Expr, &'a NullableInterval>,
 ) -> Result<Transformed<Expr>> {
-    let mut rewriter = GuaranteeRewriter { guarantees };
-    expr.rewrite(&mut rewriter)
+    if guarantees.is_empty() {
+        return Ok(Transformed::no(expr));
+    }
+
+    expr.transform_up(|e| rewrite_expr(e, guarantees))
 }
 
 impl TreeNodeRewriter for GuaranteeRewriter<'_> {
@@ -72,148 +93,209 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
             return Ok(Transformed::no(expr));
         }
 
-        let new_expr = match &expr {
-            Expr::IsNull(inner) => match self.guarantees.get(inner.as_ref()) {
-                Some(NullableInterval::Null { .. }) => Some(lit(true)),
-                Some(NullableInterval::NotNull { .. }) => Some(lit(false)),
-                _ => None,
-            },
-            Expr::IsNotNull(inner) => match self.guarantees.get(inner.as_ref()) {
-                Some(NullableInterval::Null { .. }) => Some(lit(false)),
-                Some(NullableInterval::NotNull { .. }) => Some(lit(true)),
-                _ => None,
-            },
-            Expr::Between(b) => self.rewrite_between(b)?,
-            Expr::BinaryExpr(b) => self.rewrite_binary_expr(&b)?,
-            Expr::InList(i) => self.rewrite_inlist(i)?,
-            _ => None,
-        };
-
-        if let Some(e) = new_expr {
-            return Ok(Transformed::yes(e));
-        }
-
-        match self.guarantees.get(&expr) {
-            Some(interval) => {
-                // If an expression collapses to a single value, replace it with a literal
-                if let Some(value) = interval.single_value() {
-                    Ok(Transformed::yes(lit(value)))
-                } else {
-                    Ok(Transformed::no(expr))
-                }
-            }
-            _ => Ok(Transformed::no(expr)),
-        }
+        rewrite_expr(expr, &self.guarantees)
     }
 }
 
-impl GuaranteeRewriter<'_> {
-    fn rewrite_between(
-        &mut self,
-        between: &Between,
-    ) -> Result<Option<Expr>, DataFusionError> {
-        let (Some(interval), Expr::Literal(low, _), Expr::Literal(high, _)) = (
-            self.guarantees.get(between.expr.as_ref()),
-            between.low.as_ref(),
-            between.high.as_ref(),
-        ) else {
-            return Ok(None);
-        };
-
-        let Ok(values) = Interval::try_new(low.clone(), high.clone()) else {
-            // If we can't create an interval from the literals, be conservative and simply leave
-            // the expression unmodified.
-            return Ok(None);
-        };
-
-        let expr_interval = NullableInterval::NotNull { values };
-
-        let contains = expr_interval.contains(*interval)?;
-
-        if contains.is_certainly_true() {
-            Ok(Some(lit(!between.negated)))
-        } else if contains.is_certainly_false() {
-            Ok(Some(lit(between.negated)))
-        } else {
-            Ok(None)
+fn rewrite_expr(
+    expr: Expr,
+    guarantees: &HashMap<&Expr, &NullableInterval>,
+) -> Result<Transformed<Expr>> {
+    // If an expression collapses to a single value, replace it with a literal
+    if let Some(interval) = guarantees.get(&expr) {
+        if let Some(value) = interval.single_value() {
+            return Ok(Transformed::yes(lit(value)));
         }
     }
 
-    fn rewrite_binary_expr(
-        &mut self,
-        b: &&BinaryExpr,
-    ) -> Result<Option<Expr>, DataFusionError> {
-        // The left or right side of expression might either have a guarantee
-        // or be a literal. Either way, we can resolve them to a NullableInterval.
-        let left_interval = self
-            .guarantees
-            .get(b.left.as_ref())
-            .map(|interval| Cow::Borrowed(*interval))
-            .or_else(|| {
-                if let Expr::Literal(value, _) = b.left.as_ref() {
-                    Some(Cow::Owned(value.clone().into()))
-                } else {
-                    None
-                }
-            });
-        let right_interval = self
-            .guarantees
-            .get(b.right.as_ref())
-            .map(|interval| Cow::Borrowed(*interval))
-            .or_else(|| {
-                if let Expr::Literal(value, _) = b.right.as_ref() {
-                    Some(Cow::Owned(value.clone().into()))
-                } else {
-                    None
-                }
-            });
+    let result = match expr {
+        Expr::IsNull(inner) => match guarantees.get(inner.as_ref()) {
+            Some(NullableInterval::Null { .. }) => Transformed::yes(lit(true)),
+            Some(NullableInterval::NotNull { .. }) => Transformed::yes(lit(false)),
+            _ => Transformed::no(Expr::IsNull(inner)),
+        },
+        Expr::IsNotNull(inner) => match guarantees.get(inner.as_ref()) {
+            Some(NullableInterval::Null { .. }) => Transformed::yes(lit(false)),
+            Some(NullableInterval::NotNull { .. }) => Transformed::yes(lit(true)),
+            _ => Transformed::no(Expr::IsNotNull(inner)),
+        },
+        Expr::Between(b) => rewrite_between(b, guarantees)?,
+        Expr::BinaryExpr(b) => rewrite_binary_expr(b, guarantees)?,
+        Expr::InList(i) => rewrite_inlist(i, guarantees)?,
+        expr => Transformed::no(expr),
+    };
+    Ok(result)
+}
 
-        Ok(match (left_interval, right_interval) {
-            (Some(left_interval), Some(right_interval)) => {
-                let result =
-                    left_interval.apply_operator(&b.op, right_interval.as_ref())?;
-                if result.is_certainly_true() {
-                    Some(lit(true))
-                } else if result.is_certainly_false() {
-                    Some(lit(false))
-                } else {
-                    None
-                }
+fn rewrite_between(
+    between: Between,
+    guarantees: &HashMap<&Expr, &NullableInterval>,
+) -> Result<Transformed<Expr>> {
+    let (Some(expr_interval), Expr::Literal(low, _), Expr::Literal(high, _)) = (
+        guarantees.get(between.expr.as_ref()),
+        between.low.as_ref(),
+        between.high.as_ref(),
+    ) else {
+        return Ok(Transformed::no(Expr::Between(between)));
+    };
+
+    // Ensure that, if low or high are null, their type matches the other bound
+    let low = ensure_typed_null(low, high)?;
+    let high = ensure_typed_null(high, &low)?;
+
+    let Ok(between_interval) = Interval::try_new(low, high) else {
+        // If we can't create an interval from the literals, be conservative and simply leave
+        // the expression unmodified.
+        return Ok(Transformed::no(Expr::Between(between)));
+    };
+
+    if between_interval.lower().is_null() && between_interval.upper().is_null() {
+        return Ok(Transformed::yes(lit(between_interval.lower().clone())));
+    }
+
+    let expr_interval = match expr_interval {
+        NullableInterval::Null { datatype } => {
+            // Value is guaranteed to be null, so we can simplify to null.
+            return Ok(Transformed::yes(lit(
+                ScalarValue::try_new_null(datatype).unwrap_or(ScalarValue::Null)
+            )));
+        }
+        NullableInterval::MaybeNull { .. } => {
+            // Value may or may not be null, so we can't simplify the expression.
+            return Ok(Transformed::no(Expr::Between(between)));
+        }
+        NullableInterval::NotNull { values } => values,
+    };
+
+    let result = if between_interval.lower().is_null() {
+        // <expr> (NOT) BETWEEN NULL AND <high>
+        let upper_bound = Interval::from(between_interval.upper().clone());
+        if expr_interval.gt(&upper_bound)?.eq(&Interval::TRUE) {
+            // if <expr> > high, then certainly false
+            Transformed::yes(lit(between.negated))
+        } else if expr_interval.lt_eq(&upper_bound)?.eq(&Interval::TRUE) {
+            // if <expr> <= high, then certainly null
+            Transformed::yes(lit(ScalarValue::try_new_null(&expr_interval.data_type())
+                .unwrap_or(ScalarValue::Null)))
+        } else {
+            // otherwise unknown
+            Transformed::no(Expr::Between(between))
+        }
+    } else if between_interval.upper().is_null() {
+        // <expr> (NOT) BETWEEN <low> AND NULL
+        let lower_bound = Interval::from(between_interval.lower().clone());
+        if expr_interval.lt(&lower_bound)?.eq(&Interval::TRUE) {
+            // if <expr> < low, then certainly false
+            Transformed::yes(lit(between.negated))
+        } else if expr_interval.gt_eq(&lower_bound)?.eq(&Interval::TRUE) {
+            // if <expr> >= low, then certainly null
+            Transformed::yes(lit(ScalarValue::try_new_null(&expr_interval.data_type())
+                .unwrap_or(ScalarValue::Null)))
+        } else {
+            // otherwise unknown
+            Transformed::no(Expr::Between(between))
+        }
+    } else {
+        let contains = between_interval.contains(expr_interval)?;
+        if contains.eq(&Interval::TRUE) {
+            Transformed::yes(lit(!between.negated))
+        } else if contains.eq(&Interval::FALSE) {
+            Transformed::yes(lit(between.negated))
+        } else {
+            Transformed::no(Expr::Between(between))
+        }
+    };
+    Ok(result)
+}
+
+fn ensure_typed_null(
+    value: &ScalarValue,
+    other: &ScalarValue,
+) -> Result<ScalarValue, DataFusionError> {
+    Ok(
+        if value.data_type().is_null() && !other.data_type().is_null() {
+            ScalarValue::try_new_null(&other.data_type())?
+        } else {
+            value.clone()
+        },
+    )
+}
+
+fn rewrite_binary_expr(
+    binary: BinaryExpr,
+    guarantees: &HashMap<&Expr, &NullableInterval>,
+) -> Result<Transformed<Expr>, DataFusionError> {
+    // The left or right side of expression might either have a guarantee
+    // or be a literal. Either way, we can resolve them to a NullableInterval.
+    let left_interval = guarantees
+        .get(binary.left.as_ref())
+        .map(|interval| Cow::Borrowed(*interval))
+        .or_else(|| {
+            if let Expr::Literal(value, _) = binary.left.as_ref() {
+                Some(Cow::Owned(value.clone().into()))
+            } else {
+                None
             }
-            _ => None,
-        })
+        });
+    let right_interval = guarantees
+        .get(binary.right.as_ref())
+        .map(|interval| Cow::Borrowed(*interval))
+        .or_else(|| {
+            if let Expr::Literal(value, _) = binary.right.as_ref() {
+                Some(Cow::Owned(value.clone().into()))
+            } else {
+                None
+            }
+        });
+
+    if let (Some(left_interval), Some(right_interval)) = (left_interval, right_interval) {
+        let result = left_interval.apply_operator(&binary.op, right_interval.as_ref())?;
+        if result.is_certainly_true() {
+            return Ok(Transformed::yes(lit(true)));
+        } else if result.is_certainly_false() {
+            return Ok(Transformed::yes(lit(false)));
+        }
     }
+    Ok(Transformed::no(Expr::BinaryExpr(binary)))
+}
 
-    fn rewrite_inlist(&mut self, i: &InList) -> Result<Option<Expr>, DataFusionError> {
-        let Some(interval) = self.guarantees.get(i.expr.as_ref()) else {
-            return Ok(None);
-        };
+fn rewrite_inlist(
+    inlist: InList,
+    guarantees: &HashMap<&Expr, &NullableInterval>,
+) -> Result<Transformed<Expr>, DataFusionError> {
+    let Some(interval) = guarantees.get(inlist.expr.as_ref()) else {
+        return Ok(Transformed::no(Expr::InList(inlist)));
+    };
 
-        // Can remove items from the list that don't match the guarantee
-        let new_list: Vec<Expr> = i
-            .list
-            .iter()
-            .filter_map(|expr| {
-                if let Expr::Literal(item, _) = expr {
-                    match interval.contains(NullableInterval::from(item.clone())) {
-                        // If we know for certain the value isn't in the column's interval,
-                        // we can skip checking it.
-                        Ok(interval) if interval.is_certainly_false() => None,
-                        Ok(_) => Some(Ok(expr.clone())),
-                        Err(e) => Some(Err(e)),
-                    }
-                } else {
-                    Some(Ok(expr.clone()))
+    let InList {
+        expr,
+        list,
+        negated,
+    } = inlist;
+
+    // Can remove items from the list that don't match the guarantee
+    let list: Vec<Expr> = list
+        .into_iter()
+        .filter_map(|expr| {
+            if let Expr::Literal(item, _) = &expr {
+                match interval.contains(NullableInterval::from(item.clone())) {
+                    // If we know for certain the value isn't in the column's interval,
+                    // we can skip checking it.
+                    Ok(interval) if interval.is_certainly_false() => None,
+                    Ok(_) => Some(Ok(expr)),
+                    Err(e) => Some(Err(e)),
                 }
-            })
-            .collect::<Result<_, DataFusionError>>()?;
+            } else {
+                Some(Ok(expr))
+            }
+        })
+        .collect::<Result<_, DataFusionError>>()?;
 
-        Ok(Some(Expr::InList(InList {
-            expr: i.expr.clone(),
-            list: new_list,
-            negated: i.negated,
-        })))
-    }
+    Ok(Transformed::yes(Expr::InList(InList {
+        expr,
+        list,
+        negated,
+    })))
 }
 
 #[cfg(test)]
@@ -221,7 +303,6 @@ mod tests {
     use super::*;
 
     use crate::{col, Operator};
-    use arrow::datatypes::DataType;
     use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
 
@@ -234,17 +315,96 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::make_unbounded(&DataType::Int32).unwrap(),
+                    values: Interval::make(Some(1), Some(3)).unwrap(),
                 },
             ),
         ];
 
-        // x IS NULL => guaranteed false
         let is_null_cases = vec![
+            // x IS NULL => guaranteed false
             (col("x").is_null(), Some(lit(false))),
+            // x IS NOT NULL => guaranteed true
             (col("x").is_not_null(), Some(lit(true))),
-            (col("x").between(lit(1), lit(2)), None),
+            // [1, 3] BETWEEN 0 AND 10 => guaranteed true
+            (col("x").between(lit(0), lit(10)), Some(lit(true))),
+            // x BETWEEN 1 AND -2 => unknown (actually guaranteed false)
             (col("x").between(lit(1), lit(-2)), None),
+            // [1, 3] BETWEEN NULL AND 0 => guaranteed false
+            (
+                col("x").between(lit(ScalarValue::Null), lit(0)),
+                Some(lit(false)),
+            ),
+            // [1, 3] BETWEEN NULL AND 1 => unknown
+            (col("x").between(lit(ScalarValue::Null), lit(1)), None),
+            // [1, 3] BETWEEN NULL AND 2 => unknown
+            (col("x").between(lit(ScalarValue::Null), lit(2)), None),
+            // [1, 3] BETWEEN NULL AND 3 => guaranteed NULL
+            (
+                col("x").between(lit(ScalarValue::Null), lit(3)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
+            // [1, 3] BETWEEN NULL AND 4 => guaranteed NULL
+            (
+                col("x").between(lit(ScalarValue::Null), lit(4)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
+            // [1, 3] BETWEEN 1 AND NULL => guaranteed NULL
+            (
+                col("x").between(lit(0), lit(ScalarValue::Null)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
+            // [1, 3] BETWEEN 1 AND NULL => guaranteed NULL
+            (
+                col("x").between(lit(1), lit(ScalarValue::Null)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
+            // [1, 3] BETWEEN 2 AND NULL => unknown
+            (col("x").between(lit(2), lit(ScalarValue::Null)), None),
+            // [1, 3] BETWEEN 3 AND NULL => unknown
+            (col("x").between(lit(3), lit(ScalarValue::Null)), None),
+            // [1, 3] BETWEEN 4 AND NULL => guaranteed false
+            (
+                col("x").between(lit(4), lit(ScalarValue::Null)),
+                Some(lit(false)),
+            ),
+            // [1, 3] NOT BETWEEN NULL AND 0 => guaranteed false
+            (
+                col("x").not_between(lit(ScalarValue::Null), lit(0)),
+                Some(lit(true)),
+            ),
+            // [1, 3] NOT BETWEEN NULL AND 1 => unknown
+            (col("x").not_between(lit(ScalarValue::Null), lit(1)), None),
+            // [1, 3] NOT BETWEEN NULL AND 2 => unknown
+            (col("x").not_between(lit(ScalarValue::Null), lit(2)), None),
+            // [1, 3] NOT BETWEEN NULL AND 3 => guaranteed NULL
+            (
+                col("x").not_between(lit(ScalarValue::Null), lit(3)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
+            // [1, 3] NOT BETWEEN NULL AND 4 => guaranteed NULL
+            (
+                col("x").not_between(lit(ScalarValue::Null), lit(4)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
+            // [1, 3] NOT BETWEEN 1 AND NULL => guaranteed NULL
+            (
+                col("x").not_between(lit(0), lit(ScalarValue::Null)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
+            // [1, 3] NOT BETWEEN 1 AND NULL => guaranteed NULL
+            (
+                col("x").not_between(lit(1), lit(ScalarValue::Null)),
+                Some(lit(ScalarValue::Int32(None))),
+            ),
+            // [1, 3] NOT BETWEEN 2 AND NULL => unknown
+            (col("x").not_between(lit(2), lit(ScalarValue::Null)), None),
+            // [1, 3] NOT BETWEEN 3 AND NULL => unknown
+            (col("x").not_between(lit(3), lit(ScalarValue::Null)), None),
+            // [1, 3] NOT BETWEEN 4 AND NULL => guaranteed false
+            (
+                col("x").not_between(lit(4), lit(ScalarValue::Null)),
+                Some(lit(true)),
+            ),
         ];
 
         for case in is_null_cases {
@@ -252,11 +412,11 @@ mod tests {
                 .data()
                 .unwrap();
             let expected = match case.1 {
-                None => case.0,
+                None => case.0.clone(),
                 Some(expected) => expected,
             };
 
-            assert_eq!(output, expected);
+            assert_eq!(output, expected, "Failed for {}", case.0);
         }
     }
 
