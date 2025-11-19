@@ -168,6 +168,34 @@ pub(super) fn is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_b
     }
 }
 
+// pub(super) fn is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_inlist<
+//     S: SimplifyInfo,
+// >(
+//     info: &S,
+//     expr: &Expr,
+//     list: &[Expr],
+// ) -> bool {
+//     match expr {
+//         Expr::ScalarFunction(ScalarFunction { func, args })
+//             if func.name() == "date_part" =>
+//         {
+//             let left_expr = Box::new(args[1].clone());
+//             let Ok(expr_type) = info.get_data_type(&left_expr) else {
+//                 return false;
+//             };
+//             for right in list {
+//                 match right {
+//                     Expr::Literal(lit_val, _)
+//                         if year_literal_to_type(lit_val, &expr_type).is_some() => {}
+//                     _ => return false,
+//                 }
+//             }
+//             true
+//         }
+//         _ => false,
+//     }
+// }
+
 /// Cast the year to the right datatype
 fn year_literal_to_type(
     lit_value: &ScalarValue,
@@ -321,6 +349,20 @@ mod tests {
         )));
         assert_eq!(optimize_test(expr_lt, &schema), expected)
     }
+
+    // #[test]
+    // fn test_preimage_date_part_date32_in_list() {
+    //     let schema = expr_test_schema();
+    //     let expr_lt = expr_fn::date_part(lit("year"), col("date32"))
+    //         .in_list(vec![lit(2024i32), lit(1984i32)], false);
+    //     let expected = (col("date32")
+    //         .gt_eq(lit(ScalarValue::Date32(Some(19723))))
+    //         .or(col("date32").lt(lit(ScalarValue::Date32(Some(20089))))))
+    //     .or(col("date32")
+    //         .gt_eq(lit(ScalarValue::Date32(Some(5113))))
+    //         .or(col("date32").lt(lit(ScalarValue::Date32(Some(5480))))));
+    //     assert_eq!(optimize_test(expr_lt, &schema), expected)
+    // }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let props = ExecutionProps::new();

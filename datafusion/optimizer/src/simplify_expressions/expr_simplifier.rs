@@ -49,7 +49,7 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::{guarantees::GuaranteeRewriter};
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
@@ -1991,6 +1991,54 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     op.swap().unwrap(),
                 )?
             }
+
+            // // For case:
+            // // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
+            // Expr::InList(InList {
+            //     expr: mut left,
+            //     list,
+            //     negated,
+            // }) if is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_inlist(
+            //     info, &left, &list,
+            // ) =>
+            // {
+            //     let Expr::ScalarFunction(ScalarFunction {
+            //         func, args
+            //     }) = left.as_mut()
+            //     else {
+            //         return internal_err!("Expect scalar function expression, but got {:?}", left)?;
+            //     };
+            //     let left_expr = Box::new(args[1].clone());
+            //     let expr_type = info.get_data_type(&left_expr)?;
+            //     let right_exprs = list
+            //         .into_iter()
+            //         .map(|right| {
+            //             match right {
+            //                 Expr::Literal(right_lit_value, _) => {
+            //                     // if the right_lit_value can be casted to the type of internal_left_expr
+            //                     // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
+            //                     let Some(value) = try_cast_literal_to_type(&right_lit_value, &expr_type) else {
+            //                         internal_err!(
+            //                             "Can't cast the list expr {:?} to type {}",
+            //                             right_lit_value, &expr_type
+            //                         )?
+            //                     };
+            //                     Ok(lit(value))
+            //                 }
+            //                 other_expr => internal_err!(
+            //                     "Only support literal expr to optimize, but the expr is {:?}",
+            //                     &other_expr
+            //                 ),
+            //             }
+            //         })
+            //         .collect::<Result<Vec<_>>>()?;
+
+            //     Transformed::yes(Expr::InList(InList {
+            //         expr: std::mem::take(&mut: left_expr),
+            //         list: right_exprs,
+            //         negated,
+            //     }))
+            // }
 
             // no additional rewrites possible
             expr => Transformed::no(expr),
