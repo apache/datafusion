@@ -144,9 +144,7 @@ impl ScalarUDFImpl for ToCharFunc {
 
         match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => {
-                to_char_scalar(date_time, None)
-            }
+            | ColumnarValue::Scalar(ScalarValue::Null) => to_char_scalar(date_time, None),
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
