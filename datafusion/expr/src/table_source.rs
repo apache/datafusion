@@ -130,3 +130,38 @@ pub trait TableSource: Sync + Send {
         None
     }
 }
+
+/// Planning time information about a batched table function.
+///
+/// This trait is used during logical query planning and optimizations for
+/// batched table functions (UDTFs), providing schema information and filter
+/// push-down capabilities.
+///
+/// Similar to [`TableSource`], this trait provides a subset of functionality
+/// needed during logical planning, while the full [`BatchedTableFunctionImpl`]
+/// trait provides the execution capabilities.
+///
+/// [`BatchedTableFunctionImpl`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.BatchedTableFunctionImpl.html
+pub trait BatchedTableFunctionSource: Sync + Send {
+    fn as_any(&self) -> &dyn Any;
+
+    /// Get the name of this batched table function
+    fn name(&self) -> &str;
+
+    /// Get a reference to the schema for this table function's output
+    fn schema(&self) -> SchemaRef;
+
+    /// Tests whether the batched table function can make use of any or all filter
+    /// expressions to optimize data retrieval. Only non-volatile expressions are passed
+    /// to this function.
+    ///
+    /// This is similar to [`TableSource::supports_filters_pushdown`].
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok((0..filters.len())
+            .map(|_| TableProviderFilterPushDown::Unsupported)
+            .collect())
+    }
+}

@@ -21,10 +21,14 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
+    not_impl_err, plan_datafusion_err, plan_err, DFSchema, Diagnostic, Result, Span,
+    Spans, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
-use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{
+    expr::Unnest, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+    StandaloneBatchedTableFunction,
+};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
@@ -45,34 +49,111 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if let Some(func_args) = args {
                     let tbl_func_name =
                         name.0.first().unwrap().as_ident().unwrap().to_string();
-                    let args = func_args
-                        .args
-                        .into_iter()
-                        .flat_map(|arg| {
-                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg
-                            {
-                                self.sql_expr_to_logical_expr(
-                                    expr,
-                                    &DFSchema::empty(),
-                                    planner_context,
-                                )
-                            } else {
-                                plan_err!("Unsupported function argument type: {}", arg)
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    let provider = self
+
+                    if self
                         .context_provider
-                        .get_table_function_source(&tbl_func_name, args)?;
-                    let plan = LogicalPlanBuilder::scan(
-                        TableReference::Bare {
-                            table: format!("{tbl_func_name}()").into(),
-                        },
-                        provider,
-                        None,
-                    )?
-                    .build()?;
-                    (plan, alias)
+                        .is_batched_table_function(&tbl_func_name)
+                    {
+                        // Standalone batched table function
+                        let schema = planner_context
+                            .outer_query_schema()
+                            .cloned()
+                            .unwrap_or_else(DFSchema::empty);
+
+                        let args = func_args
+                            .args
+                            .into_iter()
+                            .map(|arg| match arg {
+                                FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
+                                | FunctionArg::Named {
+                                    arg: FunctionArgExpr::Expr(expr),
+                                    ..
+                                } => self.sql_expr_to_logical_expr(
+                                    expr,
+                                    &schema,
+                                    planner_context,
+                                ),
+                                _ => plan_err!("Unsupported function argument: {arg:?}"),
+                            })
+                            .collect::<Result<Vec<Expr>>>()?;
+
+                        let arg_types: Vec<arrow::datatypes::DataType> = args
+                            .iter()
+                            .map(|e| e.get_type(&schema))
+                            .collect::<Result<Vec<_>>>()?;
+
+                        let source = self
+                            .context_provider
+                            .get_batched_table_function_source(&tbl_func_name, &arg_types)?
+                            .ok_or_else(|| {
+                                plan_datafusion_err!(
+                                    "Failed to get source for batched table function '{}'",
+                                    tbl_func_name
+                                )
+                            })?;
+
+                        // Get schema from source
+                        let func_schema = source.schema();
+
+                        // Use alias if provided, otherwise "function_name()"
+                        let qualifier = alias
+                            .as_ref()
+                            .map(|a| self.ident_normalizer.normalize(a.name.clone()))
+                            .unwrap_or_else(|| format!("{tbl_func_name}()"));
+
+                        let qualified_func_schema = DFSchema::try_from_qualified_schema(
+                            &qualifier,
+                            &func_schema,
+                        )?;
+
+                        let plan = LogicalPlan::StandaloneBatchedTableFunction(
+                            StandaloneBatchedTableFunction {
+                                function_name: tbl_func_name.clone(),
+                                source,
+                                args,
+                                schema: Arc::new(qualified_func_schema),
+                                projection: None,
+                                filters: vec![],
+                                fetch: None,
+                            },
+                        );
+
+                        // Alias already in schema
+                        (plan, None)
+                    } else {
+                        let args = func_args
+                            .args
+                            .into_iter()
+                            .flat_map(|arg| {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) =
+                                    arg
+                                {
+                                    self.sql_expr_to_logical_expr(
+                                        expr,
+                                        &DFSchema::empty(),
+                                        planner_context,
+                                    )
+                                } else {
+                                    plan_err!(
+                                        "Unsupported function argument type: {}",
+                                        arg
+                                    )
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let provider = self
+                            .context_provider
+                            .get_table_function_source(&tbl_func_name, args)?;
+                        let plan = LogicalPlanBuilder::scan(
+                            TableReference::Bare {
+                                table: format!("{tbl_func_name}()").into(),
+                            },
+                            provider,
+                            None,
+                        )?
+                        .build()?;
+                        (plan, alias)
+                    }
                 } else {
                     // Normalize name and alias
                     let table_ref = self.object_name_to_table_reference(name)?;
@@ -158,30 +239,100 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name, args, alias, ..
             } => {
                 let tbl_func_ref = self.object_name_to_table_reference(name)?;
-                let schema = planner_context
-                    .outer_query_schema()
-                    .cloned()
-                    .unwrap_or_else(DFSchema::empty);
-                let func_args = args
-                    .into_iter()
-                    .map(|arg| match arg {
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
-                        | FunctionArg::Named {
-                            arg: FunctionArgExpr::Expr(expr),
-                            ..
-                        } => {
-                            self.sql_expr_to_logical_expr(expr, &schema, planner_context)
-                        }
-                        _ => plan_err!("Unsupported function argument: {arg:?}"),
-                    })
-                    .collect::<Result<Vec<Expr>>>()?;
-                let provider = self
-                    .context_provider
-                    .get_table_function_source(tbl_func_ref.table(), func_args)?;
-                let plan =
-                    LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
-                        .build()?;
-                (plan, alias)
+                let func_name = tbl_func_ref.table();
+
+                if self.context_provider.is_batched_table_function(func_name) {
+                    // Standalone batched table function
+                    let schema = planner_context
+                        .outer_query_schema()
+                        .cloned()
+                        .unwrap_or_else(DFSchema::empty);
+
+                    let func_args = args
+                        .into_iter()
+                        .map(|arg| match arg {
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
+                            | FunctionArg::Named {
+                                arg: FunctionArgExpr::Expr(expr),
+                                ..
+                            } => self.sql_expr_to_logical_expr(
+                                expr,
+                                &schema,
+                                planner_context,
+                            ),
+                            _ => plan_err!("Unsupported function argument: {arg:?}"),
+                        })
+                        .collect::<Result<Vec<Expr>>>()?;
+
+                    let arg_types: Vec<arrow::datatypes::DataType> = func_args
+                        .iter()
+                        .map(|e| e.get_type(&schema))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    let source = self
+                        .context_provider
+                        .get_batched_table_function_source(func_name, &arg_types)?
+                        .ok_or_else(|| {
+                            plan_datafusion_err!(
+                                "Failed to get source for batched table function '{}'",
+                                func_name
+                            )
+                        })?;
+
+                    // Get schema from source
+                    let func_schema = source.schema();
+
+                    // Use alias if provided, otherwise "function_name()"
+                    let qualifier = alias
+                        .as_ref()
+                        .map(|a| self.ident_normalizer.normalize(a.name.clone()))
+                        .unwrap_or_else(|| format!("{func_name}()"));
+
+                    let qualified_func_schema =
+                        DFSchema::try_from_qualified_schema(&qualifier, &func_schema)?;
+
+                    let plan = LogicalPlan::StandaloneBatchedTableFunction(
+                        StandaloneBatchedTableFunction {
+                            function_name: func_name.to_string(),
+                            source,
+                            args: func_args,
+                            schema: Arc::new(qualified_func_schema),
+                            projection: None,
+                            filters: vec![],
+                            fetch: None,
+                        },
+                    );
+
+                    // Alias already in schema
+                    (plan, None)
+                } else {
+                    let schema = planner_context
+                        .outer_query_schema()
+                        .cloned()
+                        .unwrap_or_else(DFSchema::empty);
+                    let func_args = args
+                        .into_iter()
+                        .map(|arg| match arg {
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
+                            | FunctionArg::Named {
+                                arg: FunctionArgExpr::Expr(expr),
+                                ..
+                            } => self.sql_expr_to_logical_expr(
+                                expr,
+                                &schema,
+                                planner_context,
+                            ),
+                            _ => plan_err!("Unsupported function argument: {arg:?}"),
+                        })
+                        .collect::<Result<Vec<Expr>>>()?;
+                    let provider = self
+                        .context_provider
+                        .get_table_function_source(tbl_func_ref.table(), func_args)?;
+                    let plan =
+                        LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
+                            .build()?;
+                    (plan, alias)
+                }
             }
             // @todo Support TableFactory::TableFunction?
             _ => {

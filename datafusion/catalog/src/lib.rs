@@ -33,6 +33,7 @@
 //! * Simple memory based catalog: [`MemoryCatalogProviderList`], [`MemoryCatalogProvider`], [`MemorySchemaProvider`]
 //! * Listing schema: [`listing_schema`]
 
+pub mod batched_function;
 pub mod cte_worktable;
 pub mod default_table_source;
 pub mod information_schema;
@@ -48,6 +49,7 @@ mod dynamic_file;
 mod schema;
 mod table;
 
+pub use batched_function::BatchedTableFunctionMode;
 pub use catalog::*;
 pub use datafusion_session::Session;
 pub use dynamic_file::catalog::*;

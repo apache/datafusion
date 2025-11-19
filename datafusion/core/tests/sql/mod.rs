@@ -66,6 +66,8 @@ pub mod aggregates;
 pub mod create_drop;
 pub mod explain_analyze;
 pub mod joins;
+pub mod lateral_simple;
+pub mod lateral_table_functions;
 mod path_partition;
 mod runtime_config;
 pub mod select;

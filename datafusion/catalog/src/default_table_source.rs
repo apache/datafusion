@@ -20,11 +20,13 @@
 use std::sync::Arc;
 use std::{any::Any, borrow::Cow};
 
-use crate::TableProvider;
+use crate::{BatchedTableFunctionImpl, TableProvider};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Constraints};
-use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
+use datafusion_expr::{
+    BatchedTableFunctionSource, Expr, TableProviderFilterPushDown, TableSource, TableType,
+};
 
 /// Implements [`TableSource`] for a [`TableProvider`]
 ///
@@ -143,4 +145,58 @@ fn preserves_table_type() {
 
     let table_source = DefaultTableSource::new(Arc::new(TestTempTable));
     assert_eq!(table_source.table_type(), TableType::Temporary);
+}
+
+/// Implements [`BatchedTableFunctionSource`] for a [`BatchedTableFunctionImpl`]
+///
+/// This structure adapts a [`BatchedTableFunctionImpl`] (a physical plan trait) to the
+/// [`BatchedTableFunctionSource`] (logical plan trait).
+///
+/// It is used so logical plans in the `datafusion_expr` crate do not have a
+/// direct dependency on physical plans, such as [`BatchedTableFunctionImpl`]s.
+///
+/// This source is created per call site, storing the specific argument types
+/// for that invocation. This allows the `schema()` method to correctly return
+/// the output schema based on the actual argument types.
+pub struct DefaultBatchedTableFunctionSource {
+    /// batched table function implementation
+    pub function_impl: Arc<dyn BatchedTableFunctionImpl>,
+    /// The argument types for this specific call site
+    pub arg_types: Vec<arrow::datatypes::DataType>,
+}
+
+impl DefaultBatchedTableFunctionSource {
+    pub fn new(
+        function_impl: Arc<dyn BatchedTableFunctionImpl>,
+        arg_types: Vec<arrow::datatypes::DataType>,
+    ) -> Self {
+        Self {
+            function_impl,
+            arg_types,
+        }
+    }
+}
+
+impl BatchedTableFunctionSource for DefaultBatchedTableFunctionSource {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        self.function_impl.name()
+    }
+
+    fn schema(&self) -> SchemaRef {
+        match self.function_impl.return_type(&self.arg_types) {
+            Ok(schema) => Arc::new(schema),
+            Err(_) => Arc::new(arrow::datatypes::Schema::empty()),
+        }
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion_common::Result<Vec<TableProviderFilterPushDown>> {
+        self.function_impl.supports_filters_pushdown(filters)
+    }
 }
