@@ -46,7 +46,7 @@ mod record_batch {
 
     #[test]
     fn test_macro() {
-        record_batch!(("column_name", Int32, vec![1, 2, 3])).unwrap();
+        record_batch!(("column_name", Int32, [1, 2, 3])).unwrap();
     }
 }
 

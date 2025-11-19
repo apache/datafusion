@@ -164,14 +164,14 @@ mod tests {
         let (mapper, indices) = adapter.map_schema(&file_schema).unwrap();
         assert_eq!(indices, vec![1]);
 
-        let file_batch = record_batch!(("b", Float64, vec![1.0, 2.0])).unwrap();
+        let file_batch = record_batch!(("b", Float64, [1.0, 2.0])).unwrap();
 
         let mapped_batch = mapper.map_batch(file_batch).unwrap();
 
         // the mapped batch has the correct schema and the "b" column has been cast to Utf8
         let expected_batch = record_batch!(
-            ("a", Int32, vec![None, None]), // missing column filled with nulls
-            ("b", Utf8, vec!["1.0", "2.0"])  // b was cast to string and order was changed
+            ("a", Int32, [None, None]),  // missing column filled with nulls
+            ("b", Utf8, ["1.0", "2.0"])  // b was cast to string and order was changed
         )
         .unwrap();
         assert_eq!(mapped_batch, expected_batch);
@@ -192,7 +192,7 @@ mod tests {
         let (mapper, indices) = adapter.map_schema(&file_schema).unwrap();
         assert_eq!(indices, vec![0]);
 
-        let file_batch = record_batch!(("b", Float64, vec![1.0, 2.0])).unwrap();
+        let file_batch = record_batch!(("b", Float64, [1.0, 2.0])).unwrap();
 
         // Mapping fails because it tries to fill in a non-nullable column with nulls
         let err = mapper.map_batch(file_batch).unwrap_err().to_string();

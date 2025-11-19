@@ -326,7 +326,7 @@ mod tests {
         let mut foreign_accum: ForeignAccumulator = ffi_accum.into();
 
         // Send in an array to average. There are 5 values and it should average to 30.0
-        let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
+        let values = create_array!(Float64, [10., 20., 30., 40., 50.]);
         foreign_accum.update_batch(&[values])?;
 
         let avg = foreign_accum.evaluate()?;
@@ -340,8 +340,8 @@ mod tests {
         // To verify merging batches works, create a second state to add in
         // This should cause our average to go down to 25.0
         let second_states = vec![
-            make_array(create_array!(UInt64, vec![1]).to_data()),
-            make_array(create_array!(Float64, vec![0.0]).to_data()),
+            make_array(create_array!(UInt64, [1]).to_data()),
+            make_array(create_array!(Float64, [0.0]).to_data()),
         ];
 
         foreign_accum.merge_batch(&second_states)?;
@@ -350,7 +350,7 @@ mod tests {
 
         // If we remove a batch that is equivalent to the state we added
         // we should go back to our original value of 30.0
-        let values = create_array!(Float64, vec![0.0]);
+        let values = create_array!(Float64, [0.0]);
         foreign_accum.retract_batch(&[values])?;
         let avg = foreign_accum.evaluate()?;
         assert_eq!(avg, ScalarValue::Float64(Some(30.0)));

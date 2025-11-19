@@ -446,9 +446,8 @@ mod tests {
         let mut foreign_accum: ForeignGroupsAccumulator = ffi_accum.into();
 
         // Send in an array to evaluate. We want a mean of 30 and standard deviation of 4.
-        let values = create_array!(Boolean, vec![true, true, true, false, true, true]);
-        let opt_filter =
-            create_array!(Boolean, vec![true, true, true, true, false, false]);
+        let values = create_array!(Boolean, [true, true, true, false, true, true]);
+        let opt_filter = create_array!(Boolean, [true, true, true, true, false, false]);
         foreign_accum.update_batch(
             &[values],
             &[0, 0, 1, 1, 2, 2],
@@ -461,7 +460,7 @@ mod tests {
 
         assert_eq!(
             groups_bool,
-            create_array!(Boolean, vec![Some(true), Some(false), None]).as_ref()
+            create_array!(Boolean, [Some(true), Some(false), None]).as_ref()
         );
 
         let state = foreign_accum.state(EmitTo::All)?;
@@ -469,26 +468,25 @@ mod tests {
 
         // To verify merging batches works, create a second state to add in
         // This should cause our average to go down to 25.0
-        let second_states =
-            vec![make_array(create_array!(Boolean, vec![false]).to_data())];
+        let second_states = vec![make_array(create_array!(Boolean, [false]).to_data())];
 
-        let opt_filter = create_array!(Boolean, vec![true]);
+        let opt_filter = create_array!(Boolean, [true]);
         foreign_accum.merge_batch(&second_states, &[0], Some(opt_filter.as_ref()), 1)?;
         let groups_bool = foreign_accum.evaluate(EmitTo::All)?;
         assert_eq!(groups_bool.len(), 1);
         assert_eq!(
             groups_bool.as_ref(),
-            make_array(create_array!(Boolean, vec![false]).to_data()).as_ref()
+            make_array(create_array!(Boolean, [false]).to_data()).as_ref()
         );
 
-        let values = create_array!(Boolean, vec![false]);
-        let opt_filter = create_array!(Boolean, vec![true]);
+        let values = create_array!(Boolean, [false]);
+        let opt_filter = create_array!(Boolean, [true]);
         let groups_bool =
             foreign_accum.convert_to_state(&[values], Some(opt_filter.as_ref()))?;
 
         assert_eq!(
             groups_bool[0].as_ref(),
-            make_array(create_array!(Boolean, vec![false]).to_data()).as_ref()
+            make_array(create_array!(Boolean, [false]).to_data()).as_ref()
         );
 
         Ok(())

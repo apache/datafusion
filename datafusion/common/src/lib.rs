@@ -67,6 +67,8 @@ pub mod utils;
 
 /// Reexport arrow crate
 pub use arrow;
+/// Reexport arrow-rs macros for creating arrays and record batches
+pub use arrow::array::{create_array, record_batch};
 pub use column::Column;
 pub use dfschema::{
     qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
