@@ -3453,7 +3453,7 @@ SELECT percentile_cont(1.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
 SELECT percentile_cont(-0.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be a literal
+statement error (?s)DataFusion error: Error during planning: Execution error: Function 'percentile_cont' user-defined coercion failed with "Error during planning: PERCENTILE_CONT percentile argument must be Float64 or List\(Float64\), got Int8\.".*
 SELECT percentile_cont(c2) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont
@@ -3777,6 +3777,13 @@ query R
 SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) as t (v)
 ----
 2.75
+
+# Test percentile_cont with array of percentiles
+query ?
+SELECT percentile_cont([0.01, 0.05, 0.1, 0.5, 0.9]) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+[1.0, 1.0, 1.0, 3.0, 5.0]
+
 
 # array_agg_zero
 query ?

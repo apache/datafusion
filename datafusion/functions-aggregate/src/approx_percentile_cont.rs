@@ -167,7 +167,7 @@ impl ApproxPercentileCont {
         args: AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
         let percentile =
-            validate_percentile_expr(&args.exprs[1], "APPROX_PERCENTILE_CONT")?;
+            validate_percentile_expr(&args.exprs[1], "APPROX_PERCENTILE_CONT")?[0];
 
         let is_descending = args
             .order_bys
