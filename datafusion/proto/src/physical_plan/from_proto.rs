@@ -72,9 +72,9 @@ impl From<&protobuf::PhysicalColumn> for Column {
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn parse_physical_sort_expr<D: PhysicalDeserializer>(
+pub fn parse_physical_sort_expr(
     proto: &protobuf::PhysicalSortExprNode,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     input_schema: &Schema,
 ) -> Result<PhysicalSortExpr> {
     if let Some(expr) = &proto.expr {
@@ -98,9 +98,9 @@ pub fn parse_physical_sort_expr<D: PhysicalDeserializer>(
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn parse_physical_sort_exprs<D: PhysicalDeserializer>(
+pub fn parse_physical_sort_exprs(
     proto: &[protobuf::PhysicalSortExprNode],
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     input_schema: &Schema,
 ) -> Result<Vec<PhysicalSortExpr>> {
     proto
@@ -119,9 +119,9 @@ pub fn parse_physical_sort_exprs<D: PhysicalDeserializer>(
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn parse_physical_window_expr<D: PhysicalDeserializer>(
+pub fn parse_physical_window_expr(
     proto: &protobuf::PhysicalWindowExprNode,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     let window_node_expr = parse_physical_exprs(&proto.args, parser, input_schema)?;
@@ -178,14 +178,13 @@ pub fn parse_physical_window_expr<D: PhysicalDeserializer>(
     )
 }
 
-pub fn parse_physical_exprs<'a, I, D>(
+pub fn parse_physical_exprs<'a, I>(
     protos: I,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     input_schema: &Schema,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
 where
     I: IntoIterator<Item = &'a PhysicalExprNode>,
-    D: PhysicalDeserializer,
 {
     protos
         .into_iter()
@@ -202,9 +201,9 @@ where
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn parse_physical_expr<D: PhysicalDeserializer>(
+pub fn parse_physical_expr(
     proto: &PhysicalExprNode,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = proto
@@ -391,9 +390,9 @@ pub fn parse_physical_expr<D: PhysicalDeserializer>(
     Ok(pexpr)
 }
 
-fn parse_required_physical_expr<D: PhysicalDeserializer>(
+fn parse_required_physical_expr(
     expr: Option<&PhysicalExprNode>,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     field: &str,
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -402,9 +401,9 @@ fn parse_required_physical_expr<D: PhysicalDeserializer>(
         .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
 }
 
-pub fn parse_protobuf_hash_partitioning<D: PhysicalDeserializer>(
+pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     input_schema: &Schema,
 ) -> Result<Option<Partitioning>> {
     match partitioning {
@@ -420,9 +419,9 @@ pub fn parse_protobuf_hash_partitioning<D: PhysicalDeserializer>(
     }
 }
 
-pub fn parse_protobuf_partitioning<D: PhysicalDeserializer>(
+pub fn parse_protobuf_partitioning(
     partitioning: Option<&protobuf::Partitioning>,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     input_schema: &Schema,
 ) -> Result<Option<Partitioning>> {
     match partitioning {
@@ -487,9 +486,9 @@ pub fn parse_table_schema_from_proto(
     Ok(TableSchema::new(file_schema, table_partition_cols))
 }
 
-pub fn parse_protobuf_file_scan_config<D: PhysicalDeserializer>(
+pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
     file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;

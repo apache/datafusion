@@ -128,9 +128,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_into_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_physical_plan(
         &self,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
@@ -246,9 +246,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         }
     }
 
-    fn try_from_physical_plan<S: PhysicalSerializer>(
+    fn try_from_physical_plan(
         plan: Arc<dyn ExecutionPlan>,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self>
     where
         Self: Sized,
@@ -429,10 +429,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 }
 
 impl protobuf::PhysicalPlanNode {
-    fn try_into_explain_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_explain_physical_plan(
         &self,
         explain: &protobuf::ExplainExecNode,
-        _parser: &mut D,
+        _parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(ExplainExec::new(
             Arc::new(explain.schema.as_ref().unwrap().try_into()?),
@@ -445,10 +445,10 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_projection_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_projection_physical_plan(
         &self,
         projection: &protobuf::ProjectionExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&projection.input, parser)?;
@@ -470,10 +470,10 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
-    fn try_into_filter_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_filter_physical_plan(
         &self,
         filter: &protobuf::FilterExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = into_physical_plan(&filter.input, parser)?;
 
@@ -513,10 +513,10 @@ impl protobuf::PhysicalPlanNode {
         }
     }
 
-    fn try_into_csv_scan_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_csv_scan_physical_plan(
         &self,
         scan: &protobuf::CsvScanExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let escape =
             if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape)) =
@@ -564,10 +564,10 @@ impl protobuf::PhysicalPlanNode {
         Ok(DataSourceExec::from_data_source(conf))
     }
 
-    fn try_into_json_scan_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_json_scan_physical_plan(
         &self,
         scan: &protobuf::JsonScanExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let base_conf = scan.base_conf.as_ref().unwrap();
         let table_schema = parse_table_schema_from_proto(base_conf)?;
@@ -580,10 +580,10 @@ impl protobuf::PhysicalPlanNode {
     }
 
     #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
-    fn try_into_parquet_scan_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
@@ -634,10 +634,10 @@ impl protobuf::PhysicalPlanNode {
     }
 
     #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
-    fn try_into_avro_scan_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "avro")]
         {
@@ -654,10 +654,10 @@ impl protobuf::PhysicalPlanNode {
         panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
     }
 
-    fn try_into_memory_scan_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_memory_scan_physical_plan(
         &self,
         scan: &protobuf::MemoryScanExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let partitions = scan
             .partitions
@@ -700,10 +700,10 @@ impl protobuf::PhysicalPlanNode {
         Ok(DataSourceExec::from_data_source(source))
     }
 
-    fn try_into_coalesce_batches_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_coalesce_batches_physical_plan(
         &self,
         coalesce_batches: &protobuf::CoalesceBatchesExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&coalesce_batches.input, parser)?;
@@ -713,10 +713,10 @@ impl protobuf::PhysicalPlanNode {
         ))
     }
 
-    fn try_into_merge_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_merge_physical_plan(
         &self,
         merge: &protobuf::CoalescePartitionsExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = into_physical_plan(&merge.input, parser)?;
         Ok(Arc::new(
@@ -725,10 +725,10 @@ impl protobuf::PhysicalPlanNode {
         ))
     }
 
-    fn try_into_repartition_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_repartition_physical_plan(
         &self,
         repart: &protobuf::RepartitionExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = into_physical_plan(&repart.input, parser)?;
         let partitioning = parse_protobuf_partitioning(
@@ -742,10 +742,10 @@ impl protobuf::PhysicalPlanNode {
         )?))
     }
 
-    fn try_into_global_limit_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_global_limit_physical_plan(
         &self,
         limit: &protobuf::GlobalLimitExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = into_physical_plan(&limit.input, parser)?;
         let fetch = if limit.fetch >= 0 {
@@ -760,19 +760,19 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_local_limit_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_local_limit_physical_plan(
         &self,
         limit: &protobuf::LocalLimitExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = into_physical_plan(&limit.input, parser)?;
         Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
     }
 
-    fn try_into_window_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_window_physical_plan(
         &self,
         window_agg: &protobuf::WindowAggExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&window_agg.input, parser)?;
@@ -818,10 +818,10 @@ impl protobuf::PhysicalPlanNode {
         }
     }
 
-    fn try_into_aggregate_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_aggregate_physical_plan(
         &self,
         hash_agg: &protobuf::AggregateExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = into_physical_plan(&hash_agg.input, parser)?;
         let mode = protobuf::AggregateMode::try_from(hash_agg.mode).map_err(|_| {
@@ -966,10 +966,10 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(agg))
     }
 
-    fn try_into_hash_join_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_hash_join_physical_plan(
         &self,
         hashjoin: &protobuf::HashJoinExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left: Arc<dyn ExecutionPlan> = into_physical_plan(&hashjoin.left, parser)?;
         let right: Arc<dyn ExecutionPlan> = into_physical_plan(&hashjoin.right, parser)?;
@@ -1077,10 +1077,10 @@ impl protobuf::PhysicalPlanNode {
         )?))
     }
 
-    fn try_into_symmetric_hash_join_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_symmetric_hash_join_physical_plan(
         &self,
         sym_join: &protobuf::SymmetricHashJoinExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left = into_physical_plan(&sym_join.left, parser)?;
         let right = into_physical_plan(&sym_join.right, parser)?;
@@ -1192,10 +1192,10 @@ impl protobuf::PhysicalPlanNode {
         .map(|e| Arc::new(e) as _)
     }
 
-    fn try_into_union_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_union_physical_plan(
         &self,
         union: &protobuf::UnionExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
         for input in &union.inputs {
@@ -1204,10 +1204,10 @@ impl protobuf::PhysicalPlanNode {
         UnionExec::try_new(inputs)
     }
 
-    fn try_into_interleave_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_interleave_physical_plan(
         &self,
         interleave: &protobuf::InterleaveExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
         for input in &interleave.inputs {
@@ -1216,38 +1216,38 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(InterleaveExec::try_new(inputs)?))
     }
 
-    fn try_into_cross_join_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_cross_join_physical_plan(
         &self,
         crossjoin: &protobuf::CrossJoinExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left: Arc<dyn ExecutionPlan> = into_physical_plan(&crossjoin.left, parser)?;
         let right: Arc<dyn ExecutionPlan> = into_physical_plan(&crossjoin.right, parser)?;
         Ok(Arc::new(CrossJoinExec::new(left, right)))
     }
 
-    fn try_into_empty_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_empty_physical_plan(
         &self,
         empty: &protobuf::EmptyExecNode,
-        _parser: &mut D,
+        _parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(empty.schema)?);
         Ok(Arc::new(EmptyExec::new(schema)))
     }
 
-    fn try_into_placeholder_row_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_placeholder_row_physical_plan(
         &self,
         placeholder: &protobuf::PlaceholderRowExecNode,
-        _parser: &mut D,
+        _parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(convert_required!(placeholder.schema)?);
         Ok(Arc::new(PlaceholderRowExec::new(schema)))
     }
 
-    fn try_into_sort_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_sort_physical_plan(
         &self,
         sort: &protobuf::SortExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = into_physical_plan(&sort.input, parser)?;
         let exprs = sort
@@ -1294,10 +1294,10 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(new_sort))
     }
 
-    fn try_into_sort_preserving_merge_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_sort_preserving_merge_physical_plan(
         &self,
         sort: &protobuf::SortPreservingMergeExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = into_physical_plan(&sort.input, parser)?;
         let exprs = sort
@@ -1340,10 +1340,10 @@ impl protobuf::PhysicalPlanNode {
         ))
     }
 
-    fn try_into_extension_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_extension_physical_plan(
         &self,
         extension: &protobuf::PhysicalExtensionNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
             .inputs
@@ -1357,10 +1357,10 @@ impl protobuf::PhysicalPlanNode {
         Ok(extension_node)
     }
 
-    fn try_into_nested_loop_join_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_nested_loop_join_physical_plan(
         &self,
         join: &protobuf::NestedLoopJoinExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left: Arc<dyn ExecutionPlan> = into_physical_plan(&join.left, parser)?;
         let right: Arc<dyn ExecutionPlan> = into_physical_plan(&join.right, parser)?;
@@ -1426,10 +1426,10 @@ impl protobuf::PhysicalPlanNode {
         )?))
     }
 
-    fn try_into_analyze_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_analyze_physical_plan(
         &self,
         analyze: &protobuf::AnalyzeExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = into_physical_plan(&analyze.input, parser)?;
         Ok(Arc::new(AnalyzeExec::new(
@@ -1441,10 +1441,10 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_json_sink_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_json_sink_physical_plan(
         &self,
         sink: &protobuf::JsonSinkExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = into_physical_plan(&sink.input, parser)?;
 
@@ -1476,10 +1476,10 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_csv_sink_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_csv_sink_physical_plan(
         &self,
         sink: &protobuf::CsvSinkExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = into_physical_plan(&sink.input, parser)?;
 
@@ -1512,10 +1512,10 @@ impl protobuf::PhysicalPlanNode {
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
-    fn try_into_parquet_sink_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_parquet_sink_physical_plan(
         &self,
         sink: &protobuf::ParquetSinkExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
@@ -1552,10 +1552,10 @@ impl protobuf::PhysicalPlanNode {
         panic!("Trying to use ParquetSink without `parquet` feature enabled");
     }
 
-    fn try_into_unnest_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_unnest_physical_plan(
         &self,
         unnest: &protobuf::UnnestExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = into_physical_plan(&unnest.input, parser)?;
 
@@ -1581,10 +1581,10 @@ impl protobuf::PhysicalPlanNode {
             protobuf::GenerateSeriesName::GsRange => "range",
         }
     }
-    fn try_into_sort_join<D: PhysicalDeserializer>(
+    fn try_into_sort_join(
         &self,
         sort_join: &SortMergeJoinExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left = into_physical_plan(&sort_join.left, parser)?;
         let left_schema = left.schema();
@@ -1753,18 +1753,18 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
 
-    fn try_into_cooperative_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_cooperative_physical_plan(
         &self,
         field_stream: &protobuf::CooperativeExecNode,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = into_physical_plan(&field_stream.input, parser)?;
         Ok(Arc::new(CooperativeExec::new(input)))
     }
 
-    fn try_from_explain_exec<S: PhysicalSerializer>(
+    fn try_from_explain_exec(
         exec: &ExplainExec,
-        _parser: &mut S,
+        _parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Explain(
@@ -1781,9 +1781,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_projection_exec<S: PhysicalSerializer>(
+    fn try_from_projection_exec(
         exec: &ProjectionExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -1810,9 +1810,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_analyze_exec<S: PhysicalSerializer>(
+    fn try_from_analyze_exec(
         exec: &AnalyzeExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -1830,9 +1830,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_filter_exec<S: PhysicalSerializer>(
+    fn try_from_filter_exec(
         exec: &FilterExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -1852,9 +1852,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_global_limit_exec<S: PhysicalSerializer>(
+    fn try_from_global_limit_exec(
         limit: &GlobalLimitExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             limit.input().to_owned(),
@@ -1875,9 +1875,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_local_limit_exec<S: PhysicalSerializer>(
+    fn try_from_local_limit_exec(
         limit: &LocalLimitExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             limit.input().to_owned(),
@@ -1893,9 +1893,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_hash_join_exec<S: PhysicalSerializer>(
+    fn try_from_hash_join_exec(
         exec: &HashJoinExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.left().to_owned(),
@@ -1968,9 +1968,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_symmetric_hash_join_exec<S: PhysicalSerializer>(
+    fn try_from_symmetric_hash_join_exec(
         exec: &SymmetricHashJoinExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.left().to_owned(),
@@ -2083,9 +2083,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_sort_merge_join_exec<S: PhysicalSerializer>(
+    fn try_from_sort_merge_join_exec(
         exec: &SortMergeJoinExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.left().to_owned(),
@@ -2166,9 +2166,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_cross_join_exec<S: PhysicalSerializer>(
+    fn try_from_cross_join_exec(
         exec: &CrossJoinExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.left().to_owned(),
@@ -2188,9 +2188,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_aggregate_exec<S: PhysicalSerializer>(
+    fn try_from_aggregate_exec(
         exec: &AggregateExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let groups: Vec<bool> = exec
             .group_expr()
@@ -2277,9 +2277,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_empty_exec<S: PhysicalSerializer>(
+    fn try_from_empty_exec(
         empty: &EmptyExec,
-        _parser: &mut S,
+        _parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let schema = empty.schema().as_ref().try_into()?;
         Ok(protobuf::PhysicalPlanNode {
@@ -2289,9 +2289,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_placeholder_row_exec<S: PhysicalSerializer>(
+    fn try_from_placeholder_row_exec(
         empty: &PlaceholderRowExec,
-        _parser: &mut S,
+        _parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let schema = empty.schema().as_ref().try_into()?;
         Ok(protobuf::PhysicalPlanNode {
@@ -2303,9 +2303,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_coalesce_batches_exec<S: PhysicalSerializer>(
+    fn try_from_coalesce_batches_exec(
         coalesce_batches: &CoalesceBatchesExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             coalesce_batches.input().to_owned(),
@@ -2322,9 +2322,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_data_source_exec<S: PhysicalSerializer>(
+    fn try_from_data_source_exec(
         data_source_exec: &DataSourceExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Option<Self>> {
         let data_source = data_source_exec.data_source();
         if let Some(maybe_csv) = data_source.as_any().downcast_ref::<FileScanConfig>() {
@@ -2468,9 +2468,9 @@ impl protobuf::PhysicalPlanNode {
         Ok(None)
     }
 
-    fn try_from_coalesce_partitions_exec<S: PhysicalSerializer>(
+    fn try_from_coalesce_partitions_exec(
         exec: &CoalescePartitionsExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -2486,9 +2486,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_repartition_exec<S: PhysicalSerializer>(
+    fn try_from_repartition_exec(
         exec: &RepartitionExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -2507,9 +2507,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_sort_exec<S: PhysicalSerializer>(
+    fn try_from_sort_exec(
         exec: &SortExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -2544,9 +2544,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_union_exec<S: PhysicalSerializer>(
+    fn try_from_union_exec(
         union: &UnionExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
         for input in union.inputs() {
@@ -2562,9 +2562,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_interleave_exec<S: PhysicalSerializer>(
+    fn try_from_interleave_exec(
         interleave: &InterleaveExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
         for input in interleave.inputs() {
@@ -2580,9 +2580,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_sort_preserving_merge_exec<S: PhysicalSerializer>(
+    fn try_from_sort_preserving_merge_exec(
         exec: &SortPreservingMergeExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -2613,9 +2613,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_nested_loop_join_exec<S: PhysicalSerializer>(
+    fn try_from_nested_loop_join_exec(
         exec: &NestedLoopJoinExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.left().to_owned(),
@@ -2667,9 +2667,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_window_agg_exec<S: PhysicalSerializer>(
+    fn try_from_window_agg_exec(
         exec: &WindowAggExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -2700,9 +2700,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_bounded_window_agg_exec<S: PhysicalSerializer>(
+    fn try_from_bounded_window_agg_exec(
         exec: &BoundedWindowAggExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -2749,9 +2749,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_data_sink_exec<S: PhysicalSerializer>(
+    fn try_from_data_sink_exec(
         exec: &DataSinkExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Option<Self>> {
         let input: protobuf::PhysicalPlanNode =
             protobuf::PhysicalPlanNode::try_from_physical_plan(
@@ -2825,9 +2825,9 @@ impl protobuf::PhysicalPlanNode {
         Ok(None)
     }
 
-    fn try_from_unnest_exec<S: PhysicalSerializer>(
+    fn try_from_unnest_exec(
         exec: &UnnestExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -2858,9 +2858,9 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_cooperative_exec<S: PhysicalSerializer>(
+    fn try_from_cooperative_exec(
         exec: &CooperativeExec,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec.input().to_owned(),
@@ -3002,14 +3002,14 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         B: BufMut,
         Self: Sized;
 
-    fn try_into_physical_plan<D: PhysicalDeserializer>(
+    fn try_into_physical_plan(
         &self,
-        parser: &mut D,
+        parser: &mut dyn PhysicalDeserializer,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    fn try_from_physical_plan<S: PhysicalSerializer>(
+    fn try_from_physical_plan(
         plan: Arc<dyn ExecutionPlan>,
-        parser: &mut S,
+        parser: &mut dyn PhysicalSerializer,
     ) -> Result<Self>
     where
         Self: Sized;
@@ -3392,9 +3392,9 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     }
 }
 
-fn into_physical_plan<D: PhysicalDeserializer>(
+fn into_physical_plan(
     node: &Option<Box<protobuf::PhysicalPlanNode>>,
-    parser: &mut D,
+    parser: &mut dyn PhysicalDeserializer,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(field) = node {
         field.try_into_physical_plan(parser)
