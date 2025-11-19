@@ -3091,22 +3091,22 @@ pub trait PhysicalDeserializer {
 
 pub trait PhysicalSerializer {
     fn try_encode_execution_plan(
-        &self,
+        &mut self,
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
     ) -> Result<()>;
 
-    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()>;
+    fn try_encode_udf(&mut self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()>;
 
     fn try_encode_expr(
-        &self,
+        &mut self,
         node: &Arc<dyn PhysicalExpr>,
         buf: &mut Vec<u8>,
     ) -> Result<()>;
 
-    fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()>;
+    fn try_encode_udaf(&mut self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()>;
 
-    fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()>;
+    fn try_encode_udwf(&mut self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()>;
 }
 
 impl PhysicalDeserializer for Arc<TaskContext> {
@@ -3202,30 +3202,30 @@ impl PhysicalDeserializer for TaskContextWithPhysicalCodec<'_, '_> {
 
 impl PhysicalSerializer for TaskContextWithPhysicalCodec<'_, '_> {
     fn try_encode_execution_plan(
-        &self,
+        &mut self,
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         self.codec.try_encode(node, buf)
     }
 
-    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_udf(&mut self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.codec.try_encode_udf(node, buf)
     }
 
     fn try_encode_expr(
-        &self,
+        &mut self,
         node: &Arc<dyn PhysicalExpr>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         self.codec.try_encode_expr(node, buf)
     }
 
-    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_udaf(&mut self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.codec.try_encode_udaf(node, buf)
     }
 
-    fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_udwf(&mut self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.codec.try_encode_udwf(node, buf)
     }
 }
@@ -3253,30 +3253,30 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
 
 impl<C: PhysicalExtensionCodec> PhysicalSerializer for C {
     fn try_encode_execution_plan(
-        &self,
+        &mut self,
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         PhysicalExtensionCodec::try_encode(self, node, buf)
     }
 
-    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_udf(&mut self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         PhysicalExtensionCodec::try_encode_udf(self, node, buf)
     }
 
     fn try_encode_expr(
-        &self,
+        &mut self,
         node: &Arc<dyn PhysicalExpr>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         PhysicalExtensionCodec::try_encode_expr(self, node, buf)
     }
 
-    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_udaf(&mut self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         PhysicalExtensionCodec::try_encode_udaf(self, node, buf)
     }
 
-    fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_udwf(&mut self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
         PhysicalExtensionCodec::try_encode_udwf(self, node, buf)
     }
 }
