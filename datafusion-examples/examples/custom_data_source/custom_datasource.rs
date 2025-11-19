@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Formatter};

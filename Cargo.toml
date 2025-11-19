@@ -90,7 +90,7 @@ version = "51.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-apache-avro = { version = "0.20", default-features = false }
+apache-avro = { version = "0.21", default-features = false }
 arrow = { version = "57.0.0", features = [
     "prettyprint",
     "chrono-tz",
@@ -158,6 +158,7 @@ hex = { version = "0.4.3" }
 indexmap = "2.12.0"
 insta = { version = "1.43.2", features = ["glob", "filters"] }
 itertools = "0.14"
+liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
 num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }

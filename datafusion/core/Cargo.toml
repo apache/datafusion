@@ -46,7 +46,7 @@ array_expressions = ["nested_expressions"]
 avro = ["datafusion-common/avro", "datafusion-datasource-avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = [
-    "xz2",
+    "liblzma",
     "bzip2",
     "flate2",
     "zstd",
@@ -146,6 +146,7 @@ datafusion-sql = { workspace = true, optional = true }
 flate2 = { version = "1.1.4", optional = true }
 futures = { workspace = true }
 itertools = { workspace = true }
+liblzma = { workspace = true, optional = true }
 log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
@@ -159,7 +160,6 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 uuid = { version = "1.18", features = ["v4", "js"] }
-xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]

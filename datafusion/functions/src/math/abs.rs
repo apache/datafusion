@@ -39,6 +39,7 @@ use num_traits::sign::Signed;
 
 type MathArrayFunction = fn(&ArrayRef) -> Result<ArrayRef>;
 
+#[macro_export]
 macro_rules! make_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |input: &ArrayRef| {
@@ -67,7 +68,8 @@ macro_rules! make_try_abs_function {
     }};
 }
 
-macro_rules! make_decimal_abs_function {
+#[macro_export]
+macro_rules! make_wrapping_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |input: &ArrayRef| {
             let array = downcast_named_arg!(&input, "abs arg", $ARRAY_TYPE);
@@ -101,10 +103,10 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
         | DataType::UInt64 => Ok(|input: &ArrayRef| Ok(Arc::clone(input))),
 
         // Decimal types
-        DataType::Decimal32(_, _) => Ok(make_decimal_abs_function!(Decimal32Array)),
-        DataType::Decimal64(_, _) => Ok(make_decimal_abs_function!(Decimal64Array)),
-        DataType::Decimal128(_, _) => Ok(make_decimal_abs_function!(Decimal128Array)),
-        DataType::Decimal256(_, _) => Ok(make_decimal_abs_function!(Decimal256Array)),
+        DataType::Decimal32(_, _) => Ok(make_wrapping_abs_function!(Decimal32Array)),
+        DataType::Decimal64(_, _) => Ok(make_wrapping_abs_function!(Decimal64Array)),
+        DataType::Decimal128(_, _) => Ok(make_wrapping_abs_function!(Decimal128Array)),
+        DataType::Decimal256(_, _) => Ok(make_wrapping_abs_function!(Decimal256Array)),
 
         other => not_impl_err!("Unsupported data type {other:?} for function abs"),
     }

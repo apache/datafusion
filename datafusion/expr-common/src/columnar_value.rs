@@ -17,12 +17,19 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::{Array, ArrayRef, NullArray};
-use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::DataType;
-use arrow::util::pretty::pretty_format_columns;
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use arrow::{
+    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
+    compute::{kernels, max, min, CastOptions},
+    datatypes::DataType,
+    util::pretty::pretty_format_columns,
+};
+use datafusion_common::internal_datafusion_err;
+use datafusion_common::{
+    format::DEFAULT_CAST_OPTIONS,
+    internal_err,
+    scalar::{date_to_timestamp_multiplier, ensure_timestamp_in_bounds},
+    Result, ScalarValue,
+};
 use std::fmt;
 use std::sync::Arc;
 
@@ -275,14 +282,72 @@ impl ColumnarValue {
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
-            )),
+            ColumnarValue::Array(array) => {
+                ensure_date_array_timestamp_bounds(array, cast_type)?;
+                Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
+                    array,
+                    cast_type,
+                    &cast_options,
+                )?))
+            }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
             )),
         }
     }
+}
+
+fn ensure_date_array_timestamp_bounds(
+    array: &ArrayRef,
+    cast_type: &DataType,
+) -> Result<()> {
+    let source_type = array.data_type().clone();
+    let Some(multiplier) = date_to_timestamp_multiplier(&source_type, cast_type) else {
+        return Ok(());
+    };
+
+    if multiplier <= 1 {
+        return Ok(());
+    }
+
+    // Use compute kernels to find min/max instead of iterating all elements
+    let (min_val, max_val): (Option<i64>, Option<i64>) = match &source_type {
+        DataType::Date32 => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<Date32Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected Date32Array but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr).map(|v| v as i64), max(arr).map(|v| v as i64))
+        }
+        DataType::Date64 => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<Date64Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected Date64Array but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        _ => return Ok(()), // Not a date type, nothing to do
+    };
+
+    // Only validate the min and max values instead of all elements
+    if let Some(min) = min_val {
+        ensure_timestamp_in_bounds(min, multiplier, &source_type, cast_type)?;
+    }
+    if let Some(max) = max_val {
+        ensure_timestamp_in_bounds(max, multiplier, &source_type, cast_type)?;
+    }
+
+    Ok(())
 }
 
 // Implement Display trait for ColumnarValue
@@ -312,7 +377,10 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
+    use arrow::{
+        array::{Date64Array, Int32Array},
+        datatypes::TimeUnit,
+    };
 
     #[test]
     fn into_array_of_size() {
@@ -482,6 +550,21 @@ mod tests {
                 "| 3                       |\n",
                 "+-------------------------+"
             )
+        );
+    }
+
+    #[test]
+    fn cast_date64_array_to_timestamp_overflow() {
+        let overflow_value = i64::MAX / 1_000_000 + 1;
+        let array: ArrayRef = Arc::new(Date64Array::from(vec![Some(overflow_value)]));
+        let value = ColumnarValue::Array(array);
+        let result =
+            value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None), None);
+        let err = result.expect_err("expected overflow to be detected");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
         );
     }
 }

@@ -1757,11 +1757,11 @@ fn qualify_join_schema_sides(
     let join_fields = join_schema.fields();
 
     // Validate lengths
-    if join_fields.len() != left_fields.len() + right_fields.len() {
-        return internal_err!(
-            "Join schema field count must match left and right field count."
-        );
-    }
+    assert_eq_or_internal_err!(
+        join_fields.len(),
+        left_fields.len() + right_fields.len(),
+        "Join schema field count must match left and right field count."
+    );
 
     // Validate field names match
     for (i, (field, expected)) in join_fields
