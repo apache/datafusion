@@ -160,9 +160,8 @@ fn transform_array<T: ArrowTimestampType>(
     array: &ArrayRef,
     tz: Tz,
 ) -> Result<ColumnarValue> {
-    let mut builder = PrimitiveBuilder::<T>::new();
-
     let primitive_array = as_primitive_array::<T>(array)?;
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(primitive_array.len());
     for ts_opt in primitive_array.iter() {
         match ts_opt {
             None => builder.append_null(),
