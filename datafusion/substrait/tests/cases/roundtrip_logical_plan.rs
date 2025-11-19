@@ -1107,7 +1107,8 @@ async fn self_referential_intersect() -> Result<()> {
     // After roundtrip through Substrait, SubqueryAlias is lost and requalification
     // produces "left" and "right" aliases
     // Note: INTERSECT (without ALL) includes DISTINCT, but the outer Aggregate
-    // is optimized away, resulting in just the LeftSemi join
+    // is optimized away, resulting in just the **LeftSemi** join
+    // (LeftSemi returns rows from left that exist in right)
     assert_expected_plan(
         "SELECT a FROM data WHERE a > 0 INTERSECT SELECT a FROM data WHERE a < 5",
         "LeftSemi Join: left.a = right.a\
@@ -1131,7 +1132,8 @@ async fn self_referential_except() -> Result<()> {
     // After roundtrip through Substrait, SubqueryAlias is lost and requalification
     // produces "left" and "right" aliases
     // Note: EXCEPT (without ALL) includes DISTINCT, but the outer Aggregate
-    // is optimized away, resulting in just the LeftAnti join
+    // is optimized away, resulting in just the **LeftAnti** join
+    // (LeftAnti returns rows from left that don't exist in right)
     assert_expected_plan(
         "SELECT a FROM data WHERE a > 0 EXCEPT SELECT a FROM data WHERE a < 5",
         "LeftAnti Join: left.a = right.a\
@@ -1151,6 +1153,7 @@ async fn self_referential_except() -> Result<()> {
 async fn self_referential_intersect_all() -> Result<()> {
     // Test INTERSECT ALL with the same table on both sides
     // INTERSECT ALL preserves duplicates and does not include DISTINCT
+    // Uses **LeftSemi** join (returns rows from left that exist in right)
     // The requalification ensures no duplicate field name errors
     assert_expected_plan(
         "SELECT a FROM data WHERE a > 0 INTERSECT ALL SELECT a FROM data WHERE a < 5",
@@ -1170,6 +1173,7 @@ async fn self_referential_intersect_all() -> Result<()> {
 async fn self_referential_except_all() -> Result<()> {
     // Test EXCEPT ALL with the same table on both sides
     // EXCEPT ALL preserves duplicates and does not include DISTINCT
+    // Uses **LeftAnti** join (returns rows from left that don't exist in right)
     // The requalification ensures no duplicate field name errors
     assert_expected_plan(
         "SELECT a FROM data WHERE a > 0 EXCEPT ALL SELECT a FROM data WHERE a < 5",
