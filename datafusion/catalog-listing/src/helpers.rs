@@ -381,8 +381,14 @@ pub async fn pruned_partition_list<'a>(
     file_extension: &'a str,
     partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
+    let prefix = if !partition_cols.is_empty() {
+        evaluate_partition_prefix(partition_cols, filters)
+    } else {
+        None
+    };
+
     let objects = table_path
-        .list_all_files(ctx, store, file_extension)
+        .list_prefixed_files(ctx, store, prefix, file_extension)
         .await?
         .try_filter(|object_meta| futures::future::ready(object_meta.size > 0));
 
