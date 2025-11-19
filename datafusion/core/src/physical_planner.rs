@@ -1586,10 +1586,6 @@ fn has_sufficient_rows_for_repartition(
     input: &Arc<dyn ExecutionPlan>,
     session_state: &SessionState,
 ) -> Result<bool> {
-    if session_state.config().round_robin_repartition() {
-        return Ok(true);
-    }
-
     // Get partition statistics, default to repartitioning if unavailable
     let stats = match input.partition_statistics(None) {
         Ok(s) => s,
@@ -1598,8 +1594,8 @@ fn has_sufficient_rows_for_repartition(
 
     if let Some(num_rows) = stats.num_rows.get_value().copied() {
         let batch_size = session_state.config().batch_size();
-        // Only skip repartitioning for datasets smaller than batch_size * 10
-        return Ok(num_rows >= batch_size * 10);
+        
+        return Ok(num_rows >= batch_size);
     }
 
     Ok(true)
