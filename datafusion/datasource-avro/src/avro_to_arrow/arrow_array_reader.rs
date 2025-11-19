@@ -55,7 +55,7 @@ use std::sync::Arc;
 type RecordSlice<'a> = &'a [&'a Vec<(String, Value)>];
 
 #[derive(Default)]
-pub struct NamesResolver {
+struct NamesResolver {
     in_progress: HashSet<Name>,
     all_subnames_in_name: HashMap<Name, BTreeMap<String, usize>>,
 }
@@ -101,7 +101,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 }
 
                 unresolved_names.in_progress.remove(&name);
-                assert!(unresolved_names.in_progress.is_empty());
+                debug_assert!(unresolved_names.in_progress.is_empty());
 
                 Ok(lookup)
             }
