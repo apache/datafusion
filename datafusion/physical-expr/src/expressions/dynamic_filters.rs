@@ -78,6 +78,10 @@ struct Inner {
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
     generation: u64,
     expr: Arc<dyn PhysicalExpr>,
+    /// Flag for quick synchronous check if filter is complete.
+    /// This is redundant with the watch channel state, but allows us to return immediately
+    /// from `wait_complete()` without subscribing if already complete.
+    is_complete: bool,
 }
 
 impl Inner {
@@ -87,6 +91,7 @@ impl Inner {
             // This is not currently used anywhere but it seems useful to have this simple distinction.
             generation: 1,
             expr,
+            is_complete: false,
         }
     }
 
@@ -231,6 +236,7 @@ impl DynamicFilterPhysicalExpr {
         *current = Inner {
             generation: new_generation,
             expr: new_expr,
+            is_complete: current.is_complete,
         };
         drop(current); // Release the lock before broadcasting
 
@@ -246,7 +252,11 @@ impl DynamicFilterPhysicalExpr {
     /// This signals that all expected updates have been received.
     /// Waiters using [`Self::wait_complete`] will be notified.
     pub fn mark_complete(&self) {
-        let current_generation = self.inner.read().generation;
+        let mut current = self.inner.write();
+        let current_generation = current.generation;
+        current.is_complete = true;
+        drop(current);
+
         // Broadcast completion to all waiters
         let _ = self.state_watch.send(FilterState::Complete {
             generation: current_generation,
@@ -274,8 +284,11 @@ impl DynamicFilterPhysicalExpr {
     /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
     /// the filter is fully complete with no more updates expected.
     pub async fn wait_complete(&self) {
+        if self.inner.read().is_complete {
+            return;
+        }
+
         let mut rx = self.state_watch.subscribe();
-        // Wait until the state becomes Complete
         let _ = rx
             .wait_for(|state| matches!(state, FilterState::Complete { .. }))
             .await;
@@ -579,5 +592,19 @@ mod test {
             dynamic_filter.evaluate(&batch).is_err(),
             "Expected err when evaluate is called after changing the expression."
         );
+    }
+
+    #[tokio::test]
+    async fn test_wait_complete_already_complete() {
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(42) as Arc<dyn PhysicalExpr>,
+        ));
+
+        // Mark as complete immediately
+        dynamic_filter.mark_complete();
+
+        // wait_complete should return immediately
+        dynamic_filter.wait_complete().await;
     }
 }

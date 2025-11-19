@@ -4494,4 +4494,103 @@ mod tests {
     fn columns(schema: &Schema) -> Vec<String> {
         schema.fields().iter().map(|f| f.name().clone()).collect()
     }
+
+    /// This test verifies that the dynamic filter is marked as complete after HashJoinExec finishes building the hash table.
+    #[tokio::test]
+    async fn test_hash_join_marks_filter_complete() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 6]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        // Create a dynamic filter manually
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+
+        // Create HashJoinExec with the dynamic filter
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: dynamic_filter,
+            bounds_accumulator: OnceLock::new(),
+        });
+
+        // Execute the join
+        let stream = join.execute(0, task_ctx)?;
+        let _batches = common::collect(stream).await?;
+
+        // After the join completes, the dynamic filter should be marked as complete
+        // wait_complete() should return immediately
+        dynamic_filter_clone.wait_complete().await;
+
+        Ok(())
+    }
+
+    /// This test verifies that the dynamic filter is marked as complete even when the build side is empty.
+    #[tokio::test]
+    async fn test_hash_join_marks_filter_complete_empty_build_side() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        // Empty left side (build side)
+        let left = build_table(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        // Create a dynamic filter manually
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+
+        // Create HashJoinExec with the dynamic filter
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: dynamic_filter,
+            bounds_accumulator: OnceLock::new(),
+        });
+
+        // Execute the join
+        let stream = join.execute(0, task_ctx)?;
+        let _batches = common::collect(stream).await?;
+
+        // Even with empty build side, the dynamic filter should be marked as complete
+        // wait_complete() should return immediately
+        dynamic_filter_clone.wait_complete().await;
+
+        Ok(())
+    }
 }
