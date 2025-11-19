@@ -197,8 +197,6 @@ impl AsyncFuncExpr {
             .map(|cv| match cv {
                 ColumnarValue::Array(arr) => Ok(arr.to_data()),
                 ColumnarValue::Scalar(scalar) => {
-                    // This shouldn't happen in practice since async UDFs should return arrays,
-                    // but handle it for completeness
                     Ok(scalar.to_array_of_size(1)?.to_data())
                 }
             })

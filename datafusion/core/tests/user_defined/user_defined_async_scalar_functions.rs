@@ -22,15 +22,19 @@ use arrow::array::{Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::prelude::*;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{assert_batches_eq, exec_err, Result, ScalarValue};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
+// This test checks the case where batch_size doesn't evenly divide
+// the number of rows.
 #[tokio::test]
 async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
     let num_rows = 3;
+    let batch_size = 2;
+
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("prompt", DataType::Utf8, false),
@@ -48,51 +52,49 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
         ],
     )?;
 
-    println!("Created test data with {} rows\n", batch.num_rows());
-
-    // Create context and register UDF
     let ctx = SessionContext::new();
     ctx.register_batch("test_table", batch)?;
 
     ctx.register_udf(
-        AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(2))).into_scalar_udf(),
+        AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(batch_size)))
+            .into_scalar_udf(),
     );
 
-    // Execute query
-    println!("Executing query...\n");
     let df = ctx
         .sql("SELECT id, test_async_udf(prompt) as result FROM test_table")
         .await?;
 
-    let results = df.collect().await?;
+    let result = df.collect().await?;
 
-    println!("=== Final Results ===");
-    for batch in results {
-        println!("Result batch has {} rows", batch.num_rows());
-        println!("{:?}", batch);
-    }
+    assert_batches_eq!(
+        &[
+            "+----+---------+",
+            "| id | result  |",
+            "+----+---------+",
+            "| 0  | prompt0 |",
+            "| 1  | prompt1 |",
+            "| 2  | prompt2 |",
+            "+----+---------+"
+        ],
+        &result
+    );
 
     Ok(())
 }
 
-/// Helper function to convert ColumnarValue to Vec<String>
-fn columnar_to_vec_string(cv: &ColumnarValue) -> Result<Vec<String>> {
-    match cv {
-        ColumnarValue::Array(arr) => {
-            let string_arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
-            Ok(string_arr
-                .iter()
-                .map(|s| s.unwrap_or("").to_string())
-                .collect())
-        }
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(vec![s.clone()]),
-        _ => panic!("Unexpected type"),
-    }
-}
-
 /// Simulates calling an async external service
 async fn call_external_service(arg1: &ColumnarValue) -> Result<Vec<String>> {
-    let vec1 = columnar_to_vec_string(arg1)?;
+    let vec1 = match arg1 {
+        ColumnarValue::Array(arr) => {
+            let string_arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
+            string_arr
+                .iter()
+                .map(|s| s.unwrap_or("").to_string())
+                .collect()
+        }
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => vec![s.clone()],
+        _ => return exec_err!("Unexpected data type for arg1"),
+    };
     tokio::time::sleep(Duration::from_millis(10)).await;
     Ok(vec1)
 }
