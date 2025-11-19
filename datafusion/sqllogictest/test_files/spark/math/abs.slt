@@ -39,16 +39,16 @@ select abs((-128)::TINYINT), abs((-32768)::SMALLINT), abs((-2147483648)::INT), a
 -128 -32768 -2147483648 -9223372036854775808
 
 # abs: floats, NULL and NaN
-query RRRR
-SELECT abs(-1.0::FLOAT), abs(0.::FLOAT), abs(NULL::FLOAT), abs('NaN'::FLOAT)
+query RRRRRRRRRRRR
+SELECT abs(-1.0::FLOAT), abs(0.::FLOAT), abs(-0.::FLOAT), abs(-0::FLOAT), abs(NULL::FLOAT), abs('NaN'::FLOAT), abs('inf'::FLOAT), abs('+inf'::FLOAT), abs('-inf'::FLOAT), abs('infinity'::FLOAT), abs('+infinity'::FLOAT), abs('-infinity'::FLOAT)
 ----
-1 0 NULL NaN
+1 0 0 0 NULL NaN Infinity Infinity Infinity Infinity Infinity Infinity
 
 # abs: doubles, NULL and NaN
-query RRRR
-SELECT abs(-1.0::DOUBLE), abs(0.::DOUBLE), abs(NULL::DOUBLE), abs('NaN'::DOUBLE)
+query RRRRRRRRRRRR
+SELECT abs(-1.0::DOUBLE), abs(0.::DOUBLE), abs(-0.::DOUBLE), abs(-0::DOUBLE), abs(NULL::DOUBLE), abs('NaN'::DOUBLE), abs('inf'::DOUBLE), abs('+inf'::DOUBLE), abs('-inf'::DOUBLE), abs('infinity'::DOUBLE), abs('+infinity'::DOUBLE), abs('-infinity'::DOUBLE)
 ----
-1 0 NULL NaN
+1 0 0 0 NULL NaN Infinity Infinity Infinity Infinity Infinity Infinity
 
 # abs: decimal128 and decimal256
 statement ok
