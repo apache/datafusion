@@ -1318,7 +1318,7 @@ mod tests {
 
         // Create constrained memory to trigger early emission but not completely fail
         let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(1024, 1.0) // 100KB - enough to start but will trigger pressure
+            .with_memory_limit(1024, 1.0) // small enough to start but will trigger pressure
             .build_arc()?;
 
         let mut task_ctx = TaskContext::default().with_runtime(runtime);
