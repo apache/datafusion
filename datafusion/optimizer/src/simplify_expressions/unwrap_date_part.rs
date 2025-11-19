@@ -310,6 +310,18 @@ mod tests {
         assert_eq!(optimize_test(expr_lt, &schema), expected)
     }
 
+    #[test]
+    fn test_preimage_date_part_timestamp_nano_lt_swap() {
+        let schema = expr_test_schema();
+        let expr_lt =
+            lit(2024i32).gt(expr_fn::date_part(lit("year"), col("ts_nano_none")));
+        let expected = col("ts_nano_none").lt(lit(ScalarValue::TimestampNanosecond(
+            Some(19723 * 86_400_000_000_000),
+            None,
+        )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
