@@ -18,7 +18,6 @@
 //! Rewrite expressions based on external expression value range guarantees.
 
 use std::borrow::Cow;
-
 use crate::{expr::InList, lit, Between, BinaryExpr, Expr};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, HashMap, Result, ScalarValue};
@@ -79,6 +78,10 @@ pub fn rewrite_with_guarantees_map<'a>(
     expr: Expr,
     guarantees: &'a HashMap<&'a Expr, &'a NullableInterval>,
 ) -> Result<Transformed<Expr>> {
+    if guarantees.is_empty() {
+        return Ok(Transformed::no(expr));
+    }
+
     expr.transform_up(|e| rewrite_expr(e, guarantees))
 }
 
@@ -86,6 +89,10 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if self.guarantees.is_empty() {
+            return Ok(Transformed::no(expr));
+        }
+
         rewrite_expr(expr, &self.guarantees)
     }
 }
@@ -94,10 +101,6 @@ fn rewrite_expr(
     expr: Expr,
     guarantees: &HashMap<&Expr, &NullableInterval>,
 ) -> Result<Transformed<Expr>> {
-    if guarantees.is_empty() {
-        return Ok(Transformed::no(expr));
-    }
-
     let new_expr = match &expr {
         Expr::IsNull(inner) => match guarantees.get(inner.as_ref()) {
             Some(NullableInterval::Null { .. }) => Some(lit(true)),
@@ -136,7 +139,7 @@ fn rewrite_between(
     between: &Between,
     guarantees: &HashMap<&Expr, &NullableInterval>,
 ) -> Result<Option<Expr>, DataFusionError> {
-    let (Some(interval), Expr::Literal(low, _), Expr::Literal(high, _)) = (
+    let (Some(expr_interval), Expr::Literal(low, _), Expr::Literal(high, _)) = (
         guarantees.get(between.expr.as_ref()),
         between.low.as_ref(),
         between.high.as_ref(),
@@ -148,23 +151,64 @@ fn rewrite_between(
     let low = ensure_typed_null(low, high)?;
     let high = ensure_typed_null(high, &low)?;
 
-    let Ok(values) = Interval::try_new(low, high) else {
+    let Ok(between_interval) = Interval::try_new(low, high) else {
         // If we can't create an interval from the literals, be conservative and simply leave
         // the expression unmodified.
         return Ok(None);
     };
 
-    let expr_interval = NullableInterval::NotNull { values };
-
-    let contains = expr_interval.contains(*interval)?;
-
-    if contains.is_certainly_true() {
-        Ok(Some(lit(!between.negated)))
-    } else if contains.is_certainly_false() {
-        Ok(Some(lit(between.negated)))
-    } else {
-        Ok(None)
+    if between_interval.lower().is_null() && between_interval.upper().is_null() {
+        return Ok(Some(lit(between_interval.lower().clone())));
     }
+
+    let expr_interval = match expr_interval {
+        NullableInterval::Null { datatype } => {
+            // Value is guaranteed to be null, so we can simplify to null.
+            return Ok(Some(lit(ScalarValue::try_new_null(datatype).unwrap_or(ScalarValue::Null))))
+        },
+        NullableInterval::MaybeNull { .. } => {
+            // Value may or may not be null, so we can't simplify the expression.
+            return Ok(None)
+        },
+        NullableInterval::NotNull { values } => values
+    };
+
+    Ok(if between_interval.lower().is_null() {
+        // <expr> (NOT) BETWEEN NULL AND <high>
+        let upper_bound = Interval::from(between_interval.upper().clone());
+        if expr_interval.gt(&upper_bound)?.eq(&Interval::TRUE) {
+            // if <expr> > high, then certainly false
+            Some(lit(between.negated))
+        } else if expr_interval.lt_eq(&upper_bound)?.eq(&Interval::TRUE) {
+            // if <expr> <= high, then certainly null
+            Some(lit(ScalarValue::try_new_null(&expr_interval.data_type()).unwrap_or(ScalarValue::Null)))
+        } else {
+            // otherwise unknown
+            None
+        }
+    } else if between_interval.upper().is_null() {
+        // <expr> (NOT) BETWEEN <low> AND NULL
+        let lower_bound = Interval::from(between_interval.lower().clone());
+        if expr_interval.lt(&lower_bound)?.eq(&Interval::TRUE) {
+            // if <expr> < low, then certainly false
+            Some(lit(between.negated))
+        } else if expr_interval.gt_eq(&lower_bound)?.eq(&Interval::TRUE) {
+            // if <expr> >= low, then certainly null
+            Some(lit(ScalarValue::try_new_null(&expr_interval.data_type()).unwrap_or(ScalarValue::Null)))
+        } else {
+            // otherwise unknown
+            None
+        }
+    } else {
+        let contains = between_interval.contains(expr_interval)?;
+        if contains.eq(&Interval::TRUE) {
+            Some(lit(!between.negated))
+        } else if contains.eq(&Interval::FALSE) {
+            Some(lit(between.negated))
+        } else {
+            None
+        }
+    })
 }
 
 fn ensure_typed_null(
@@ -262,30 +306,77 @@ mod tests {
     use super::*;
 
     use crate::{col, Operator};
-    use arrow::datatypes::DataType;
     use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
 
     #[test]
     fn test_not_null_guarantee() {
-        // IsNull / IsNotNull can be rewritten to true / false
+
         let guarantees = [
             // Note: AlwaysNull case handled by test_column_single_value test,
             // since it's a special case of a column with a single value.
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::make_unbounded(&DataType::Int32).unwrap(),
+                    values: Interval::make(Some(1), Some(3)).unwrap(),
                 },
             ),
         ];
 
-        // x IS NULL => guaranteed false
         let is_null_cases = vec![
+            // x IS NULL => guaranteed false
             (col("x").is_null(), Some(lit(false))),
+            // x IS NOT NULL => guaranteed true
             (col("x").is_not_null(), Some(lit(true))),
-            (col("x").between(lit(1), lit(2)), None),
+
+            // [1, 3] BETWEEN 0 AND 10 => guaranteed true
+            (col("x").between(lit(0), lit(10)), Some(lit(true))),
+            // x BETWEEN 1 AND -2 => unknown (actually guaranteed false)
             (col("x").between(lit(1), lit(-2)), None),
+
+            // [1, 3] BETWEEN NULL AND 0 => guaranteed false
+            (col("x").between(lit(ScalarValue::Null), lit(0)), Some(lit(false))),
+            // [1, 3] BETWEEN NULL AND 1 => unknown
+            (col("x").between(lit(ScalarValue::Null), lit(1)), None),
+            // [1, 3] BETWEEN NULL AND 2 => unknown
+            (col("x").between(lit(ScalarValue::Null), lit(2)), None),
+            // [1, 3] BETWEEN NULL AND 3 => guaranteed NULL
+            (col("x").between(lit(ScalarValue::Null), lit(3)), Some(lit(ScalarValue::Int32(None)))),
+            // [1, 3] BETWEEN NULL AND 4 => guaranteed NULL
+            (col("x").between(lit(ScalarValue::Null), lit(4)), Some(lit(ScalarValue::Int32(None)))),
+
+            // [1, 3] BETWEEN 1 AND NULL => guaranteed NULL
+            (col("x").between(lit(0), lit(ScalarValue::Null)), Some(lit(ScalarValue::Int32(None)))),
+            // [1, 3] BETWEEN 1 AND NULL => guaranteed NULL
+            (col("x").between(lit(1), lit(ScalarValue::Null)), Some(lit(ScalarValue::Int32(None)))),
+            // [1, 3] BETWEEN 2 AND NULL => unknown
+            (col("x").between(lit(2), lit(ScalarValue::Null)), None),
+            // [1, 3] BETWEEN 3 AND NULL => unknown
+            (col("x").between(lit(3), lit(ScalarValue::Null)), None),
+            // [1, 3] BETWEEN 4 AND NULL => guaranteed false
+            (col("x").between(lit(4), lit(ScalarValue::Null)), Some(lit(false))),
+
+            // [1, 3] NOT BETWEEN NULL AND 0 => guaranteed false
+            (col("x").not_between(lit(ScalarValue::Null), lit(0)), Some(lit(true))),
+            // [1, 3] NOT BETWEEN NULL AND 1 => unknown
+            (col("x").not_between(lit(ScalarValue::Null), lit(1)), None),
+            // [1, 3] NOT BETWEEN NULL AND 2 => unknown
+            (col("x").not_between(lit(ScalarValue::Null), lit(2)), None),
+            // [1, 3] NOT BETWEEN NULL AND 3 => guaranteed NULL
+            (col("x").not_between(lit(ScalarValue::Null), lit(3)), Some(lit(ScalarValue::Int32(None)))),
+            // [1, 3] NOT BETWEEN NULL AND 4 => guaranteed NULL
+            (col("x").not_between(lit(ScalarValue::Null), lit(4)), Some(lit(ScalarValue::Int32(None)))),
+
+            // [1, 3] NOT BETWEEN 1 AND NULL => guaranteed NULL
+            (col("x").not_between(lit(0), lit(ScalarValue::Null)), Some(lit(ScalarValue::Int32(None)))),
+            // [1, 3] NOT BETWEEN 1 AND NULL => guaranteed NULL
+            (col("x").not_between(lit(1), lit(ScalarValue::Null)), Some(lit(ScalarValue::Int32(None)))),
+            // [1, 3] NOT BETWEEN 2 AND NULL => unknown
+            (col("x").not_between(lit(2), lit(ScalarValue::Null)), None),
+            // [1, 3] NOT BETWEEN 3 AND NULL => unknown
+            (col("x").not_between(lit(3), lit(ScalarValue::Null)), None),
+            // [1, 3] NOT BETWEEN 4 AND NULL => guaranteed false
+            (col("x").not_between(lit(4), lit(ScalarValue::Null)), Some(lit(true))),
         ];
 
         for case in is_null_cases {
@@ -293,11 +384,11 @@ mod tests {
                 .data()
                 .unwrap();
             let expected = match case.1 {
-                None => case.0,
+                None => case.0.clone(),
                 Some(expected) => expected,
             };
 
-            assert_eq!(output, expected);
+            assert_eq!(output, expected, "Failed for {}", case.0);
         }
     }
 
