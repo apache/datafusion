@@ -22,7 +22,7 @@ use arrow::array::{Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::prelude::*;
-use datafusion_common::{assert_batches_eq, exec_err, Result, ScalarValue};
+use datafusion_common::{assert_batches_eq, Result};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -129,24 +129,13 @@ impl AsyncScalarUDFImpl for TestAsyncUDFImpl {
         args: ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let arg1 = &args.args[0];
-        let results = call_external_service(arg1).await?;
-        Ok(ColumnarValue::Array(Arc::new(StringArray::from(results))))
+        let results = call_external_service(arg1.clone()).await?;
+        Ok(results)
     }
 }
 
 /// Simulates calling an async external service
-async fn call_external_service(arg1: &ColumnarValue) -> Result<Vec<String>> {
-    let vec1 = match arg1 {
-        ColumnarValue::Array(arr) => {
-            let string_arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
-            string_arr
-                .iter()
-                .map(|s| s.unwrap_or("").to_string())
-                .collect()
-        }
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => vec![s.clone()],
-        _ => return exec_err!("Unexpected data type for arg1"),
-    };
+async fn call_external_service(arg1: ColumnarValue) -> Result<ColumnarValue> {
     tokio::time::sleep(Duration::from_millis(10)).await;
-    Ok(vec1)
+    Ok(arg1)
 }
