@@ -1926,11 +1926,13 @@ impl NullableInterval {
     /// This method uses the following truth table.
     ///
     /// ```text
-    /// A ∧ B │ F U T
-    /// ──────┼──────
-    ///     F │ F F F
-    ///     U │ F U U
-    ///     T │ F U T
+    ///       │   B
+    /// A ∧ B ├──────
+    ///       │ F U T
+    /// ──┬───┼──────
+    ///   │ F │ F F F
+    /// A │ U │ F U U
+    ///   │ T │ F U T
     /// ```
     pub fn and<T: Borrow<Self>>(&self, rhs: T) -> Result<Self> {
         if self == &Self::FALSE || rhs.borrow() == &Self::FALSE {
@@ -1964,11 +1966,13 @@ impl NullableInterval {
     /// This method uses the following truth table.
     ///
     /// ```text
-    /// A ∨ B │ F U T
-    /// ──────┼──────
-    ///     F │ F U T
-    ///     U │ U U T
-    ///     T │ T T T
+    ///       │   B
+    /// A ∨ B ├──────
+    ///       │ F U T
+    /// ──┬───┼──────
+    ///   │ F │ F U T
+    /// A │ U │ U U T
+    ///   │ T │ T T T
     /// ```
     pub fn or<T: Borrow<Self>>(&self, rhs: T) -> Result<Self> {
         if self == &Self::TRUE || rhs.borrow() == &Self::TRUE {
