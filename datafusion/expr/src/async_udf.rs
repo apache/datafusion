@@ -140,8 +140,14 @@ mod tests {
         sync::Arc,
     };
 
-    use arrow::array::{Array, StringArray};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::{
+        array::Int32Array,
+        datatypes::{DataType, Field},
+    };
+    use arrow::{
+        array::{Array, RecordBatch, StringArray},
+        datatypes::Schema,
+    };
     use async_trait::async_trait;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::error::Result;
@@ -237,15 +243,15 @@ mod tests {
     #[test]
     fn test_async_udf_partial_eq_and_hash() {
         // Inner is same cloned arc -> equal
-        let inner = Arc::new(TestAsyncUDFImpl { a: 1 });
+        let inner = Arc::new(TestAsyncUDFImpl::new(1));
         let a = AsyncScalarUDF::new(Arc::clone(&inner) as Arc<dyn AsyncScalarUDFImpl>);
         let b = AsyncScalarUDF::new(inner);
         assert_eq!(a, b);
         assert_eq!(hash(&a), hash(&b));
 
         // Inner is distinct arc -> still equal
-        let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
-        let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
+        let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(1)));
+        let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl::new(1)));
         assert_eq!(a, b);
         assert_eq!(hash(&a), hash(&b));
 
