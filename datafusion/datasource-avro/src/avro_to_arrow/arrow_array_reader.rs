@@ -926,8 +926,8 @@ fn flatten_values<'a>(values: &[&'a Value]) -> Vec<&'a Value> {
 }
 
 /// Flattens a list into string values, dropping Value::Null in the process.
-/// This is useful for interpreting any Avro array as string, dropping nulls.
-/// See `value_as_string`.
+/// This is useful for interpreting any Avro array as bytes, dropping nulls.
+/// See `resolve_bytes`.
 #[inline]
 fn flatten_binary_values<'a>(values: &[&'a Value]) -> Vec<Option<Cow<'a, [u8]>>> {
     values
@@ -947,7 +947,7 @@ fn flatten_binary_values<'a>(values: &[&'a Value]) -> Vec<Option<Cow<'a, [u8]>>>
 
 /// Flattens a list into string values, dropping Value::Null in the process.
 /// This is useful for interpreting any Avro array as string, dropping nulls.
-/// See `value_as_string`.
+/// See `resolve_string`.
 #[inline]
 fn flatten_string_values<'a>(values: &[&'a Value]) -> Vec<Option<&'a str>> {
     values
@@ -970,7 +970,7 @@ fn flatten_string_values<'a>(values: &[&'a Value]) -> Vec<Option<&'a str>> {
 
 /// Reads an Avro value as a string, regardless of its type.
 /// This is useful if the expected datatype is a string, in which case we preserve
-/// all the values regardless of they type.
+/// all the values regardless of their type.
 fn resolve_string(v: &Value) -> ArrowResult<Option<&str>> {
     let v = if let Value::Union(_, b) = v { b } else { v };
     match v {
