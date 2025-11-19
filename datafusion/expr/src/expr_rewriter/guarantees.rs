@@ -462,7 +462,7 @@ mod tests {
                         ScalarValue::Date32(Some(18628)),
                         ScalarValue::Date32(None),
                     )
-                        .unwrap(),
+                    .unwrap(),
                 },
             ),
         ];
@@ -540,7 +540,7 @@ mod tests {
                         ScalarValue::from("abc"),
                         ScalarValue::from("def"),
                     )
-                        .unwrap(),
+                    .unwrap(),
                 },
             ),
         ];
@@ -621,7 +621,7 @@ mod tests {
                         ScalarValue::Int32(Some(1)),
                         ScalarValue::Int32(Some(10)),
                     )
-                        .unwrap(),
+                    .unwrap(),
                 },
             ),
         ];
