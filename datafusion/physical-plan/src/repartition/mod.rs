@@ -407,7 +407,6 @@ pub struct BatchPartitioner {
 
 enum BatchPartitionerState {
     Hash {
-        random_state: ahash::RandomState,
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
         hash_buffer: Vec<u64>,
@@ -418,9 +417,10 @@ enum BatchPartitionerState {
     },
 }
 
-/// Fixed seed used for hash repartitioning to ensure consistent behavior across
+/// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
-pub const REPARTITION_HASH_SEED: [u64; 4] = [0u64; 4];
+pub const REPARTITION_RANDOM_STATE: ahash::RandomState =
+    ahash::RandomState::with_seeds(0, 0, 0, 0);
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
@@ -437,13 +437,6 @@ impl BatchPartitioner {
             Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
                 exprs,
                 num_partitions,
-                // Use fixed random hash
-                random_state: ahash::RandomState::with_seeds(
-                    REPARTITION_HASH_SEED[0],
-                    REPARTITION_HASH_SEED[1],
-                    REPARTITION_HASH_SEED[2],
-                    REPARTITION_HASH_SEED[3],
-                ),
                 hash_buffer: vec![],
             },
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
@@ -491,7 +484,6 @@ impl BatchPartitioner {
                     Box::new(std::iter::once(Ok((idx, batch))))
                 }
                 BatchPartitionerState::Hash {
-                    random_state,
                     exprs,
                     num_partitions: partitions,
                     hash_buffer,
@@ -505,7 +497,7 @@ impl BatchPartitioner {
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(&arrays, random_state, hash_buffer)?;
+                    create_hashes(&arrays, &REPARTITION_RANDOM_STATE, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| Vec::with_capacity(batch.num_rows()))

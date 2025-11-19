@@ -42,7 +42,7 @@ use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
 };
-use crate::repartition::REPARTITION_HASH_SEED;
+use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
 use crate::{
@@ -963,12 +963,7 @@ impl ExecutionPlan for HashJoinExec {
 
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
-        let repartition_random_state = RandomState::with_seeds(
-            REPARTITION_HASH_SEED[0],
-            REPARTITION_HASH_SEED[1],
-            REPARTITION_HASH_SEED[2],
-            REPARTITION_HASH_SEED[3],
-        );
+        let repartition_random_state = REPARTITION_RANDOM_STATE;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
