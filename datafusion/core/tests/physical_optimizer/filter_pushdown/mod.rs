@@ -1824,7 +1824,7 @@ STORED AS PARQUET;
     assert!(explain.contains("output_rows=128")); // Read 1 row group
     assert!(explain.contains("t@0 < 1372708809")); // Dynamic filter was applied
     assert!(
-        explain.contains("pushdown_rows_matched=128, pushdown_rows_pruned=99872"),
+        explain.contains("pushdown_rows_matched=128, pushdown_rows_pruned=99.87 K"),
         "{explain}"
     );
     // Pushdown pruned most rows

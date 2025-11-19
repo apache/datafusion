@@ -36,12 +36,12 @@ use log::{debug, trace};
 
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TransformedResult;
+use datafusion_common::{assert_eq_or_internal_err, Column, DFSchema};
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
+    internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
-    ScalarValue,
+    DataFusionError, ScalarValue,
 };
-use datafusion_common::{Column, DFSchema};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
@@ -238,7 +238,7 @@ use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 /// Original Predicate | Rewritten Predicate
 /// ------------------ | --------------------
 /// `x = 5` | `x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max)`
-/// `x < 5` | `x_null_count != x_row_count THEN false (x_max < 5)`
+/// `x < 5` | `x_null_count != x_row_count AND (x_min < 5)`
 /// `x = 5 AND y = 10` | `x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max) AND y_null_count != y_row_count (y_min <= 10 AND 10 <= y_max)`
 /// `x IS NULL`  | `x_null_count > 0`
 /// `x IS NOT NULL`  | `x_null_count != row_count`
@@ -919,13 +919,13 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
-        if num_containers != array.len() {
-            return internal_err!(
-                "mismatched statistics length. Expected {}, got {}",
-                num_containers,
-                array.len()
-            );
-        }
+        assert_eq_or_internal_err!(
+            num_containers,
+            array.len(),
+            "mismatched statistics length. Expected {}, got {}",
+            num_containers,
+            array.len()
+        );
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")

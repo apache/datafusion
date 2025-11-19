@@ -175,9 +175,9 @@ impl ScalarUDFImpl for AbsFunc {
         let range = &arg.range;
         let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-        if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        if range.gt_eq(&zero_point)? == Interval::TRUE {
             Ok(arg.sort_properties)
-        } else if range.lt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        } else if range.lt_eq(&zero_point)? == Interval::TRUE {
             Ok(-arg.sort_properties)
         } else {
             Ok(SortProperties::Unordered)

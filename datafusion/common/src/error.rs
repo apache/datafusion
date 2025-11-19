@@ -15,7 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion error types
+//! # Error Handling in DataFusion
+//!
+//! In DataFusion, there are two types of errors that can be raised:
+//!
+//! 1. Expected errors – These indicate invalid operations performed by the caller,
+//!    such as attempting to open a non-existent file. Different categories exist to
+//!    distinguish their sources (e.g., [`DataFusionError::ArrowError`],
+//!    [`DataFusionError::IoError`], etc.).
+//!
+//! 2. Unexpected errors – Represented by [`DataFusionError::Internal`], these
+//!    indicate that an internal invariant has been broken, suggesting a potential
+//!    bug in the system.
+//!
+//! There are several convenient macros for throwing errors. For example, use
+//! `exec_err!` for expected errors.
+//! For invariant checks, you can use `assert_or_internal_err!`,
+//! `assert_eq_or_internal_err!`, `assert_ne_or_internal_err!` for easier assertions.
+//! On the performance-critical path, use `debug_assert!` instead to reduce overhead.
+
 #[cfg(feature = "backtrace")]
 use std::backtrace::{Backtrace, BacktraceStatus};
 

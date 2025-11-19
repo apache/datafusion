@@ -31,14 +31,102 @@ use crate::cast::{
     as_string_array, as_string_view_array, as_struct_array,
 };
 use crate::error::Result;
-#[cfg(not(feature = "force_hash_collisions"))]
-use crate::error::_internal_err;
+use crate::error::{_internal_datafusion_err, _internal_err};
+use std::cell::RefCell;
 
 // Combines two hashes into one hash
 #[inline]
 pub fn combine_hashes(l: u64, r: u64) -> u64 {
     let hash = (17 * 37u64).wrapping_add(l);
     hash.wrapping_mul(37).wrapping_add(r)
+}
+
+/// Maximum size for the thread-local hash buffer before truncation (4MB = 524,288 u64 elements).
+/// The goal of this is to avoid unbounded memory growth that would appear as a memory leak.
+/// We allow temporary allocations beyond this size, but after use the buffer is truncated
+/// to this size.
+const MAX_BUFFER_SIZE: usize = 524_288;
+
+thread_local! {
+    /// Thread-local buffer for hash computations to avoid repeated allocations.
+    /// The buffer is reused across calls and truncated if it exceeds MAX_BUFFER_SIZE.
+    /// Defaults to a capacity of 8192 u64 elements which is the default batch size.
+    /// This corresponds to 64KB of memory.
+    static HASH_BUFFER: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Creates hashes for the given arrays using a thread-local buffer, then calls the provided callback
+/// with an immutable reference to the computed hashes.
+///
+/// This function manages a thread-local buffer to avoid repeated allocations. The buffer is automatically
+/// truncated if it exceeds `MAX_BUFFER_SIZE` after use.
+///
+/// # Arguments
+/// * `arrays` - The arrays to hash (must contain at least one array)
+/// * `random_state` - The random state for hashing
+/// * `callback` - A function that receives an immutable reference to the hash slice and returns a result
+///
+/// # Errors
+/// Returns an error if:
+/// - No arrays are provided
+/// - The function is called reentrantly (i.e., the callback invokes `with_hashes` again on the same thread)
+/// - The function is called during or after thread destruction
+///
+/// # Example
+/// ```ignore
+/// use datafusion_common::hash_utils::{with_hashes, RandomState};
+/// use arrow::array::{Int32Array, ArrayRef};
+/// use std::sync::Arc;
+///
+/// let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+/// let random_state = RandomState::new();
+///
+/// let result = with_hashes([&array], &random_state, |hashes| {
+///     // Use the hashes here
+///     Ok(hashes.len())
+/// })?;
+/// ```
+pub fn with_hashes<I, T, F, R>(
+    arrays: I,
+    random_state: &RandomState,
+    callback: F,
+) -> Result<R>
+where
+    I: IntoIterator<Item = T>,
+    T: AsDynArray,
+    F: FnOnce(&[u64]) -> Result<R>,
+{
+    // Peek at the first array to determine buffer size without fully collecting
+    let mut iter = arrays.into_iter().peekable();
+
+    // Get the required size from the first array
+    let required_size = match iter.peek() {
+        Some(arr) => arr.as_dyn_array().len(),
+        None => return _internal_err!("with_hashes requires at least one array"),
+    };
+
+    HASH_BUFFER.try_with(|cell| {
+        let mut buffer = cell.try_borrow_mut()
+            .map_err(|_| _internal_datafusion_err!("with_hashes cannot be called reentrantly on the same thread"))?;
+
+        // Ensure buffer has sufficient length, clearing old values
+        buffer.clear();
+        buffer.resize(required_size, 0);
+
+        // Create hashes in the buffer - this consumes the iterator
+        create_hashes(iter, random_state, &mut buffer[..required_size])?;
+
+        // Execute the callback with an immutable slice
+        let result = callback(&buffer[..required_size])?;
+
+        // Cleanup: truncate if buffer grew too large
+        if buffer.capacity() > MAX_BUFFER_SIZE {
+            buffer.truncate(MAX_BUFFER_SIZE);
+            buffer.shrink_to_fit();
+        }
+
+        Ok(result)
+    }).map_err(|_| _internal_datafusion_err!("with_hashes cannot access thread-local storage during or after thread destruction"))?
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -478,8 +566,8 @@ impl AsDynArray for &ArrayRef {
 pub fn create_hashes<'a, I, T>(
     arrays: I,
     random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
-) -> Result<&'a mut Vec<u64>>
+    hashes_buffer: &'a mut [u64],
+) -> Result<&'a mut [u64]>
 where
     I: IntoIterator<Item = T>,
     T: AsDynArray,
@@ -522,7 +610,7 @@ mod tests {
     fn create_hashes_for_empty_fixed_size_lit() -> Result<()> {
         let empty_array = FixedSizeListBuilder::new(StringBuilder::new(), 1).finish();
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let hashes_buff = &mut vec![0; 0];
+        let hashes_buff = &mut [0; 0];
         let hashes = create_hashes(
             &[Arc::new(empty_array) as ArrayRef],
             &random_state,
@@ -999,5 +1087,85 @@ mod tests {
         create_hashes([array], &random_state, &mut hashes2).unwrap();
 
         assert_eq!(hashes1, hashes2);
+    }
+
+    #[test]
+    fn test_with_hashes() {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+
+        // Test that with_hashes produces the same results as create_hashes
+        let mut expected_hashes = vec![0; array.len()];
+        create_hashes([&array], &random_state, &mut expected_hashes).unwrap();
+
+        let result = with_hashes([&array], &random_state, |hashes| {
+            assert_eq!(hashes.len(), 4);
+            // Verify hashes match expected values
+            assert_eq!(hashes, &expected_hashes[..]);
+            // Return a copy of the hashes
+            Ok(hashes.to_vec())
+        })
+        .unwrap();
+
+        // Verify callback result is returned correctly
+        assert_eq!(result, expected_hashes);
+    }
+
+    #[test]
+    fn test_with_hashes_multi_column() {
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let str_array: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+
+        // Test multi-column hashing
+        let mut expected_hashes = vec![0; int_array.len()];
+        create_hashes(
+            [&int_array, &str_array],
+            &random_state,
+            &mut expected_hashes,
+        )
+        .unwrap();
+
+        with_hashes([&int_array, &str_array], &random_state, |hashes| {
+            assert_eq!(hashes.len(), 3);
+            assert_eq!(hashes, &expected_hashes[..]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn test_with_hashes_empty_arrays() {
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+
+        // Test that passing no arrays returns an error
+        let empty: [&ArrayRef; 0] = [];
+        let result = with_hashes(empty, &random_state, |_hashes| Ok(()));
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("requires at least one array"));
+    }
+
+    #[test]
+    fn test_with_hashes_reentrancy() {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let array2: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+
+        // Test that reentrant calls return an error instead of panicking
+        let result = with_hashes([&array], &random_state, |_hashes| {
+            // Try to call with_hashes again inside the callback
+            with_hashes([&array2], &random_state, |_inner_hashes| Ok(()))
+        });
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("reentrantly") || err_msg.contains("cannot be called"),
+            "Error message should mention reentrancy: {err_msg}",
+        );
     }
 }

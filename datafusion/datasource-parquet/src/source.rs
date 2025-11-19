@@ -334,6 +334,7 @@ impl ParquetSource {
     }
 
     /// Set predicate information
+    #[expect(clippy::needless_pass_by_value)]
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
         conf.predicate = Some(Arc::clone(&predicate));
