@@ -1967,7 +1967,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // =======================================
             //
             // For case:
-            // try_cast/cast(expr as data_type) op literal
+            // date_part(expr as data_type) op literal
             Expr::BinaryExpr(BinaryExpr { left, op, right })
                 if is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_binary(
                     info, &left, op, &right,
@@ -1975,9 +1975,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             {
                 unwrap_date_part_in_comparison_for_binary(info, *left, *right, op)?
             }
-            // literal op try_cast/cast(expr as data_type)
+            // literal op date_part(literal, expression)
             // -->
-            // try_cast/cast(expr as data_type) op_swap literal
+            // date_part(literal, expression) op_swap literal
             Expr::BinaryExpr(BinaryExpr { left, op, right })
                 if is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_binary(
                     info, &right, op, &left,
