@@ -101,50 +101,42 @@ fn rewrite_expr(
     expr: Expr,
     guarantees: &HashMap<&Expr, &NullableInterval>,
 ) -> Result<Transformed<Expr>> {
-    let new_expr = match &expr {
+    // If an expression collapses to a single value, replace it with a literal
+    if let Some(interval) = guarantees.get(&expr) {
+        if let Some(value) = interval.single_value() {
+            return Ok(Transformed::yes(lit(value)));
+        }
+    }
+
+    let result = match expr {
         Expr::IsNull(inner) => match guarantees.get(inner.as_ref()) {
-            Some(NullableInterval::Null { .. }) => Some(lit(true)),
-            Some(NullableInterval::NotNull { .. }) => Some(lit(false)),
-            _ => None,
+            Some(NullableInterval::Null { .. }) => Transformed::yes(lit(true)),
+            Some(NullableInterval::NotNull { .. }) => Transformed::yes(lit(false)),
+            _ => Transformed::no(Expr::IsNull(inner)),
         },
         Expr::IsNotNull(inner) => match guarantees.get(inner.as_ref()) {
-            Some(NullableInterval::Null { .. }) => Some(lit(false)),
-            Some(NullableInterval::NotNull { .. }) => Some(lit(true)),
-            _ => None,
+            Some(NullableInterval::Null { .. }) => Transformed::yes(lit(false)),
+            Some(NullableInterval::NotNull { .. }) => Transformed::yes(lit(true)),
+            _ => Transformed::no(Expr::IsNotNull(inner)),
         },
         Expr::Between(b) => rewrite_between(b, guarantees)?,
         Expr::BinaryExpr(b) => rewrite_binary_expr(b, guarantees)?,
         Expr::InList(i) => rewrite_inlist(i, guarantees)?,
-        _ => None,
+        expr => Transformed::no(expr),
     };
-
-    if let Some(e) = new_expr {
-        return Ok(Transformed::yes(e));
-    }
-
-    match guarantees.get(&expr) {
-        Some(interval) => {
-            // If an expression collapses to a single value, replace it with a literal
-            if let Some(value) = interval.single_value() {
-                Ok(Transformed::yes(lit(value)))
-            } else {
-                Ok(Transformed::no(expr))
-            }
-        }
-        _ => Ok(Transformed::no(expr)),
-    }
+    Ok(result)
 }
 
 fn rewrite_between(
-    between: &Between,
+    between: Between,
     guarantees: &HashMap<&Expr, &NullableInterval>,
-) -> Result<Option<Expr>, DataFusionError> {
+) -> Result<Transformed<Expr>> {
     let (Some(expr_interval), Expr::Literal(low, _), Expr::Literal(high, _)) = (
         guarantees.get(between.expr.as_ref()),
         between.low.as_ref(),
         between.high.as_ref(),
     ) else {
-        return Ok(None);
+        return Ok(Transformed::no(Expr::Between(between)));
     };
 
     // Ensure that, if low or high are null, their type matches the other bound
@@ -154,65 +146,66 @@ fn rewrite_between(
     let Ok(between_interval) = Interval::try_new(low, high) else {
         // If we can't create an interval from the literals, be conservative and simply leave
         // the expression unmodified.
-        return Ok(None);
+        return Ok(Transformed::no(Expr::Between(between)));
     };
 
     if between_interval.lower().is_null() && between_interval.upper().is_null() {
-        return Ok(Some(lit(between_interval.lower().clone())));
+        return Ok(Transformed::yes(lit(between_interval.lower().clone())));
     }
 
     let expr_interval = match expr_interval {
         NullableInterval::Null { datatype } => {
             // Value is guaranteed to be null, so we can simplify to null.
-            return Ok(Some(lit(
+            return Ok(Transformed::yes(lit(
                 ScalarValue::try_new_null(datatype).unwrap_or(ScalarValue::Null)
             )));
         }
         NullableInterval::MaybeNull { .. } => {
             // Value may or may not be null, so we can't simplify the expression.
-            return Ok(None);
+            return Ok(Transformed::no(Expr::Between(between)));
         }
         NullableInterval::NotNull { values } => values,
     };
 
-    Ok(if between_interval.lower().is_null() {
+    let result = if between_interval.lower().is_null() {
         // <expr> (NOT) BETWEEN NULL AND <high>
         let upper_bound = Interval::from(between_interval.upper().clone());
         if expr_interval.gt(&upper_bound)?.eq(&Interval::TRUE) {
             // if <expr> > high, then certainly false
-            Some(lit(between.negated))
+            Transformed::yes(lit(between.negated))
         } else if expr_interval.lt_eq(&upper_bound)?.eq(&Interval::TRUE) {
             // if <expr> <= high, then certainly null
-            Some(lit(ScalarValue::try_new_null(&expr_interval.data_type())
+            Transformed::yes(lit(ScalarValue::try_new_null(&expr_interval.data_type())
                 .unwrap_or(ScalarValue::Null)))
         } else {
             // otherwise unknown
-            None
+            Transformed::no(Expr::Between(between))
         }
     } else if between_interval.upper().is_null() {
         // <expr> (NOT) BETWEEN <low> AND NULL
         let lower_bound = Interval::from(between_interval.lower().clone());
         if expr_interval.lt(&lower_bound)?.eq(&Interval::TRUE) {
             // if <expr> < low, then certainly false
-            Some(lit(between.negated))
+            Transformed::yes(lit(between.negated))
         } else if expr_interval.gt_eq(&lower_bound)?.eq(&Interval::TRUE) {
             // if <expr> >= low, then certainly null
-            Some(lit(ScalarValue::try_new_null(&expr_interval.data_type())
+            Transformed::yes(lit(ScalarValue::try_new_null(&expr_interval.data_type())
                 .unwrap_or(ScalarValue::Null)))
         } else {
             // otherwise unknown
-            None
+            Transformed::no(Expr::Between(between))
         }
     } else {
         let contains = between_interval.contains(expr_interval)?;
         if contains.eq(&Interval::TRUE) {
-            Some(lit(!between.negated))
+            Transformed::yes(lit(!between.negated))
         } else if contains.eq(&Interval::FALSE) {
-            Some(lit(between.negated))
+            Transformed::yes(lit(between.negated))
         } else {
-            None
+            Transformed::no(Expr::Between(between))
         }
-    })
+    };
+    Ok(result)
 }
 
 fn ensure_typed_null(
@@ -229,9 +222,9 @@ fn ensure_typed_null(
 }
 
 fn rewrite_binary_expr(
-    binary: &BinaryExpr,
+    binary: BinaryExpr,
     guarantees: &HashMap<&Expr, &NullableInterval>,
-) -> Result<Option<Expr>, DataFusionError> {
+) -> Result<Transformed<Expr>, DataFusionError> {
     // The left or right side of expression might either have a guarantee
     // or be a literal. Either way, we can resolve them to a NullableInterval.
     let left_interval = guarantees
@@ -255,53 +248,53 @@ fn rewrite_binary_expr(
             }
         });
 
-    Ok(match (left_interval, right_interval) {
-        (Some(left_interval), Some(right_interval)) => {
-            let result =
-                left_interval.apply_operator(&binary.op, right_interval.as_ref())?;
-            if result.is_certainly_true() {
-                Some(lit(true))
-            } else if result.is_certainly_false() {
-                Some(lit(false))
-            } else {
-                None
-            }
+    if let (Some(left_interval), Some(right_interval)) = (left_interval, right_interval) {
+        let result = left_interval.apply_operator(&binary.op, right_interval.as_ref())?;
+        if result.is_certainly_true() {
+            return Ok(Transformed::yes(lit(true)));
+        } else if result.is_certainly_false() {
+            return Ok(Transformed::yes(lit(false)));
         }
-        _ => None,
-    })
+    }
+    Ok(Transformed::no(Expr::BinaryExpr(binary)))
 }
 
 fn rewrite_inlist(
-    inlist: &InList,
+    inlist: InList,
     guarantees: &HashMap<&Expr, &NullableInterval>,
-) -> Result<Option<Expr>, DataFusionError> {
+) -> Result<Transformed<Expr>, DataFusionError> {
     let Some(interval) = guarantees.get(inlist.expr.as_ref()) else {
-        return Ok(None);
+        return Ok(Transformed::no(Expr::InList(inlist)));
     };
 
+    let InList {
+        expr,
+        list,
+        negated,
+    } = inlist;
+
     // Can remove items from the list that don't match the guarantee
-    let new_list: Vec<Expr> = inlist
-        .list
-        .iter()
+    let list: Vec<Expr> = list
+        .into_iter()
         .filter_map(|expr| {
-            if let Expr::Literal(item, _) = expr {
+            if let Expr::Literal(item, _) = &expr {
                 match interval.contains(NullableInterval::from(item.clone())) {
                     // If we know for certain the value isn't in the column's interval,
                     // we can skip checking it.
                     Ok(interval) if interval.is_certainly_false() => None,
-                    Ok(_) => Some(Ok(expr.clone())),
+                    Ok(_) => Some(Ok(expr)),
                     Err(e) => Some(Err(e)),
                 }
             } else {
-                Some(Ok(expr.clone()))
+                Some(Ok(expr))
             }
         })
         .collect::<Result<_, DataFusionError>>()?;
 
-    Ok(Some(Expr::InList(InList {
-        expr: inlist.expr.clone(),
-        list: new_list,
-        negated: inlist.negated,
+    Ok(Transformed::yes(Expr::InList(InList {
+        expr,
+        list,
+        negated,
     })))
 }
 
@@ -315,6 +308,7 @@ mod tests {
 
     #[test]
     fn test_not_null_guarantee() {
+        // IsNull / IsNotNull can be rewritten to true / false
         let guarantees = [
             // Note: AlwaysNull case handled by test_column_single_value test,
             // since it's a special case of a column with a single value.
@@ -468,7 +462,7 @@ mod tests {
                         ScalarValue::Date32(Some(18628)),
                         ScalarValue::Date32(None),
                     )
-                    .unwrap(),
+                        .unwrap(),
                 },
             ),
         ];
@@ -546,7 +540,7 @@ mod tests {
                         ScalarValue::from("abc"),
                         ScalarValue::from("def"),
                     )
-                    .unwrap(),
+                        .unwrap(),
                 },
             ),
         ];
@@ -627,7 +621,7 @@ mod tests {
                         ScalarValue::Int32(Some(1)),
                         ScalarValue::Int32(Some(10)),
                     )
-                    .unwrap(),
+                        .unwrap(),
                 },
             ),
         ];
