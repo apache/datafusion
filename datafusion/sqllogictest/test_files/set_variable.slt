@@ -244,3 +244,125 @@ SET TIME ZONE = 'Asia/Taipei2'
 
 statement error Arrow error: Parser error: Invalid timezone "Asia/Taipei2": failed to parse timezone
 SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+
+# reset variable restores default
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.batch_size = 1024
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 1024
+
+statement ok
+RESET datafusion.execution.batch_size
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 8192
+
+# reset variable with NULL default
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.parquet.max_predicate_cache_size = '123'
+
+query TT
+SHOW datafusion.execution.parquet.max_predicate_cache_size
+----
+datafusion.execution.parquet.max_predicate_cache_size 123
+
+statement ok
+RESET datafusion.execution.parquet.max_predicate_cache_size
+
+query TT
+SHOW datafusion.execution.parquet.max_predicate_cache_size
+----
+datafusion.execution.parquet.max_predicate_cache_size NULL
+
+# reset time zone via aliases
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET TIMEZONE = '-03:00'
+
+statement ok
+RESET TIMEZONE
+
+query TT
+SHOW TIMEZONE
+----
+datafusion.execution.time_zone NULL
+
+statement ok
+SET TIME ZONE = '+09:00'
+
+statement ok
+RESET timezone
+
+query TT
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone NULL
+
+# reset runtime variables
+statement ok
+SET datafusion.runtime.memory_limit = '1M'
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+SET datafusion.runtime.max_temp_directory_size = '1M'
+
+statement ok
+RESET datafusion.runtime.max_temp_directory_size
+
+statement ok
+SET datafusion.runtime.metadata_cache_limit = '1M'
+
+statement ok
+RESET datafusion.runtime.metadata_cache_limit
+
+statement ok
+SET datafusion.runtime.temp_directory = './'
+
+statement ok
+RESET datafusion.runtime.temp_directory
+
+# test memory limit effect
+statement ok
+SET datafusion.runtime.memory_limit = '1K'
+
+# This query should fail with low memory
+statement error Not enough memory to continue external sort
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+# This query should succeed after resetting memory limit
+statement ok
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+
+# reset invalid variable - typo in namespace
+statement error DataFusion error: Invalid or Unsupported Configuration: Could not find config namespace "dataexplosion"
+RESET dataexplosion.execution.batch_size
+
+# reset invalid variable - wrong namespace prefix
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "exec" not found on ConfigOptions
+RESET datafusion.exec.batch_size
+
+# reset invalid variable - typo in field name
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "batches_size" not found on ExecutionOptions
+RESET datafusion.execution.batches_size
+
+# reset invalid variable - extra suffix on valid field
+statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar usize and does not have nested field "bar"
+RESET datafusion.execution.batch_size.bar

@@ -64,8 +64,7 @@ use url::Url;
 /// when using Rust libraries such as `tonic`. Using a separate `Runtime` for
 /// CPU bound tasks will often be simpler in larger applications, even though it
 /// makes this example slightly more complex.
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn thread_pools() -> Result<()> {
     // The first two examples read local files. Enabling the URL table feature
     // lets us treat filenames as tables in SQL.
     let ctx = SessionContext::new().enable_url_table();
@@ -121,7 +120,7 @@ async fn same_runtime(ctx: &SessionContext, sql: &str) -> Result<()> {
     // Executing the plan using this pattern intermixes any IO and CPU intensive
     // work on same Runtime
     while let Some(batch) = stream.next().await {
-        println!("{}", pretty_format_batches(&[batch?]).unwrap());
+        println!("{}", pretty_format_batches(&[batch?])?);
     }
     Ok(())
 }

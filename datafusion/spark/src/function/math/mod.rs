@@ -35,6 +35,7 @@ make_udf_function!(modulus::SparkPmod, pmod);
 make_udf_function!(rint::SparkRint, rint);
 make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
+make_udf_function!(trigonometry::SparkSec, sec);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -51,6 +52,7 @@ pub mod expr_fn {
     export_functions!((rint, "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.", arg1));
     export_functions!((width_bucket, "Returns the bucket number into which the value of this expression would fall after being evaluated.", arg1 arg2 arg3 arg4));
     export_functions!((csc, "Returns the cosecant of expr.", arg1));
+    export_functions!((sec, "Returns the secant of expr.", arg1));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -63,5 +65,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         rint(),
         width_bucket(),
         csc(),
+        sec(),
     ]
 }

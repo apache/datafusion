@@ -56,9 +56,9 @@ use datafusion_datasource_csv::partitioned_csv_config;
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
 use flate2::Compression as GzCompression;
-use object_store::local_unpartitioned_file;
 #[cfg(feature = "compression")]
-use xz2::write::XzEncoder;
+use liblzma::write::XzEncoder;
+use object_store::local_unpartitioned_file;
 #[cfg(feature = "compression")]
 use zstd::Encoder as ZstdEncoder;
 

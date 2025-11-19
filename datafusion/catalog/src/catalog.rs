@@ -61,7 +61,7 @@ use datafusion_common::Result;
 /// schemas and tables exist.
 ///
 /// [Delta Lake]: https://delta.io/
-/// [`remote_catalog`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/remote_catalog.rs
+/// [`remote_catalog`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/remote_catalog.rs
 ///
 /// The [`CatalogProvider`] can support this use case, but it takes some care.
 /// The planning APIs in DataFusion are not `async` and thus network IO can not
@@ -100,7 +100,7 @@ use datafusion_common::Result;
 ///
 /// [`datafusion-cli`]: https://datafusion.apache.org/user-guide/cli/index.html
 /// [`DynamicFileCatalogProvider`]: https://github.com/apache/datafusion/blob/31b9b48b08592b7d293f46e75707aad7dadd7cbc/datafusion-cli/src/catalog.rs#L75
-/// [`catalog.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/catalog.rs
+/// [`catalog.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/catalog.rs
 /// [delta-rs]: https://github.com/delta-io/delta-rs
 /// [`UnityCatalogProvider`]: https://github.com/delta-io/delta-rs/blob/951436ecec476ce65b5ed3b58b50fb0846ca7b91/crates/deltalake-core/src/data_catalog/unity/datafusion.rs#L111-L123
 ///
