@@ -1744,6 +1744,14 @@ pub fn requalify_sides_if_needed(
     // 1. Duplicate qualified fields: both sides have same relation.name
     // 2. Duplicate unqualified fields: both sides have same unqualified name
     // 3. Ambiguous reference: one side qualified, other unqualified, same name
+    //
+    // Implementation note: This uses a simple O(n*m) nested loop rather than
+    // a HashMap-based O(n+m) approach. The nested loop is preferred because:
+    // - Schemas are typically small (per TPCH benchmark, max is 16 columns),
+    // so n*m is negligible
+    // - Early return on first conflict makes common case very fast
+    // - Code is simpler and easier to reason about
+    // - Called only during plan construction, not in execution hot path
     for l in &left_cols {
         for r in &right_cols {
             if l.name != r.name {
