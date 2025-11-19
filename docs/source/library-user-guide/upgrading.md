@@ -30,6 +30,28 @@ You can see the current [status of the `52.0.0`release here](https://github.com/
 The `pyarrow` feature flag has been removed. This feature has been migrated to
 the `datafusion-python` repository since version `44.0.0`.
 
+### Adaptive filter representation in Parquet filter pushdown
+
+As of Arrow 57.1.0, DataFusion uses a new adaptive filter strategy when
+evaluating pushed down filters for Parquet files. This new strategy improves
+performance for certain types of queries where the results of filtering are
+more efficiently represented with a bitmask rather than a selection.
+See [arrow-rs #5523] for more details.
+
+This change only applies to the built-in Parquet data source with filter-pushdown enabled (
+which is [not yet the default behavior]).
+
+You can disable the new behavior by setting the
+`datafusion.execution.parquet.force_filter_selections` [configuration setting] to true.
+
+```sql
+> set datafusion.execution.parquet.force_filter_selections = true;
+```
+
+[arrow-rs #5523]: https://github.com/apache/arrow-rs/issues/5523
+[configuration setting]: https://datafusion.apache.org/user-guide/configs.html
+[not yet the default behavior]: https://github.com/apache/datafusion/issues/3463
+
 ### Statistics handling moved from `FileSource` to `FileScanConfig`
 
 Statistics are now managed directly by `FileScanConfig` instead of being delegated to `FileSource` implementations. This simplifies the `FileSource` trait and provides more consistent statistics handling across all file formats.
