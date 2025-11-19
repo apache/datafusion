@@ -25,6 +25,8 @@ use datafusion_common::{DataFusionError, HashMap, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
 
 /// Rewrite expressions to incorporate guarantees.
+///
+/// See [`rewrite_with_guarantees`] for more information
 pub struct GuaranteeRewriter<'a> {
     guarantees: HashMap<&'a Expr, &'a NullableInterval>,
 }
