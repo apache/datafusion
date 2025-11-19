@@ -62,8 +62,8 @@ async fn main() {
         Arc::new(ChildPhysicalExtensionCodec {}),
     ]));
     let mut parser = TaskContextWithPhysicalCodec {
-        task_ctx,
-        codec: Arc::clone(&composed_codec) as Arc<dyn PhysicalExtensionCodec>,
+        task_ctx: task_ctx.as_ref(),
+        codec: composed_codec.as_ref(),
     };
 
     // serialize execution plan to proto

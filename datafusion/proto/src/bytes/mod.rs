@@ -21,7 +21,8 @@ use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use crate::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalSerializer,
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalDeserializer,
+    PhysicalSerializer, TaskContextWithPhysicalCodec,
 };
 use crate::protobuf;
 use datafusion_common::{plan_datafusion_err, Result};
@@ -315,24 +316,25 @@ pub fn physical_plan_from_json(
     back.try_into_physical_plan(ctx, &extension_codec)
 }
 
-// TODO(tsaucer) update the below methods
+/// Deserialize a PhysicalPlan from bytes
+pub fn physical_plan_from_bytes(
+    bytes: &[u8],
+    ctx: &TaskContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let extension_codec = DefaultPhysicalExtensionCodec {};
+    let mut parser = TaskContextWithPhysicalCodec {
+        task_ctx: ctx,
+        codec: &extension_codec,
+    };
+    physical_plan_from_bytes_with_extension_codec(bytes, &mut parser)
+}
 
-// /// Deserialize a PhysicalPlan from bytes
-// pub fn physical_plan_from_bytes(
-//     bytes: &[u8],
-//     ctx: &TaskContext,
-// ) -> Result<Arc<dyn ExecutionPlan>> {
-//     let extension_codec = DefaultPhysicalExtensionCodec {};
-//     physical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
-// }
-//
-// /// Deserialize a PhysicalPlan from bytes
-// pub fn physical_plan_from_bytes_with_extension_codec(
-//     bytes: &[u8],
-//     ctx: &TaskContext,
-//     extension_codec: &dyn PhysicalExtensionCodec,
-// ) -> Result<Arc<dyn ExecutionPlan>> {
-//     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
-//         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-//     protobuf.try_into_physical_plan(extension_codec)
-// }
+/// Deserialize a PhysicalPlan from bytes
+pub fn physical_plan_from_bytes_with_extension_codec<S: PhysicalDeserializer>(
+    bytes: &[u8],
+    parser: &mut S,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
+        .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
+    protobuf.try_into_physical_plan(parser)
+}

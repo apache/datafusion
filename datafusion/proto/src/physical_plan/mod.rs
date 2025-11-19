@@ -3143,12 +3143,12 @@ impl PhysicalDeserializer for Arc<TaskContext> {
     }
 }
 
-pub struct TaskContextWithPhysicalCodec {
-    pub task_ctx: Arc<TaskContext>,
-    pub codec: Arc<dyn PhysicalExtensionCodec>,
+pub struct TaskContextWithPhysicalCodec<'a, 'b> {
+    pub task_ctx: &'a TaskContext,
+    pub codec: &'b dyn PhysicalExtensionCodec,
 }
 
-impl PhysicalDeserializer for TaskContextWithPhysicalCodec {
+impl PhysicalDeserializer for TaskContextWithPhysicalCodec<'_, '_> {
     fn try_decode_execution_plan(
         &mut self,
         buf: &[u8],
@@ -3196,11 +3196,11 @@ impl PhysicalDeserializer for TaskContextWithPhysicalCodec {
     }
 
     fn config_options(&mut self) -> &Arc<ConfigOptions> {
-        self.task_ctx.config_options()
+        self.task_ctx.session_config().options()
     }
 }
 
-impl PhysicalSerializer for TaskContextWithPhysicalCodec {
+impl PhysicalSerializer for TaskContextWithPhysicalCodec<'_, '_> {
     fn try_encode_execution_plan(
         &self,
         node: Arc<dyn ExecutionPlan>,
