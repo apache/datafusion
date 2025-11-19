@@ -145,12 +145,12 @@ impl ScalarUDFImpl for ToCharFunc {
         match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::Null) => {
-                to_char_scalar(&date_time.clone(), None)
+                to_char_scalar(date_time, None)
             }
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
-                to_char_scalar(&date_time.clone(), Some(format))
+                to_char_scalar(date_time, Some(format))
             }
             ColumnarValue::Array(_) => to_char_array(&args),
             _ => {
@@ -253,7 +253,7 @@ fn to_char_scalar(
         // if the data type was a Date32, formatting could have failed because the format string
         // contained datetime specifiers, so we'll retry by casting the date array as a timestamp array
         if data_type == &Date32 {
-            return to_char_scalar(&expression.clone().cast_to(&Date64, None)?, format);
+            return to_char_scalar(&expression.cast_to(&Date64, None)?, format);
         }
 
         exec_err!("{}", formatted.unwrap_err())

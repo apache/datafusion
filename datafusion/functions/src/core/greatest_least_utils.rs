@@ -102,7 +102,7 @@ pub(super) fn execute_conditional<Op: GreatestLeastOperator>(
 
         // Start with the result value
         result = keep_array::<Op>(
-            &Arc::clone(first_array),
+            first_array,
             &result_scalar.to_array_of_size(first_array.len())?,
         )?;
     } else {
@@ -112,7 +112,7 @@ pub(super) fn execute_conditional<Op: GreatestLeastOperator>(
     }
 
     for array in arrays_iter {
-        result = keep_array::<Op>(&Arc::clone(array), &result)?;
+        result = keep_array::<Op>(array, &result)?;
     }
 
     Ok(ColumnarValue::Array(result))

@@ -197,10 +197,10 @@ impl ScalarUDFImpl for GetFieldFunc {
         };
 
         fn process_map_array(
-            array: &Arc<dyn Array>,
+            array: &dyn Array,
             key_array: Arc<dyn Array>,
         ) -> Result<ColumnarValue> {
-            let map_array = as_map_array(array.as_ref())?;
+            let map_array = as_map_array(array)?;
             let keys = if key_array.data_type().is_nested() {
                 let comparator = make_comparator(
                     map_array.keys().as_ref(),
@@ -246,10 +246,10 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         fn process_map_with_nested_key(
-            array: &Arc<dyn Array>,
+            array: &dyn Array,
             key_array: &Arc<dyn Array>,
         ) -> Result<ColumnarValue> {
-            let map_array = as_map_array(array.as_ref())?;
+            let map_array = as_map_array(array)?;
 
             let comparator = make_comparator(
                 map_array.keys().as_ref(),
