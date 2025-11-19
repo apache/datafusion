@@ -82,23 +82,6 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
     Ok(())
 }
 
-/// Simulates calling an async external service
-async fn call_external_service(arg1: &ColumnarValue) -> Result<Vec<String>> {
-    let vec1 = match arg1 {
-        ColumnarValue::Array(arr) => {
-            let string_arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
-            string_arr
-                .iter()
-                .map(|s| s.unwrap_or("").to_string())
-                .collect()
-        }
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => vec![s.clone()],
-        _ => return exec_err!("Unexpected data type for arg1"),
-    };
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    Ok(vec1)
-}
-
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct TestAsyncUDFImpl {
     batch_size: usize,
@@ -149,4 +132,21 @@ impl AsyncScalarUDFImpl for TestAsyncUDFImpl {
         let results = call_external_service(arg1).await?;
         Ok(ColumnarValue::Array(Arc::new(StringArray::from(results))))
     }
+}
+
+/// Simulates calling an async external service
+async fn call_external_service(arg1: &ColumnarValue) -> Result<Vec<String>> {
+    let vec1 = match arg1 {
+        ColumnarValue::Array(arr) => {
+            let string_arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
+            string_arr
+                .iter()
+                .map(|s| s.unwrap_or("").to_string())
+                .collect()
+        }
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => vec![s.clone()],
+        _ => return exec_err!("Unexpected data type for arg1"),
+    };
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    Ok(vec1)
 }
