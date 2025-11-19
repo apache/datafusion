@@ -96,50 +96,42 @@ fn rewrite_expr(
         return Ok(Transformed::no(expr));
     }
 
-    let new_expr = match &expr {
+    // If an expression collapses to a single value, replace it with a literal
+    if let Some(interval) = guarantees.get(&expr) {
+        if let Some(value) = interval.single_value() {
+            return Ok(Transformed::yes(lit(value)));
+        }
+    }
+
+    let result = match expr {
         Expr::IsNull(inner) => match guarantees.get(inner.as_ref()) {
-            Some(NullableInterval::Null { .. }) => Some(lit(true)),
-            Some(NullableInterval::NotNull { .. }) => Some(lit(false)),
-            _ => None,
+            Some(NullableInterval::Null { .. }) => Transformed::yes(lit(true)),
+            Some(NullableInterval::NotNull { .. }) => Transformed::yes(lit(false)),
+            _ => Transformed::no(Expr::IsNull(inner)),
         },
         Expr::IsNotNull(inner) => match guarantees.get(inner.as_ref()) {
-            Some(NullableInterval::Null { .. }) => Some(lit(false)),
-            Some(NullableInterval::NotNull { .. }) => Some(lit(true)),
-            _ => None,
+            Some(NullableInterval::Null { .. }) => Transformed::yes(lit(false)),
+            Some(NullableInterval::NotNull { .. }) => Transformed::yes(lit(true)),
+            _ => Transformed::no(Expr::IsNotNull(inner)),
         },
         Expr::Between(b) => rewrite_between(b, guarantees)?,
         Expr::BinaryExpr(b) => rewrite_binary_expr(b, guarantees)?,
         Expr::InList(i) => rewrite_inlist(i, guarantees)?,
-        _ => None,
+        expr => Transformed::no(expr),
     };
-
-    if let Some(e) = new_expr {
-        return Ok(Transformed::yes(e));
-    }
-
-    match guarantees.get(&expr) {
-        Some(interval) => {
-            // If an expression collapses to a single value, replace it with a literal
-            if let Some(value) = interval.single_value() {
-                Ok(Transformed::yes(lit(value)))
-            } else {
-                Ok(Transformed::no(expr))
-            }
-        }
-        _ => Ok(Transformed::no(expr)),
-    }
+    Ok(result)
 }
 
 fn rewrite_between(
-    between: &Between,
+    between: Between,
     guarantees: &HashMap<&Expr, &NullableInterval>,
-) -> Result<Option<Expr>, DataFusionError> {
+) -> Result<Transformed<Expr>> {
     let (Some(interval), Expr::Literal(low, _), Expr::Literal(high, _)) = (
         guarantees.get(between.expr.as_ref()),
         between.low.as_ref(),
         between.high.as_ref(),
     ) else {
-        return Ok(None);
+        return Ok(Transformed::no(Expr::Between(between)));
     };
 
     // Ensure that, if low or high are null, their type matches the other bound
@@ -149,7 +141,7 @@ fn rewrite_between(
     let Ok(values) = Interval::try_new(low, high) else {
         // If we can't create an interval from the literals, be conservative and simply leave
         // the expression unmodified.
-        return Ok(None);
+        return Ok(Transformed::no(Expr::Between(between)));
     };
 
     let expr_interval = NullableInterval::NotNull { values };
@@ -157,11 +149,11 @@ fn rewrite_between(
     let contains = expr_interval.contains(*interval)?;
 
     if contains.is_certainly_true() {
-        Ok(Some(lit(!between.negated)))
+        Ok(Transformed::yes(lit(!between.negated)))
     } else if contains.is_certainly_false() {
-        Ok(Some(lit(between.negated)))
+        Ok(Transformed::yes(lit(between.negated)))
     } else {
-        Ok(None)
+        Ok(Transformed::no(Expr::Between(between)))
     }
 }
 
@@ -179,9 +171,9 @@ fn ensure_typed_null(
 }
 
 fn rewrite_binary_expr(
-    binary: &BinaryExpr,
+    binary: BinaryExpr,
     guarantees: &HashMap<&Expr, &NullableInterval>,
-) -> Result<Option<Expr>, DataFusionError> {
+) -> Result<Transformed<Expr>, DataFusionError> {
     // The left or right side of expression might either have a guarantee
     // or be a literal. Either way, we can resolve them to a NullableInterval.
     let left_interval = guarantees
@@ -205,53 +197,53 @@ fn rewrite_binary_expr(
             }
         });
 
-    Ok(match (left_interval, right_interval) {
-        (Some(left_interval), Some(right_interval)) => {
-            let result =
-                left_interval.apply_operator(&binary.op, right_interval.as_ref())?;
-            if result.is_certainly_true() {
-                Some(lit(true))
-            } else if result.is_certainly_false() {
-                Some(lit(false))
-            } else {
-                None
-            }
+    if let (Some(left_interval), Some(right_interval)) = (left_interval, right_interval) {
+        let result = left_interval.apply_operator(&binary.op, right_interval.as_ref())?;
+        if result.is_certainly_true() {
+            return Ok(Transformed::yes(lit(true)));
+        } else if result.is_certainly_false() {
+            return Ok(Transformed::yes(lit(false)));
         }
-        _ => None,
-    })
+    }
+    Ok(Transformed::no(Expr::BinaryExpr(binary)))
 }
 
 fn rewrite_inlist(
-    inlist: &InList,
+    inlist: InList,
     guarantees: &HashMap<&Expr, &NullableInterval>,
-) -> Result<Option<Expr>, DataFusionError> {
+) -> Result<Transformed<Expr>, DataFusionError> {
     let Some(interval) = guarantees.get(inlist.expr.as_ref()) else {
-        return Ok(None);
+        return Ok(Transformed::no(Expr::InList(inlist)));
     };
 
+    let InList {
+        expr,
+        list,
+        negated,
+    } = inlist;
+
     // Can remove items from the list that don't match the guarantee
-    let new_list: Vec<Expr> = inlist
-        .list
-        .iter()
+    let list: Vec<Expr> = list
+        .into_iter()
         .filter_map(|expr| {
-            if let Expr::Literal(item, _) = expr {
+            if let Expr::Literal(item, _) = &expr {
                 match interval.contains(NullableInterval::from(item.clone())) {
                     // If we know for certain the value isn't in the column's interval,
                     // we can skip checking it.
                     Ok(interval) if interval.is_certainly_false() => None,
-                    Ok(_) => Some(Ok(expr.clone())),
+                    Ok(_) => Some(Ok(expr)),
                     Err(e) => Some(Err(e)),
                 }
             } else {
-                Some(Ok(expr.clone()))
+                Some(Ok(expr))
             }
         })
         .collect::<Result<_, DataFusionError>>()?;
 
-    Ok(Some(Expr::InList(InList {
-        expr: inlist.expr.clone(),
-        list: new_list,
-        negated: inlist.negated,
+    Ok(Transformed::yes(Expr::InList(InList {
+        expr,
+        list,
+        negated,
     })))
 }
 
