@@ -90,13 +90,6 @@ use sqlparser::{
 use url::Url;
 use uuid::Uuid;
 
-/// A [`CacheFactory`] can be registered via [`SessionState`]
-/// to create a custom logical plan for caching.
-/// Additionally, a custom [`crate::physical_planner::ExtensionPlanner`]/[`QueryPlanner`]
-/// may need to be implemented to handle such plans.
-pub type CacheFactory =
-    fn(LogicalPlan, &SessionState) -> datafusion_common::Result<LogicalPlan>;
-
 /// `SessionState` contains all the necessary state to plan and execute queries,
 /// such as configuration, functions, and runtime environment. Please see the
 /// documentation on [`SessionContext`] for more information.
@@ -192,7 +185,7 @@ pub struct SessionState {
     /// It will be invoked on `CREATE FUNCTION` statements.
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
-    cache_factory: Option<CacheFactory>,
+    cache_factory: Option<Arc<dyn CacheFactory>>,
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
@@ -365,12 +358,12 @@ impl SessionState {
     }
 
     /// Register a [`CacheFactory`] for custom caching strategy
-    pub fn set_cache_factory(&mut self, cache_factory: CacheFactory) {
+    pub fn set_cache_factory(&mut self, cache_factory: Arc<dyn CacheFactory>) {
         self.cache_factory = Some(cache_factory);
     }
 
     /// Get the cache factory
-    pub fn cache_factory(&self) -> Option<&CacheFactory> {
+    pub fn cache_factory(&self) -> Option<&Arc<dyn CacheFactory>> {
         self.cache_factory.as_ref()
     }
 
@@ -960,7 +953,7 @@ pub struct SessionStateBuilder {
     table_factories: Option<HashMap<String, Arc<dyn TableProviderFactory>>>,
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
-    cache_factory: Option<CacheFactory>,
+    cache_factory: Option<Arc<dyn CacheFactory>>,
     // fields to support convenience functions
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
@@ -1341,7 +1334,10 @@ impl SessionStateBuilder {
     }
 
     /// Set a [`CacheFactory`] for custom caching strategy
-    pub fn with_cache_factory(mut self, cache_factory: Option<CacheFactory>) -> Self {
+    pub fn with_cache_factory(
+        mut self,
+        cache_factory: Option<Arc<dyn CacheFactory>>,
+    ) -> Self {
         self.cache_factory = cache_factory;
         self
     }
@@ -1651,7 +1647,7 @@ impl SessionStateBuilder {
     }
 
     /// Returns the cache factory
-    pub fn cache_factory(&mut self) -> &mut Option<CacheFactory> {
+    pub fn cache_factory(&mut self) -> &mut Option<Arc<dyn CacheFactory>> {
         &mut self.cache_factory
     }
 
@@ -2080,6 +2076,19 @@ pub(crate) struct PreparedPlan {
     pub(crate) fields: Vec<FieldRef>,
     /// The prepared logical plan
     pub(crate) plan: Arc<LogicalPlan>,
+}
+
+/// A [`CacheFactory`] can be registered via [`SessionState`]
+/// to create a custom logical plan for caching.
+/// Additionally, a custom [`crate::physical_planner::ExtensionPlanner`]/[`QueryPlanner`]
+/// may need to be implemented to handle such plans.
+pub trait CacheFactory: Debug + Send + Sync {
+    /// Create a logical plan for caching
+    fn create(
+        &self,
+        plan: LogicalPlan,
+        session_state: &SessionState,
+    ) -> datafusion_common::Result<LogicalPlan>;
 }
 
 #[cfg(test)]

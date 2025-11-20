@@ -37,6 +37,7 @@ use crate::dataframe::DataFrame;
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
+use crate::execution::session_state::CacheFactory;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{CsvReadOptions, SessionContext};
@@ -325,19 +326,25 @@ impl UserDefinedLogicalNodeCore for CacheNode {
     }
 }
 
-fn cache_factory(
-    plan: LogicalPlan,
-    _session_state: &SessionState,
-) -> Result<LogicalPlan> {
-    Ok(LogicalPlan::Extension(datafusion_expr::Extension {
-        node: Arc::new(CacheNode { input: plan }),
-    }))
+#[derive(Debug)]
+struct TestCacheFactory {}
+
+impl CacheFactory for TestCacheFactory {
+    fn create(
+        &self,
+        plan: LogicalPlan,
+        _session_state: &SessionState,
+    ) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(CacheNode { input: plan }),
+        }))
+    }
 }
 
 /// Create a test table registered to a session context with an associated cache factory
 pub async fn test_table_with_cache_factory() -> Result<DataFrame> {
     let session_state = SessionStateBuilder::new()
-        .with_cache_factory(Some(cache_factory))
+        .with_cache_factory(Some(Arc::new(TestCacheFactory {})))
         .build();
     let ctx = SessionContext::new_with_state(session_state);
     let name = "aggregate_test_100";

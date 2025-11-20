@@ -2328,8 +2328,11 @@ impl DataFrame {
         })
     }
 
-    /// Cache DataFrame as a memory table by default, or use
-    /// a [`crate::execution::session_state::CacheFactory`] if configured via [`SessionState`].
+    /// Cache DataFrame as a memory table.
+    ///
+    /// Default behavior could be changed using
+    /// a [`crate::execution::session_state::CacheFactory`]
+    /// configured via [`SessionState`].
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -2346,7 +2349,8 @@ impl DataFrame {
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
         if let Some(cache_factory) = self.session_state.cache_factory() {
-            let new_plan = cache_factory(self.plan, self.session_state.as_ref())?;
+            let new_plan =
+                cache_factory.create(self.plan, self.session_state.as_ref())?;
             Ok(Self {
                 session_state: self.session_state,
                 plan: new_plan,
