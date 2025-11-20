@@ -19,16 +19,18 @@
 
 use arrow::datatypes::DataType::{Float64, UInt64};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::types::NativeType;
+use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -57,18 +59,9 @@ make_udaf_expr_and_func!(
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ApproxMedian {
     signature: Signature,
-}
-
-impl Debug for ApproxMedian {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("ApproxMedian")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for ApproxMedian {
@@ -81,33 +74,53 @@ impl ApproxMedian {
     /// Create a new APPROX_MEDIAN aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Integer,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Decimal],
+                        NativeType::Float64,
+                    )]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
 
 impl AggregateUDFImpl for ApproxMedian {
-    /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new(format_state_name(args.name, "max_size"), UInt64, false),
-            Field::new(format_state_name(args.name, "sum"), Float64, false),
-            Field::new(format_state_name(args.name, "count"), UInt64, false),
-            Field::new(format_state_name(args.name, "max"), Float64, false),
-            Field::new(format_state_name(args.name, "min"), Float64, false),
-            Field::new_list(
-                format_state_name(args.name, "centroids"),
-                Field::new_list_field(Float64, true),
-                false,
-            ),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect())
+        if args.input_fields[0].data_type().is_null() {
+            Ok(vec![Field::new(
+                format_state_name(args.name, self.name()),
+                DataType::Null,
+                true,
+            )
+            .into()])
+        } else {
+            Ok(vec![
+                Field::new(format_state_name(args.name, "max_size"), UInt64, false),
+                Field::new(format_state_name(args.name, "sum"), Float64, false),
+                Field::new(format_state_name(args.name, "count"), UInt64, false),
+                Field::new(format_state_name(args.name, "max"), Float64, false),
+                Field::new(format_state_name(args.name, "min"), Float64, false),
+                Field::new_list(
+                    format_state_name(args.name, "centroids"),
+                    Field::new_list_field(Float64, true),
+                    false,
+                ),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect())
+        }
     }
 
     fn name(&self) -> &str {
@@ -119,9 +132,6 @@ impl AggregateUDFImpl for ApproxMedian {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("ApproxMedian requires numeric input types");
-        }
         Ok(arg_types[0].clone())
     }
 
@@ -132,10 +142,14 @@ impl AggregateUDFImpl for ApproxMedian {
             );
         }
 
-        Ok(Box::new(ApproxPercentileAccumulator::new(
-            0.5_f64,
-            acc_args.expr_fields[0].data_type().clone(),
-        )))
+        if acc_args.expr_fields[0].data_type().is_null() {
+            Ok(Box::new(NoopAccumulator::default()))
+        } else {
+            Ok(Box::new(ApproxPercentileAccumulator::new(
+                0.5_f64,
+                acc_args.expr_fields[0].data_type().clone(),
+            )))
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {

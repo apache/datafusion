@@ -32,7 +32,6 @@
 use arrow::datatypes::DataType;
 use arrow::datatypes::Float64Type;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use std::cmp::Ordering;
 use std::mem::{size_of, size_of_val};
@@ -60,41 +59,6 @@ macro_rules! cast_scalar_u64 {
         }
     };
 }
-
-/// This trait is implemented for each type a [`TDigest`] can operate on,
-/// allowing it to support both numerical rust types (obtained from
-/// `PrimitiveArray` instances), and [`ScalarValue`] instances.
-pub trait TryIntoF64 {
-    /// A fallible conversion of a possibly null `self` into a [`f64`].
-    ///
-    /// If `self` is null, this method must return `Ok(None)`.
-    ///
-    /// If `self` cannot be coerced to the desired type, this method must return
-    /// an `Err` variant.
-    fn try_as_f64(&self) -> Result<Option<f64>>;
-}
-
-/// Generate an infallible conversion from `type` to an [`f64`].
-macro_rules! impl_try_ordered_f64 {
-    ($type:ty) => {
-        impl TryIntoF64 for $type {
-            fn try_as_f64(&self) -> Result<Option<f64>> {
-                Ok(Some(*self as f64))
-            }
-        }
-    };
-}
-
-impl_try_ordered_f64!(f64);
-impl_try_ordered_f64!(f32);
-impl_try_ordered_f64!(i64);
-impl_try_ordered_f64!(i32);
-impl_try_ordered_f64!(i16);
-impl_try_ordered_f64!(i8);
-impl_try_ordered_f64!(u64);
-impl_try_ordered_f64!(u32);
-impl_try_ordered_f64!(u16);
-impl_try_ordered_f64!(u8);
 
 /// Centroid implementation to the cluster mentioned in the paper.
 #[derive(Debug, PartialEq, Clone)]
