@@ -16,9 +16,9 @@
 // under the License.
 
 use datafusion_common::{
-    internal_err, plan_err,
+    assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    DFSchemaRef, Result,
+    DFSchemaRef, DataFusionError, Result,
 };
 
 use crate::{
@@ -114,15 +114,13 @@ fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
 pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Result<()> {
     let compatible = plan.schema().logically_equivalent_names_and_types(schema);
 
-    if !compatible {
-        internal_err!(
-            "Failed due to a difference in schemas: original schema: {:?}, new schema: {:?}",
-            schema,
-            plan.schema()
-        )
-    } else {
-        Ok(())
-    }
+    assert_or_internal_err!(
+        compatible,
+        "Failed due to a difference in schemas: original schema: {:?}, new schema: {:?}",
+        schema,
+        plan.schema()
+    );
+    Ok(())
 }
 
 /// Asserts that the subqueries are structured properly with valid node placement.

@@ -1072,6 +1072,7 @@ pub async fn fetch_statistics(
     since = "50.0.0",
     note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
@@ -1500,7 +1501,7 @@ fn spawn_parquet_parallel_serialization_task(
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
-    parallel_options: ParallelParquetWriterOptions,
+    parallel_options: Arc<ParallelParquetWriterOptions>,
     pool: Arc<dyn MemoryPool>,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
@@ -1671,7 +1672,7 @@ async fn output_single_parquet_file_parallelized(
         serialize_tx,
         Arc::clone(&output_schema),
         Arc::clone(&arc_props),
-        parallel_options,
+        parallel_options.into(),
         Arc::clone(&pool),
     );
     let parquet_meta_data = concatenate_parallel_row_groups(

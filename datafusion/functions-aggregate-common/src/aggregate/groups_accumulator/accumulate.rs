@@ -218,14 +218,10 @@ impl NullState {
             EmitTo::All => nulls,
             EmitTo::First(n) => {
                 // split off the first N values in seen_values
-                //
-                // TODO make this more efficient rather than two
-                // copies and bitwise manipulation
-                let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
+                let first_n_null: BooleanBuffer = nulls.slice(0, n);
                 // reset the existing seen buffer
-                for seen in nulls.iter().skip(n) {
-                    self.seen_values.append(seen);
-                }
+                self.seen_values
+                    .append_buffer(&nulls.slice(n, nulls.len() - n));
                 first_n_null
             }
         };

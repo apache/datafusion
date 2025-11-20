@@ -16,7 +16,8 @@
 // under the License.
 
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, PruningMetrics, Time,
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, PruningMetrics,
+    RatioMergeStrategy, RatioMetrics, Time,
 };
 
 /// Stores metrics about the parquet execution for a particular parquet file.
@@ -66,6 +67,8 @@ pub struct ParquetFileMetrics {
     pub page_index_eval_time: Time,
     /// Total time spent reading and parsing metadata from the footer
     pub metadata_load_time: Time,
+    /// Scan Efficiency Ratio, calculated as bytes_scanned / total_file_size
+    pub scan_efficiency_ratio: RatioMetrics,
     /// Predicate Cache: number of records read directly from the inner reader.
     /// This is the number of rows decoded while evaluating predicates
     pub predicate_cache_inner_records: Count,
@@ -113,6 +116,15 @@ impl ParquetFileMetrics {
         let files_ranges_pruned_statistics = MetricBuilder::new(metrics)
             .with_type(MetricType::SUMMARY)
             .pruning_metrics("files_ranges_pruned_statistics", partition);
+
+        let scan_efficiency_ratio = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
+            .ratio_metrics_with_strategy(
+                "scan_efficiency_ratio",
+                partition,
+                RatioMergeStrategy::AddPartSetTotal,
+            );
 
         // -----------------------
         // 'dev' level metrics
@@ -164,6 +176,7 @@ impl ParquetFileMetrics {
             bloom_filter_eval_time,
             page_index_eval_time,
             metadata_load_time,
+            scan_efficiency_ratio,
             predicate_cache_inner_records,
             predicate_cache_records,
         }

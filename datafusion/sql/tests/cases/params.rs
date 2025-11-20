@@ -105,7 +105,7 @@ fn test_prepare_statement_to_plan_panic_param_format() {
     assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
         @r###"
-        Error during planning: Invalid placeholder, not a number: $foo
+        Error during planning: Unknown placeholder: $foo
         "###
     );
 }

@@ -45,8 +45,9 @@ pub use plan::{
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
-    Deallocate, Execute, Prepare, SetVariable, Statement, TransactionAccessMode,
-    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
+    Deallocate, Execute, Prepare, ResetVariable, SetVariable, Statement,
+    TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart,
 };
 
 pub use datafusion_common::format::ExplainFormat;

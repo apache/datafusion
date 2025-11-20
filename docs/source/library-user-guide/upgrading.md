@@ -40,11 +40,49 @@ directly on the `Field`. For example:
 + let field = Arc::clone(df_schema.field("my_column"));
 ```
 
+### Planner now requires explicit opt-in for WITHIN GROUP syntax
+
+The SQL planner now enforces the aggregate UDF contract more strictly: the
+`WITHIN GROUP (ORDER BY ...)` syntax is accepted only if the aggregate UDAF
+explicitly advertises support by returning `true` from
+`AggregateUDFImpl::supports_within_group_clause()`.
+
+Previously the planner forwarded a `WITHIN GROUP` clause to order-sensitive
+aggregates even when they did not implement ordered-set semantics, which could
+cause queries such as `SUM(x) WITHIN GROUP (ORDER BY x)` to plan successfully.
+This behavior was too permissive and has been changed to match PostgreSQL and
+the documented semantics.
+
+Migration: If your UDAF intentionally implements ordered-set semantics and
+wants to accept the `WITHIN GROUP` SQL syntax, update your implementation to
+return `true` from `supports_within_group_clause()` and handle the ordering
+semantics in your accumulator implementation. If your UDAF is merely
+order-sensitive (but not an ordered-set aggregate), do not advertise
+`supports_within_group_clause()` and clients should use alternative function
+signatures (for example, explicit ordering as a function argument) instead.
+
+### `AggregateUDFImpl::supports_null_handling_clause` now defaults to `false`
+
+This method specifies whether an aggregate function allows `IGNORE NULLS`/`RESPECT NULLS`
+during SQL parsing, with the implication it respects these configs during computation.
+
+Most DataFusion aggregate functions silently ignored this syntax in prior versions
+as they did not make use of it and it was permitted by default. We change this so
+only the few functions which do respect this clause (e.g. `array_agg`, `first_value`,
+`last_value`) need to implement it.
+
+Custom user defined aggregate functions will also error if this syntax is used,
+unless they explicitly declare support by overriding the method.
+
+For example, SQL parsing will now fail for queries such as this:
+
+```sql
+SELECT median(c1) IGNORE NULLS FROM table
+```
+
+Instead of silently succeeding.
+
 ## DataFusion `51.0.0`
-
-**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-
-You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
 
 ### `arrow` / `parquet` updated to 57.0.0
 

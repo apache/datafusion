@@ -70,7 +70,7 @@ use arrow::{
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     common::cast::as_int64_array,
-    common::{arrow_datafusion_err, internal_err, DFSchemaRef},
+    common::{arrow_datafusion_err, DFSchemaRef},
     error::{DataFusionError, Result},
     execution::{
         context::{QueryPlanner, SessionState, TaskContext},
@@ -91,7 +91,7 @@ use datafusion::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::ScalarValue;
+use datafusion_common::{assert_eq_or_internal_err, assert_or_internal_err, ScalarValue};
 use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
@@ -585,9 +585,10 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
             kind,
         }) = self.invariant_mock.clone()
         {
-            if should_fail_invariant && check == kind {
-                return internal_err!("node fails check, such as improper inputs");
-            }
+            assert_or_internal_err!(
+                !(should_fail_invariant && check == kind),
+                "node fails check, such as improper inputs"
+            );
         }
         Ok(())
     }
@@ -733,9 +734,11 @@ impl ExecutionPlan for TopKExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if 0 != partition {
-            return internal_err!("TopKExec invalid partition {partition}");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "TopKExec invalid partition {partition}"
+        );
 
         Ok(Box::pin(TopKReader {
             input: self.input.execute(partition, context)?,
