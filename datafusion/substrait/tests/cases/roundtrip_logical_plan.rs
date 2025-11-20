@@ -2086,3 +2086,108 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
+    use datafusion::logical_expr::{
+        col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
+    };
+    use std::sync::Arc;
+
+    let ctx = create_context().await?;
+
+    // Build a RecursiveQuery with specific child plan structures
+    let empty_plan = LogicalPlanBuilder::empty(false).build()?;
+    let static_term = LogicalPlanBuilder::from(empty_plan.clone())
+        .project(vec![lit(42i64).alias("value")])? // Use specific value
+        .build()?;
+
+    // Create a more complex recursive term with filter and projection
+    let table = ctx.table("data").await?;
+    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
+        .filter(col("a").gt(lit(5i64)))? // Specific filter condition
+        .project(vec![
+            (col("a") * lit(2i64)).alias("value"), // Specific projection
+        ])?
+        .build()?;
+
+    let original_plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+        name: "test_cte".to_string(),
+        static_term: Arc::new(static_term),
+        recursive_term: Arc::new(recursive_term),
+        is_distinct: false,
+    });
+
+    // Convert to substrait and back
+    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
+    let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    // Extract the RecursiveQuery from potential projection wrapper
+    let roundtrip_rq = match roundtrip_plan {
+        LogicalPlan::RecursiveQuery(ref rq) => rq,
+        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(ref rq) => rq,
+            _ => panic!(
+                "Expected RecursiveQuery inside Projection, got: {:?}",
+                roundtrip_plan
+            ),
+        },
+        _ => panic!(
+            "Expected RecursiveQuery or Projection, got: {:?}",
+            roundtrip_plan
+        ),
+    };
+
+    // Verify metadata is preserved
+    assert_eq!(roundtrip_rq.name, "test_cte");
+    assert_eq!(roundtrip_rq.is_distinct, false);
+
+    // Verify static_term structure is preserved
+    // The static term should contain a projection
+    match roundtrip_rq.static_term.as_ref() {
+        LogicalPlan::Projection(proj) => {
+            assert_eq!(proj.expr.len(), 1, "Static term should have 1 projection");
+            // Verify the projection contains our literal 42
+            let expr_str = format!("{:?}", proj.expr[0]);
+            assert!(
+                expr_str.contains("42") || expr_str.contains("Int64(42)"),
+                "Static term should contain literal 42, got: {}",
+                expr_str
+            );
+        }
+        other => panic!("Expected static_term to be Projection, got: {:?}", other),
+    }
+
+    // Verify recursive_term structure is preserved
+    // The recursive term should contain a projection over a filter over a table scan
+    match roundtrip_rq.recursive_term.as_ref() {
+        LogicalPlan::Projection(proj) => {
+            assert_eq!(
+                proj.expr.len(),
+                1,
+                "Recursive term should have 1 projection"
+            );
+            // Check that the input is a filter
+            match proj.input.as_ref() {
+                LogicalPlan::Filter(filter) => {
+                    // Verify filter condition references column 'a' and value 5
+                    let filter_str = format!("{:?}", filter.predicate);
+                    assert!(
+                        filter_str.contains("a") && filter_str.contains("5"),
+                        "Filter should contain 'a > 5', got: {}",
+                        filter_str
+                    );
+                    // Verify there's a table scan underneath
+                    assert!(
+                        matches!(filter.input.as_ref(), LogicalPlan::TableScan(_)),
+                        "Expected TableScan under filter"
+                    );
+                }
+                other => panic!("Expected Filter under projection, got: {:?}", other),
+            }
+        }
+        other => panic!("Expected recursive_term to be Projection, got: {:?}", other),
+    }
+
+    Ok(())
+}

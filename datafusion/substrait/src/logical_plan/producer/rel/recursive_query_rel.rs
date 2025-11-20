@@ -93,5 +93,11 @@ pub fn decode_recursive_query_detail(
             e
         ))
     })?;
+
+    // Validate that name is not empty
+    if detail.name.is_empty() {
+        return datafusion::common::substrait_err!("RecursiveQuery name cannot be empty");
+    }
+
     Ok((detail.name, detail.is_distinct))
 }
