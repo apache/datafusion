@@ -241,9 +241,7 @@ impl LogicalType for NativeType {
             (Self::Decimal(p, s), _) => Decimal256(*p, *s),
             (Self::Timestamp(tu, tz), _) => Timestamp(*tu, tz.clone()),
             // If given type is Date, return the same type
-            (Self::Date, origin) if matches!(origin, Date32 | Date64) => {
-                origin.to_owned()
-            }
+            (Self::Date, Date32 | Date64) => origin.to_owned(),
             (Self::Date, _) => Date32,
             (Self::Time(tu), _) => match tu {
                 TimeUnit::Second | TimeUnit::Millisecond => Time32(*tu),
@@ -253,6 +251,8 @@ impl LogicalType for NativeType {
             (Self::Interval(iu), _) => Interval(*iu),
             (Self::Binary, LargeUtf8) => LargeBinary,
             (Self::Binary, Utf8View) => BinaryView,
+            // We don't cast to another kind of binary type if the origin one is already a binary type
+            (Self::Binary, Binary | LargeBinary | BinaryView) => origin.to_owned(),
             (Self::Binary, data_type) if can_cast_types(data_type, &BinaryView) => {
                 BinaryView
             }
