@@ -114,7 +114,6 @@ pub async fn from_read_rel(
             .await
         }
         Some(ReadType::VirtualTable(vt)) => {
-            #[allow(deprecated)]
             if vt.values.is_empty() && vt.expressions.is_empty() {
                 return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row: false,
@@ -127,7 +126,6 @@ pub async fn from_read_rel(
             // an EmptyRelation with produce_one_row=true. This pattern is used for queries without
             // a FROM clause (e.g., "SELECT 1 AS one") where a single phantom row is needed to
             // provide a context for evaluating scalar expressions.
-            #[allow(deprecated)]
             let is_produce_one_row = (vt.values.len() == 1
                 && vt.expressions.is_empty()
                 && substrait_schema.fields().is_empty()
@@ -166,7 +164,6 @@ pub async fn from_read_rel(
                 }
                 exprs
             } else {
-                #[allow(deprecated)]
                 {
                     vt
                     .values
