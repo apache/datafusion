@@ -78,14 +78,14 @@ To update your code, suppose you have a `FFI_SchemaProvider` called `ffi_provide
 and you wish to use this as a `SchemaProvider`. In the old approach you would do
 something like:
 
-```rust
+```rust,ignore
     let foreign_provider: ForeignSchemaProvider = provider.into();
     let foreign_provider = Arc::new(foreign_provider) as Arc<dyn SchemaProvider>;
 ```
 
 This code should now be written as:
 
-```rust
+```rust,ignore
     let foreign_provider: Arc<dyn SchemaProvider + Send> = provider.into();
     let foreign_provider = foreign_provider as Arc<dyn SchemaProvider>;
 ```
@@ -96,14 +96,14 @@ Aggregate and window functions follow the same pattern.
 
 Previously you may write:
 
-```rust
+```rust,ignore
     let foreign_udf: ForeignScalarUDF = ffi_udf.try_into()?;
     let foreign_udf: ScalarUDF = foreign_udf.into();
 ```
 
 Instead this should now be:
 
-```rust
+```rust,ignore
     let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.try_into()?;
     let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
 ```
