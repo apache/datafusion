@@ -1,0 +1,211 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Reverse Parquet Scan Tests - Test reverse scan optimization
+##########
+
+# Setup: Create a table with sorted data
+statement ok
+CREATE TABLE test_reverse_scan(id INT, value INT, name VARCHAR) AS
+VALUES
+    (1, 100, 'a'),
+    (2, 200, 'b'),
+    (3, 300, 'c'),
+    (4, 400, 'd'),
+    (5, 500, 'e'),
+    (6, 600, 'f'),
+    (7, 700, 'g'),
+    (8, 800, 'h'),
+    (9, 900, 'i'),
+    (10, 1000, 'j');
+
+# Copy to parquet (data is already sorted by id ASC)
+query I
+COPY (SELECT * FROM test_reverse_scan ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/sorted_data.parquet'
+STORED AS PARQUET;
+----
+10
+
+# Create external table WITH ORDER clause to tell DataFusion the data is sorted
+statement ok
+CREATE EXTERNAL TABLE parquet_reverse_test (
+    id INT NOT NULL,
+    value INT NOT NULL,
+    name TEXT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (id ASC NULLS LAST)
+LOCATION 'test_files/scratch/reverse_parquet_scan/sorted_data.parquet';
+
+# Test EXPLAIN for DESC order - should show reverse optimization applied
+query TT
+EXPLAIN SELECT * FROM parquet_reverse_test ORDER BY id DESC;
+----
+logical_plan
+01)Sort: parquet_reverse_test.id DESC NULLS FIRST
+02)--TableScan: parquet_reverse_test projection=[id, value, name]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id, value, name], output_ordering=[id@0 DESC], file_type=parquet
+
+# Test 1: Basic reverse scan - data should come out in reverse order
+query IIT
+SELECT * FROM parquet_reverse_test ORDER BY id DESC;
+----
+10 1000 j
+9 900 i
+8 800 h
+7 700 g
+6 600 f
+5 500 e
+4 400 d
+3 300 c
+2 200 b
+1 100 a
+
+# Test 2: Forward scan still works (should use original ordering)
+query TT
+EXPLAIN SELECT * FROM parquet_reverse_test ORDER BY id ASC;
+----
+logical_plan
+01)Sort: parquet_reverse_test.id ASC NULLS LAST
+02)--TableScan: parquet_reverse_test projection=[id, value, name]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id, value, name], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+query IIT
+SELECT * FROM parquet_reverse_test ORDER BY id ASC;
+----
+1 100 a
+2 200 b
+3 300 c
+4 400 d
+5 500 e
+6 600 f
+7 700 g
+8 800 h
+9 900 i
+10 1000 j
+
+# Test 3: Reverse scan with LIMIT
+query IIT
+SELECT * FROM parquet_reverse_test ORDER BY id DESC LIMIT 3;
+----
+10 1000 j
+9 900 i
+8 800 h
+
+# Test 4: Reverse scan with WHERE clause
+query IIT
+SELECT * FROM parquet_reverse_test WHERE id > 5 ORDER BY id DESC;
+----
+10 1000 j
+9 900 i
+8 800 h
+7 700 g
+6 600 f
+
+# Test 5: Multiple column sort with DESC
+query IIT
+SELECT * FROM parquet_reverse_test ORDER BY id DESC, value DESC LIMIT 5;
+----
+10 1000 j
+9 900 i
+8 800 h
+7 700 g
+6 600 f
+
+# Test 6: Test with aggregation
+query II
+SELECT id, SUM(value) as total
+FROM parquet_reverse_test
+WHERE id <= 5
+GROUP BY id
+ORDER BY id DESC;
+----
+5 500
+4 400
+3 300
+2 200
+1 100
+
+# Test 7: BETWEEN with DESC
+query IIT
+SELECT * FROM parquet_reverse_test WHERE id BETWEEN 3 AND 7 ORDER BY id DESC;
+----
+7 700 g
+6 600 f
+5 500 e
+4 400 d
+3 300 c
+
+# Test 8: Verify first/last swap
+query I
+SELECT id FROM parquet_reverse_test ORDER BY id ASC LIMIT 1;
+----
+1
+
+query I
+SELECT id FROM parquet_reverse_test ORDER BY id DESC LIMIT 1;
+----
+10
+
+query TT
+EXPLAIN SELECT id FROM parquet_reverse_test ORDER BY id DESC LIMIT 1;
+----
+logical_plan
+01)Sort: parquet_reverse_test.id DESC NULLS FIRST, fetch=1
+02)--TableScan: parquet_reverse_test projection=[id]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=1
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], output_ordering=[id@0 DESC], file_type=parquet
+
+# Test 9: Test all rows DESC (full table scan with reverse)
+query I
+SELECT id FROM parquet_reverse_test ORDER BY id DESC;
+----
+10
+9
+8
+7
+6
+5
+4
+3
+2
+1
+
+# Test 10: Test all rows ASC (verify correctness)
+query I
+SELECT id FROM parquet_reverse_test ORDER BY id ASC;
+----
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+
+# Cleanup
+statement ok
+DROP TABLE test_reverse_scan;
+
+statement ok
+DROP TABLE parquet_reverse_test;

@@ -43,6 +43,8 @@ recursive_protection = ["dep:recursive"]
 [dependencies]
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
+datafusion-datasource-parquet = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true, default-features = true }
@@ -51,6 +53,7 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-pruning = { workspace = true }
 itertools = { workspace = true }
+parking_lot = { workspace = true }
 recursive = { workspace = true, optional = true }
 
 [dev-dependencies]

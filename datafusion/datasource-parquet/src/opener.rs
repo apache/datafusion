@@ -23,15 +23,15 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
-use arrow::array::RecordBatch;
+use arrow::array::{ArrayRef, RecordBatch, UInt32Array};
+use arrow::compute::take;
+use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
+use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-
-use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
-use datafusion_common::encryption::FileDecryptionProperties;
 
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
@@ -49,6 +49,8 @@ use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
@@ -111,6 +113,9 @@ pub(super) struct ParquetOpener {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
+    /// If true, read row groups and batches in reverse order.
+    /// Used for optimizing ORDER BY ... DESC queries on sorted data.
+    pub reverse_scan: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -139,9 +144,10 @@ impl FileOpener for ParquetOpener {
         let projected_schema =
             SchemaRef::from(self.logical_file_schema.project(&self.projection)?);
         let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
-        let schema_adapter = self
-            .schema_adapter_factory
-            .create(projected_schema, Arc::clone(&self.logical_file_schema));
+        let schema_adapter = self.schema_adapter_factory.create(
+            Arc::clone(&projected_schema),
+            Arc::clone(&self.logical_file_schema),
+        );
         let mut predicate = self.predicate.clone();
         let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let partition_fields = self.partition_fields.clone();
@@ -162,6 +168,8 @@ impl FileOpener for ParquetOpener {
         #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
+
+        let reverse_scan = self.reverse_scan;
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -451,20 +459,35 @@ impl FileOpener for ParquetOpener {
 
             let files_ranges_pruned_statistics =
                 file_metrics.files_ranges_pruned_statistics.clone();
+
             let predicate_cache_inner_records =
                 file_metrics.predicate_cache_inner_records.clone();
             let predicate_cache_records = file_metrics.predicate_cache_records.clone();
 
-            let stream = stream.map_err(DataFusionError::from).map(move |b| {
-                b.and_then(|b| {
+            let final_schema = Arc::clone(&projected_schema);
+            let stream: SendableRecordBatchStream = if reverse_scan {
+                let error_adapted = stream.map_err(DataFusionError::from);
+                let schema_mapped = error_adapted.map(move |result| {
                     copy_arrow_reader_metrics(
                         &arrow_reader_metrics,
                         &predicate_cache_inner_records,
                         &predicate_cache_records,
                     );
-                    schema_mapping.map_batch(b)
-                })
-            });
+                    result.and_then(|batch| schema_mapping.map_batch(batch))
+                });
+                Box::pin(ReversedParquetStream::new(schema_mapped, final_schema))
+            } else {
+                let error_adapted = stream.map_err(DataFusionError::from);
+                let schema_mapped = error_adapted.map(move |result| {
+                    copy_arrow_reader_metrics(
+                        &arrow_reader_metrics,
+                        &predicate_cache_inner_records,
+                        &predicate_cache_records,
+                    );
+                    result.and_then(|batch| schema_mapping.map_batch(batch))
+                });
+                Box::pin(RecordBatchStreamAdapter::new(final_schema, schema_mapped))
+            };
 
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
@@ -752,10 +775,103 @@ fn should_enable_page_index(
             .unwrap_or(false)
 }
 
+struct ReversedParquetStream<S> {
+    input: S,
+    schema: SchemaRef,
+    buffered_batches: Option<Vec<RecordBatch>>,
+    current_index: usize,
+}
+
+impl<S> ReversedParquetStream<S> {
+    fn new(stream: S, schema: SchemaRef) -> Self {
+        Self {
+            input: stream,
+            schema,
+            buffered_batches: None,
+            current_index: 0,
+        }
+    }
+
+    fn reverse_batch(batch: RecordBatch) -> Result<RecordBatch> {
+        let num_rows = batch.num_rows();
+        if num_rows <= 1 {
+            return Ok(batch);
+        }
+
+        let indices = UInt32Array::from_iter_values((0..num_rows as u32).rev());
+
+        let reversed_columns = batch
+            .columns()
+            .iter()
+            .map(|col| take(col.as_ref(), &indices, None))
+            .collect::<std::result::Result<Vec<ArrayRef>, arrow::error::ArrowError>>()
+            .map_err(DataFusionError::from)?;
+
+        RecordBatch::try_new(batch.schema(), reversed_columns)
+            .map_err(DataFusionError::from)
+    }
+}
+
+impl<S> Stream for ReversedParquetStream<S>
+where
+    S: Stream<Item = Result<RecordBatch>> + Unpin,
+{
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+
+        if this.buffered_batches.is_none() {
+            let mut batches = Vec::new();
+
+            loop {
+                match ready!(Pin::new(&mut this.input).poll_next(cx)) {
+                    Some(Ok(batch)) => match Self::reverse_batch(batch) {
+                        Ok(rev) => batches.push(rev),
+                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    },
+                    Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                    None => break,
+                }
+            }
+
+            batches.reverse();
+            this.buffered_batches = Some(batches);
+            this.current_index = 0;
+        }
+
+        if let Some(batches) = &this.buffered_batches {
+            if this.current_index < batches.len() {
+                let batch = batches[this.current_index].clone();
+                this.current_index += 1;
+                Poll::Ready(Some(Ok(batch)))
+            } else {
+                Poll::Ready(None)
+            }
+        } else {
+            Poll::Ready(None)
+        }
+    }
+}
+
+impl<S> RecordBatchStream for ReversedParquetStream<S>
+where
+    S: Stream<Item = Result<RecordBatch>> + Unpin,
+{
+    fn schema(&self) -> SchemaRef {
+        SchemaRef::clone(&self.schema)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
 
+    use crate::source::ParquetSource;
+    use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
     use arrow::{
         compute::cast,
         datatypes::{DataType, Field, Schema, SchemaRef},
@@ -765,6 +881,7 @@ mod test {
         assert_batches_eq, record_batch, stats::Precision, ColumnStatistics,
         DataFusionError, ScalarValue, Statistics,
     };
+    use datafusion_datasource::file::FileSource;
     use datafusion_datasource::{
         file_stream::FileOpener,
         schema_adapter::{
@@ -782,8 +899,6 @@ mod test {
     use futures::{Stream, StreamExt};
     use object_store::{memory::InMemory, path::Path, ObjectStore};
     use parquet::arrow::ArrowWriter;
-
-    use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
 
     async fn count_batches_and_rows(
         mut stream: std::pin::Pin<
@@ -898,6 +1013,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan: false,
             }
         };
 
@@ -971,6 +1087,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan: false,
             }
         };
 
@@ -1060,6 +1177,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan: false,
             }
         };
 
@@ -1152,6 +1270,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan: false,
             }
         };
 
@@ -1244,6 +1363,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan: false,
             }
         };
 
@@ -1394,6 +1514,7 @@ mod test {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             max_predicate_cache_size: None,
+            reverse_scan: false,
         };
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);
@@ -1413,5 +1534,345 @@ mod test {
         let metrics = opener.metrics.clone_inner();
         assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 2);
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_single_batch() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!((
+            "id",
+            Int32,
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5)]
+        ))
+        .unwrap();
+
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 1024,
+            limit: None,
+            predicate: None,
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_scan,
+        };
+
+        let opener_normal = make_opener(false);
+        let stream_normal = opener_normal.open(file.clone()).unwrap().await.unwrap();
+        let batches_normal = collect_batches(stream_normal).await;
+
+        // test reverse scan
+        let opener_reverse = make_opener(true);
+        let stream_reverse = opener_reverse.open(file.clone()).unwrap().await.unwrap();
+        let batches_reverse = collect_batches(stream_reverse).await;
+
+        assert_eq!(batches_normal.len(), batches_reverse.len());
+
+        assert_eq!(batches_normal[0].num_rows(), batches_reverse[0].num_rows());
+
+        let normal_col = batches_normal[0].column(0);
+        let reverse_col = batches_reverse[0].column(0);
+
+        let normal_values: Vec<i32> = (0..normal_col.len())
+            .filter_map(|i| {
+                Some(
+                    normal_col
+                        .as_any()
+                        .downcast_ref::<arrow::array::Int32Array>()?
+                        .value(i),
+                )
+            })
+            .collect();
+
+        let reverse_values: Vec<i32> = (0..reverse_col.len())
+            .filter_map(|i| {
+                Some(
+                    reverse_col
+                        .as_any()
+                        .downcast_ref::<arrow::array::Int32Array>()?
+                        .value(i),
+                )
+            })
+            .collect();
+
+        assert_eq!(normal_values, vec![1, 2, 3, 4, 5]);
+        assert_eq!(reverse_values, vec![5, 4, 3, 2, 1]);
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_multiple_batches() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!((
+            "id",
+            Int32,
+            vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+                Some(7),
+                Some(8),
+                Some(9),
+                Some(10)
+            ]
+        ))
+        .unwrap();
+
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 3,
+            limit: None,
+            predicate: None,
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_scan,
+        };
+
+        let opener_normal = make_opener(false);
+        let stream_normal = opener_normal.open(file.clone()).unwrap().await.unwrap();
+        let batches_normal = collect_batches(stream_normal).await;
+
+        // reverse scan
+        let opener_reverse = make_opener(true);
+        let stream_reverse = opener_reverse.open(file.clone()).unwrap().await.unwrap();
+        let batches_reverse = collect_batches(stream_reverse).await;
+
+        let total_normal: usize = batches_normal.iter().map(|b| b.num_rows()).sum();
+        let total_reverse: usize = batches_reverse.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_normal, total_reverse);
+        assert_eq!(total_normal, 10);
+
+        let mut normal_values = Vec::new();
+        for batch in &batches_normal {
+            let col = batch.column(0);
+            for i in 0..col.len() {
+                if let Some(val) = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int32Array>()
+                    .map(|arr| arr.value(i))
+                {
+                    normal_values.push(val);
+                }
+            }
+        }
+
+        let mut reverse_values = Vec::new();
+        for batch in &batches_reverse {
+            let col = batch.column(0);
+            for i in 0..col.len() {
+                if let Some(val) = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int32Array>()
+                    .map(|arr| arr.value(i))
+                {
+                    reverse_values.push(val);
+                }
+            }
+        }
+
+        assert_eq!(normal_values, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(reverse_values, vec![10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn test_parquet_source_reverse_scan_setter_getter() {
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema.clone());
+        assert!(!source.reverse_scan());
+
+        let source = source.with_reverse_scan(true);
+        assert!(source.reverse_scan());
+
+        let source = source.with_reverse_scan(false);
+        assert!(!source.reverse_scan());
+    }
+
+    #[test]
+    fn test_parquet_source_reverse_scan_clone_preserves_flag() {
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema).with_reverse_scan(true);
+
+        let cloned = source.clone();
+        assert!(cloned.reverse_scan());
+
+        let modified = cloned.with_reverse_scan(false);
+        assert!(source.reverse_scan());
+        assert!(!modified.reverse_scan());
+    }
+
+    #[test]
+    fn test_parquet_source_with_projection_preserves_reverse_scan() {
+        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let source = Arc::new(ParquetSource::new(schema.clone()).with_reverse_scan(true));
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            source.clone(),
+        )
+        .build();
+
+        let projected = source.with_projection(&config);
+
+        let projected_source = projected
+            .as_any()
+            .downcast_ref::<ParquetSource>()
+            .expect("Failed to downcast to ParquetSource");
+
+        assert!(projected_source.reverse_scan());
+    }
+}
+
+#[cfg(test)]
+mod reverse_scan_integration_tests {
+    use crate::source::ParquetSource;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use bytes::{BufMut, BytesMut};
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::ObjectStore;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_reverse_scan_end_to_end_ascending_data() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let forward_source =
+            Arc::new(ParquetSource::new(schema.clone()).with_reverse_scan(false));
+
+        let reverse_source =
+            Arc::new(ParquetSource::new(schema.clone()).with_reverse_scan(true));
+
+        assert!(!forward_source.reverse_scan());
+        assert!(reverse_source.reverse_scan());
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_preserves_correctness_with_nulls() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let data = vec![Some(1), Some(2), None, Some(4), Some(5)];
+        let array = arrow::array::Int32Array::from(data);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)])
+            .expect("Failed to create RecordBatch");
+
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer = ArrowWriter::try_new(&mut out, schema.clone(), None)
+                .expect("Failed to create writer");
+            writer.write(&batch).expect("Failed to write batch");
+            writer.finish().expect("Failed to finish writing");
+        }
+
+        let data = out.into_inner().freeze();
+        let _data_len = data.len() as u64;
+        store
+            .put(&Path::from("nulls.parquet"), data.into())
+            .await
+            .expect("Failed to put file");
+
+        let forward_source =
+            Arc::new(ParquetSource::new(schema.clone()).with_reverse_scan(false));
+        let reverse_source =
+            Arc::new(ParquetSource::new(schema.clone()).with_reverse_scan(true));
+
+        assert!(!forward_source.reverse_scan());
+        assert!(reverse_source.reverse_scan());
+    }
+
+    #[test]
+    fn test_reverse_scan_source_builder_pattern() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let source = ParquetSource::new(schema.clone())
+            .with_metadata_size_hint(16384)
+            .with_reverse_scan(true);
+
+        assert!(source.reverse_scan());
+        assert_eq!(source.metadata_size_hint, Some(16384));
+    }
+
+    #[test]
+    fn test_reverse_scan_immutable_copy() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let source1 = ParquetSource::new(schema.clone()).with_reverse_scan(true);
+        let source2 = source1.clone().with_reverse_scan(false);
+
+        assert!(source1.reverse_scan());
+        assert!(!source2.reverse_scan());
     }
 }
