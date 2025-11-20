@@ -24,6 +24,16 @@
 This crate is a submodule of DataFusion that provides a [Substrait] producer and consumer for DataFusion
 plans. See [API Docs] for details and examples.
 
+## Table function scans
+
+When a logical `TableScan` originates from built-in table functions such as `generate_series` or `range`,
+the Substrait producer populates `ReadRel.advanced_extension` with an [`Any`](https://protobuf.dev/reference/protobuf/google.protobuf/#any) payload
+whose `type_url` is `type.googleapis.com/datafusion.substrait.TableFunctionReadRel`. The embedded
+`TableFunctionReadRel` message stores the function name and the evaluated argument literals (after defaults
+and type coercions). Integer table functions, for example, always emit a three-element argument list
+representing `start`, `end`, and `step`, even when the user omitted optional parameters. If a consumer does
+not recognize the extension, it can still fall back to the accompanying `NamedTable` reference.
+
 [apache arrow]: https://arrow.apache.org/
 [apache datafusion]: https://datafusion.apache.org/
 [substrait]: https://substrait.io

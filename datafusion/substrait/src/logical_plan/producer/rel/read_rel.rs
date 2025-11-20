@@ -18,16 +18,70 @@
 use crate::logical_plan::producer::{
     to_substrait_literal, to_substrait_named_struct, SubstraitProducer,
 };
+use datafusion::catalog::default_table_source::DefaultTableSource;
 use datafusion::common::{not_impl_err, substrait_datafusion_err, DFSchema, ToDFSchema};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
+use datafusion_functions_table::generate_series::GenerateSeriesTable;
+use pbjson_types::Any;
+use prost::Message;
 use std::sync::Arc;
 use substrait::proto::expression::literal::Struct;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::MaskExpression;
+use substrait::proto::extensions::AdvancedExtension;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
 use substrait::proto::{ReadRel, Rel};
+
+const TABLE_FUNCTION_TYPE_URL: &str =
+    "type.googleapis.com/datafusion.substrait.TableFunctionReadRel";
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TableFunctionReadRelExtension {
+    #[prost(string, tag = "1")]
+    pub name: String,
+    #[prost(message, repeated, tag = "2")]
+    pub arguments: Vec<substrait::proto::expression::Literal>,
+}
+
+fn table_function_extension_for_scan(
+    producer: &mut impl SubstraitProducer,
+    scan: &TableScan,
+) -> datafusion::common::Result<Option<AdvancedExtension>> {
+    let default_source = match scan.source.as_any().downcast_ref::<DefaultTableSource>() {
+        Some(source) => source,
+        None => return Ok(None),
+    };
+
+    let Some(generate_series) = default_source
+        .table_provider
+        .as_any()
+        .downcast_ref::<GenerateSeriesTable>()
+    else {
+        return Ok(None);
+    };
+
+    let details = generate_series.table_function_details();
+    let arguments = details
+        .arguments
+        .iter()
+        .map(|value| to_substrait_literal(producer, value))
+        .collect::<datafusion::common::Result<_>>()?;
+
+    let extension = TableFunctionReadRelExtension {
+        name: details.name.to_string(),
+        arguments,
+    };
+
+    Ok(Some(AdvancedExtension {
+        optimization: vec![],
+        enhancement: Some(Any {
+            type_url: TABLE_FUNCTION_TYPE_URL.to_string(),
+            value: extension.encode_to_vec().into(),
+        }),
+    }))
+}
 
 pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
@@ -67,6 +121,8 @@ pub fn from_table_scan(
         Some(Box::new(filter_expr))
     };
 
+    let advanced_extension = table_function_extension_for_scan(producer, scan)?;
+
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
@@ -74,7 +130,7 @@ pub fn from_table_scan(
             filter: filter_option,
             best_effort_filter: None,
             projection,
-            advanced_extension: None,
+            advanced_extension,
             read_type: Some(ReadType::NamedTable(NamedTable {
                 names: scan.table_name.to_vec(),
                 advanced_extension: None,
@@ -149,4 +205,80 @@ pub fn from_values(
             })),
         }))),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TableFunctionReadRelExtension, TABLE_FUNCTION_TYPE_URL};
+    use crate::logical_plan::producer::to_substrait_plan;
+    use datafusion::prelude::SessionContext;
+    use prost::Message;
+    use substrait::proto::{plan_rel, rel, ReadRel, Rel};
+
+    #[tokio::test]
+    async fn captures_generate_series_table_function() {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .sql("select * from generate_series(1, 3)")
+            .await
+            .expect("failed to plan generate_series");
+
+        let plan = df.into_optimized_plan().expect("optimized plan");
+        let substrait_plan =
+            to_substrait_plan(&plan, &ctx.state()).expect("serialize to substrait");
+
+        let root_rel = substrait_plan
+            .relations
+            .first()
+            .and_then(|rel| rel.rel_type.as_ref())
+            .and_then(|rel_type| match rel_type {
+                plan_rel::RelType::Root(root) => root.input.as_ref(),
+                _ => None,
+            })
+            .expect("root rel");
+
+        let read_rel = find_read_rel(root_rel).expect("found read rel");
+        let advanced_extension = read_rel
+            .advanced_extension
+            .as_ref()
+            .expect("table function extension present");
+        let enhancement = advanced_extension
+            .enhancement
+            .as_ref()
+            .expect("enhancement payload");
+
+        assert_eq!(enhancement.type_url, TABLE_FUNCTION_TYPE_URL);
+
+        let payload = TableFunctionReadRelExtension::decode(&*enhancement.value)
+            .expect("decode table function payload");
+        assert_eq!(payload.name, "generate_series");
+
+        let literal_values: Vec<Option<i64>> = payload
+            .arguments
+            .iter()
+            .map(|literal| match literal.literal_type.as_ref() {
+                Some(substrait::proto::expression::literal::LiteralType::I64(v)) => {
+                    Some(*v)
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(literal_values, vec![Some(1), Some(3), Some(1)]);
+    }
+
+    fn find_read_rel(rel: &Rel) -> Option<&ReadRel> {
+        match rel.rel_type.as_ref()? {
+            rel::RelType::Read(read) => Some(read),
+            rel::RelType::Project(project) => project
+                .input
+                .as_ref()
+                .and_then(|input| find_read_rel(input.as_ref())),
+            rel::RelType::Filter(filter) => filter
+                .input
+                .as_ref()
+                .and_then(|input| find_read_rel(input.as_ref())),
+            _ => None,
+        }
+    }
 }
