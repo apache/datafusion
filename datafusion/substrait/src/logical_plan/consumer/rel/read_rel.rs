@@ -33,22 +33,25 @@ use prost::Message;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
-use substrait::proto::read_rel::{NamedTable, ReadType};
+use substrait::proto::read_rel::ReadType;
 use substrait::proto::{Expression, ReadRel};
 use url::Url;
 
+const TABLE_FUNCTION_TYPE_URL: &str =
+    "type.googleapis.com/datafusion.substrait.TableFunctionReadRel";
+
 #[derive(Clone, PartialEq, Message)]
-struct TableFunctionMetadata {
+struct TableFunctionReadRelExtension {
     #[prost(string, tag = "1")]
     name: String,
 
     #[prost(message, repeated, tag = "2")]
-    arguments: Vec<Expression>,
+    arguments: Vec<substrait::proto::expression::Literal>,
 }
 
 struct TableFunctionInvocation {
     name: String,
-    arguments: Vec<Expression>,
+    arguments: Vec<substrait::proto::expression::Literal>,
 }
 
 #[allow(deprecated)]
@@ -106,7 +109,7 @@ pub async fn from_read_rel(
 
     match &read.read_type {
         Some(ReadType::NamedTable(nt)) => {
-            let table_function = parse_table_function_metadata(nt)?;
+            let table_function = parse_table_function_metadata(read)?;
             let table_reference = match nt.names.len() {
                 0 => {
                     return plan_err!("No table name found in NamedTable");
@@ -257,9 +260,9 @@ pub async fn from_read_rel(
 }
 
 fn parse_table_function_metadata(
-    named_table: &NamedTable,
+    read: &ReadRel,
 ) -> datafusion::common::Result<Option<TableFunctionInvocation>> {
-    let enhancement = named_table
+    let enhancement = read
         .advanced_extension
         .as_ref()
         .and_then(|ext| ext.enhancement.as_ref());
@@ -268,9 +271,14 @@ fn parse_table_function_metadata(
         return Ok(None);
     };
 
-    let metadata = TableFunctionMetadata::decode(any.value.as_ref()).map_err(|e| {
-        substrait_datafusion_err!("Failed to decode table function metadata: {e}")
-    })?;
+    if any.type_url != TABLE_FUNCTION_TYPE_URL {
+        return Ok(None);
+    }
+
+    let metadata =
+        TableFunctionReadRelExtension::decode(any.value.as_ref()).map_err(|e| {
+            substrait_datafusion_err!("Failed to decode table function metadata: {e}")
+        })?;
 
     Ok(Some(TableFunctionInvocation {
         name: metadata.name,
@@ -284,15 +292,14 @@ async fn resolve_table_function(
 ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
     let table_function = consumer
         .get_table_function(invocation.name.as_str())
-        .ok_or_else(|| plan_datafusion_err!("No table function named '{}'", invocation.name))?;
+        .ok_or_else(|| {
+            plan_datafusion_err!("No table function named '{}'", invocation.name)
+        })?;
 
     let mut args = Vec::with_capacity(invocation.arguments.len());
-    for argument in &invocation.arguments {
-        args.push(
-            consumer
-                .consume_expression(argument, &DFSchema::empty())
-                .await?,
-        );
+    for literal in &invocation.arguments {
+        let scalar_value = from_substrait_literal(consumer, literal, &vec![], &mut 0)?;
+        args.push(Expr::Literal(scalar_value, None));
     }
 
     table_function.create_table_provider(&args)
