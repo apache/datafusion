@@ -18,7 +18,7 @@
 mod literal_lookup_table;
 
 use super::{Column, Literal};
-use crate::expressions::{try_cast, Column, Literal};
+use crate::expressions::{lit, try_cast};
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
@@ -38,11 +38,11 @@ use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
+use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 use std::fmt::{Debug, Formatter};
-use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 
 pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -2457,184 +2457,183 @@ mod tests {
         assert_eq!(merged.value(2), "C");
     }
 
-
-  fn when_then_else(
-    when: &Arc<dyn PhysicalExpr>,
-    then: &Arc<dyn PhysicalExpr>,
-    els: &Arc<dyn PhysicalExpr>,
-  ) -> Result<Arc<dyn PhysicalExpr>> {
-    let case = CaseExpr::try_new(
-      None,
-      vec![(Arc::clone(when), Arc::clone(then))],
-      Some(Arc::clone(els)),
-    )?;
-    Ok(Arc::new(case))
-  }
-
-  #[test]
-  fn test_case_expression_nullability_with_nullable_column() -> Result<()> {
-    case_expression_nullability(true)
-  }
-
-  #[test]
-  fn test_case_expression_nullability_with_not_nullable_column() -> Result<()> {
-    case_expression_nullability(false)
-  }
-
-  fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
-    let schema =
-      Schema::new(vec![Field::new("foo", DataType::Int32, col_is_nullable)]);
-
-    let foo = col("foo", &schema)?;
-    let foo_is_not_null = is_not_null(Arc::clone(&foo))?;
-    let foo_is_null = expressions::is_null(Arc::clone(&foo))?;
-    let not_foo_is_null = expressions::not(Arc::clone(&foo_is_null))?;
-    let zero = lit(0);
-    let foo_eq_zero =
-      binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?;
-
-    assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
-    assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
-    assert_not_nullable(when_then_else(&foo_eq_zero, &foo, &zero)?, &schema);
-
-    assert_not_nullable(
-      when_then_else(
-        &binary(
-          Arc::clone(&foo_is_not_null),
-          Operator::And,
-          Arc::clone(&foo_eq_zero),
-          &schema,
-        )?,
-        &foo,
-        &zero,
-      )?,
-      &schema,
-    );
-
-    assert_not_nullable(
-      when_then_else(
-        &binary(
-          Arc::clone(&foo_eq_zero),
-          Operator::And,
-          Arc::clone(&foo_is_not_null),
-          &schema,
-        )?,
-        &foo,
-        &zero,
-      )?,
-      &schema,
-    );
-
-    assert_not_nullable(
-      when_then_else(
-        &binary(
-          Arc::clone(&foo_is_not_null),
-          Operator::Or,
-          Arc::clone(&foo_eq_zero),
-          &schema,
-        )?,
-        &foo,
-        &zero,
-      )?,
-      &schema,
-    );
-
-    assert_not_nullable(
-      when_then_else(
-        &binary(
-          Arc::clone(&foo_eq_zero),
-          Operator::Or,
-          Arc::clone(&foo_is_not_null),
-          &schema,
-        )?,
-        &foo,
-        &zero,
-      )?,
-      &schema,
-    );
-
-    assert_nullability(
-      when_then_else(
-        &binary(
-          Arc::clone(&foo_is_null),
-          Operator::Or,
-          Arc::clone(&foo_eq_zero),
-          &schema,
-        )?,
-        &foo,
-        &zero,
-      )?,
-      &schema,
-      col_is_nullable,
-    );
-
-    assert_nullability(
-      when_then_else(
-        &binary(
-          binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?,
-          Operator::Or,
-          Arc::clone(&foo_is_null),
-          &schema,
-        )?,
-        &foo,
-        &zero,
-      )?,
-      &schema,
-      col_is_nullable,
-    );
-
-    assert_not_nullable(
-      when_then_else(
-        &binary(
-          binary(
-            binary(
-              Arc::clone(&foo),
-              Operator::Eq,
-              Arc::clone(&zero),
-              &schema,
-            )?,
-            Operator::And,
-            Arc::clone(&foo_is_not_null),
-            &schema,
-          )?,
-          Operator::Or,
-          binary(
-            binary(
-              Arc::clone(&foo),
-              Operator::Eq,
-              Arc::clone(&foo),
-              &schema,
-            )?,
-            Operator::And,
-            Arc::clone(&foo_is_not_null),
-            &schema,
-          )?,
-          &schema,
-        )?,
-        &foo,
-        &zero,
-      )?,
-      &schema,
-    );
-
-    Ok(())
-  }
-
-  fn assert_not_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
-    assert!(!expr.nullable(schema).unwrap());
-  }
-
-  fn assert_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
-    assert!(expr.nullable(schema).unwrap());
-  }
-
-  fn assert_nullability(expr: Arc<dyn PhysicalExpr>, schema: &Schema, nullable: bool) {
-    if nullable {
-      assert_nullable(expr, schema);
-    } else {
-      assert_not_nullable(expr, schema);
+    fn when_then_else(
+        when: &Arc<dyn PhysicalExpr>,
+        then: &Arc<dyn PhysicalExpr>,
+        els: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let case = CaseExpr::try_new(
+            None,
+            vec![(Arc::clone(when), Arc::clone(then))],
+            Some(Arc::clone(els)),
+        )?;
+        Ok(Arc::new(case))
     }
-  }
+
+    #[test]
+    fn test_case_expression_nullability_with_nullable_column() -> Result<()> {
+        case_expression_nullability(true)
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_not_nullable_column() -> Result<()> {
+        case_expression_nullability(false)
+    }
+
+    fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
+        let schema =
+            Schema::new(vec![Field::new("foo", DataType::Int32, col_is_nullable)]);
+
+        let foo = col("foo", &schema)?;
+        let foo_is_not_null = is_not_null(Arc::clone(&foo))?;
+        let foo_is_null = expressions::is_null(Arc::clone(&foo))?;
+        let not_foo_is_null = expressions::not(Arc::clone(&foo_is_null))?;
+        let zero = lit(0);
+        let foo_eq_zero =
+            binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?;
+
+        assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&foo_eq_zero, &foo, &zero)?, &schema);
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::And,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::And,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::Or,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?,
+                    Operator::Or,
+                    Arc::clone(&foo_is_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&zero),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    Operator::Or,
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&foo),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        Ok(())
+    }
+
+    fn assert_not_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(!expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullability(expr: Arc<dyn PhysicalExpr>, schema: &Schema, nullable: bool) {
+        if nullable {
+            assert_nullable(expr, schema);
+        } else {
+            assert_not_nullable(expr, schema);
+        }
+    }
 
     // Test Lookup evaluation
 
