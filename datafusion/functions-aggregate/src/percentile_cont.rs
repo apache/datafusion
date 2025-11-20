@@ -33,14 +33,18 @@ use arrow::{
 
 use arrow::array::ArrowNativeTypeOp;
 
+use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::{
     assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError,
     Result, ScalarValue,
 };
-use datafusion_expr::expr::{AggregateFunction, Sort};
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
+use datafusion_expr::{
+    expr::{AggregateFunction, Cast, Sort},
+    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+    simplify::SimplifyInfo,
+};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
     Volatility,
@@ -358,12 +362,162 @@ impl AggregateUDFImpl for PercentileCont {
         }
     }
 
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        Some(Box::new(|aggregate_function, info| {
+            simplify_percentile_cont_aggregate(aggregate_function, info)
+        }))
+    }
+
     fn supports_within_group_clause(&self) -> bool {
         true
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+const PERCENTILE_LITERAL_EPSILON: f64 = 1e-12;
+
+#[derive(Clone, Copy)]
+enum PercentileRewriteTarget {
+    Min,
+    Max,
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn simplify_percentile_cont_aggregate(
+    aggregate_function: AggregateFunction,
+    info: &dyn SimplifyInfo,
+) -> Result<Expr> {
+    let original_expr = Expr::AggregateFunction(aggregate_function.clone());
+    let params = &aggregate_function.params;
+
+    if params.args.len() != 2 {
+        return Ok(original_expr);
+    }
+
+    let percentile_value = match extract_percentile_literal(&params.args[1]) {
+        Some(value) => value,
+        None => return Ok(original_expr),
+    };
+
+    let is_descending = params
+        .order_by
+        .first()
+        .map(|sort| !sort.asc)
+        .unwrap_or(false);
+
+    let rewrite_target = match classify_rewrite_target(percentile_value, is_descending) {
+        Some(target) => target,
+        None => return Ok(original_expr),
+    };
+
+    let value_expr = params.args[0].clone();
+    let input_type = match info.get_data_type(&value_expr) {
+        Ok(data_type) => data_type,
+        Err(_) => return Ok(original_expr),
+    };
+
+    let expected_return_type = match percentile_cont_result_type(&input_type) {
+        Some(data_type) => data_type,
+        None => return Ok(original_expr),
+    };
+
+    let udaf = match rewrite_target {
+        PercentileRewriteTarget::Min => min_udaf(),
+        PercentileRewriteTarget::Max => max_udaf(),
+    };
+
+    let mut rewritten = Expr::AggregateFunction(AggregateFunction::new_udf(
+        udaf,
+        vec![value_expr],
+        params.distinct,
+        params.filter.clone(),
+        vec![],
+        params.null_treatment,
+    ));
+
+    if expected_return_type != input_type {
+        rewritten = Expr::Cast(Cast::new(Box::new(rewritten), expected_return_type));
+    }
+
+    Ok(rewritten)
+}
+
+fn classify_rewrite_target(
+    percentile_value: f64,
+    is_descending: bool,
+) -> Option<PercentileRewriteTarget> {
+    if nearly_equals_fraction(percentile_value, 0.0) {
+        Some(if is_descending {
+            PercentileRewriteTarget::Max
+        } else {
+            PercentileRewriteTarget::Min
+        })
+    } else if nearly_equals_fraction(percentile_value, 1.0) {
+        Some(if is_descending {
+            PercentileRewriteTarget::Min
+        } else {
+            PercentileRewriteTarget::Max
+        })
+    } else {
+        None
+    }
+}
+
+fn nearly_equals_fraction(value: f64, target: f64) -> bool {
+    (value - target).abs() < PERCENTILE_LITERAL_EPSILON
+}
+
+fn percentile_cont_result_type(input_type: &DataType) -> Option<DataType> {
+    if !input_type.is_numeric() {
+        return None;
+    }
+
+    let result_type = match input_type {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => input_type.clone(),
+        DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => input_type.clone(),
+        DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64 => DataType::Float64,
+        _ => return None,
+    };
+
+    Some(result_type)
+}
+
+fn extract_percentile_literal(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Literal(value, _) => literal_scalar_to_f64(value),
+        Expr::Alias(alias) => extract_percentile_literal(alias.expr.as_ref()),
+        Expr::Cast(cast) => extract_percentile_literal(cast.expr.as_ref()),
+        Expr::TryCast(cast) => extract_percentile_literal(cast.expr.as_ref()),
+        _ => None,
+    }
+}
+
+fn literal_scalar_to_f64(value: &ScalarValue) -> Option<f64> {
+    match value {
+        ScalarValue::Float64(Some(v)) => Some(*v),
+        ScalarValue::Float32(Some(v)) => Some(*v as f64),
+        ScalarValue::Int64(Some(v)) => Some(*v as f64),
+        ScalarValue::Int32(Some(v)) => Some(*v as f64),
+        ScalarValue::Int16(Some(v)) => Some(*v as f64),
+        ScalarValue::Int8(Some(v)) => Some(*v as f64),
+        ScalarValue::UInt64(Some(v)) => Some(*v as f64),
+        ScalarValue::UInt32(Some(v)) => Some(*v as f64),
+        ScalarValue::UInt16(Some(v)) => Some(*v as f64),
+        ScalarValue::UInt8(Some(v)) => Some(*v as f64),
+        _ => None,
     }
 }
 
@@ -758,5 +912,82 @@ fn calculate_percentile<T: ArrowNumericType>(
             );
             Some(interpolated)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::min_max::{max, min};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::{
+        col, execution_props::ExecutionProps, expr::Cast as ExprCast, expr::Sort, lit,
+        simplify::SimplifyContext, Expr,
+    };
+    use std::sync::Arc;
+
+    fn run_simplifier(expr: &Expr, schema: Arc<DFSchema>) -> Result<Expr> {
+        let props = ExecutionProps::new();
+        let context = SimplifyContext::new(&props).with_schema(schema);
+        let simplifier = percentile_cont_udaf()
+            .simplify()
+            .expect("simplifier should be available");
+
+        match expr.clone() {
+            Expr::AggregateFunction(agg) => simplifier(agg, &context),
+            _ => panic!("expected aggregate expression"),
+        }
+    }
+
+    fn schema_for(field: Field) -> Arc<DFSchema> {
+        Arc::new(DFSchema::try_from(Schema::new(vec![field])).unwrap())
+    }
+
+    #[test]
+    fn simplify_percentile_cont_zero_to_min_with_cast() -> Result<()> {
+        let schema = schema_for(Field::new("value", DataType::Int32, true));
+        let expr = percentile_cont(Sort::new(col("value"), true, true), lit(0_f64));
+        let simplified = run_simplifier(&expr, Arc::clone(&schema))?;
+
+        let expected_min = min(col("value"));
+        let expected =
+            Expr::Cast(ExprCast::new(Box::new(expected_min), DataType::Float64));
+
+        assert_eq!(simplified, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_percentile_cont_zero_desc_to_max() -> Result<()> {
+        let schema = schema_for(Field::new("value", DataType::Float64, true));
+        let expr = percentile_cont(Sort::new(col("value"), false, true), lit(0_f64));
+        let simplified = run_simplifier(&expr, schema)?;
+
+        let expected = max(col("value"));
+        assert_eq!(simplified, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_percentile_cont_one_desc_to_min() -> Result<()> {
+        let schema = schema_for(Field::new("value", DataType::Float64, true));
+        let expr = percentile_cont(Sort::new(col("value"), false, true), lit(1_f64));
+        let simplified = run_simplifier(&expr, schema)?;
+
+        let expected = min(col("value"));
+        assert_eq!(simplified, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn percentile_cont_not_simplified_for_other_percentiles() -> Result<()> {
+        let schema = schema_for(Field::new("value", DataType::Float64, true));
+        let expr = percentile_cont(Sort::new(col("value"), true, true), lit(0.5_f64));
+        let expected = expr.clone();
+
+        let simplified = run_simplifier(&expr, schema)?;
+        assert_eq!(simplified, expected);
+        Ok(())
     }
 }
