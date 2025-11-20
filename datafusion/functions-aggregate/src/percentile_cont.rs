@@ -429,19 +429,19 @@ fn simplify_percentile_cont_aggregate(
         PercentileRewriteTarget::Max => max_udaf(),
     };
 
-    let mut rewritten = Expr::AggregateFunction(AggregateFunction::new_udf(
+    let mut agg_arg = value_expr;
+    if expected_return_type != input_type {
+        agg_arg = Expr::Cast(Cast::new(Box::new(agg_arg), expected_return_type.clone()));
+    }
+
+    let rewritten = Expr::AggregateFunction(AggregateFunction::new_udf(
         udaf,
-        vec![value_expr],
+        vec![agg_arg],
         params.distinct,
         params.filter.clone(),
         vec![],
         params.null_treatment,
     ));
-
-    if expected_return_type != input_type {
-        rewritten = Expr::Cast(Cast::new(Box::new(rewritten), expected_return_type));
-    }
-
     Ok(rewritten)
 }
 
@@ -950,9 +950,9 @@ mod tests {
         let expr = percentile_cont(Sort::new(col("value"), true, true), lit(0_f64));
         let simplified = run_simplifier(&expr, Arc::clone(&schema))?;
 
-        let expected_min = min(col("value"));
-        let expected =
-            Expr::Cast(ExprCast::new(Box::new(expected_min), DataType::Float64));
+        let casted_value =
+            Expr::Cast(ExprCast::new(Box::new(col("value")), DataType::Float64));
+        let expected = min(casted_value);
 
         assert_eq!(simplified, expected);
         Ok(())
