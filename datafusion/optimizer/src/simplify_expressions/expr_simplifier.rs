@@ -1968,6 +1968,12 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
             // For case:
             // date_part(expr as data_type) op literal
+            //
+            // Background:
+            // Datasources such as Parquet can prune partitions using simple predicates,
+            // but they cannot do so for complex expressions.
+            // For a complex predicate like `date_part('YEAR', c1) < 2000`, pruning is not possible.
+            // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
             Expr::BinaryExpr(BinaryExpr { left, op, right })
                 if is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary(
                     info, &left, op, &right,
