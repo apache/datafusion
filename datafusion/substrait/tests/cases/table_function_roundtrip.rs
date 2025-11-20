@@ -18,13 +18,13 @@
 use datafusion::common::Result;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
-use std::sync::Arc;
 use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
+use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
-use substrait::proto::{plan_rel, read_rel::ReadType, Rel};
 use substrait::proto::rel::RelType;
+use substrait::proto::{plan_rel, read_rel::ReadType, Rel};
 
 #[tokio::test]
 async fn table_function_round_trip_generate_series() -> Result<()> {
@@ -42,10 +42,17 @@ async fn table_function_round_trip_range() -> Result<()> {
 
 #[tokio::test]
 async fn table_function_round_trip_generate_series_with_null() -> Result<()> {
-    assert_table_function_round_trip("SELECT * FROM generate_series(NULL, 5)", &["generate_series"]).await
+    assert_table_function_round_trip(
+        "SELECT * FROM generate_series(NULL, 5)",
+        &["generate_series"],
+    )
+    .await
 }
 
-async fn assert_table_function_round_trip(query: &str, expected_functions: &[&str]) -> Result<()> {
+async fn assert_table_function_round_trip(
+    query: &str,
+    expected_functions: &[&str],
+) -> Result<()> {
     let ctx = SessionContext::new();
 
     let df = ctx.sql(query).await?;
@@ -82,8 +89,9 @@ async fn assert_table_function_round_trip(query: &str, expected_functions: &[&st
     }
 
     if let Some(first_batch) = expected.first() {
-        let table: Arc<dyn datafusion::datasource::TableProvider> =
-            Arc::new(MemTable::try_new(first_batch.schema(), vec![expected.clone()])?);
+        let table: Arc<dyn datafusion::datasource::TableProvider> = Arc::new(
+            MemTable::try_new(first_batch.schema(), vec![expected.clone()])?,
+        );
         for table_name in &table_names {
             ctx.register_table(table_name, Arc::clone(&table))?;
         }
@@ -106,7 +114,9 @@ fn collect_named_table_names(plan: &substrait::proto::Plan) -> Vec<String> {
     let mut tables = Vec::new();
     for rel in &plan.relations {
         match rel.rel_type.as_ref() {
-            Some(plan_rel::RelType::Rel(rel)) => collect_named_table_from_rel(rel, &mut tables),
+            Some(plan_rel::RelType::Rel(rel)) => {
+                collect_named_table_from_rel(rel, &mut tables)
+            }
             Some(plan_rel::RelType::Root(root)) => {
                 if let Some(rel) = root.input.as_ref() {
                     collect_named_table_from_rel(rel, &mut tables);
