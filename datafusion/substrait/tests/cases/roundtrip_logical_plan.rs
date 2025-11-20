@@ -1971,7 +1971,6 @@ async fn create_all_type_context() -> Result<SessionContext> {
 
 #[tokio::test]
 async fn roundtrip_recursive_query() -> Result<()> {
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::logical_expr::{
         col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
     };
@@ -1984,12 +1983,6 @@ async fn roundtrip_recursive_query() -> Result<()> {
     let static_term = LogicalPlanBuilder::from(empty_plan.clone())
         .project(vec![lit(1i64).alias("id")])?
         .build()?;
-
-    let schema = Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
-        "id",
-        DataType::Int64,
-        false,
-    )]))?);
 
     // Create a simple scan from the data table
     let table = ctx.table("data").await?;
@@ -2030,7 +2023,6 @@ async fn roundtrip_recursive_query() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_recursive_query_distinct() -> Result<()> {
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::logical_expr::{
         col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
     };
@@ -2043,12 +2035,6 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
     let static_term = LogicalPlanBuilder::from(empty_plan.clone())
         .project(vec![lit(1i64).alias("id")])?
         .build()?;
-
-    let schema = Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
-        "id",
-        DataType::Int64,
-        false,
-    )]))?);
 
     // Create a simple scan from the data table
     let table = ctx.table("data").await?;
