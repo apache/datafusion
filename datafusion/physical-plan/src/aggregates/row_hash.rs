@@ -64,6 +64,10 @@ pub(crate) enum ExecutionState {
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
+    /// Iteratively emitting groups from group_values in batch_size chunks.
+    /// This state is used after input is complete to avoid emitting all groups
+    /// in a single large batch that would block the async runtime.
+    DrainingGroups,
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -793,14 +797,36 @@ impl Stream for GroupedHashAggregateStream {
                     }
                 }
 
-                ExecutionState::ProducingOutput(batch) => {
-                    // slice off a part of the batch, if needed
-                    let output_batch;
+                ExecutionState::DrainingGroups => {
                     let size = self.batch_size;
+                    let remaining_groups = self.group_values.len();
+                    let emit_count = size.min(remaining_groups);
+                    match self.emit(EmitTo::First(emit_count), false)? {
+                        Some(batch) => {
+                            if let Some(reduction_factor) = self.reduction_factor.as_ref()
+                            {
+                                reduction_factor.add_part(batch.num_rows());
+                            }
+
+                            return Poll::Ready(Some(Ok(
+                                batch.record_output(&self.baseline_metrics)
+                            )));
+                        }
+                        None => {
+                            self.exec_state = ExecutionState::Done;
+                            continue;
+                        }
+                    }
+                }
+
+                ExecutionState::ProducingOutput(batch) => {
+                    let size = self.batch_size;
+                    let output_batch;
                     (self.exec_state, output_batch) = if batch.num_rows() <= size {
                         (
                             if self.input_done {
-                                ExecutionState::Done
+                                // All groups consumed, switch to drain mode
+                                ExecutionState::DrainingGroups
                             }
                             // In Partial aggregation, we also need to check
                             // if we should trigger partial skipping
@@ -814,8 +840,7 @@ impl Stream for GroupedHashAggregateStream {
                             batch.clone(),
                         )
                     } else {
-                        // output first batch_size rows
-                        let size = self.batch_size;
+                        // Slice off first batch_size rows
                         let num_remaining = batch.num_rows() - size;
                         let remaining = batch.slice(size, num_remaining);
                         let output = batch.slice(0, size);
@@ -1164,11 +1189,11 @@ impl GroupedHashAggregateStream {
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
+        self.group_values.input_done();
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
-            let batch = self.emit(EmitTo::All, false)?;
-            batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
+            ExecutionState::DrainingGroups
         } else {
             // If spill files exist, stream-merge them.
             self.update_merged_stream()?;
