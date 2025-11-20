@@ -398,8 +398,8 @@ fn simplify_percentile_cont_aggregate(
     }
 
     let percentile_value = match extract_percentile_literal(&params.args[1]) {
-        Some(value) if value >= 0.0 && value <= 1.0 => value,
-        None => return Ok(original_expr),
+        Some(value) if (0.0..=1.0).contains(&value) => value,
+        _ => return Ok(original_expr),
     };
 
     let is_descending = params
