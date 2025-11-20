@@ -1080,6 +1080,10 @@ SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
 ----
 16
 
+# Order by unprojected aggregate expressions requires GROUP BY
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT column2 FROM foo ORDER BY SUM(column1)
+
 statement ok
 create table ambiguity_test(a int, b int) as values (1,20), (2,10);
 
