@@ -2609,3 +2609,444 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
     ];
     assert_batches_eq!(&expected, &batches);
 }
+
+/// Test that when hash_join_inlist_pushdown_max_size is set to a very small value,
+/// the HashTable strategy is used instead of InList strategy, even with small build sides.
+/// This test is identical to test_hashjoin_dynamic_filter_pushdown_partitioned except
+/// for the config setting that forces the HashTable strategy.
+#[tokio::test]
+async fn test_hashjoin_hash_table_pushdown_partitioned() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Create build side with limited values
+    let build_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab"]),
+        ("b", Utf8, ["ba", "bb"]),
+        ("c", Float64, [1.0, 2.0]) // Extra column not used in join
+    )
+    .unwrap()];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with more values
+    let probe_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+        ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+        ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
+    )
+    .unwrap()];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create RepartitionExec nodes for both sides with hash partitioning on join keys
+    let partition_count = 12;
+
+    // Build side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    let build_hash_exprs = vec![
+        col("a", &build_side_schema).unwrap(),
+        col("b", &build_side_schema).unwrap(),
+    ];
+    let build_repartition = Arc::new(
+        RepartitionExec::try_new(
+            build_scan,
+            Partitioning::Hash(build_hash_exprs, partition_count),
+        )
+        .unwrap(),
+    );
+    let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
+
+    // Probe side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    let probe_hash_exprs = vec![
+        col("a", &probe_side_schema).unwrap(),
+        col("b", &probe_side_schema).unwrap(),
+    ];
+    let probe_repartition = Arc::new(
+        RepartitionExec::try_new(
+            Arc::clone(&probe_scan),
+            Partitioning::Hash(probe_hash_exprs, partition_count),
+        )
+        .unwrap(),
+    );
+    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
+
+    // Create HashJoinExec with partitioned inputs
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_coalesce,
+            probe_coalesce,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    // Top-level CoalesceBatchesExec
+    let cb =
+        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
+    // Top-level CoalescePartitionsExec
+    let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
+    // Add a sort for deterministic output
+    let plan = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &probe_side_schema).unwrap(),
+            SortOptions::new(true, false), // descending, nulls_first
+        )])
+        .unwrap(),
+        cp,
+    )) as Arc<dyn ExecutionPlan>;
+
+    // Apply the optimization with config setting that forces HashTable strategy
+    let session_config = SessionConfig::default()
+        .with_batch_size(10)
+        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
+        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
+        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, session_config.options())
+        .unwrap();
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    // Verify that hash_lookup is used instead of IN (SET)
+    let plan_str = format!("{}", format_plan_for_test(&plan));
+    assert!(
+        plan_str.contains("hash_lookup"),
+        "Expected hash_lookup in plan but got: {}",
+        plan_str
+    );
+    assert!(
+        !plan_str.contains("IN (SET)"),
+        "Expected no IN (SET) in plan but got: {}",
+        plan_str
+    );
+
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    let probe_scan_metrics = probe_scan.metrics().unwrap();
+
+    // The probe side had 4 rows, but after applying the dynamic filter only 2 rows should remain.
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
+
+    // Results should be identical to the InList version
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    +----+----+-----+----+----+-----+
+    ",
+    );
+}
+
+/// Test that when hash_join_inlist_pushdown_max_size is set to a very small value,
+/// the HashTable strategy is used instead of InList strategy in CollectLeft mode.
+/// This test is identical to test_hashjoin_dynamic_filter_pushdown_collect_left except
+/// for the config setting that forces the HashTable strategy.
+#[tokio::test]
+async fn test_hashjoin_hash_table_pushdown_collect_left() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    let build_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab"]),
+        ("b", Utf8, ["ba", "bb"]),
+        ("c", Float64, [1.0, 2.0]) // Extra column not used in join
+    )
+    .unwrap()];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with more values
+    let probe_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+        ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+        ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
+    )
+    .unwrap()];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create RepartitionExec nodes for both sides with hash partitioning on join keys
+    let partition_count = 12;
+
+    // Probe side: DataSource -> RepartitionExec(Hash) -> CoalesceBatchesExec
+    let probe_hash_exprs = vec![
+        col("a", &probe_side_schema).unwrap(),
+        col("b", &probe_side_schema).unwrap(),
+    ];
+    let probe_repartition = Arc::new(
+        RepartitionExec::try_new(
+            Arc::clone(&probe_scan),
+            Partitioning::Hash(probe_hash_exprs, partition_count), // create multi partitions on probSide
+        )
+        .unwrap(),
+    );
+    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
+
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_coalesce,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    // Top-level CoalesceBatchesExec
+    let cb =
+        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
+    // Top-level CoalescePartitionsExec
+    let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
+    // Add a sort for deterministic output
+    let plan = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &probe_side_schema).unwrap(),
+            SortOptions::new(true, false), // descending, nulls_first
+        )])
+        .unwrap(),
+        cp,
+    )) as Arc<dyn ExecutionPlan>;
+
+    // Apply the optimization with config setting that forces HashTable strategy
+    let session_config = SessionConfig::default()
+        .with_batch_size(10)
+        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
+        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
+        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, session_config.options())
+        .unwrap();
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    // Verify that hash_lookup is used instead of IN (SET)
+    let plan_str = format!("{}", format_plan_for_test(&plan));
+    assert!(
+        plan_str.contains("hash_lookup"),
+        "Expected hash_lookup in plan but got: {}",
+        plan_str
+    );
+    assert!(
+        !plan_str.contains("IN (SET)"),
+        "Expected no IN (SET) in plan but got: {}",
+        plan_str
+    );
+
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    let probe_scan_metrics = probe_scan.metrics().unwrap();
+
+    // The probe side had 4 rows, but after applying the dynamic filter only 2 rows should remain.
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
+
+    // Results should be identical to the InList version
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    +----+----+-----+----+----+-----+
+    ",
+    );
+}
+
+/// Test HashTable strategy with integer multi-column join keys.
+/// Verifies that hash_lookup works correctly with integer data types.
+#[tokio::test]
+async fn test_hashjoin_hash_table_pushdown_integer_keys() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Create build side with integer keys
+    let build_batches = vec![record_batch!(
+        ("id1", Int32, [1, 2]),
+        ("id2", Int32, [10, 20]),
+        ("value", Float64, [100.0, 200.0])
+    )
+    .unwrap()];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id1", DataType::Int32, false),
+        Field::new("id2", DataType::Int32, false),
+        Field::new("value", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with more integer rows
+    let probe_batches = vec![record_batch!(
+        ("id1", Int32, [1, 2, 3, 4]),
+        ("id2", Int32, [10, 20, 30, 40]),
+        ("data", Utf8, ["a", "b", "c", "d"])
+    )
+    .unwrap()];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id1", DataType::Int32, false),
+        Field::new("id2", DataType::Int32, false),
+        Field::new("data", DataType::Utf8, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create join on multiple integer columns
+    let on = vec![
+        (
+            col("id1", &build_side_schema).unwrap(),
+            col("id1", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("id2", &build_side_schema).unwrap(),
+            col("id2", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            Arc::clone(&probe_scan),
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    let plan =
+        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
+
+    // Apply optimization with forced HashTable strategy
+    let session_config = SessionConfig::default()
+        .with_batch_size(10)
+        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
+        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
+        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, session_config.options())
+        .unwrap();
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    // Verify hash_lookup is used
+    let plan_str = format!("{}", format_plan_for_test(&plan));
+    assert!(
+        plan_str.contains("hash_lookup"),
+        "Expected hash_lookup in plan but got: {}",
+        plan_str
+    );
+    assert!(
+        !plan_str.contains("IN (SET)"),
+        "Expected no IN (SET) in plan but got: {}",
+        plan_str
+    );
+
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    let probe_scan_metrics = probe_scan.metrics().unwrap();
+    // Only 2 rows from probe side match the build side
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
+
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +-----+-----+-------+-----+-----+------+
+    | id1 | id2 | value | id1 | id2 | data |
+    +-----+-----+-------+-----+-----+------+
+    | 1   | 10  | 100.0 | 1   | 10  | a    |
+    | 2   | 20  | 200.0 | 2   | 20  | b    |
+    +-----+-----+-------+-----+-----+------+
+    ",
+    );
+}
