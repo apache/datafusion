@@ -122,7 +122,11 @@ pub async fn from_read_rel(
                 }));
             }
 
-            // Check for produce_one_row pattern in both old (values) and new (expressions) formats
+            // Check for produce_one_row pattern in both old (values) and new (expressions) formats.
+            // A VirtualTable with exactly one row containing only empty/default fields represents
+            // an EmptyRelation with produce_one_row=true. This pattern is used for queries without
+            // a FROM clause (e.g., "SELECT 1 AS one") where a single phantom row is needed to
+            // provide a context for evaluating scalar expressions.
             #[allow(deprecated)]
             let is_produce_one_row = (vt.values.len() == 1
                 && vt.expressions.is_empty()

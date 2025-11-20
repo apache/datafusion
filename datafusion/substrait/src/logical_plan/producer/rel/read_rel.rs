@@ -84,6 +84,15 @@ pub fn from_table_scan(
     }))
 }
 
+/// Encodes an EmptyRelation as a Substrait VirtualTable.
+///
+/// EmptyRelation represents a relation with no input data. When `produce_one_row` is true,
+/// it generates a single row with all fields set to their default values (typically NULL).
+/// This is used for queries without a FROM clause, such as "SELECT 1 AS one" or
+/// "SELECT current_timestamp()".
+///
+/// When `produce_one_row` is false, it represents a truly empty relation with no rows,
+/// used in optimizations or as a placeholder.
 pub fn from_empty_relation(
     producer: &mut impl SubstraitProducer,
     e: &EmptyRelation,
@@ -91,6 +100,10 @@ pub fn from_empty_relation(
     let base_schema = to_substrait_named_struct(producer, &e.schema)?;
 
     let read_type = if e.produce_one_row {
+        // Create one row with default scalar values for each field in the schema.
+        // For example, an Int32 field gets Int32(NULL), a Utf8 field gets Utf8(NULL), etc.
+        // This represents the "phantom row" that provides a context for evaluating
+        // scalar expressions in queries without a FROM clause.
         let fields = e
             .schema
             .fields()
@@ -102,6 +115,10 @@ pub fn from_empty_relation(
             .collect::<datafusion::common::Result<_>>()?;
 
         ReadType::VirtualTable(VirtualTable {
+            // Use deprecated 'values' field instead of 'expressions' because the consumer's
+            // nested expression support (RexType::Nested) is not yet implemented.
+            // The 'values' field uses literal::Struct which the consumer can properly
+            // deserialize with field name preservation.
             #[allow(deprecated)]
             values: vec![Struct { fields }],
             expressions: vec![],
