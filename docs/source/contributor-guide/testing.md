@@ -70,7 +70,7 @@ cargo test --profile=ci --test sqllogictests
 ```
 
 ```shell
-cargo test ---profile=ci -test sqllogictests -- --complete
+cargo test --profile=ci --test sqllogictests -- --complete
 ```
 
 `sqllogictests` may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated.
