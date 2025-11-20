@@ -211,7 +211,6 @@ async fn roundtrip_empty_relation_no_rows() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_subquery_with_empty_relation() -> Result<()> {
     // Test EmptyRelation in the context of scalar subqueries.
-    // This pattern appears in aggregate queries (related to original bug report).
     // The optimizer may simplify the subquery away, but we're testing that
     // the EmptyRelation round-trips correctly when it appears in the plan.
     let ctx = create_context().await?;
