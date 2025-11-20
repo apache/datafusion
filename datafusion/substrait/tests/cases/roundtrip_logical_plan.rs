@@ -1968,3 +1968,121 @@ async fn create_all_type_context() -> Result<SessionContext> {
 
     Ok(ctx)
 }
+
+#[tokio::test]
+async fn roundtrip_recursive_query() -> Result<()> {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::logical_expr::{
+        col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
+    };
+    use std::sync::Arc;
+
+    let ctx = create_context().await?;
+
+    // Build a simple RecursiveQuery manually
+    let empty_plan = LogicalPlanBuilder::empty(false).build()?;
+    let static_term = LogicalPlanBuilder::from(empty_plan.clone())
+        .project(vec![lit(1i64).alias("id")])?
+        .build()?;
+
+    let schema = Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
+        "id",
+        DataType::Int64,
+        false,
+    )]))?);
+
+    // Create a simple scan from the data table
+    let table = ctx.table("data").await?;
+    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
+        .filter(col("a").lt(lit(10i64)))?
+        .project(vec![col("a").add(lit(1i64)).alias("id")])?
+        .build()?;
+
+    let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+        name: "nodes".to_string(),
+        static_term: Arc::new(static_term),
+        recursive_term: Arc::new(recursive_term),
+        is_distinct: false,
+    });
+
+    // Convert to substrait and back
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    // The deserialized plan may have projection wrappers, unwrap to find RecursiveQuery
+    let recursive_query = match plan2 {
+        LogicalPlan::RecursiveQuery(ref rq) => rq,
+        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(ref rq) => rq,
+            _ => panic!(
+                "Expected RecursiveQuery inside Projection, got: {:?}",
+                plan2
+            ),
+        },
+        _ => panic!("Expected RecursiveQuery or Projection, got: {:?}", plan2),
+    };
+
+    assert_eq!(recursive_query.name, "nodes");
+    assert_eq!(recursive_query.is_distinct, false);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_recursive_query_distinct() -> Result<()> {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::logical_expr::{
+        col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
+    };
+    use std::sync::Arc;
+
+    let ctx = create_context().await?;
+
+    // Build a RecursiveQuery with is_distinct=true
+    let empty_plan = LogicalPlanBuilder::empty(false).build()?;
+    let static_term = LogicalPlanBuilder::from(empty_plan.clone())
+        .project(vec![lit(1i64).alias("id")])?
+        .build()?;
+
+    let schema = Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
+        "id",
+        DataType::Int64,
+        false,
+    )]))?);
+
+    // Create a simple scan from the data table
+    let table = ctx.table("data").await?;
+    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
+        .filter(col("a").lt(lit(5i64)))?
+        .project(vec![col("a").add(lit(1i64)).alias("id")])?
+        .build()?;
+
+    let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+        name: "cte".to_string(),
+        static_term: Arc::new(static_term),
+        recursive_term: Arc::new(recursive_term),
+        is_distinct: true,
+    });
+
+    // Convert to substrait and back
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    // The deserialized plan may have projection wrappers, unwrap to find RecursiveQuery
+    let recursive_query = match plan2 {
+        LogicalPlan::RecursiveQuery(ref rq) => rq,
+        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(ref rq) => rq,
+            _ => panic!(
+                "Expected RecursiveQuery inside Projection, got: {:?}",
+                plan2
+            ),
+        },
+        _ => panic!("Expected RecursiveQuery or Projection, got: {:?}", plan2),
+    };
+
+    assert_eq!(recursive_query.name, "cte");
+    assert_eq!(recursive_query.is_distinct, true);
+
+    Ok(())
+}

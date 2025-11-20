@@ -22,6 +22,7 @@ mod filter_rel;
 mod join;
 mod project_rel;
 mod read_rel;
+mod recursive_query_rel;
 mod set_rel;
 mod sort_rel;
 
@@ -32,6 +33,7 @@ pub use filter_rel::*;
 pub use join::*;
 pub use project_rel::*;
 pub use read_rel::*;
+pub use recursive_query_rel::*;
 pub use set_rel::*;
 pub use sort_rel::*;
 
@@ -71,8 +73,6 @@ pub fn to_substrait_rel(
             not_impl_err!("Unsupported plan type: {plan:?}")?
         }
         LogicalPlan::Unnest(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
-        LogicalPlan::RecursiveQuery(plan) => {
-            not_impl_err!("Unsupported plan type: {plan:?}")?
-        }
+        LogicalPlan::RecursiveQuery(plan) => producer.handle_recursive_query(plan),
     }
 }
