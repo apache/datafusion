@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{Between, Expr, Like};
+use super::{predicate_bounds, Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
     InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
+use crate::expr_rewriter::rewrite_with_guarantees;
 use crate::type_coercion::functions::{
     data_types_with_scalar_udf, fields_with_aggregate_udf, fields_with_window_udf,
 };
@@ -31,8 +32,9 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, Spans, TableReference,
+    Result, ScalarValue, Spans, TableReference,
 };
+use datafusion_expr_common::interval_arithmetic::NullableInterval;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::sync::Arc;
@@ -282,15 +284,85 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
-                // This expression is nullable if any of the input expressions are nullable
-                let then_nullable = case
+                let nullable_then = case
                     .when_then_expr
                     .iter()
-                    .map(|(_, t)| t.nullable(input_schema))
-                    .collect::<Result<Vec<_>>>()?;
-                if then_nullable.contains(&true) {
-                    Ok(true)
+                    .filter_map(|(w, t)| {
+                        let is_nullable = match t.nullable(input_schema) {
+                            Err(e) => return Some(Err(e)),
+                            Ok(n) => n,
+                        };
+
+                        // Branches with a then expression that is not nullable do not impact the
+                        // nullability of the case expression.
+                        if !is_nullable {
+                            return None;
+                        }
+
+                        // For case-with-expression assume all 'then' expressions are reachable
+                        if case.expr.is_some() {
+                            return Some(Ok(()));
+                        }
+
+                        // For branches with a nullable 'then' expression, try to determine
+                        // if the 'then' expression is ever reachable in the situation where
+                        // it would evaluate to null.
+
+                        // First, derive a variant of the 'when' expression, where all occurrences
+                        // of the 'then' expression have been replaced by 'NULL'.
+                        let certainly_null_expr = unwrap_certainly_null_expr(t).clone();
+                        let certainly_null_type =
+                            match certainly_null_expr.get_type(input_schema) {
+                                Err(e) => return Some(Err(e)),
+                                Ok(datatype) => datatype,
+                            };
+                        let null_interval = NullableInterval::Null {
+                            datatype: certainly_null_type,
+                        };
+                        let guarantees = vec![(certainly_null_expr, null_interval)];
+                        let when_with_null =
+                            match rewrite_with_guarantees(*w.clone(), &guarantees) {
+                                Err(e) => return Some(Err(e)),
+                                Ok(e) => e.data,
+                            };
+
+                        // Next, determine the bounds of the derived 'when' expression to see if it
+                        // can ever evaluate to true.
+                        let bounds = match predicate_bounds::evaluate_bounds(
+                            &when_with_null,
+                            input_schema,
+                        ) {
+                            Err(e) => return Some(Err(e)),
+                            Ok(b) => b,
+                        };
+
+                        let can_be_true = match bounds
+                            .contains_value(ScalarValue::Boolean(Some(true)))
+                        {
+                            Err(e) => return Some(Err(e)),
+                            Ok(b) => b,
+                        };
+
+                        if !can_be_true {
+                            // If the derived 'when' expression can never evaluate to true, the
+                            // 'then' expression is not reachable when it would evaluate to NULL.
+                            // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                            None
+                        } else {
+                            // The branch might be taken
+                            Some(Ok(()))
+                        }
+                    })
+                    .next();
+
+                if let Some(nullable_then) = nullable_then {
+                    // There is at least one reachable nullable 'then' expression, so the case
+                    // expression itself is nullable.
+                    // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+                    nullable_then.map(|_| true)
                 } else if let Some(e) = &case.else_expr {
+                    // There are no reachable nullable 'then' expressions, so all we still need to
+                    // check is the 'else' expression's nullability.
                     e.nullable(input_schema)
                 } else {
                     // CASE produces NULL if there is no `else` expr
@@ -642,6 +714,16 @@ impl ExprSchemable for Expr {
     }
 }
 
+/// Returns the innermost [Expr] that is provably null if `expr` is null.
+fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Not(e) => unwrap_certainly_null_expr(e),
+        Expr::Negative(e) => unwrap_certainly_null_expr(e),
+        Expr::Cast(e) => unwrap_certainly_null_expr(e.expr.as_ref()),
+        _ => expr,
+    }
+}
+
 impl Expr {
     /// Common method for window functions that applies type coercion
     /// to all arguments of the window function to check if it matches
@@ -773,7 +855,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{col, lit, out_ref_col_with_metadata};
+    use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
     use datafusion_common::{
         assert_or_internal_err, DFSchema, DataFusionError, ScalarValue,
@@ -826,6 +908,137 @@ mod tests {
 
         let expr = col("foo").between(null.clone(), null);
         assert!(expr.nullable(&get_schema(false)).unwrap());
+    }
+
+    fn assert_nullability(expr: &Expr, schema: &dyn ExprSchema, expected: bool) {
+        assert_eq!(
+            expr.nullable(schema).unwrap(),
+            expected,
+            "Nullability of '{expr}' should be {expected}"
+        );
+    }
+
+    fn assert_not_nullable(expr: &Expr, schema: &dyn ExprSchema) {
+        assert_nullability(expr, schema, false);
+    }
+
+    fn assert_nullable(expr: &Expr, schema: &dyn ExprSchema) {
+        assert_nullability(expr, schema, true);
+    }
+
+    #[test]
+    fn test_case_expression_nullability() -> Result<()> {
+        let nullable_schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_nullable(true);
+
+        let not_nullable_schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_nullable(false);
+
+        // CASE WHEN x IS NOT NULL THEN x ELSE 0
+        let e = when(col("x").is_not_null(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN NOT x IS NULL THEN x ELSE 0
+        let e = when(not(col("x").is_null()), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN X = 5 THEN x ELSE 0
+        let e = when(col("x").eq(lit(5)), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT NULL AND x = 5 THEN x ELSE 0
+        let e = when(and(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x = 5 AND x IS NOT NULL THEN x ELSE 0
+        let e = when(and(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT NULL OR x = 5 THEN x ELSE 0
+        let e = when(or(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x = 5 OR x IS NOT NULL THEN x ELSE 0
+        let e = when(or(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN (x = 5 AND x IS NOT NULL) OR (x = bar AND x IS NOT NULL) THEN x ELSE 0
+        let e = when(
+            or(
+                and(col("x").eq(lit(5)), col("x").is_not_null()),
+                and(col("x").eq(col("bar")), col("x").is_not_null()),
+            ),
+            col("x"),
+        )
+        .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x = 5 OR x IS NULL THEN x ELSE 0
+        let e = when(or(col("x").eq(lit(5)), col("x").is_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS TRUE THEN x ELSE 0
+        let e = when(col("x").is_true(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT TRUE THEN x ELSE 0
+        let e = when(col("x").is_not_true(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS FALSE THEN x ELSE 0
+        let e = when(col("x").is_false(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT FALSE THEN x ELSE 0
+        let e = when(col("x").is_not_false(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS UNKNOWN THEN x ELSE 0
+        let e = when(col("x").is_unknown(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT UNKNOWN THEN x ELSE 0
+        let e = when(col("x").is_not_unknown(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x LIKE 'x' THEN x ELSE 0
+        let e = when(col("x").like(lit("x")), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN 0 THEN x ELSE 0
+        let e = when(lit(0), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN 1 THEN x ELSE 0
+        let e = when(lit(1), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        Ok(())
     }
 
     #[test]

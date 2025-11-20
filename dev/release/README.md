@@ -26,11 +26,11 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 ## Release Process Overview
 
 New development happens on the `main` branch.
-Releases are made from branches, e.g. `branch-37` for the `37.x.y` release series.
+Releases are made from branches, e.g. `branch-50` for the `50.x.y` release series.
 
 To prepare for a new release series, we:
 
-- Create a new branch from `main`, such as `branch-37` in the Apache repository (not in a fork)
+- Create a new branch from `main`, such as `branch-50` in the Apache repository (not in a fork)
 - Continue merging new features changes to `main` branch
 - Prepare the release branch for release:
   - Update version numbers in `Cargo.toml` files and create `CHANGELOG.md`
@@ -55,7 +55,7 @@ these steps:
 
 1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
 2. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
-3. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
+3. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-50`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
 For example, to backport commit `12345` from `main` to `branch-50`:
 
@@ -127,16 +127,35 @@ We then publish the code in the approved artifacts to crates.io.
 
 First create a new release branch from `main` in the apache repository.
 
-For example, to create the `branch-51` branch for the `51.x.y` release series:
+For example, to create the `branch-50` branch for the `50.x.y` release series:
 
 ```shell
 git fetch apache             # make sure we are up to date
 git checkout apache/main     # checkout current latest development branch
-git checkout -b branch-51    # create local branch
-git push -u apache branch-51 # push branch to apache remote
+git checkout -b branch-50    # create local branch
+git push -u apache branch-50 # push branch to apache remote
 ```
 
-### 2. Prepare PR to Update Changelog and the Release Version
+### 2. Add a protection to release candidate branch
+
+To protect a release candidate branch from accidental merges, run:
+
+```shell
+./dev/release/add-branch-protection.sh 50
+```
+
+The script will modify `.asf.yaml` and add following block:
+
+```yaml
+branch-50:
+  required_pull_request_reviews:
+    required_approving_review_count: 1
+```
+
+- Create a PR.
+- Merge to `main`.
+
+### 3. Prepare PR to Update Changelog and the Release Version
 
 First, prepare a PR to update the changelog and versions to reflect the planned
 release. See [#18173](https://github.com/apache/datafusion/pull/18173) for an example.
@@ -201,17 +220,6 @@ git commit -a -m 'Update version'
 ```
 
 Remember to merge any fixes back to `main` branch as well.
-
-### 3. Prepare a PR to Modify `asf.yaml`
-
-Modify `asf.yaml` to protect future release candidate branch to prevent accidental merges:
-
-```yaml
-# needs to be updated as part of the release process
-branch-50:
-  required_pull_request_reviews:
-    required_approving_review_count: 1
-```
 
 ### 4. Prepare Release Candidate Artifacts
 
@@ -425,7 +433,7 @@ svn ls https://dist.apache.org/repos/dist/dev/datafusion
 Delete a release candidate:
 
 ```shell
-svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-38.0.0-rc1/
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-50.0.0-rc1/
 ```
 
 #### Deleting old releases from `release` svn
@@ -441,5 +449,5 @@ svn ls https://dist.apache.org/repos/dist/release/datafusion
 Delete a release:
 
 ```shell
-svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-37.0.0
+svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-50.0.0
 ```

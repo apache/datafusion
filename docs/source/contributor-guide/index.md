@@ -59,9 +59,8 @@ If you want to work on an issue which is not already assigned to someone else
 and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by using the `unassign me`
-link at the top of the issue page (and ask for help if are stuck) so that
-someone else can get involved in the work.
+unable to make progress you should unassign the issue by commenting a single
+word `untake`.
 
 # Developer's guide
 

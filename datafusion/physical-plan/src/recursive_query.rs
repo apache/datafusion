@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::work_table::{ReservedBatches, WorkTable, WorkTableExec};
+use super::work_table::{ReservedBatches, WorkTable};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
@@ -378,13 +378,8 @@ fn assign_work_table(
 /// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
 fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|plan| {
-        // WorkTableExec's states have already been updated correctly.
-        if plan.as_any().is::<WorkTableExec>() {
-            Ok(Transformed::no(plan))
-        } else {
-            let new_plan = Arc::clone(&plan).reset_state()?;
-            Ok(Transformed::yes(new_plan))
-        }
+        let new_plan = Arc::clone(&plan).reset_state()?;
+        Ok(Transformed::yes(new_plan))
     })
     .data()
 }
