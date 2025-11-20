@@ -114,6 +114,7 @@ pub async fn from_read_rel(
             .await
         }
         Some(ReadType::VirtualTable(vt)) => {
+            #[allow(deprecated)]
             if vt.values.is_empty() && vt.expressions.is_empty() {
                 return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row: false,
@@ -121,11 +122,18 @@ pub async fn from_read_rel(
                 }));
             }
 
-            if vt.values.len() == 1
+            // Check for produce_one_row pattern in both old (values) and new (expressions) formats
+            #[allow(deprecated)]
+            let is_produce_one_row = (vt.values.len() == 1
                 && vt.expressions.is_empty()
                 && substrait_schema.fields().is_empty()
-                && vt.values[0].fields.is_empty()
-            {
+                && vt.values[0].fields.is_empty())
+                || (vt.expressions.len() == 1
+                    && vt.values.is_empty()
+                    && substrait_schema.fields().is_empty()
+                    && vt.expressions[0].fields.is_empty());
+
+            if is_produce_one_row {
                 return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row: true,
                     schema: DFSchemaRef::new(substrait_schema),
@@ -135,54 +143,56 @@ pub async fn from_read_rel(
             let values = if !vt.expressions.is_empty() {
                 let mut exprs = vec![];
                 for row in &vt.expressions {
-                    let mut name_idx = 0;
                     let mut row_exprs = vec![];
                     for expression in &row.fields {
-                        name_idx += 1;
                         let expr = consumer
-                            .consume_expression(expression, &DFSchema::empty())
+                            .consume_expression(expression, &substrait_schema)
                             .await?;
                         row_exprs.push(expr);
                     }
-                    if name_idx != named_struct.names.len() {
+                    // For expressions, validate against top-level schema fields, not nested names
+                    if row_exprs.len() != substrait_schema.fields().len() {
                         return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                named_struct.names.len()
+                                "Field count mismatch: expected {} fields but found {} in virtual table row",
+                                substrait_schema.fields().len(),
+                                row_exprs.len()
                             );
                     }
                     exprs.push(row_exprs);
                 }
                 exprs
             } else {
-                vt
-                .values
-                .iter()
-                .map(|row| {
-                    let mut name_idx = 0;
-                    let lits = row
-                        .fields
-                        .iter()
-                        .map(|lit| {
-                            name_idx += 1; // top-level names are provided through schema
-                            Ok(Expr::Literal(from_substrait_literal(
-                                consumer,
-                                lit,
-                                &named_struct.names,
-                                &mut name_idx,
-                            )?, None))
-                        })
-                        .collect::<datafusion::common::Result<_>>()?;
-                    if name_idx != named_struct.names.len() {
-                        return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                named_struct.names.len()
-                            );
-                    }
-                    Ok(lits)
-                })
-                .collect::<datafusion::common::Result<_>>()?
+                #[allow(deprecated)]
+                {
+                    vt
+                    .values
+                    .iter()
+                    .map(|row| {
+                        let mut name_idx = 0;
+                        let lits = row
+                            .fields
+                            .iter()
+                            .map(|lit| {
+                                name_idx += 1; // top-level names are provided through schema
+                                Ok(Expr::Literal(from_substrait_literal(
+                                    consumer,
+                                    lit,
+                                    &named_struct.names,
+                                    &mut name_idx,
+                                )?, None))
+                            })
+                            .collect::<datafusion::common::Result<_>>()?;
+                        if name_idx != named_struct.names.len() {
+                            return substrait_err!(
+                                    "Names list must match exactly to nested schema, but found {} uses for {} names",
+                                    name_idx,
+                                    named_struct.names.len()
+                                );
+                        }
+                        Ok(lits)
+                    })
+                    .collect::<datafusion::common::Result<_>>()?
+                }
             };
 
             Ok(LogicalPlan::Values(Values {

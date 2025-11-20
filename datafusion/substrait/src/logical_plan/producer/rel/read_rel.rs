@@ -102,16 +102,17 @@ pub fn from_empty_relation(
             .collect::<datafusion::common::Result<_>>()?;
 
         ReadType::VirtualTable(VirtualTable {
+            #[allow(deprecated)]
             values: vec![Struct { fields }],
             expressions: vec![],
         })
     } else {
         ReadType::VirtualTable(VirtualTable {
+            #[allow(deprecated)]
             values: vec![],
             expressions: vec![],
         })
     };
-    #[allow(deprecated)]
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
@@ -152,7 +153,6 @@ pub fn from_values(
             Ok(Struct { fields })
         })
         .collect::<datafusion::common::Result<_>>()?;
-    #[allow(deprecated)]
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
@@ -162,6 +162,7 @@ pub fn from_values(
             projection: None,
             advanced_extension: None,
             read_type: Some(ReadType::VirtualTable(VirtualTable {
+                #[allow(deprecated)]
                 values,
                 expressions: vec![],
             })),
