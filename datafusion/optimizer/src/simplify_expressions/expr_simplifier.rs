@@ -58,12 +58,9 @@ use crate::simplify_expressions::unwrap_cast::{
     unwrap_cast_in_comparison_for_binary,
 };
 use crate::simplify_expressions::SimplifyInfo;
-use crate::simplify_expressions::{
-    guarantees::GuaranteeRewriter,
-    udf_preimage::{
+use crate::simplify_expressions::udf_preimage::{
         is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary,
         preimage_in_comparison_for_binary,
-    },
 };
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
