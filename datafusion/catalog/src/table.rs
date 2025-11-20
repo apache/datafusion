@@ -182,6 +182,14 @@ pub trait TableProvider: Debug + Sync + Send {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
+    /// A convenience helper, returning the table function name if available.
+    ///
+    /// Preferred usage is `table.table_function_details()` which provides both
+    /// the name and evaluated args. This helper is left for convenience in
+    /// existing call sites.
+    fn table_function_name(&self) -> Option<&'static str> {
+        self.table_function_details().map(|d| d.name)
+    }
     /// Create an [`ExecutionPlan`] for scanning the table using structured arguments.
     ///
     /// This method uses [`ScanArgs`] to pass scan parameters in a structured way

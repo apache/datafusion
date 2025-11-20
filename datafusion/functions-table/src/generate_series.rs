@@ -294,14 +294,10 @@ impl GenerateSeriesTable {
         }
     }
 
-    pub fn table_function_details(
-        &self,
-    ) -> datafusion::catalog::TableFunctionDetails<'_> {
-        datafusion::catalog::TableFunctionDetails {
-            name: self.args.name(),
-            arguments: &self.arguments,
-        }
-    }
+    // The table function metadata is exposed through the `TableProvider` trait's
+    // `table_function_details` method. Implementations should prefer that API so
+    // that external code can access function metadata even when the table is
+    // accessed through trait objects.
 
     pub fn as_generator(
         &self,
@@ -537,8 +533,8 @@ impl TableProvider for GenerateSeriesTable {
 
     fn table_function_details(
         &self,
-    ) -> Option<datafusion::catalog::TableFunctionDetails<'_>> {
-        Some(datafusion::catalog::TableFunctionDetails {
+    ) -> Option<datafusion_catalog::TableFunctionDetails<'_>> {
+        Some(datafusion_catalog::TableFunctionDetails {
             name: self.args.name(),
             arguments: &self.arguments,
         })

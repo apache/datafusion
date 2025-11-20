@@ -271,6 +271,9 @@ fn parse_table_function_metadata(
         return Ok(None);
     };
 
+    // Only parse table function read-rel extensions created by the local
+    // Substrait producer. This avoids accidentally interpreting unrelated
+    // extension payloads as table functions.
     if any.type_url != TABLE_FUNCTION_TYPE_URL {
         return Ok(None);
     }

@@ -22,7 +22,6 @@ use datafusion::catalog::default_table_source::DefaultTableSource;
 use datafusion::common::{not_impl_err, substrait_datafusion_err, DFSchema, ToDFSchema};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
-use datafusion_functions_table::generate_series::GenerateSeriesTable;
 use pbjson_types::Any;
 use prost::Message;
 use std::sync::Arc;
@@ -54,6 +53,10 @@ fn table_function_extension_for_scan(
         None => return Ok(None),
     };
 
+    // If the table provider exposes function details (e.g. `generate_series`),
+    // include a substrait extension with the function name and evaluated
+    // literals. This allows consumers to reconstruct table functions during
+    // read-rel deserialization.
     let Some(details) = default_source.table_provider.table_function_details() else {
         return Ok(None);
     };

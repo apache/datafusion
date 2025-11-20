@@ -40,6 +40,11 @@ async fn table_function_round_trip_range() -> Result<()> {
     assert_table_function_round_trip("SELECT * FROM range(2, 8, 3)", &["range"]).await
 }
 
+#[tokio::test]
+async fn table_function_round_trip_generate_series_with_null() -> Result<()> {
+    assert_table_function_round_trip("SELECT * FROM generate_series(NULL, 5)", &["generate_series"]).await
+}
+
 async fn assert_table_function_round_trip(query: &str, expected_functions: &[&str]) -> Result<()> {
     let ctx = SessionContext::new();
 
