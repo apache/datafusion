@@ -19,6 +19,7 @@ use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
 use crate::logical_plan::consumer::SubstraitConsumer;
+use datafusion::catalog::TableProvider;
 use datafusion::common::{
     not_impl_err, plan_err, substrait_datafusion_err, substrait_err, DFSchema,
     DFSchemaRef, TableReference,
@@ -28,12 +29,27 @@ use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
     EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Values,
 };
+use prost::Message;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
-use substrait::proto::read_rel::ReadType;
+use substrait::proto::read_rel::{NamedTable, ReadType};
 use substrait::proto::{Expression, ReadRel};
 use url::Url;
+
+#[derive(Clone, PartialEq, Message)]
+struct TableFunctionMetadata {
+    #[prost(string, tag = "1")]
+    name: String,
+
+    #[prost(message, repeated, tag = "2")]
+    arguments: Vec<Expression>,
+}
+
+struct TableFunctionInvocation {
+    name: String,
+    arguments: Vec<Expression>,
+}
 
 #[allow(deprecated)]
 pub async fn from_read_rel(
@@ -44,6 +60,7 @@ pub async fn from_read_rel(
         consumer: &impl SubstraitConsumer,
         table_ref: TableReference,
         schema: DFSchema,
+        provider_override: Option<Arc<dyn TableProvider>>,
         projection: &Option<MaskExpression>,
         filter: &Option<Box<Expression>>,
     ) -> datafusion::common::Result<LogicalPlan> {
@@ -57,9 +74,12 @@ pub async fn from_read_rel(
         };
 
         let plan = {
-            let provider = match consumer.resolve_table_ref(&table_ref).await? {
-                Some(ref provider) => Arc::clone(provider),
-                _ => return plan_err!("No table named '{table_ref}'"),
+            let provider = match provider_override {
+                Some(provider) => provider,
+                None => match consumer.resolve_table_ref(&table_ref).await? {
+                    Some(ref provider) => Arc::clone(provider),
+                    _ => return plan_err!("No table named '{table_ref}'"),
+                },
             };
 
             LogicalPlanBuilder::scan_with_filters(
@@ -86,6 +106,7 @@ pub async fn from_read_rel(
 
     match &read.read_type {
         Some(ReadType::NamedTable(nt)) => {
+            let table_function = parse_table_function_metadata(nt)?;
             let table_reference = match nt.names.len() {
                 0 => {
                     return plan_err!("No table name found in NamedTable");
@@ -104,10 +125,18 @@ pub async fn from_read_rel(
                 },
             };
 
+            let provider_override = match table_function {
+                Some(invocation) => {
+                    Some(resolve_table_function(consumer, &invocation).await?)
+                }
+                None => None,
+            };
+
             read_with_schema(
                 consumer,
                 table_reference,
                 substrait_schema,
+                provider_override,
                 &read.projection,
                 &read.filter,
             )
@@ -215,6 +244,7 @@ pub async fn from_read_rel(
                 consumer,
                 table_reference,
                 substrait_schema,
+                None,
                 &read.projection,
                 &read.filter,
             )
@@ -224,6 +254,48 @@ pub async fn from_read_rel(
             not_impl_err!("Unsupported Readtype: {:?}", read.read_type)
         }
     }
+}
+
+fn parse_table_function_metadata(
+    named_table: &NamedTable,
+) -> datafusion::common::Result<Option<TableFunctionInvocation>> {
+    let enhancement = named_table
+        .advanced_extension
+        .as_ref()
+        .and_then(|ext| ext.enhancement.as_ref());
+
+    let Some(any) = enhancement else {
+        return Ok(None);
+    };
+
+    let metadata = TableFunctionMetadata::decode(any.value.as_slice()).map_err(|e| {
+        substrait_datafusion_err!("Failed to decode table function metadata: {e}")
+    })?;
+
+    Ok(Some(TableFunctionInvocation {
+        name: metadata.name,
+        arguments: metadata.arguments,
+    }))
+}
+
+async fn resolve_table_function(
+    consumer: &impl SubstraitConsumer,
+    invocation: &TableFunctionInvocation,
+) -> datafusion::common::Result<Arc<dyn TableProvider>> {
+    let table_function = consumer
+        .get_table_function(invocation.name.as_str())
+        .ok_or_else(|| plan_err!("No table function named '{}'", invocation.name))?;
+
+    let mut args = Vec::with_capacity(invocation.arguments.len());
+    for argument in &invocation.arguments {
+        args.push(
+            consumer
+                .consume_expression(argument, &DFSchema::empty())
+                .await?,
+        );
+    }
+
+    table_function.create_table_provider(&args)
 }
 
 pub fn apply_masking(
