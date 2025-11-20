@@ -30,10 +30,10 @@ In addition to submitting new PRs, we have a healthy tradition of community
 members reviewing each other's PRs. Doing so is a great way to help the
 community as well as get more familiar with Rust and the relevant codebases.
 
-## Development Environment + Testing
+## Development Environment
 
 Setup your development environment [here](development_environment.md), and learn
-how to test the code [here](testing).
+how to test the code [here](testing.md).
 
 ## Finding and Creating Issues to Work On
 
