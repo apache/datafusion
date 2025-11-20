@@ -24,8 +24,8 @@ mod inlist_simplifier;
 mod regex;
 pub mod simplify_exprs;
 mod simplify_predicates;
+mod udf_preimage;
 mod unwrap_cast;
-mod unwrap_date_part;
 mod utils;
 
 // backwards compatibility

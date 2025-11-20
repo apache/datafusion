@@ -15,27 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, TimeUnit};
-use chrono::NaiveDate;
-use datafusion_common::{
-    internal_err, tree_node::Transformed, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{internal_err, tree_node::Transformed, Result};
 use datafusion_expr::{
     and, expr::ScalarFunction, lit, or, simplify::SimplifyInfo, BinaryExpr, Expr,
-    Operator,
+    Operator, ScalarUDFImpl,
 };
+use datafusion_functions::datetime::date_part::DatePartFunc;
 
-pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
-    info: &S,
-    cast_expr: Expr,
+pub(super) fn preimage_in_comparison_for_binary(
+    info: &dyn SimplifyInfo,
+    udf_expr: Expr,
     literal: Expr,
     op: Operator,
 ) -> Result<Transformed<Expr>> {
-    let (args, lit_value) = match (cast_expr, literal) {
+    let (func, args, lit_value) = match (udf_expr, literal) {
         (
             Expr::ScalarFunction(ScalarFunction { func, args }),
             Expr::Literal(lit_value, _),
-        ) if func.name() == "date_part" => (args, lit_value),
+        ) => (func, args, lit_value),
         _ => return internal_err!("Expect date_part expr and literal"),
     };
     let expr = Box::new(args[1].clone());
@@ -44,18 +41,17 @@ pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
         return internal_err!("Can't get the data type of the expr {:?}", &expr);
     };
 
-    // Helper to cast literal
-    let cast_year = |updated_year: &ScalarValue| -> Result<ScalarValue, DataFusionError> {
-        year_literal_to_type(updated_year, &expr_type).ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Can't cast {lit_value} to type {expr_type}"
-            ))
-        })
+    let preimage_func = match func.name() {
+        "date_part" => DatePartFunc::new(),
+        _ => return internal_err!("Preimage is not supported for {:?}", func.name()),
     };
 
     let rewritten_expr = match op {
         Operator::Lt | Operator::GtEq => {
-            let v = cast_year(&lit_value)?;
+            let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
+                Some(v) => v,
+                None => return internal_err!("Preimage cast did work"),
+            };
             Expr::BinaryExpr(BinaryExpr {
                 left: expr,
                 op,
@@ -63,12 +59,10 @@ pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
             })
         }
         Operator::Gt => {
-            let year = match lit_value {
-                ScalarValue::Int32(Some(y)) => y + 1,
-                _ => return internal_err!("Expected Int32 Literal"),
+            let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
+                Some(v) => v,
+                None => return internal_err!("Preimage cast did work"),
             };
-            let updated_year = ScalarValue::Int32(Some(year));
-            let v = cast_year(&updated_year)?;
             Expr::BinaryExpr(BinaryExpr {
                 left: expr,
                 op: Operator::GtEq,
@@ -76,12 +70,10 @@ pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
             })
         }
         Operator::LtEq => {
-            let year = match lit_value {
-                ScalarValue::Int32(Some(y)) => y + 1,
-                _ => return internal_err!("Expected Int32 Literal"),
+            let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
+                Some(v) => v,
+                None => return internal_err!("Preimage cast did work"),
             };
-            let updated_year = ScalarValue::Int32(Some(year));
-            let v = cast_year(&updated_year)?;
             Expr::BinaryExpr(BinaryExpr {
                 left: expr,
                 op: Operator::Lt,
@@ -89,13 +81,18 @@ pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
             })
         }
         Operator::Eq => {
-            let year = match lit_value {
-                ScalarValue::Int32(Some(y)) => y + 1,
-                _ => return internal_err!("Expected Int32 Literal"),
-            };
-            let updated_year = ScalarValue::Int32(Some(year));
-            let lower = cast_year(&lit_value)?;
-            let upper = cast_year(&updated_year)?;
+            let lower =
+                match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::GtEq)
+                {
+                    Some(v) => v,
+                    None => return internal_err!("Preimage cast did work"),
+                };
+            let upper =
+                match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::LtEq)
+                {
+                    Some(v) => v,
+                    None => return internal_err!("Preimage cast did work"),
+                };
             and(
                 Expr::BinaryExpr(BinaryExpr {
                     left: expr.clone(),
@@ -110,13 +107,16 @@ pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
             )
         }
         Operator::NotEq => {
-            let year = match lit_value {
-                ScalarValue::Int32(Some(y)) => y + 1,
-                _ => return internal_err!("Expected Int32 Literal"),
-            };
-            let updated_year = ScalarValue::Int32(Some(year));
-            let lower = cast_year(&lit_value)?;
-            let upper = cast_year(&updated_year)?;
+            let lower =
+                match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::Lt) {
+                    Some(v) => v,
+                    None => return internal_err!("Preimage cast did work"),
+                };
+            let upper =
+                match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::Gt) {
+                    Some(v) => v,
+                    None => return internal_err!("Preimage cast did work"),
+                };
             or(
                 Expr::BinaryExpr(BinaryExpr {
                     left: expr.clone(),
@@ -135,7 +135,7 @@ pub(super) fn unwrap_date_part_in_comparison_for_binary<S: SimplifyInfo>(
     Ok(Transformed::yes(rewritten_expr))
 }
 
-pub(super) fn is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_binary<
+pub(super) fn is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary<
     S: SimplifyInfo,
 >(
     info: &S,
@@ -143,7 +143,7 @@ pub(super) fn is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_b
     op: Operator,
     literal: &Expr,
 ) -> bool {
-    match (expr, op, literal) {
+    let (func, args, lit_value) = match (expr, op, literal) {
         (
             Expr::ScalarFunction(ScalarFunction { func, args }),
             Operator::Eq
@@ -152,17 +152,23 @@ pub(super) fn is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_b
             | Operator::Lt
             | Operator::GtEq
             | Operator::LtEq,
-            Expr::Literal(lit_val, _),
-        ) if func.name() == "date_part" => {
-            let left_expr = Box::new(args[1].clone());
+            Expr::Literal(lit_value, _),
+        ) => (func, args, lit_value),
+        _ => return false,
+    };
+
+    match func.name() {
+        "date_part" => {
+            let left_expr = Box::new(args[1].clone()); // len args is variable and the position of args can vary too
             let Ok(expr_type) = info.get_data_type(&left_expr) else {
                 return false;
             };
             let Ok(_lit_type) = info.get_data_type(literal) else {
                 return false;
             };
-
-            year_literal_to_type(lit_val, &expr_type).is_some()
+            DatePartFunc::new()
+                .preimage_cast(lit_value, &expr_type, op)
+                .is_some()
         }
         _ => false,
     }
@@ -195,63 +201,6 @@ pub(super) fn is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_b
 //         _ => false,
 //     }
 // }
-
-/// Cast the year to the right datatype
-fn year_literal_to_type(
-    lit_value: &ScalarValue,
-    target_type: &DataType,
-) -> Option<ScalarValue> {
-    let year = match lit_value {
-        ScalarValue::Int32(Some(y)) => *y,
-        _ => return None,
-    };
-    // Can only extract year from Date32/64 and Timestamp
-    match target_type {
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {}
-        _ => return None,
-    }
-
-    let naive_date = NaiveDate::from_ymd_opt(year, 1, 1).expect("Invalid year");
-
-    let casted = match target_type {
-        DataType::Date32 => {
-            let days = naive_date
-                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
-                .num_days() as i32;
-            ScalarValue::Date32(Some(days))
-        }
-        DataType::Date64 => {
-            let milis = naive_date
-                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
-                .num_milliseconds();
-            ScalarValue::Date64(Some(milis))
-        }
-        DataType::Timestamp(unit, tz) => {
-            let days = naive_date
-                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
-                .num_days();
-            match unit {
-                TimeUnit::Second => {
-                    ScalarValue::TimestampSecond(Some(days * 86_400), tz.clone())
-                }
-                TimeUnit::Millisecond => {
-                    ScalarValue::TimestampMillisecond(Some(days * 86_400_000), tz.clone())
-                }
-                TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(
-                    Some(days * 86_400_000_000),
-                    tz.clone(),
-                ),
-                TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(
-                    Some(days * 86_400_000_000_000),
-                    tz.clone(),
-                ),
-            }
-        }
-        _ => return None,
-    };
-
-    Some(casted)
-}
 
 #[cfg(test)]
 mod tests {
