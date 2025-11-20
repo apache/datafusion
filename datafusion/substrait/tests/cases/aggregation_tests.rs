@@ -68,4 +68,27 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn multiple_grouping_sets() -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/aggregate_groupings/multiple_groupings.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+            plan,
+            @r#"
+                Projection: c0, c1, sum(c0) AS summation
+                  Aggregate: groupBy=[[GROUPING SETS ((c0), (c1), (c0, c1))]], aggr=[[sum(c0)]]
+                    EmptyRelation: rows=0
+                "#
+        );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
 }
