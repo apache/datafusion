@@ -416,7 +416,13 @@ impl SharedBuildAccumulator {
                             &partition_data.bounds,
                         );
 
-                        // Combine membership and bounds expressions
+                        // Combine membership and bounds expressions for multi-layer optimization:
+                        // - Bounds (min/max): Enable statistics-based pruning (Parquet row group/file skipping)
+                        // - Membership (InList/hash lookup): Enables:
+                        //   * Precise filtering (exact value matching)
+                        //   * Bloom filter utilization (if present in Parquet files)
+                        //   * Better pruning for data types where min/max isn't effective (e.g., UUIDs)
+                        // Together, they provide complementary benefits and maximize data skipping.
                         let filter_expr = match (membership_expr, bounds_expr) {
                             (Some(membership), Some(bounds)) => {
                                 // Both available: combine with AND
@@ -427,8 +433,19 @@ impl SharedBuildAccumulator {
                                 ))
                                     as Arc<dyn PhysicalExpr>
                             }
-                            (Some(membership), None) => membership,
-                            (None, Some(bounds)) => bounds,
+                            (Some(membership), None) => {
+                                // Membership available but no bounds
+                                // This is reachable when we have data but bounds aren't available
+                                // (e.g., unsupported data types or no columns with bounds)
+                                membership
+                            }
+                            (None, Some(bounds)) => {
+                                // Bounds available but no membership.
+                                // This should be unreachable in practice: we can always push down a reference
+                                // to the hash table.
+                                // But it seems safer to handle it defensively.
+                                bounds
+                            }
                             (None, None) => {
                                 // No filter available, nothing to update
                                 return Ok(());
@@ -518,8 +535,17 @@ impl SharedBuildAccumulator {
                                         ))
                                             as Arc<dyn PhysicalExpr>
                                     }
-                                    (Some(membership), None) => membership,
-                                    (None, Some(bounds)) => bounds,
+                                    (Some(membership), None) => {
+                                        // Membership available but no bounds (e.g., unsupported data types)
+                                        membership
+                                    }
+                                    (None, Some(bounds)) => {
+                                        // Bounds available but no membership.
+                                        // This should be unreachable in practice: we can always push down a reference
+                                        // to the hash table.
+                                        // But it seems safer to handle it defensively.
+                                        bounds
+                                    }
                                     (None, None) => {
                                         // No filter for this partition - should not happen due to filter_map above
                                         // but handle defensively by returning a "true" literal
