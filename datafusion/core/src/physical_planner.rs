@@ -801,7 +801,11 @@ impl DefaultPhysicalPlanner {
 
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_aggregations();
+                    && session_state.config().repartition_aggregations()
+                    && has_sufficient_rows_for_repartition(
+                        initial_aggr.input(),
+                        session_state,
+                    )?;
 
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
@@ -1577,6 +1581,25 @@ impl DefaultPhysicalPlanner {
             ))
         }
     }
+}
+
+fn has_sufficient_rows_for_repartition(
+    input: &Arc<dyn ExecutionPlan>,
+    session_state: &SessionState,
+) -> Result<bool> {
+    // Get partition statistics, default to repartitioning if unavailable
+    let stats = match input.partition_statistics(None) {
+        Ok(s) => s,
+        Err(_) => return Ok(true),
+    };
+
+    if let Some(num_rows) = stats.num_rows.get_value().copied() {
+        let batch_size = session_state.config().batch_size();
+        
+        return Ok(num_rows >= batch_size);
+    }
+
+    Ok(true)
 }
 
 /// Expand and align a GROUPING SET expression.
