@@ -33,8 +33,7 @@ use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
 use substrait::proto::{ReadRel, Rel};
 
-const TABLE_FUNCTION_TYPE_URL: &str =
-    "type.googleapis.com/datafusion.substrait.TableFunctionReadRel";
+use crate::logical_plan::constants::TABLE_FUNCTION_TYPE_URL;
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 struct TableFunctionReadRelExtension {

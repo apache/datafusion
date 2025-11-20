@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod constants;
-pub mod consumer;
-pub mod producer;
+/// Type URL used in Substrait `ReadRel` advanced_extension to indicate a
+/// serialized table function invocation with evaluated arguments.
+///
+/// This string is used by both the producer and consumer; keeping it in one
+/// place avoids accidental drift.
+pub const TABLE_FUNCTION_TYPE_URL: &str =
+    "type.googleapis.com/datafusion.substrait.TableFunctionReadRel";
