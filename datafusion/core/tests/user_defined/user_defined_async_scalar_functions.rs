@@ -136,6 +136,5 @@ impl AsyncScalarUDFImpl for TestAsyncUDFImpl {
 
 /// Simulates calling an async external service
 async fn call_external_service(arg1: ColumnarValue) -> Result<ColumnarValue> {
-    tokio::time::sleep(Duration::from_millis(10)).await;
     Ok(arg1)
 }
