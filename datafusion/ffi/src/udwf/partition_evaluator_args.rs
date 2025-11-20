@@ -96,8 +96,8 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
 
         let schema = Arc::new(Schema::new(fields));
 
-        let codec = DefaultPhysicalExtensionCodec {};
-        let input_exprs = serialize_physical_exprs(args.input_exprs(), &codec)?
+        let mut codec = DefaultPhysicalExtensionCodec {};
+        let input_exprs = serialize_physical_exprs(args.input_exprs(), &mut codec)?
             .into_iter()
             .map(|expr_node| expr_node.encode_to_vec().into())
             .collect();
@@ -136,8 +136,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_PartitionEvaluatorArgs) -> Result<Self> {
-        let default_ctx = SessionContext::new();
-        let codec = DefaultPhysicalExtensionCodec {};
+        let mut task_ctx = SessionContext::new().task_ctx();
 
         let schema: SchemaRef = value.schema.into();
 
@@ -148,9 +147,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .collect::<std::result::Result<Vec<_>, prost::DecodeError>>()
             .map_err(|e| exec_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
             .iter()
-            .map(|expr_node| {
-                parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)
-            })
+            .map(|expr_node| parse_physical_expr(expr_node, &mut task_ctx, &schema))
             .collect::<Result<Vec<_>>>()?;
 
         let input_fields = input_exprs

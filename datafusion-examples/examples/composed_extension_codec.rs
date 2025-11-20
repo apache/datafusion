@@ -41,6 +41,7 @@ use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec,
+    TaskContextWithPhysicalCodec,
 };
 use datafusion_proto::protobuf;
 
@@ -52,26 +53,30 @@ async fn main() {
     let exec_plan = Arc::new(ParentExec {
         input: Arc::new(ChildExec {}),
     });
-    let ctx = SessionContext::new();
 
+    let task_ctx = SessionContext::new().task_ctx();
     // Position in this list is important as it will be used for decoding.
     // If new codec is added it should go to last position.
-    let composed_codec = ComposedPhysicalExtensionCodec::new(vec![
+    let composed_codec = Arc::new(ComposedPhysicalExtensionCodec::new(vec![
         Arc::new(ParentPhysicalExtensionCodec {}),
         Arc::new(ChildPhysicalExtensionCodec {}),
-    ]);
+    ]));
+    let mut parser = TaskContextWithPhysicalCodec {
+        task_ctx: task_ctx.as_ref(),
+        codec: composed_codec.as_ref(),
+    };
 
     // serialize execution plan to proto
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec_plan.clone(),
-            &composed_codec,
+            &mut parser,
         )
         .expect("to proto");
 
     // deserialize proto back to execution plan
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), &composed_codec)
+        .try_into_physical_plan(&mut parser)
         .expect("from proto");
 
     // assert that the original and deserialized execution plans are equal
@@ -137,7 +142,6 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if buf == "ParentExec".as_bytes() {
             Ok(Arc::new(ParentExec {
@@ -213,7 +217,6 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         &self,
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if buf == "ChildExec".as_bytes() {
             Ok(Arc::new(ChildExec {}))

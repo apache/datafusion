@@ -57,7 +57,6 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
@@ -116,6 +115,7 @@ use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    PhysicalSerializer,
 };
 use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 
@@ -124,8 +124,7 @@ use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 /// lost during serde because the string representation of a plan often only shows a subset of state.
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
     let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    roundtrip_test_and_return(exec_plan, &ctx, &codec)?;
+    roundtrip_test_and_return(exec_plan, &ctx, &mut DefaultPhysicalExtensionCodec {})?;
     Ok(())
 }
 
@@ -135,16 +134,17 @@ fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
 ///
 /// This version of the roundtrip_test method returns the final plan after serde so that it can be inspected
 /// farther in tests.
-fn roundtrip_test_and_return(
+fn roundtrip_test_and_return<S: PhysicalSerializer>(
     exec_plan: Arc<dyn ExecutionPlan>,
     ctx: &SessionContext,
-    codec: &dyn PhysicalExtensionCodec,
+    parser: &mut S,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut task_ctx = ctx.task_ctx();
     let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
+        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), parser)
             .expect("to proto");
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), codec)
+        .try_into_physical_plan(&mut task_ctx)
         .expect("from proto");
 
     pretty_assertions::assert_eq!(
@@ -164,18 +164,16 @@ fn roundtrip_test_with_context(
     exec_plan: Arc<dyn ExecutionPlan>,
     ctx: &SessionContext,
 ) -> Result<()> {
-    let codec = DefaultPhysicalExtensionCodec {};
-    roundtrip_test_and_return(exec_plan, ctx, &codec)?;
+    roundtrip_test_and_return(exec_plan, ctx, &mut DefaultPhysicalExtensionCodec {})?;
     Ok(())
 }
 
 /// Perform a serde roundtrip for the specified sql query, and  assert that
 /// query results are identical.
 async fn roundtrip_test_sql_with_context(sql: &str, ctx: &SessionContext) -> Result<()> {
-    let codec = DefaultPhysicalExtensionCodec {};
     let initial_plan = ctx.sql(sql).await?.create_physical_plan().await?;
 
-    roundtrip_test_and_return(initial_plan, ctx, &codec)?;
+    roundtrip_test_and_return(initial_plan, ctx, &mut DefaultPhysicalExtensionCodec {})?;
     Ok(())
 }
 
@@ -1029,7 +1027,6 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             _buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
-            _ctx: &TaskContext,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unreachable!()
         }
@@ -1077,7 +1074,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     let exec_plan = DataSourceExec::from_data_source(scan_config);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;
+    roundtrip_test_and_return(exec_plan, &ctx, &mut CustomPhysicalExtensionCodec {})?;
     Ok(())
 }
 
@@ -1137,7 +1134,6 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("No extension codec provided")
     }
@@ -1283,7 +1279,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec)?;
+    roundtrip_test_and_return(aggregate, &ctx, &mut UDFExtensionCodec)?;
     Ok(())
 }
 
@@ -1330,7 +1326,7 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(window, &ctx, &UDFExtensionCodec)?;
+    roundtrip_test_and_return(window, &ctx, &mut UDFExtensionCodec)?;
     Ok(())
 }
 
@@ -1401,7 +1397,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec)?;
+    roundtrip_test_and_return(aggregate, &ctx, &mut UDFExtensionCodec)?;
     Ok(())
 }
 
@@ -1524,11 +1520,11 @@ fn roundtrip_csv_sink() -> Result<()> {
     .into();
 
     let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
+    let mut codec = DefaultPhysicalExtensionCodec {};
     let roundtrip_plan = roundtrip_test_and_return(
         Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
         &ctx,
-        &codec,
+        &mut codec,
     )
     .unwrap();
 
@@ -1725,6 +1721,7 @@ fn roundtrip_unnest() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_coalesce() -> Result<()> {
     let ctx = SessionContext::new();
+    let mut task_ctx = ctx.task_ctx();
     ctx.register_table(
         "t",
         Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
@@ -1736,12 +1733,11 @@ async fn roundtrip_coalesce() -> Result<()> {
 
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
-        &DefaultPhysicalExtensionCodec {},
+        &mut DefaultPhysicalExtensionCodec {},
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+    let restored = node.try_into_physical_plan(&mut task_ctx)?;
 
     assert_eq!(
         plan.schema(),
@@ -1761,6 +1757,7 @@ async fn roundtrip_coalesce() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_generate_series() -> Result<()> {
     let ctx = SessionContext::new();
+    let mut task_ctx = ctx.task_ctx();
     ctx.register_table(
         "t",
         Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
@@ -1772,12 +1769,11 @@ async fn roundtrip_generate_series() -> Result<()> {
 
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
-        &DefaultPhysicalExtensionCodec {},
+        &mut DefaultPhysicalExtensionCodec {},
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+    let restored = node.try_into_physical_plan(&mut task_ctx)?;
 
     assert_eq!(
         plan.schema(),
@@ -1872,6 +1868,7 @@ async fn roundtrip_physical_plan_node() {
     use datafusion_proto::protobuf::PhysicalPlanNode;
 
     let ctx = SessionContext::new();
+    let mut task_ctx = ctx.task_ctx();
 
     ctx.register_parquet(
         "pt",
@@ -1892,13 +1889,13 @@ async fn roundtrip_physical_plan_node() {
         .await
         .unwrap();
 
-    let node: PhysicalPlanNode =
-        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
-            .unwrap();
+    let node: PhysicalPlanNode = PhysicalPlanNode::try_from_physical_plan(
+        plan,
+        &mut DefaultPhysicalExtensionCodec {},
+    )
+    .unwrap();
 
-    let plan = node
-        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
-        .unwrap();
+    let plan = node.try_into_physical_plan(&mut task_ctx).unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
 }
@@ -1960,6 +1957,7 @@ fn get_tpch_query_sql(query: usize) -> Result<Vec<String>> {
 async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
     // Create context with TPC-H tables
     let ctx = tpch_context().await?;
+    let mut task_ctx = ctx.task_ctx();
 
     // repeat to run all 22 queries
     for query in 1..=22 {
@@ -1971,13 +1969,14 @@ async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
             let physical_plan = ctx.state().create_physical_plan(&optimized_plan).await?;
 
             // serialize the physical plan
-            let codec = DefaultPhysicalExtensionCodec {};
-            let proto =
-                PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
+            let mut codec = DefaultPhysicalExtensionCodec {};
+            let proto = PhysicalPlanNode::try_from_physical_plan(
+                physical_plan.clone(),
+                &mut codec,
+            )?;
 
             // deserialize the physical plan
-            let _deserialized_plan =
-                proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+            let _deserialized_plan = proto.try_into_physical_plan(&mut task_ctx)?;
         }
     }
 
@@ -2073,6 +2072,7 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     use datafusion_common::test_util::datafusion_test_data;
 
     let ctx = SessionContext::new();
+    let mut task_ctx = ctx.task_ctx();
 
     // Register the TPC-H part table using the local test data
     let test_data = datafusion_test_data();
@@ -2092,11 +2092,12 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     let physical_plan = ctx.state().create_physical_plan(&optimized_plan).await?;
 
     // Serialize the physical plan - bug may happen here already but not necessarily manifests
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
+    let mut codec = DefaultPhysicalExtensionCodec {};
+    let proto =
+        PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &mut codec)?;
 
     // This will fail with the bug, but should succeed when fixed
-    let _deserialized_plan = proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    let _deserialized_plan = proto.try_into_physical_plan(&mut task_ctx)?;
     Ok(())
 }
 
@@ -2104,6 +2105,7 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
 /// Tests that we can serialize an unoptimized "analyze" plan and it will work on the other end
 async fn analyze_roundtrip_unoptimized() -> Result<()> {
     let ctx = SessionContext::new();
+    let mut task_ctx = ctx.task_ctx();
 
     // No optimizations
     let session_state =
@@ -2118,14 +2120,13 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
 
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
-        &DefaultPhysicalExtensionCodec {},
+        &mut DefaultPhysicalExtensionCodec {},
     )?;
 
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let unoptimized =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+    let unoptimized = node.try_into_physical_plan(&mut task_ctx)?;
 
     let physical_planner =
         datafusion::physical_planner::DefaultPhysicalPlanner::default();

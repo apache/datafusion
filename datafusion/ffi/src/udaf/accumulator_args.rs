@@ -63,11 +63,11 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
-        let codec = DefaultPhysicalExtensionCodec {};
+        let mut codec = DefaultPhysicalExtensionCodec {};
         let ordering_req =
-            serialize_physical_sort_exprs(args.order_bys.to_owned(), &codec)?;
+            serialize_physical_sort_exprs(args.order_bys.to_owned(), &mut codec)?;
 
-        let expr = serialize_physical_exprs(args.exprs, &codec)?;
+        let expr = serialize_physical_exprs(args.exprs, &mut codec)?;
 
         let physical_expr_def = PhysicalAggregateExprNode {
             expr,
@@ -121,17 +121,12 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
         let schema = Schema::try_from(&value.schema.0)?;
 
         let default_ctx = SessionContext::new();
-        let task_ctx = default_ctx.task_ctx();
-        let codex = DefaultPhysicalExtensionCodec {};
+        let mut task_ctx = default_ctx.task_ctx();
 
-        let order_bys = parse_physical_sort_exprs(
-            &proto_def.ordering_req,
-            &task_ctx,
-            &schema,
-            &codex,
-        )?;
+        let order_bys =
+            parse_physical_sort_exprs(&proto_def.ordering_req, &mut task_ctx, &schema)?;
 
-        let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
+        let exprs = parse_physical_exprs(&proto_def.expr, &mut task_ctx, &schema)?;
 
         let expr_fields = exprs
             .iter()
