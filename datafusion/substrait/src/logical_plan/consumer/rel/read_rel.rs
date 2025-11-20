@@ -164,36 +164,7 @@ pub async fn from_read_rel(
                 }
                 exprs
             } else {
-                {
-                    vt
-                    .values
-                    .iter()
-                    .map(|row| {
-                        let mut name_idx = 0;
-                        let lits = row
-                            .fields
-                            .iter()
-                            .map(|lit| {
-                                name_idx += 1; // top-level names are provided through schema
-                                Ok(Expr::Literal(from_substrait_literal(
-                                    consumer,
-                                    lit,
-                                    &named_struct.names,
-                                    &mut name_idx,
-                                )?, None))
-                            })
-                            .collect::<datafusion::common::Result<_>>()?;
-                        if name_idx != named_struct.names.len() {
-                            return substrait_err!(
-                                    "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                    name_idx,
-                                    named_struct.names.len()
-                                );
-                        }
-                        Ok(lits)
-                    })
-                    .collect::<datafusion::common::Result<_>>()?
-                }
+                convert_literal_rows(consumer, vt, named_struct)?
             };
 
             Ok(LogicalPlan::Values(Values {
@@ -246,6 +217,46 @@ pub async fn from_read_rel(
             not_impl_err!("Unsupported Readtype: {:?}", read.read_type)
         }
     }
+}
+
+/// Converts Substrait literal rows from a VirtualTable into DataFusion expressions.
+///
+/// This function processes the deprecated `values` field of VirtualTable, converting
+/// each literal value into a `Expr::Literal` while tracking and validating the name
+/// indices against the provided named struct schema.
+fn convert_literal_rows(
+    consumer: &impl SubstraitConsumer,
+    vt: &substrait::proto::read_rel::VirtualTable,
+    named_struct: &substrait::proto::NamedStruct,
+) -> datafusion::common::Result<Vec<Vec<Expr>>> {
+    #[allow(deprecated)]
+    vt.values
+        .iter()
+        .map(|row| {
+            let mut name_idx = 0;
+            let lits = row
+                .fields
+                .iter()
+                .map(|lit| {
+                    name_idx += 1; // top-level names are provided through schema
+                    Ok(Expr::Literal(from_substrait_literal(
+                        consumer,
+                        lit,
+                        &named_struct.names,
+                        &mut name_idx,
+                    )?, None))
+                })
+                .collect::<datafusion::common::Result<_>>()?;
+            if name_idx != named_struct.names.len() {
+                return substrait_err!(
+                    "Names list must match exactly to nested schema, but found {} uses for {} names",
+                    name_idx,
+                    named_struct.names.len()
+                );
+            }
+            Ok(lits)
+        })
+        .collect::<datafusion::common::Result<_>>()
 }
 
 pub fn apply_masking(
