@@ -77,134 +77,6 @@ impl ConcatFunc {
         }
     }
 
-    /// Extract array elements from a single row of arguments for array concatenation
-    fn extract_arrays_from_row(
-        &self,
-        args: &[ColumnarValue],
-        row_idx: usize,
-    ) -> Result<Vec<Arc<dyn Array>>> {
-        let mut inner_arrays = Vec::new();
-
-        for arg in args {
-            match arg {
-                ColumnarValue::Array(arr) => {
-                    if let Some(array) = self.extract_list_value(arr, row_idx)? {
-                        inner_arrays.push(array);
-                    }
-                }
-                ColumnarValue::Scalar(scalar) => {
-                    if let Some(array) = self.extract_scalar_list_value(scalar)? {
-                        inner_arrays.push(array);
-                    }
-                }
-            }
-        }
-
-        Ok(inner_arrays)
-    }
-
-    /// Extract list value from array at given row index, handling all list types
-    fn extract_list_value(
-        &self,
-        arr: &Arc<dyn Array>,
-        row_idx: usize,
-    ) -> Result<Option<Arc<dyn Array>>> {
-        use arrow::array::*;
-
-        if arr.is_null(row_idx) {
-            return Ok(None);
-        }
-
-        match arr.data_type() {
-            DataType::List(_) => {
-                let list_array =
-                    arr.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "Failed to downcast to ListArray".to_string(),
-                        )
-                    })?;
-                Ok(Some(list_array.value(row_idx)))
-            }
-            DataType::LargeList(_) => {
-                let list_array = arr
-                    .as_any()
-                    .downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "Failed to downcast to LargeListArray".to_string(),
-                        )
-                    })?;
-                Ok(Some(list_array.value(row_idx)))
-            }
-            DataType::FixedSizeList(_, _) => {
-                let list_array = arr
-                    .as_any()
-                    .downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "Failed to downcast to FixedSizeListArray".to_string(),
-                        )
-                    })?;
-                Ok(Some(list_array.value(row_idx)))
-            }
-            _ => plan_err!("Expected list array, got {}", arr.data_type()),
-        }
-    }
-
-    /// Extract list value from scalar, handling all list scalar types
-    fn extract_scalar_list_value(
-        &self,
-        scalar: &ScalarValue,
-    ) -> Result<Option<Arc<dyn Array>>> {
-        use arrow::array::*;
-
-        if scalar.is_null() {
-            return Ok(None);
-        }
-
-        match scalar {
-            ScalarValue::List(arr) => {
-                let list_array =
-                    arr.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "Failed to downcast scalar List to ListArray".to_string(),
-                        )
-                    })?;
-                if !list_array.is_null(0) {
-                    Ok(Some(list_array.value(0)))
-                } else {
-                    Ok(None)
-                }
-            }
-            ScalarValue::LargeList(arr) => {
-                let list_array = arr
-                    .as_any()
-                    .downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "Failed to downcast scalar LargeList to LargeListArray"
-                                .to_string(),
-                        )
-                    })?;
-                if !list_array.is_null(0) {
-                    Ok(Some(list_array.value(0)))
-                } else {
-                    Ok(None)
-                }
-            }
-            ScalarValue::FixedSizeList(arr) => {
-                let list_array = arr.as_any().downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| datafusion_common::DataFusionError::Plan("Failed to downcast scalar FixedSizeList to FixedSizeListArray".to_string()))?;
-                if !list_array.is_null(0) {
-                    Ok(Some(list_array.value(0)))
-                } else {
-                    Ok(None)
-                }
-            }
-            _ => Ok(None),
-        }
-    }
-
     /// Get the string type with highest precedence: Utf8View > LargeUtf8 > Utf8
     fn get_string_type_precedence(&self, arg_types: &[DataType]) -> DataType {
         use DataType::*;
@@ -224,130 +96,136 @@ impl ConcatFunc {
         Utf8
     }
 
-    /// Determine element type from first valid array argument
-    fn determine_element_type(&self, args: &[ColumnarValue]) -> Result<DataType> {
-        for arg in args {
-            match arg {
-                ColumnarValue::Array(arr) => match arr.data_type() {
-                    DataType::List(field)
-                    | DataType::LargeList(field)
-                    | DataType::FixedSizeList(field, _) => {
-                        return Ok(field.data_type().clone());
-                    }
-                    _ => {}
-                },
-                ColumnarValue::Scalar(scalar) => match scalar {
-                    ScalarValue::List(arr) => {
-                        if let DataType::List(field) = arr.data_type() {
-                            return Ok(field.data_type().clone());
-                        }
-                    }
-                    ScalarValue::LargeList(arr) => {
-                        if let DataType::LargeList(field) = arr.data_type() {
-                            return Ok(field.data_type().clone());
-                        }
-                    }
-                    ScalarValue::FixedSizeList(arr) => {
-                        if let DataType::FixedSizeList(field, _) = arr.data_type() {
-                            return Ok(field.data_type().clone());
-                        }
-                    }
-                    _ => {}
-                },
-            }
-        }
-        plan_err!("No valid array arguments found. Expected at least one array argument for array concatenation.")
-    }
-
-    /// Concatenate array arguments into a single array using runtime delegation to Arrow's compute::concat
+    /// Concatenate array arguments using full array concatenation logic
     fn concat_arrays(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         use arrow::array::*;
-        use arrow::buffer::OffsetBuffer;
 
         if args.is_empty() {
             return plan_err!("concat requires at least one argument");
         }
 
-        let array_len = args
+        // Convert ColumnarValue arguments to ArrayRef
+        let array_refs: Result<Vec<Arc<dyn Array>>> = args
             .iter()
-            .find_map(|arg| match arg {
-                ColumnarValue::Array(array) => Some(array.len()),
-                _ => None,
+            .map(|arg| match arg {
+                ColumnarValue::Array(arr) => Ok(Arc::clone(arr)),
+                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(1),
             })
-            .unwrap_or(1);
+            .collect();
 
-        if array_len == 1 {
-            // Single row case
-            let inner_arrays = self.extract_arrays_from_row(args, 0)?;
+        let arrays = array_refs?;
 
-            if inner_arrays.is_empty() {
-                return plan_err!("No valid arrays to concatenate. All array arguments were null or empty.");
+        // Check if all arrays are null
+        let mut all_null = true;
+        let mut large_list = false;
+        for arg in &arrays {
+            match arg.data_type() {
+                DataType::Null => continue,
+                DataType::LargeList(_) => large_list = true,
+                _ => (),
             }
-
-            let array_refs: Vec<&dyn Array> =
-                inner_arrays.iter().map(|a| a.as_ref()).collect();
-            let concatenated = compute::concat(&array_refs)?;
-
-            let field = Arc::new(arrow::datatypes::Field::new_list_field(
-                concatenated.data_type().clone(),
-                true,
-            ));
-            let offsets = OffsetBuffer::from_lengths([concatenated.len()]);
-            let result_list = ListArray::new(field, offsets, concatenated, None);
-
-            Ok(ColumnarValue::Array(Arc::new(result_list)))
-        } else {
-            // Multi-row case
-            let mut result_arrays = Vec::with_capacity(array_len);
-
-            for row_idx in 0..array_len {
-                let row_inner_arrays = self.extract_arrays_from_row(args, row_idx)?;
-
-                if row_inner_arrays.is_empty() {
-                    result_arrays.push(None);
-                } else {
-                    let array_refs: Vec<&dyn Array> =
-                        row_inner_arrays.iter().map(|a| a.as_ref()).collect();
-                    let concatenated = compute::concat(&array_refs)?;
-                    result_arrays.push(Some(concatenated));
-                }
+            if arg.null_count() < arg.len() {
+                all_null = false;
             }
-
-            let element_type = self.determine_element_type(args)?;
-            let field = Arc::new(arrow::datatypes::Field::new_list_field(
-                element_type.clone(),
-                true,
-            ));
-
-            // Build final ListArray with proper offsets
-            let mut values_vec = Vec::new();
-            let mut lengths = Vec::with_capacity(array_len);
-
-            for result in result_arrays {
-                match result {
-                    Some(array) => {
-                        lengths.push(array.len());
-                        values_vec.push(array);
-                    }
-                    None => {
-                        lengths.push(0);
-                    }
-                }
-            }
-
-            let values = if values_vec.is_empty() {
-                new_empty_array(&element_type)
-            } else {
-                let array_refs: Vec<&dyn Array> =
-                    values_vec.iter().map(|a| a.as_ref()).collect();
-                compute::concat(&array_refs)?
-            };
-
-            let offsets = OffsetBuffer::from_lengths(lengths);
-            let result_list = ListArray::new(field, offsets, values, None);
-
-            Ok(ColumnarValue::Array(Arc::new(result_list)))
         }
+
+        if all_null {
+            // For concat function, if all arrays are null (even if they have types),
+            // we return an error since there are no valid arrays to concatenate
+            return plan_err!("No valid arrays to concatenate");
+        }
+
+        // Full implementation supporting multi-row arrays
+        if large_list {
+            self.concat_arrays_internal::<i64>(&arrays)
+        } else {
+            self.concat_arrays_internal::<i32>(&arrays)
+        }
+    }
+
+    /// Internal array concatenation implementation supporting different offset types
+    fn concat_arrays_internal<O: arrow::array::OffsetSizeTrait>(
+        &self,
+        arrays: &[Arc<dyn Array>],
+    ) -> Result<ColumnarValue>
+    where
+        i64: TryInto<O>,
+    {
+        use arrow::array::*;
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Field;
+        use datafusion_common::cast::as_generic_list_array;
+
+        let list_arrays: Result<Vec<_>> = arrays
+            .iter()
+            .map(|arg| as_generic_list_array::<O>(arg))
+            .collect();
+        let list_arrays = list_arrays?;
+
+        // Assume number of rows is the same for all arrays
+        let row_count = list_arrays[0].len();
+
+        let mut array_lengths = vec![];
+        let mut result_arrays = vec![];
+        let mut valid = NullBufferBuilder::new(row_count);
+
+        for i in 0..row_count {
+            let nulls: Vec<bool> = list_arrays.iter().map(|arr| arr.is_null(i)).collect();
+
+            // If all the arrays are null, the concatenated array is null
+            let is_null = nulls.iter().all(|&x| x);
+            if is_null {
+                array_lengths.push(0);
+                valid.append_null();
+            } else {
+                // Get all the arrays on i-th row
+                let values: Vec<_> = list_arrays
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, arr)| {
+                        if !nulls[idx] {
+                            Some(arr.value(i))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if values.is_empty() {
+                    array_lengths.push(0);
+                    valid.append_null();
+                } else {
+                    let elements: Vec<&dyn Array> =
+                        values.iter().map(|a| a.as_ref()).collect();
+
+                    // Concatenated array on i-th row
+                    let concatenated_array = compute::concat(&elements)?;
+                    array_lengths.push(concatenated_array.len());
+                    result_arrays.push(concatenated_array);
+                    valid.append_non_null();
+                }
+            }
+        }
+
+        // Assume all arrays have the same data type
+        let data_type = list_arrays[0].value_type();
+
+        let values = if result_arrays.is_empty() {
+            new_empty_array(&data_type)
+        } else {
+            let elements: Vec<&dyn Array> =
+                result_arrays.iter().map(|a| a.as_ref()).collect();
+            compute::concat(&elements)?
+        };
+
+        let list_arr = GenericListArray::<O>::new(
+            Arc::new(Field::new_list_field(data_type, true)),
+            OffsetBuffer::from_lengths(array_lengths),
+            values,
+            valid.finish(),
+        );
+
+        Ok(ColumnarValue::Array(Arc::new(list_arr)))
     }
 }
 
