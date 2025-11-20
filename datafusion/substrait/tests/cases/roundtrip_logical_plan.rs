@@ -17,6 +17,8 @@
 
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
+use datafusion::functions_nested::map::map;
+use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
@@ -1263,6 +1265,51 @@ async fn roundtrip_values_no_columns() -> Result<()> {
         schema: DFSchemaRef::new(DFSchema::empty()),
     });
     roundtrip_logical_plan_with_ctx(plan, ctx).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_values_with_scalar_function() -> Result<()> {
+    let ctx = create_context().await?;
+    let expr = map(vec![lit("a")], vec![lit(1)]);
+    let plan = LogicalPlanBuilder::values(vec![vec![expr]])?.build()?;
+    let expected = ctx.state().optimize(&plan)?;
+
+    let proto = to_substrait_plan(&expected, &ctx.state())?;
+    let actual = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = ctx.state().optimize(&actual)?;
+
+    let normalize = |plan: &LogicalPlan| match plan {
+        LogicalPlan::Values(values_plan) => {
+            let rows = values_plan
+                .values
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|expr| match expr {
+                            Expr::Alias(alias) => (*alias.expr).clone(),
+                            other => other.clone(),
+                        })
+                        .collect()
+                })
+                .collect();
+
+            LogicalPlan::Values(Values {
+                schema: values_plan.schema.clone(),
+                values: rows,
+            })
+        }
+        other => other.clone(),
+    };
+
+    let normalized_expected = normalize(&expected);
+    let normalized_actual = normalize(&actual);
+
+    assert_eq!(
+        format!("{normalized_expected}"),
+        format!("{normalized_actual}")
+    );
+    assert_eq!(normalized_expected.schema(), normalized_actual.schema());
     Ok(())
 }
 

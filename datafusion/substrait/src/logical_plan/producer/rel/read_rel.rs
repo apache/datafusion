@@ -22,8 +22,9 @@ use datafusion::common::{not_impl_err, substrait_datafusion_err, DFSchema, ToDFS
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use std::sync::Arc;
-use substrait::proto::expression::literal::Struct;
+use substrait::proto::expression::literal::Struct as LiteralStruct;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
+use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
@@ -111,29 +112,66 @@ pub fn from_values(
     producer: &mut impl SubstraitProducer,
     v: &Values,
 ) -> datafusion::common::Result<Box<Rel>> {
-    let values = v
-        .values
-        .iter()
-        .map(|row| {
-            let fields = row
-                .iter()
-                .map(|v| match v {
-                    Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
-                    Expr::Alias(alias) => match alias.expr.as_ref() {
-                        // The schema gives us the names, so we can skip aliases
-                        Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
-                        _ => Err(substrait_datafusion_err!(
-                                    "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
-                                )),
-                    },
-                    _ => Err(substrait_datafusion_err!(
-                                "Only literal types and aliases are supported in Virtual Tables, got: {}", v.variant_name()
-                            )),
-                })
-                .collect::<datafusion::common::Result<_>>()?;
-            Ok(Struct { fields })
+    let schema_len = v.schema.fields().len();
+    let empty_schema = Arc::new(DFSchema::empty());
+
+    let use_literals = v.values.iter().all(|row| {
+        row.iter().all(|expr| match expr {
+            Expr::Literal(_, _) => true,
+            Expr::Alias(alias) => matches!(alias.expr.as_ref(), Expr::Literal(_, _)),
+            _ => false,
         })
-        .collect::<datafusion::common::Result<_>>()?;
+    });
+
+    let (values, expressions) = if use_literals {
+        let values = v
+            .values
+            .iter()
+            .map(|row| {
+                let fields = row
+                    .iter()
+                    .map(|v| match v {
+                        Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
+                        Expr::Alias(alias) => match alias.expr.as_ref() {
+                            // The schema gives us the names, so we can skip aliases
+                            Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
+                            _ => Err(substrait_datafusion_err!(
+                                        "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
+                                    )),
+                        },
+                        _ => Err(substrait_datafusion_err!(
+                                    "Only literal types and aliases are supported in Virtual Tables, got: {}", v.variant_name()
+                                )),
+                    })
+                    .collect::<datafusion::common::Result<_>>()?;
+                Ok(LiteralStruct { fields })
+            })
+            .collect::<datafusion::common::Result<_>>()?;
+
+        (values, vec![])
+    } else {
+        let expressions = v
+            .values
+            .iter()
+            .map(|row| {
+                if row.len() != schema_len {
+                    return Err(substrait_datafusion_err!(
+                            "Names list must match exactly to nested schema, but found {} uses for {} names",
+                            row.len(),
+                            schema_len
+                        ));
+                }
+
+                let fields = row
+                    .iter()
+                    .map(|expr| producer.handle_expr(expr, &empty_schema))
+                    .collect::<datafusion::common::Result<_>>()?;
+                Ok(NestedStruct { fields })
+            })
+            .collect::<datafusion::common::Result<_>>()?;
+
+        (vec![], expressions)
+    };
     #[allow(deprecated)]
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
@@ -145,7 +183,7 @@ pub fn from_values(
             advanced_extension: None,
             read_type: Some(ReadType::VirtualTable(VirtualTable {
                 values,
-                expressions: vec![],
+                expressions,
             })),
         }))),
     }))
