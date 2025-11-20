@@ -191,7 +191,7 @@ pub struct FileScanConfig {
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     /// Unprojected statistics for the table (file schema + partition columns).
     /// These are projected on-demand via `projected_stats()`.
-    /// 
+    ///
     /// Note that this field is pub(crate) because accessing it directly from outside
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].

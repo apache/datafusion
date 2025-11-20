@@ -36,6 +36,7 @@ Statistics are now managed directly by `FileScanConfig` instead of being delegat
 **Breaking changes:**
 
 Two methods have been removed from the `FileSource` trait:
+
 - `with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>`
 - `statistics(&self) -> Result<Statistics>`
 
