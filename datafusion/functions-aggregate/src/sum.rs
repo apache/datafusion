@@ -22,9 +22,10 @@ use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray
 use arrow::datatypes::Field;
 use arrow::datatypes::{
     ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, FieldRef, Float64Type, Int64Type, UInt64Type,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL32_MAX_PRECISION,
-    DECIMAL64_MAX_PRECISION,
+    Decimal64Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, FieldRef, Float64Type, Int64Type,
+    TimeUnit, UInt64Type, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
 };
 use datafusion_common::types::{
     logical_float64, logical_int16, logical_int32, logical_int64, logical_int8,
@@ -93,6 +94,27 @@ macro_rules! downcast_sum {
             DataType::Decimal256(_, _) => {
                 $helper!(Decimal256Type, $args.return_field.data_type().clone())
             }
+            DataType::Duration(TimeUnit::Second) => {
+                $helper!(DurationSecondType, $args.return_field.data_type().clone())
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                $helper!(
+                    DurationMillisecondType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                $helper!(
+                    DurationMicrosecondType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                $helper!(
+                    DurationNanosecondType,
+                    $args.return_field.data_type().clone()
+                )
+            }
             _ => {
                 not_impl_err!(
                     "Sum not supported for {}: {}",
@@ -159,6 +181,9 @@ impl Sum {
                         vec![TypeSignatureClass::Float],
                         NativeType::Float64,
                     )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Duration,
+                    )]),
                 ],
                 Volatility::Immutable,
             ),
@@ -208,6 +233,7 @@ impl AggregateUDFImpl for Sum {
                 let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal256(new_precision, *scale))
             }
+            DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
             other => {
                 exec_err!("[return_type] SUM not supported for {}", other)
             }
