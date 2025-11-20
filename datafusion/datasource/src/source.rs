@@ -22,6 +22,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
@@ -175,7 +176,7 @@ pub trait DataSource: Send + Sync + Debug {
     fn try_swapping_with_projection(
         &self,
         _projection: &[ProjectionExpr],
-    ) -> Result<Option<Arc<dyn DataSource>>>;
+    ) -> Result<ProjectionPushdownResult>;
     /// Try to push down filters into this DataSource.
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
@@ -190,6 +191,9 @@ pub trait DataSource: Send + Sync + Debug {
         ))
     }
 }
+
+pub type ProjectionPushdownResult =
+    Option<(Arc<dyn DataSource>, Option<ProjectionExprs>)>;
 
 /// [`ExecutionPlan`] that reads one or more files
 ///
@@ -321,8 +325,16 @@ impl ExecutionPlan for DataSourceExec {
             .data_source
             .try_swapping_with_projection(projection.expr())?
         {
-            Some(new_data_source) => {
-                Ok(Some(Arc::new(DataSourceExec::new(new_data_source))))
+            Some((new_data_source, remaining_projections)) => {
+                let new_exec = Arc::new(DataSourceExec::new(new_data_source));
+                if let Some(remaining_projections) = remaining_projections {
+                    let new_projection_exec =
+                        ProjectionExec::try_new(remaining_projections, new_exec)?;
+
+                    return Ok(Some(Arc::new(new_projection_exec)));
+                }
+
+                Ok(Some(new_exec))
             }
             None => Ok(None),
         }
