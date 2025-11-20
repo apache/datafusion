@@ -440,7 +440,9 @@ impl FileOpener for ParquetOpener {
             }
 
             if let Some(limit) = limit {
-                builder = builder.with_limit(limit)
+                if !reverse_scan {
+                    builder = builder.with_limit(limit)
+                }
             }
 
             if let Some(max_predicate_cache_size) = max_predicate_cache_size {
@@ -475,7 +477,16 @@ impl FileOpener for ParquetOpener {
                     );
                     result.and_then(|batch| schema_mapping.map_batch(batch))
                 });
-                Box::pin(ReversedParquetStream::new(schema_mapped, final_schema))
+
+                if let Some(limit) = limit {
+                    Box::pin(ReversedParquetStreamWithLimit::new(
+                        schema_mapped,
+                        final_schema,
+                        limit,
+                    ))
+                } else {
+                    Box::pin(ReversedParquetStream::new(schema_mapped, final_schema))
+                }
             } else {
                 let error_adapted = stream.map_err(DataFusionError::from);
                 let schema_mapped = error_adapted.map(move |result| {
@@ -775,6 +786,24 @@ fn should_enable_page_index(
             .unwrap_or(false)
 }
 
+fn reverse_batch(batch: RecordBatch) -> Result<RecordBatch> {
+    let num_rows = batch.num_rows();
+    if num_rows <= 1 {
+        return Ok(batch);
+    }
+
+    let indices = UInt32Array::from_iter_values((0..num_rows as u32).rev());
+
+    let reversed_columns = batch
+        .columns()
+        .iter()
+        .map(|col| take(col.as_ref(), &indices, None))
+        .collect::<std::result::Result<Vec<ArrayRef>, arrow::error::ArrowError>>()
+        .map_err(DataFusionError::from)?;
+
+    RecordBatch::try_new(batch.schema(), reversed_columns).map_err(DataFusionError::from)
+}
+
 struct ReversedParquetStream<S> {
     input: S,
     schema: SchemaRef,
@@ -790,25 +819,6 @@ impl<S> ReversedParquetStream<S> {
             buffered_batches: None,
             current_index: 0,
         }
-    }
-
-    fn reverse_batch(batch: RecordBatch) -> Result<RecordBatch> {
-        let num_rows = batch.num_rows();
-        if num_rows <= 1 {
-            return Ok(batch);
-        }
-
-        let indices = UInt32Array::from_iter_values((0..num_rows as u32).rev());
-
-        let reversed_columns = batch
-            .columns()
-            .iter()
-            .map(|col| take(col.as_ref(), &indices, None))
-            .collect::<std::result::Result<Vec<ArrayRef>, arrow::error::ArrowError>>()
-            .map_err(DataFusionError::from)?;
-
-        RecordBatch::try_new(batch.schema(), reversed_columns)
-            .map_err(DataFusionError::from)
     }
 }
 
@@ -829,7 +839,7 @@ where
 
             loop {
                 match ready!(Pin::new(&mut this.input).poll_next(cx)) {
-                    Some(Ok(batch)) => match Self::reverse_batch(batch) {
+                    Some(Ok(batch)) => match reverse_batch(batch) {
                         Ok(rev) => batches.push(rev),
                         Err(e) => return Poll::Ready(Some(Err(e))),
                     },
@@ -858,6 +868,97 @@ where
 }
 
 impl<S> RecordBatchStream for ReversedParquetStream<S>
+where
+    S: Stream<Item = Result<RecordBatch>> + Unpin,
+{
+    fn schema(&self) -> SchemaRef {
+        SchemaRef::clone(&self.schema)
+    }
+}
+
+struct ReversedParquetStreamWithLimit<S> {
+    input: S,
+    schema: SchemaRef,
+    buffered_batches: Option<Vec<RecordBatch>>,
+    current_index: usize,
+    limit: usize,
+    rows_produced: usize,
+}
+
+impl<S> ReversedParquetStreamWithLimit<S> {
+    fn new(stream: S, schema: SchemaRef, limit: usize) -> Self {
+        Self {
+            input: stream,
+            schema,
+            buffered_batches: None,
+            current_index: 0,
+            limit,
+            rows_produced: 0,
+        }
+    }
+}
+
+impl<S> Stream for ReversedParquetStreamWithLimit<S>
+where
+    S: Stream<Item = Result<RecordBatch>> + Unpin,
+{
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        if this.rows_produced >= this.limit {
+            return Poll::Ready(None);
+        }
+
+        if this.buffered_batches.is_none() {
+            let mut batches = Vec::new();
+            loop {
+                match ready!(Pin::new(&mut this.input).poll_next(cx)) {
+                    Some(Ok(batch)) => match reverse_batch(batch) {
+                        Ok(rev) => batches.push(rev),
+                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    },
+                    Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                    None => break,
+                }
+            }
+
+            batches.reverse();
+            this.buffered_batches = Some(batches);
+            this.current_index = 0;
+        }
+
+        if let Some(batches) = &this.buffered_batches {
+            if this.current_index < batches.len() {
+                let batch = &batches[this.current_index];
+                let remaining = this.limit - this.rows_produced;
+
+                if remaining == 0 {
+                    return Poll::Ready(None);
+                }
+
+                if batch.num_rows() <= remaining {
+                    this.rows_produced += batch.num_rows();
+                    this.current_index += 1;
+                    return Poll::Ready(Some(Ok(batch.clone())));
+                } else {
+                    let sliced = batch.slice(0, remaining);
+                    this.rows_produced += remaining;
+                    this.current_index += 1;
+                    return Poll::Ready(Some(Ok(sliced)));
+                }
+            }
+            Poll::Ready(None)
+        } else {
+            Poll::Ready(None)
+        }
+    }
+}
+
+impl<S> RecordBatchStream for ReversedParquetStreamWithLimit<S>
 where
     S: Stream<Item = Result<RecordBatch>> + Unpin,
 {

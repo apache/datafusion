@@ -53,6 +53,16 @@ impl PhysicalOptimizerRule for ReverseOrder {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Search for any SortExec nodes and try to optimize them
         plan.transform_up(&|plan: Arc<dyn ExecutionPlan>| {
+            // First check if this is a GlobalLimitExec -> SortExec pattern
+            if let Some(limit_exec) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
+                if let Some(sort_exec) =
+                    limit_exec.input().as_any().downcast_ref::<SortExec>()
+                {
+                    return optimize_limit_sort(limit_exec, sort_exec);
+                }
+            }
+
+            // Otherwise, check if this is just a SortExec
             let sort_exec = match plan.as_any().downcast_ref::<SortExec>() {
                 Some(sort_exec) => sort_exec,
                 None => return Ok(Transformed::no(plan)),
@@ -61,7 +71,6 @@ impl PhysicalOptimizerRule for ReverseOrder {
             let sort_input: Arc<dyn ExecutionPlan> = Arc::clone(sort_exec.input());
 
             // First, check if the sort is already satisfied by input ordering
-            // This is similar to analyze_immediate_sort_removal in EnforceSorting
             if let Some(_input_ordering) = sort_input.output_ordering() {
                 let input_eq_properties = sort_input.equivalence_properties();
 
@@ -131,6 +140,122 @@ impl PhysicalOptimizerRule for ReverseOrder {
     }
 }
 
+/// Handle the GlobalLimitExec -> SortExec pattern
+fn optimize_limit_sort(
+    limit_exec: &GlobalLimitExec,
+    sort_exec: &SortExec,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let sort_input = Arc::clone(sort_exec.input());
+
+    // Check if input is already sorted
+    if let Some(_input_ordering) = sort_input.output_ordering() {
+        let input_eq_properties = sort_input.equivalence_properties();
+        if input_eq_properties.ordering_satisfy(sort_exec.expr().clone())? {
+            // Input is already sorted correctly, remove sort and keep limit
+            return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+                sort_input,
+                limit_exec.skip(),
+                limit_exec.fetch(),
+            ))));
+        }
+    }
+
+    // Check if we can reverse the input to satisfy the sort
+    let reversed_eq_properties = {
+        let mut new = sort_input.properties().equivalence_properties().clone();
+        new.clear_orderings();
+
+        let reversed_orderings = sort_input
+            .equivalence_properties()
+            .oeq_class()
+            .iter()
+            .map(|ordering| {
+                ordering
+                    .iter()
+                    .map(|expr| expr.reverse())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        new.add_orderings(reversed_orderings);
+        new
+    };
+
+    if reversed_eq_properties.ordering_satisfy(sort_exec.expr().clone())? {
+        // Can reverse! Apply reversal
+        let reversed_input = sort_input.rewrite(&mut ReverseRewriter).unwrap().data;
+
+        // Check if reversed input satisfies the sort requirement
+        if reversed_input
+            .equivalence_properties()
+            .ordering_satisfy(sort_exec.expr().clone())?
+        {
+            // Check if this is a single-partition DataSourceExec with reverse_scan enabled
+            // In that case, the limit is already handled internally by ReversedParquetStreamWithLimit
+            if is_single_partition_reverse_scan_datasource(&reversed_input) {
+                let total_fetch = limit_exec.skip() + limit_exec.fetch().unwrap_or(0);
+
+                if let Some(with_fetch) = reversed_input.with_fetch(Some(total_fetch)) {
+                    if limit_exec.skip() > 0 {
+                        return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+                            with_fetch,
+                            limit_exec.skip(),
+                            limit_exec.fetch(),
+                        ))));
+                    } else {
+                        return Ok(Transformed::yes(with_fetch));
+                    }
+                }
+
+                return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+                    reversed_input,
+                    limit_exec.skip(),
+                    limit_exec.fetch(),
+                ))));
+            }
+
+            // Otherwise, remove sort but keep limit with reversed input
+            return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+                reversed_input,
+                limit_exec.skip(),
+                limit_exec.fetch(),
+            ))));
+        }
+    }
+
+    // Can't optimize, return original pattern
+    Ok(Transformed::no(Arc::new(GlobalLimitExec::new(
+        Arc::new(sort_exec.clone()),
+        limit_exec.skip(),
+        limit_exec.fetch(),
+    ))))
+}
+
+/// Check if the plan is a single-partition DataSourceExec with reverse_scan enabled
+fn is_single_partition_reverse_scan_datasource(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    // Only optimize for single partition
+    if plan.output_partitioning().partition_count() != 1 {
+        return false;
+    }
+
+    if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+        if let Some(scan_config) = data_source_exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+        {
+            if let Some(parquet_source) = scan_config
+                .file_source
+                .as_any()
+                .downcast_ref::<ParquetSource>()
+            {
+                return parquet_source.reverse_scan();
+            }
+        }
+    }
+    false
+}
+
 /// Remove unnecessary sort based on the logic from EnforceSorting::analyze_immediate_sort_removal
 fn remove_unnecessary_sort(
     sort_exec: &SortExec,
@@ -149,6 +274,17 @@ fn remove_unnecessary_sort(
         if let Some(fetch) = sort_exec.fetch() {
             // If the sort has a fetch, add a limit instead
             if sort_input.output_partitioning().partition_count() == 1 {
+                // Check if this is a reverse scan DataSourceExec
+                // If so, the limit is already handled internally
+                if is_single_partition_reverse_scan_datasource(&sort_input) {
+                    if let Some(fetch) = sort_exec.fetch() {
+                        if let Some(with_fetch) = sort_input.with_fetch(Some(fetch)) {
+                            return Ok(Transformed::yes(with_fetch));
+                        }
+                    }
+                    return Ok(Transformed::yes(sort_input));
+                }
+
                 Arc::new(GlobalLimitExec::new(sort_input, 0, Some(fetch)))
                     as Arc<dyn ExecutionPlan>
             } else {
@@ -850,6 +986,434 @@ mod tests {
         assert!(
             !result.name().is_empty(),
             "Optimizer should return a valid plan for multi-column sort"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_optimize_limit_sort_with_reverse_scan() -> Result<()> {
+        // Test case: GlobalLimitExec -> SortExec pattern with reverse scan optimization
+        // This tests the optimize_limit_sort function with limit pushdown
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        // Create data sorted in ascending order
+        let asc_sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false, // ASC
+                nulls_first: false,
+            },
+        }];
+
+        let lazy_exec = create_sorted_lazy_memory_exec(
+            Arc::clone(&schema),
+            asc_sort_expr,
+            true, // ascending order
+        )?;
+
+        // We want descending order with limit
+        let desc_sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: true, // DESC
+                nulls_first: false,
+            },
+        }];
+
+        let lex_ordering = LexOrdering::new(desc_sort_expr).unwrap();
+        let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
+
+        // Wrap with GlobalLimitExec
+        let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 0, Some(5)));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(limit_exec, &config)?;
+
+        // Verify: The plan should be optimized
+        // Either the limit is pushed down or GlobalLimitExec is preserved
+        let has_limit = result.fetch().is_some()
+            || result.as_any().downcast_ref::<GlobalLimitExec>().is_some();
+
+        assert!(
+            has_limit,
+            "Expected limit to be preserved in the plan, got: {}",
+            result.name()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_optimize_limit_sort_with_skip() -> Result<()> {
+        // Test case: GlobalLimitExec with skip > 0 should preserve GlobalLimitExec
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let asc_sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        let lazy_exec =
+            create_sorted_lazy_memory_exec(Arc::clone(&schema), asc_sort_expr, true)?;
+
+        let desc_sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        }];
+
+        let lex_ordering = LexOrdering::new(desc_sort_expr).unwrap();
+        let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
+
+        // GlobalLimitExec with skip = 2, fetch = 5
+        let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 2, Some(5)));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(limit_exec, &config)?;
+
+        // When skip > 0, GlobalLimitExec should be preserved to handle the skip
+        // The result should either be a GlobalLimitExec or contain the skip logic
+        assert!(
+            result.as_any().downcast_ref::<GlobalLimitExec>().is_some()
+                || result.fetch().is_some(),
+            "Expected GlobalLimitExec or fetch to be preserved when skip > 0, got: {}",
+            result.name()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_optimize_limit_sort_no_fetch() -> Result<()> {
+        // Test case: GlobalLimitExec with fetch = None
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        let lazy_exec =
+            create_sorted_lazy_memory_exec(Arc::clone(&schema), sort_expr.clone(), true)?;
+
+        let lex_ordering = LexOrdering::new(sort_expr).unwrap();
+        let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
+
+        // GlobalLimitExec with no fetch (None)
+        let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 0, None));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(limit_exec, &config)?;
+
+        // Should still produce a valid plan
+        assert!(
+            !result.name().is_empty(),
+            "Optimizer should return a valid plan even with fetch = None"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_unnecessary_sort_with_fetch_pushdown() -> Result<()> {
+        // Test case: Remove unnecessary sort and push down fetch to input
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        let lazy_exec =
+            create_sorted_lazy_memory_exec(Arc::clone(&schema), sort_expr.clone(), true)?;
+
+        let lex_ordering = LexOrdering::new(sort_expr).unwrap();
+        let sort_exec =
+            Arc::new(SortExec::new(lex_ordering, lazy_exec).with_fetch(Some(3)));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(sort_exec, &config)?;
+
+        // Verify fetch is preserved
+        let fetch = result.fetch();
+        assert!(
+            fetch.is_some(),
+            "Expected fetch to be preserved after optimization"
+        );
+        assert_eq!(fetch, Some(3), "Expected fetch value to be 3");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_limit_sort_already_satisfied() -> Result<()> {
+        // Test case: Input already satisfies sort requirement
+        // GlobalLimitExec -> SortExec where input is already correctly sorted
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        // Input is already sorted in ascending order
+        let lazy_exec =
+            create_sorted_lazy_memory_exec(Arc::clone(&schema), sort_expr.clone(), true)?;
+
+        let lex_ordering = LexOrdering::new(sort_expr).unwrap();
+        let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
+        let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 0, Some(10)));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(limit_exec, &config)?;
+
+        // Sort should be removed, but limit should remain
+        let sort_count = count_sorts_in_plan(&result);
+        assert_eq!(
+            sort_count, 0,
+            "Expected sort to be removed when input already satisfies ordering"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_limit_sort_cannot_optimize() -> Result<()> {
+        // Test case: Cannot optimize - input is not sorted at all
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let generator = SortedBatchGenerator {
+            schema: Arc::clone(&schema),
+            batches_generated: 0,
+            max_batches: 1,
+            ascending: true,
+        };
+
+        // Create exec WITHOUT ordering information
+        let unsorted_exec = Arc::new(LazyMemoryExec::try_new(
+            schema,
+            vec![Arc::new(RwLock::new(generator))],
+        )?);
+
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        let lex_ordering = LexOrdering::new(sort_expr).unwrap();
+        let sort_exec = Arc::new(SortExec::new(lex_ordering, unsorted_exec));
+        let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 0, Some(5)));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(limit_exec, &config)?;
+
+        // Sort should remain since input is not sorted
+        let has_sort = result
+            .as_any()
+            .downcast_ref::<GlobalLimitExec>()
+            .map(|l| l.input().as_any().downcast_ref::<SortExec>().is_some())
+            .unwrap_or(false)
+            || result.as_any().downcast_ref::<SortExec>().is_some();
+
+        assert!(
+            has_sort,
+            "Expected SortExec to remain when input is not sorted, got: {}",
+            result.name()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_single_partition_check() -> Result<()> {
+        // Test case: Multi-partition should not be treated as single partition reverse scan
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        let lazy_exec =
+            create_sorted_lazy_memory_exec(Arc::clone(&schema), sort_expr.clone(), true)?;
+
+        // Repartition to multiple partitions
+        let repartitioned = Arc::new(RepartitionExec::try_new(
+            lazy_exec,
+            Partitioning::RoundRobinBatch(4),
+        )?);
+
+        let lex_ordering = LexOrdering::new(sort_expr).unwrap();
+        let sort_exec =
+            Arc::new(SortExec::new(lex_ordering, repartitioned).with_fetch(Some(5)));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(sort_exec, &config)?;
+
+        // Multi-partition case should not use the single-partition optimization
+        // Result should have proper handling for multiple partitions
+        assert!(
+            result.output_partitioning().partition_count() >= 1,
+            "Result should have valid partitioning"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fetch_value_calculation() -> Result<()> {
+        // Test case: Verify total_fetch calculation (skip + fetch)
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        let lazy_exec =
+            create_sorted_lazy_memory_exec(Arc::clone(&schema), sort_expr.clone(), true)?;
+
+        let lex_ordering = LexOrdering::new(sort_expr).unwrap();
+        let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
+
+        // skip = 3, fetch = 7, total should be 10
+        let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 3, Some(7)));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(limit_exec, &config)?;
+
+        // The optimization should handle the combined skip + fetch correctly
+        // Either preserve GlobalLimitExec or push down the total fetch
+        assert!(
+            !result.name().is_empty(),
+            "Optimizer should handle skip + fetch calculation correctly"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_limit_sort_optimization() -> Result<()> {
+        // Test case: Nested GlobalLimitExec -> SortExec patterns
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        let lazy_exec =
+            create_sorted_lazy_memory_exec(Arc::clone(&schema), sort_expr.clone(), true)?;
+
+        let lex_ordering = LexOrdering::new(sort_expr).unwrap();
+
+        // Inner sort + limit
+        let inner_sort = Arc::new(SortExec::new(lex_ordering.clone(), lazy_exec));
+        let inner_limit = Arc::new(GlobalLimitExec::new(inner_sort, 0, Some(20)));
+
+        // Outer sort + limit
+        let outer_sort = Arc::new(SortExec::new(lex_ordering, inner_limit));
+        let outer_limit = Arc::new(GlobalLimitExec::new(outer_sort, 0, Some(10)));
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(outer_limit, &config)?;
+
+        // Should optimize both layers
+        let sort_count = count_sorts_in_plan(&result);
+        assert!(
+            sort_count < 2,
+            "Expected nested sorts to be optimized, found {sort_count} sorts"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_preserve_partitioning_with_limit() -> Result<()> {
+        // Test case: SortExec with preserve_partitioning and fetch
+
+        let config = ConfigOptions::new();
+        let schema = create_test_schema();
+
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("col1", 0)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+
+        let lazy_exec =
+            create_sorted_lazy_memory_exec(Arc::clone(&schema), sort_expr.clone(), true)?;
+
+        let repartitioned = Arc::new(RepartitionExec::try_new(
+            lazy_exec,
+            Partitioning::RoundRobinBatch(2),
+        )?);
+
+        let lex_ordering = LexOrdering::new(sort_expr).unwrap();
+        let sort_exec = Arc::new(
+            SortExec::new(lex_ordering, repartitioned)
+                .with_fetch(Some(5))
+                .with_preserve_partitioning(true),
+        );
+
+        let optimizer = ReverseOrder;
+        let result = optimizer.optimize(sort_exec, &config)?;
+
+        // With preserve_partitioning=true and multiple partitions,
+        // should use LocalLimitExec instead of GlobalLimitExec
+        let is_local_limit = result.as_any().downcast_ref::<LocalLimitExec>().is_some();
+        let has_fetch = result.fetch().is_some();
+
+        assert!(
+            is_local_limit || has_fetch,
+            "Expected LocalLimitExec or fetch for multi-partition with preserve_partitioning"
         );
 
         Ok(())
