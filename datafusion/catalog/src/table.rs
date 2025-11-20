@@ -24,6 +24,7 @@ use crate::session::Session;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
+use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
 use datafusion_expr::Expr;
 
@@ -76,6 +77,16 @@ pub trait TableProvider: Debug + Sync + Send {
 
     /// Get the [`LogicalPlan`] of this table, if available.
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
+        None
+    }
+
+    /// Provide metadata if this table represents a table function invocation.
+    ///
+    /// The default implementation returns `None`. Table providers that represent
+    /// table functions (for example `generate_series`) should override this to
+    /// return the function name and evaluated arguments. This metadata is used
+    /// during Substrait serialization to record table function calls.
+    fn table_function_details(&self) -> Option<TableFunctionDetails<'_>> {
         None
     }
 
@@ -328,6 +339,22 @@ pub trait TableProvider: Debug + Sync + Send {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Insert into not implemented for this table")
     }
+}
+
+/// Metadata about a table function invocation exposed by some implementations
+/// of [`TableProvider`].  Contains the table function name and its evaluated
+/// arguments as `ScalarValue`s.
+///
+/// This struct is used by consumers/serializers (e.g., Substrait producer) to
+/// encode table function metadata into plans.
+#[derive(Debug, Clone)]
+pub struct TableFunctionDetails<'a> {
+    /// The table function name, e.g. "generate_series".
+    pub name: &'static str,
+    /// Evaluated argument values passed to the function. The slice points into
+    /// memory owned by the table provider implementation and is valid for the
+    /// lifetime of the provider.
+    pub arguments: &'a [ScalarValue],
 }
 
 /// Arguments for scanning a table with [`TableProvider::scan_with_args`].

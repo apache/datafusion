@@ -54,15 +54,9 @@ fn table_function_extension_for_scan(
         None => return Ok(None),
     };
 
-    let Some(generate_series) = default_source
-        .table_provider
-        .as_any()
-        .downcast_ref::<GenerateSeriesTable>()
-    else {
+    let Some(details) = default_source.table_provider.table_function_details() else {
         return Ok(None);
     };
-
-    let details = generate_series.table_function_details();
     let arguments = details
         .arguments
         .iter()

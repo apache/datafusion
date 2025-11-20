@@ -279,11 +279,7 @@ pub struct GenerateSeriesTable {
     arguments: Vec<ScalarValue>,
 }
 
-#[derive(Debug, Clone)]
-pub struct TableFunctionDetails<'a> {
-    pub name: &'static str,
-    pub arguments: &'a [ScalarValue],
-}
+// `TableFunctionDetails` is provided through `datafusion::catalog::TableFunctionDetails`.
 
 impl GenerateSeriesTable {
     pub fn new(
@@ -298,8 +294,10 @@ impl GenerateSeriesTable {
         }
     }
 
-    pub fn table_function_details(&self) -> TableFunctionDetails<'_> {
-        TableFunctionDetails {
+    pub fn table_function_details(
+        &self,
+    ) -> datafusion::catalog::TableFunctionDetails<'_> {
+        datafusion::catalog::TableFunctionDetails {
             name: self.args.name(),
             arguments: &self.arguments,
         }
@@ -535,6 +533,15 @@ impl TableProvider for GenerateSeriesTable {
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    fn table_function_details(
+        &self,
+    ) -> Option<datafusion::catalog::TableFunctionDetails<'_>> {
+        Some(datafusion::catalog::TableFunctionDetails {
+            name: self.args.name(),
+            arguments: &self.arguments,
+        })
     }
 
     async fn scan(
