@@ -453,9 +453,9 @@ impl RuntimeEnvBuilder {
     /// Returns a list of all available runtime configurations with their current values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
         create_runtime_config_entries(
-            None, // Default is system-dependent
+            None,
             Some("100G".to_string()),
-            None, // Default is system-dependent
+            None,
             Some("50M".to_owned()),
         )
     }
