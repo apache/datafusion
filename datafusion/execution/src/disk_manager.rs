@@ -30,7 +30,7 @@ use tempfile::{Builder, NamedTempFile, TempDir};
 
 use crate::memory_pool::human_readable_size;
 
-const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
+pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
 /// Builder pattern for the [DiskManager] structure
 #[derive(Clone, Debug)]

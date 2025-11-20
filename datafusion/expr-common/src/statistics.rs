@@ -162,9 +162,9 @@ impl Distribution {
     /// - A [`Uniform`] distribution's range is simply its interval.
     /// - An [`Exponential`] distribution's range is `[offset, +∞)`.
     /// - A [`Gaussian`] distribution's range is unbounded.
-    /// - A [`Bernoulli`] distribution's range is [`Interval::UNCERTAIN`], if
-    ///   `p` is neither `0` nor `1`. Otherwise, it is [`Interval::CERTAINLY_FALSE`]
-    ///   and [`Interval::CERTAINLY_TRUE`], respectively.
+    /// - A [`Bernoulli`] distribution's range is [`Interval::TRUE_OR_FALSE`], if
+    ///   `p` is neither `0` nor `1`. Otherwise, it is [`Interval::FALSE`]
+    ///   and [`Interval::TRUE`], respectively.
     /// - A [`Generic`] distribution is unbounded by default, but more information
     ///   may be present.
     pub fn range(&self) -> Result<Interval> {
@@ -519,11 +519,11 @@ impl BernoulliDistribution {
         // Unwraps are safe as the constructor guarantees that the data type
         // supports zero and one values.
         if ScalarValue::new_zero(&dt).unwrap().eq(&self.p) {
-            Interval::CERTAINLY_FALSE
+            Interval::FALSE
         } else if ScalarValue::new_one(&dt).unwrap().eq(&self.p) {
-            Interval::CERTAINLY_TRUE
+            Interval::TRUE
         } else {
-            Interval::UNCERTAIN
+            Interval::TRUE_OR_FALSE
         }
     }
 }
@@ -736,11 +736,11 @@ pub fn create_bernoulli_from_comparison(
     }
     let (li, ri) = (left.range()?, right.range()?);
     let range_evaluation = apply_operator(op, &li, &ri)?;
-    if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
+    if range_evaluation.eq(&Interval::FALSE) {
         Distribution::new_bernoulli(ScalarValue::from(0.0))
-    } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
+    } else if range_evaluation.eq(&Interval::TRUE) {
         Distribution::new_bernoulli(ScalarValue::from(1.0))
-    } else if range_evaluation.eq(&Interval::UNCERTAIN) {
+    } else if range_evaluation.eq(&Interval::TRUE_OR_FALSE) {
         Distribution::new_bernoulli(ScalarValue::try_from(&DataType::Float64)?)
     } else {
         internal_err!("This function must be called with a comparison operator")
@@ -897,7 +897,7 @@ mod tests {
             })
         );
 
-        assert!(Distribution::new_uniform(Interval::UNCERTAIN).is_err());
+        assert!(Distribution::new_uniform(Interval::TRUE_OR_FALSE).is_err());
         Ok(())
     }
 
@@ -1010,7 +1010,7 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Null,
-                    Interval::UNCERTAIN,
+                    Interval::TRUE_OR_FALSE,
                 ),
                 false,
             ),
