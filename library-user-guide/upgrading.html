@@ -407,6 +407,77 @@
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code><a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
 <p>You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/18566">status of the <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code> release here</a></p>
+<section id="statistics-handling-moved-from-filesource-to-filescanconfig">
+<h3>Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code><a class="headerlink" href="#statistics-handling-moved-from-filesource-to-filescanconfig" title="Link to this heading">#</a></h3>
+<p>Statistics are now managed directly by <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> instead of being delegated to <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations. This simplifies the <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> trait and provides more consistent statistics handling across all file formats.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who have implemented custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations</p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<p>Two methods have been removed from the <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> trait:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">with_statistics(&amp;self,</span> <span class="pre">statistics:</span> <span class="pre">Statistics)</span> <span class="pre">-&gt;</span> <span class="pre">Arc&lt;dyn</span> <span class="pre">FileSource&gt;</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">statistics(&amp;self)</span> <span class="pre">-&gt;</span> <span class="pre">Result&lt;Statistics&gt;</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>If you have a custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementation, you need to:</p>
+<ol class="arabic simple">
+<li><p>Remove the <code class="docutils literal notranslate"><span class="pre">with_statistics</span></code> method implementation</p></li>
+<li><p>Remove the <code class="docutils literal notranslate"><span class="pre">statistics</span></code> method implementation</p></li>
+<li><p>Remove any internal state that was storing statistics</p></li>
+</ol>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Clone)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">table_schema</span><span class="p">:</span><span class="w"> </span><span class="nc">TableSchema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">projected_statistics</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// other fields...</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">FileSource</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">with_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">statistics</span><span class="p">:</span><span class="w"> </span><span class="nc">Statistics</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">FileSource</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">table_schema</span><span class="p">:</span><span class="w"> </span><span class="nc">self</span><span class="p">.</span><span class="n">table_schema</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">projected_statistics</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">statistics</span><span class="p">),</span>
+<span class="w">            </span><span class="c1">// other fields...</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">projected_statistics</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">unwrap_or_else</span><span class="p">(</span><span class="o">||</span>
+<span class="w">            </span><span class="n">Statistics</span><span class="p">::</span><span class="n">new_unknown</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">table_schema</span><span class="p">.</span><span class="n">file_schema</span><span class="p">())</span>
+<span class="w">        </span><span class="p">))</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// other methods...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Clone)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">table_schema</span><span class="p">:</span><span class="w"> </span><span class="nc">TableSchema</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// projected_statistics field removed</span>
+<span class="w">    </span><span class="c1">// other fields...</span>
+<span class="p">}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">FileSource</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyCustomSource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// with_statistics method removed</span>
+<span class="w">    </span><span class="c1">// statistics method removed</span>
+
+<span class="w">    </span><span class="c1">// other methods...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Accessing statistics:</strong></p>
+<p>Statistics are now accessed through <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> instead of <code class="docutils literal notranslate"><span class="pre">FileSource</span></code>:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let stats = config.file_source.statistics()?;</span>
+<span class="gi">+ let stats = config.statistics();</span>
+</pre></div>
+</div>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">FileScanConfig::statistics()</span></code> automatically marks statistics as inexact when filters are present, ensuring correctness when filters are pushed down.</p>
+</section>
 <section id="planner-now-requires-explicit-opt-in-for-within-group-syntax">
 <h3>Planner now requires explicit opt-in for WITHIN GROUP syntax<a class="headerlink" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax" title="Link to this heading">#</a></h3>
 <p>The SQL planner now enforces the aggregate UDF contract more strictly: the
@@ -1684,6 +1755,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax">Planner now requires explicit opt-in for WITHIN GROUP syntax</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-cacheaccessor-trait">API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait</a></li>
