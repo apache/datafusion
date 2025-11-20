@@ -18,8 +18,10 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    array::{Array, AsArray},
-    compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
+    array::{Array, AsArray, BooleanArray, UInt32Array},
+    compute::{
+        interleave_record_batch, prep_null_mask_filter, sort_to_indices, FilterBuilder,
+    },
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
@@ -174,6 +176,11 @@ fn build_sort_fields(
         .collect::<Result<_>>()
 }
 
+enum TopKSelection {
+    Boolean(BooleanArray),
+    Indices(UInt32Array),
+}
+
 impl TopK {
     /// Create a new [`TopK`] that stores the top `k` values, as
     /// defined by the sort expressions in `expr`.
@@ -253,8 +260,22 @@ impl TopK {
             // nothing to filter, so no need to update
             return Ok(());
         }
-        // only update the keys / rows if the filter does not match all rows
-        if true_count < num_rows {
+        // If only a single sort key, and filters out 80% of the rows based on `k` and batch size
+        // and dynamic filter is not very selective or no filter at all, we can optimize
+        // use sort_to_indices to get the top indices from the input batch
+        let twenty_percent_rows = num_rows as f64 * 0.2;
+        if sort_keys.len() == 1
+            && (self.heap.k as f64) < twenty_percent_rows
+            && (true_count as f64 > twenty_percent_rows * 1.5)
+        {
+            let array = sort_keys[0].as_ref();
+            let options = self.expr[0].options;
+            selected_rows = Some(TopKSelection::Indices(sort_to_indices(
+                array,
+                Some(options),
+                Some(self.heap.k),
+            )?));
+        } else if true_count < num_rows {
             // Indices in `set_indices` should be correct if filter contains nulls
             // So we prepare the filter here. Note this is also done in the `FilterBuilder`
             // so there is no overhead to do this here.
@@ -269,7 +290,7 @@ impl TopK {
             } else {
                 filter_predicate.build()
             };
-            selected_rows = Some(filter);
+            selected_rows = Some(TopKSelection::Boolean(filter));
             sort_keys = sort_keys
                 .iter()
                 .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
@@ -283,9 +304,14 @@ impl TopK {
         let mut batch_entry = self.heap.register_batch(batch.clone());
 
         let replacements = match selected_rows {
-            Some(filter) => {
+            Some(TopKSelection::Boolean(filter)) => {
                 self.find_new_topk_items(filter.values().set_indices(), &mut batch_entry)
             }
+            Some(TopKSelection::Indices(indices)) => self.find_new_topk_items(
+                indices.values().iter().map(|i| *i as usize),
+                &mut batch_entry,
+            ),
+
             None => self.find_new_topk_items(0..sort_keys[0].len(), &mut batch_entry),
         };
 
