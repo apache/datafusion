@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -52,5 +55,6 @@ recursive = { workspace = true, optional = true }
 
 [dev-dependencies]
 datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
 insta = { workspace = true }
 tokio = { workspace = true }

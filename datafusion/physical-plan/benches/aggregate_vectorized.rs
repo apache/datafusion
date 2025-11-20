@@ -21,6 +21,7 @@ use arrow::util::bench_util::{
     create_primitive_array, create_string_view_array_with_len,
     create_string_view_array_with_max_len,
 };
+use arrow::util::test_util::seedable_rng;
 use arrow_schema::DataType;
 use criterion::measurement::WallTime;
 use criterion::{
@@ -29,6 +30,8 @@ use criterion::{
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupColumn;
+use rand::distr::{Bernoulli, Distribution};
+use std::hint::black_box;
 use std::sync::Arc;
 
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
@@ -87,10 +90,8 @@ fn bytes_bench(
     input: &ArrayRef,
 ) {
     // vectorized_append
-    let id = BenchmarkId::new(
-        format!("{bench_prefix}_null_{null_density:.1}_size_{size}"),
-        "vectorized_append",
-    );
+    let function_name = format!("{bench_prefix}_null_{null_density:.1}_size_{size}");
+    let id = BenchmarkId::new(&function_name, "vectorized_append");
     group.bench_function(id, |b| {
         b.iter(|| {
             let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
@@ -99,10 +100,7 @@ fn bytes_bench(
     });
 
     // append_val
-    let id = BenchmarkId::new(
-        format!("{bench_prefix}_null_{null_density:.1}_size_{size}"),
-        "append_val",
-    );
+    let id = BenchmarkId::new(&function_name, "append_val");
     group.bench_function(id, |b| {
         b.iter(|| {
             let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
@@ -113,18 +111,55 @@ fn bytes_bench(
     });
 
     // vectorized_equal_to
-    let id = BenchmarkId::new(
-        format!("{bench_prefix}_null_{null_density:.1}_size_{size}"),
-        "vectorized_equal_to",
+    vectorized_equal_to(
+        group,
+        ByteViewGroupValueBuilder::<StringViewType>::new(),
+        &function_name,
+        rows,
+        input,
+        "all_true",
+        vec![true; size],
     );
-    group.bench_function(id, |b| {
-        let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-        builder.vectorized_append(input, rows).unwrap();
-        let mut results = vec![true; size];
-        b.iter(|| {
-            builder.vectorized_equal_to(rows, input, rows, &mut results);
-        });
-    });
+    vectorized_equal_to(
+        group,
+        ByteViewGroupValueBuilder::<StringViewType>::new(),
+        &function_name,
+        rows,
+        input,
+        "0.75 true",
+        {
+            let mut rng = seedable_rng();
+            let d = Bernoulli::new(0.75).unwrap();
+            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+        },
+    );
+    vectorized_equal_to(
+        group,
+        ByteViewGroupValueBuilder::<StringViewType>::new(),
+        &function_name,
+        rows,
+        input,
+        "0.5 true",
+        {
+            let mut rng = seedable_rng();
+            let d = Bernoulli::new(0.5).unwrap();
+            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+        },
+    );
+    vectorized_equal_to(
+        group,
+        ByteViewGroupValueBuilder::<StringViewType>::new(),
+        &function_name,
+        rows,
+        input,
+        "0.25 true",
+        {
+            let mut rng = seedable_rng();
+            let d = Bernoulli::new(0.25).unwrap();
+            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+        },
+    );
+    // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
 }
 
 fn primitive_vectorized_append(c: &mut Criterion) {
@@ -184,15 +219,82 @@ fn bench_single_primitive<const NULLABLE: bool>(
     });
 
     // vectorized_equal_to
-    let id = BenchmarkId::new(&function_name, "vectorized_equal_to");
+    vectorized_equal_to(
+        group,
+        PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
+        &function_name,
+        rows,
+        &input,
+        "all_true",
+        vec![true; size],
+    );
+    vectorized_equal_to(
+        group,
+        PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
+        &function_name,
+        rows,
+        &input,
+        "0.75 true",
+        {
+            let mut rng = seedable_rng();
+            let d = Bernoulli::new(0.75).unwrap();
+            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+        },
+    );
+    vectorized_equal_to(
+        group,
+        PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
+        &function_name,
+        rows,
+        &input,
+        "0.5 true",
+        {
+            let mut rng = seedable_rng();
+            let d = Bernoulli::new(0.5).unwrap();
+            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+        },
+    );
+    vectorized_equal_to(
+        group,
+        PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
+        &function_name,
+        rows,
+        &input,
+        "0.25 true",
+        {
+            let mut rng = seedable_rng();
+            let d = Bernoulli::new(0.25).unwrap();
+            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+        },
+    );
+    // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
+}
+
+/// Test `vectorized_equal_to` with different number of true in the initial results
+fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
+    group: &mut BenchmarkGroup<WallTime>,
+    mut builder: GroupColumnBuilder,
+    function_name: &str,
+    rows: &[usize],
+    input: &ArrayRef,
+    equal_to_result_description: &str,
+    equal_to_results: Vec<bool>,
+) {
+    let id = BenchmarkId::new(
+        function_name,
+        format!("vectorized_equal_to_{equal_to_result_description}"),
+    );
     group.bench_function(id, |b| {
-        let mut builder =
-            PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32);
-        builder.vectorized_append(&input, rows).unwrap();
-        let mut results = vec![true; size];
+        builder.vectorized_append(input, rows).unwrap();
 
         b.iter(|| {
-            builder.vectorized_equal_to(rows, &input, rows, &mut results);
+            // Cloning is a must as `vectorized_equal_to` will modify the input vec
+            // and without cloning all benchmarks after the first one won't be meaningful
+            let mut equal_to_results = equal_to_results.clone();
+            builder.vectorized_equal_to(rows, input, rows, &mut equal_to_results);
+
+            // Make sure that the compiler does not optimize away the call
+            black_box(equal_to_results);
         });
     });
 }

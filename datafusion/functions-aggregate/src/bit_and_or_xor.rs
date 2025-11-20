@@ -31,17 +31,17 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
-    Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, GroupsAccumulator,
+    ReversedUDAF, Signature, TypeSignatureClass, Volatility,
 };
 
 use datafusion_doc::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use std::ops::{BitAndAssign, BitOrAssign, BitXorAssign};
 use std::sync::LazyLock;
 
@@ -89,6 +89,7 @@ macro_rules! accumulator_helper {
 macro_rules! downcast_bitwise_accumulator {
     ($args:ident, $opr:expr, $is_distinct: expr) => {
         match $args.return_field.data_type() {
+            DataType::Null => Ok(Box::new(NoopAccumulator::default())),
             DataType::Int8 => accumulator_helper!(Int8Type, $opr, $is_distinct),
             DataType::Int16 => accumulator_helper!(Int16Type, $opr, $is_distinct),
             DataType::Int32 => accumulator_helper!(Int32Type, $opr, $is_distinct),
@@ -228,7 +229,10 @@ impl BitwiseOperation {
     ) -> Self {
         Self {
             operation: operator,
-            signature: Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Integer)],
+                Volatility::Immutable,
+            ),
             func_name,
             documentation,
         }
@@ -249,15 +253,7 @@ impl AggregateUDFImpl for BitwiseOperation {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_type = &arg_types[0];
-        if !arg_type.is_integer() {
-            return exec_err!(
-                "[return_type] {} not supported for {}",
-                self.name(),
-                arg_type
-            );
-        }
-        Ok(arg_type.clone())
+        Ok(arg_types[0].clone())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -265,7 +261,14 @@ impl AggregateUDFImpl for BitwiseOperation {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        if self.operation == BitwiseOperationType::Xor && args.is_distinct {
+        if args.input_fields[0].data_type().is_null() {
+            Ok(vec![Field::new(
+                format_state_name(args.name, self.name()),
+                DataType::Null,
+                true,
+            )
+            .into()])
+        } else if self.operation == BitwiseOperationType::Xor && args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(
                     args.name,

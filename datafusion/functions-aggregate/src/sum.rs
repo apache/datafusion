@@ -18,35 +18,31 @@
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
 use ahash::RandomState;
-use arrow::datatypes::DECIMAL32_MAX_PRECISION;
-use arrow::datatypes::DECIMAL64_MAX_PRECISION;
-use datafusion_expr::utils::AggregateOrderSensitivity;
-use datafusion_expr::Expr;
-use std::any::Any;
-use std::mem::size_of_val;
-
-use arrow::array::Array;
-use arrow::array::ArrowNativeTypeOp;
-use arrow::array::{ArrowNumericType, AsArray};
-use arrow::datatypes::{ArrowNativeType, FieldRef};
+use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
+use arrow::datatypes::Field;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, Float64Type,
-    Int64Type, UInt64Type, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
+    Decimal64Type, FieldRef, Float64Type, Int64Type, UInt64Type,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL32_MAX_PRECISION,
+    DECIMAL64_MAX_PRECISION,
 };
-use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, HashMap, Result, ScalarValue,
+use datafusion_common::types::{
+    logical_float64, logical_int16, logical_int32, logical_int64, logical_int8,
+    logical_uint16, logical_uint32, logical_uint64, logical_uint8, NativeType,
 };
-use datafusion_expr::function::AccumulatorArgs;
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::utils::format_state_name;
+use datafusion_common::{exec_err, not_impl_err, HashMap, Result, ScalarValue};
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
-    SetMonotonicity, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
+    ReversedUDAF, SetMonotonicity, Signature, TypeSignature, TypeSignatureClass,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
+use std::any::Any;
+use std::mem::size_of_val;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -130,7 +126,42 @@ pub struct Sum {
 impl Sum {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+            // smallint, int, bigint, real, double precision, decimal, or interval.
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Decimal,
+                    )]),
+                    // Unsigned to u64
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_uint64()),
+                        vec![
+                            TypeSignatureClass::Native(logical_uint8()),
+                            TypeSignatureClass::Native(logical_uint16()),
+                            TypeSignatureClass::Native(logical_uint32()),
+                        ],
+                        NativeType::UInt64,
+                    )]),
+                    // Signed to i64
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![
+                            TypeSignatureClass::Native(logical_int8()),
+                            TypeSignatureClass::Native(logical_int16()),
+                            TypeSignatureClass::Native(logical_int32()),
+                        ],
+                        NativeType::Int64,
+                    )]),
+                    // Floats to f64
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Float],
+                        NativeType::Float64,
+                    )]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -154,57 +185,26 @@ impl AggregateUDFImpl for Sum {
         &self.signature
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [args] = take_function_args(self.name(), arg_types)?;
-
-        // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-        // smallint, int, bigint, real, double precision, decimal, or interval.
-
-        fn coerced_type(data_type: &DataType) -> Result<DataType> {
-            match data_type {
-                DataType::Dictionary(_, v) => coerced_type(v),
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                DataType::Decimal32(_, _)
-                | DataType::Decimal64(_, _)
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _) => Ok(data_type.clone()),
-                dt if dt.is_signed_integer() => Ok(DataType::Int64),
-                dt if dt.is_unsigned_integer() => Ok(DataType::UInt64),
-                dt if dt.is_floating() => Ok(DataType::Float64),
-                _ => exec_err!("Sum not supported for {data_type}"),
-            }
-        }
-
-        Ok(vec![coerced_type(args)?])
-    }
-
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
             DataType::Int64 => Ok(DataType::Int64),
             DataType::UInt64 => Ok(DataType::UInt64),
             DataType::Float64 => Ok(DataType::Float64),
+            // In the spark, the result type is DECIMAL(min(38,precision+10), s)
+            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
             DataType::Decimal32(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 let new_precision = DECIMAL32_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal32(new_precision, *scale))
             }
             DataType::Decimal64(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 let new_precision = DECIMAL64_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal64(new_precision, *scale))
             }
             DataType::Decimal128(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal128(new_precision, *scale))
             }
             DataType::Decimal256(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal256(new_precision, *scale))
             }

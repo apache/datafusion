@@ -34,7 +34,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
-use crate::joins::utils::JoinFilter;
+use crate::joins::utils::{compare_join_arrays, JoinFilter};
+use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
@@ -604,7 +605,7 @@ impl Stream for SortMergeJoinStream {
                                             // Append filtered batch to the output buffer
                                             self.output = concat_batches(
                                                 &self.schema(),
-                                                vec![&self.output, &out_filtered_batch],
+                                                [&self.output, &out_filtered_batch],
                                             )?;
 
                                             // Send to output if the output buffer surpassed the `batch_size`
@@ -1031,7 +1032,7 @@ impl SortMergeJoinStream {
         let mut join_streamed = false;
         // Whether to join buffered rows
         let mut join_buffered = false;
-        // For Mark join we store a dummy id to indicate the the row has a match
+        // For Mark join we store a dummy id to indicate the row has a match
         let mut mark_row_as_match = false;
 
         // determine whether we need to join streamed/buffered rows
@@ -1140,7 +1141,7 @@ impl SortMergeJoinStream {
             } else {
                 Some(self.buffered_data.scanning_batch_idx)
             };
-            // For Mark join we store a dummy id to indicate the the row has a match
+            // For Mark join we store a dummy id to indicate the row has a match
             let scanning_idx = mark_row_as_match.then_some(0);
 
             self.streamed_batch
@@ -1462,10 +1463,7 @@ impl SortMergeJoinStream {
     fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
         let record_batch =
             concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
-        self.join_metrics.output_batches().add(1);
-        self.join_metrics
-            .baseline_metrics()
-            .record_output(record_batch.num_rows());
+        (&record_batch).record_output(&self.join_metrics.baseline_metrics());
         // If join filter exists, `self.output_size` is not accurate as we don't know the exact
         // number of rows in the output record batch. If streamed row joined with buffered rows,
         // once join filter is applied, the number of output rows may be more than 1.
@@ -1561,26 +1559,32 @@ impl SortMergeJoinStream {
                 null_joined_batch.num_rows(),
             );
 
-            let columns = if !matches!(self.join_type, JoinType::Right) {
-                let mut left_columns = null_joined_batch
-                    .columns()
-                    .iter()
-                    .take(right_columns_length)
-                    .cloned()
-                    .collect::<Vec<_>>();
+            let columns = match self.join_type {
+                JoinType::Right => {
+                    // The first columns are the right columns.
+                    let left_columns = null_joined_batch
+                        .columns()
+                        .iter()
+                        .skip(right_columns_length)
+                        .cloned()
+                        .collect::<Vec<_>>();
 
-                left_columns.extend(right_columns);
-                left_columns
-            } else {
-                let left_columns = null_joined_batch
-                    .columns()
-                    .iter()
-                    .skip(left_columns_length)
-                    .cloned()
-                    .collect::<Vec<_>>();
+                    right_columns.extend(left_columns);
+                    right_columns
+                }
+                JoinType::Left | JoinType::LeftMark | JoinType::RightMark => {
+                    // The first columns are the left columns.
+                    let mut left_columns = null_joined_batch
+                        .columns()
+                        .iter()
+                        .take(left_columns_length)
+                        .cloned()
+                        .collect::<Vec<_>>();
 
-                right_columns.extend(left_columns);
-                right_columns
+                    left_columns.extend(right_columns);
+                    left_columns
+                }
+                _ => exec_err!("Did not expect join type {}", self.join_type)?,
             };
 
             // Push the streamed/buffered batch joined nulls to the output
@@ -1863,101 +1867,6 @@ fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayR
             c.into_array(num_rows).unwrap()
         })
         .collect()
-}
-
-/// Get comparison result of two rows of join arrays
-fn compare_join_arrays(
-    left_arrays: &[ArrayRef],
-    left: usize,
-    right_arrays: &[ArrayRef],
-    right: usize,
-    sort_options: &[SortOptions],
-    null_equality: NullEquality,
-) -> Result<Ordering> {
-    let mut res = Ordering::Equal;
-    for ((left_array, right_array), sort_options) in
-        left_arrays.iter().zip(right_arrays).zip(sort_options)
-    {
-        macro_rules! compare_value {
-            ($T:ty) => {{
-                let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
-                let right_array = right_array.as_any().downcast_ref::<$T>().unwrap();
-                match (left_array.is_null(left), right_array.is_null(right)) {
-                    (false, false) => {
-                        let left_value = &left_array.value(left);
-                        let right_value = &right_array.value(right);
-                        res = left_value.partial_cmp(right_value).unwrap();
-                        if sort_options.descending {
-                            res = res.reverse();
-                        }
-                    }
-                    (true, false) => {
-                        res = if sort_options.nulls_first {
-                            Ordering::Less
-                        } else {
-                            Ordering::Greater
-                        };
-                    }
-                    (false, true) => {
-                        res = if sort_options.nulls_first {
-                            Ordering::Greater
-                        } else {
-                            Ordering::Less
-                        };
-                    }
-                    _ => {
-                        res = match null_equality {
-                            NullEquality::NullEqualsNothing => Ordering::Less,
-                            NullEquality::NullEqualsNull => Ordering::Equal,
-                        };
-                    }
-                }
-            }};
-        }
-
-        match left_array.data_type() {
-            DataType::Null => {}
-            DataType::Boolean => compare_value!(BooleanArray),
-            DataType::Int8 => compare_value!(Int8Array),
-            DataType::Int16 => compare_value!(Int16Array),
-            DataType::Int32 => compare_value!(Int32Array),
-            DataType::Int64 => compare_value!(Int64Array),
-            DataType::UInt8 => compare_value!(UInt8Array),
-            DataType::UInt16 => compare_value!(UInt16Array),
-            DataType::UInt32 => compare_value!(UInt32Array),
-            DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Float32 => compare_value!(Float32Array),
-            DataType::Float64 => compare_value!(Float64Array),
-            DataType::Utf8 => compare_value!(StringArray),
-            DataType::Utf8View => compare_value!(StringViewArray),
-            DataType::LargeUtf8 => compare_value!(LargeStringArray),
-            DataType::Binary => compare_value!(BinaryArray),
-            DataType::BinaryView => compare_value!(BinaryViewArray),
-            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
-            DataType::LargeBinary => compare_value!(LargeBinaryArray),
-            DataType::Decimal32(..) => compare_value!(Decimal32Array),
-            DataType::Decimal64(..) => compare_value!(Decimal64Array),
-            DataType::Decimal128(..) => compare_value!(Decimal128Array),
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => compare_value!(TimestampSecondArray),
-                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
-                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
-                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
-            },
-            DataType::Date32 => compare_value!(Date32Array),
-            DataType::Date64 => compare_value!(Date64Array),
-            dt => {
-                return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator: {}",
-                    dt
-                );
-            }
-        }
-        if !res.is_eq() {
-            break;
-        }
-    }
-    Ok(res)
 }
 
 /// A faster version of compare_join_arrays() that only output whether

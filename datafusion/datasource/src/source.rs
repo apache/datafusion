@@ -151,7 +151,21 @@ pub trait DataSource: Send + Sync + Debug {
     fn scheduling_type(&self) -> SchedulingType {
         SchedulingType::NonCooperative
     }
-    fn statistics(&self) -> Result<Statistics>;
+
+    /// Returns statistics for a specific partition, or aggregate statistics
+    /// across all partitions if `partition` is `None`.
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
+
+    /// Returns aggregate statistics across all partitions.
+    ///
+    /// # Deprecated
+    /// Use [`Self::partition_statistics`] instead, which provides more fine-grained
+    /// control over statistics retrieval (per-partition or aggregate).
+    #[deprecated(since = "51.0.0", note = "Use partition_statistics instead")]
+    fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
@@ -285,21 +299,7 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if let Some(partition) = partition {
-            let mut statistics = Statistics::new_unknown(&self.schema());
-            if let Some(file_config) =
-                self.data_source.as_any().downcast_ref::<FileScanConfig>()
-            {
-                if let Some(file_group) = file_config.file_groups.get(partition) {
-                    if let Some(stat) = file_group.file_statistics(None) {
-                        statistics = stat.clone();
-                    }
-                }
-            }
-            Ok(statistics)
-        } else {
-            Ok(self.data_source.statistics()?)
-        }
+        self.data_source.partition_statistics(partition)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -348,8 +348,7 @@ impl ExecutionPlan for DataSourceExec {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
                 // Re-compute properties since we have new filters which will impact equivalence info
-                new_node.cache =
-                    Self::compute_properties(Arc::clone(&new_node.data_source));
+                new_node.cache = Self::compute_properties(&new_node.data_source);
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -371,7 +370,7 @@ impl DataSourceExec {
 
     // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&data_source));
+        let cache = Self::compute_properties(&data_source);
         Self { data_source, cache }
     }
 
@@ -381,7 +380,7 @@ impl DataSourceExec {
     }
 
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(Arc::clone(&data_source));
+        self.cache = Self::compute_properties(&data_source);
         self.data_source = data_source;
         self
     }
@@ -398,7 +397,7 @@ impl DataSourceExec {
         self
     }
 
-    fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
+    fn compute_properties(data_source: &Arc<dyn DataSource>) -> PlanProperties {
         PlanProperties::new(
             data_source.eq_properties(),
             data_source.output_partitioning(),

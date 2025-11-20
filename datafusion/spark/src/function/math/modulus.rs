@@ -18,7 +18,9 @@
 use arrow::compute::kernels::numeric::add;
 use arrow::compute::kernels::{cmp::lt, numeric::rem, zip::zip};
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -27,9 +29,7 @@ use std::any::Any;
 /// Spark-compatible `mod` function
 /// This function directly uses Arrow's arithmetic_op function for modulo operations
 pub fn spark_mod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return internal_err!("mod expects exactly two arguments");
-    }
+    assert_eq_or_internal_err!(args.len(), 2, "mod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
     let result = rem(&args[0], &args[1])?;
     Ok(ColumnarValue::Array(result))
@@ -38,9 +38,7 @@ pub fn spark_mod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// Spark-compatible `pmod` function
 /// This function directly uses Arrow's arithmetic_op function for modulo operations
 pub fn spark_pmod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return internal_err!("pmod expects exactly two arguments");
-    }
+    assert_eq_or_internal_err!(args.len(), 2, "pmod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
     let left = &args[0];
     let right = &args[1];
@@ -87,9 +85,11 @@ impl ScalarUDFImpl for SparkMod {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
-            return internal_err!("mod expects exactly two arguments");
-        }
+        assert_eq_or_internal_err!(
+            arg_types.len(),
+            2,
+            "mod expects exactly two arguments"
+        );
 
         // Return the same type as the first argument for simplicity
         // Arrow's rem function handles type promotion internally
@@ -135,9 +135,11 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
-            return internal_err!("pmod expects exactly two arguments");
-        }
+        assert_eq_or_internal_err!(
+            arg_types.len(),
+            2,
+            "pmod expects exactly two arguments"
+        );
 
         // Return the same type as the first argument for simplicity
         // Arrow's rem function handles type promotion internally

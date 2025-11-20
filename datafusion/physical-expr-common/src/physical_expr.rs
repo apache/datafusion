@@ -23,14 +23,17 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::{ArrayRef, BooleanArray};
+use arrow::array::{new_empty_array, ArrayRef, BooleanArray};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, exec_err, not_impl_err, DataFusionError, Result,
+    ScalarValue,
+};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -90,36 +93,69 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             self.nullable(input_schema)?,
         )))
     }
-    /// Evaluate an expression against a RecordBatch after first applying a
-    /// validity array
+    /// Evaluate an expression against a RecordBatch after first applying a validity array
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Err` if the expression could not be evaluated or if the length of the
+    /// `selection` validity array and the number of row in `batch` is not equal.
     fn evaluate_selection(
         &self,
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let tmp_batch = filter_record_batch(batch, selection)?;
+        let row_count = batch.num_rows();
+        if row_count != selection.len() {
+            return exec_err!("Selection array length does not match batch row count: {} != {row_count}", selection.len());
+        }
 
-        let tmp_result = self.evaluate(&tmp_batch)?;
+        let selection_count = selection.true_count();
 
-        if batch.num_rows() == tmp_batch.num_rows() {
-            // All values from the `selection` filter are true.
-            Ok(tmp_result)
-        } else if let ColumnarValue::Array(a) = tmp_result {
-            scatter(selection, a.as_ref()).map(ColumnarValue::Array)
-        } else if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = &tmp_result {
-            // When the scalar is true or false, skip the scatter process
-            if let Some(v) = value {
-                if *v {
-                    Ok(ColumnarValue::from(Arc::new(selection.clone()) as ArrayRef))
-                } else {
-                    Ok(tmp_result)
-                }
-            } else {
-                let array = BooleanArray::from(vec![None; batch.num_rows()]);
-                scatter(selection, &array).map(ColumnarValue::Array)
-            }
+        // First, check if we can avoid filtering altogether.
+        if selection_count == row_count {
+            // All values from the `selection` filter are true and match the input batch.
+            // No need to perform any filtering.
+            return self.evaluate(batch);
+        }
+
+        // Next, prepare the result array for each 'true' row in the selection vector.
+        let filtered_result = if selection_count == 0 {
+            // Do not call `evaluate` when the selection is empty.
+            // `evaluate_selection` is used to conditionally evaluate expressions.
+            // When the expression in question is fallible, evaluating it with an empty
+            // record batch may trigger a runtime error (e.g. division by zero).
+            //
+            // Instead, create an empty array matching the expected return type.
+            let datatype = self.data_type(batch.schema_ref().as_ref())?;
+            ColumnarValue::Array(new_empty_array(&datatype))
         } else {
-            Ok(tmp_result)
+            // If we reach this point, there's no other option than to filter the batch.
+            // This is a fairly costly operation since it requires creating partial copies
+            // (worst case of length `row_count - 1`) of all the arrays in the record batch.
+            // The resulting `filtered_batch` will contain `selection_count` rows.
+            let filtered_batch = filter_record_batch(batch, selection)?;
+            self.evaluate(&filtered_batch)?
+        };
+
+        // Finally, scatter the filtered result array so that the indices match the input rows again.
+        match &filtered_result {
+            ColumnarValue::Array(a) => {
+                scatter(selection, a.as_ref()).map(ColumnarValue::Array)
+            }
+            ColumnarValue::Scalar(ScalarValue::Boolean(value)) => {
+                // When the scalar is true or false, skip the scatter process
+                if let Some(v) = value {
+                    if *v {
+                        Ok(ColumnarValue::from(Arc::new(selection.clone()) as ArrayRef))
+                    } else {
+                        Ok(filtered_result)
+                    }
+                } else {
+                    let array = BooleanArray::from(vec![None; row_count]);
+                    scatter(selection, &array).map(ColumnarValue::Array)
+                }
+            }
+            ColumnarValue::Scalar(_) => Ok(filtered_result),
         }
     }
 
@@ -214,9 +250,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
         let dt = output_interval.data_type();
         if dt.eq(&DataType::Boolean) {
-            let p = if output_interval.eq(&Interval::CERTAINLY_TRUE) {
+            let p = if output_interval.eq(&Interval::TRUE) {
                 ScalarValue::new_one(&dt)
-            } else if output_interval.eq(&Interval::CERTAINLY_FALSE) {
+            } else if output_interval.eq(&Interval::FALSE) {
                 ScalarValue::new_zero(&dt)
             } else {
                 ScalarValue::try_from(&dt)
@@ -276,9 +312,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
                     Ok((*child).clone())
                 } else if new_interval.data_type().eq(&DataType::Boolean) {
                     let dt = old_interval.data_type();
-                    let p = if new_interval.eq(&Interval::CERTAINLY_TRUE) {
+                    let p = if new_interval.eq(&Interval::TRUE) {
                         ScalarValue::new_one(&dt)
-                    } else if new_interval.eq(&Interval::CERTAINLY_FALSE) {
+                    } else if new_interval.eq(&Interval::FALSE) {
                         ScalarValue::new_zero(&dt)
                     } else {
                         unreachable!("Given that we have a range reduction for a boolean interval, we should have certainty")
@@ -308,7 +344,6 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// representation.
     ///
     /// See the [`fmt_sql`] function for an example of printing `PhysicalExpr`s as SQL.
-    ///
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
 
     /// Take a snapshot of this `PhysicalExpr`, if it is dynamic.
@@ -421,9 +456,13 @@ pub fn with_new_children_if_necessary(
     children: Vec<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let old_children = expr.children();
-    if children.len() != old_children.len() {
-        internal_err!("PhysicalExpr: Wrong number of children")
-    } else if children.is_empty()
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "PhysicalExpr: Wrong number of children"
+    );
+
+    if children.is_empty()
         || children
             .iter()
             .zip(old_children.iter())
@@ -533,9 +572,8 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
 ///
 /// # Returns
 ///
-/// Returns an `Option<Arc<dyn PhysicalExpr>>` which is the snapshot of the
-/// `PhysicalExpr` if it is dynamic. If the `PhysicalExpr` does not have
-/// any dynamic references or state, it returns `None`.
+/// Returns a snapshot of the `PhysicalExpr` if it is dynamic, otherwise
+/// returns itself.
 pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -600,4 +638,191 @@ pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
     })
     .expect("infallible closure should not fail");
     is_volatile
+}
+
+#[cfg(test)]
+mod test {
+    use crate::physical_expr::PhysicalExpr;
+    use arrow::array::{Array, BooleanArray, Int64Array, RecordBatch};
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion_expr_common::columnar_value::ColumnarValue;
+    use std::fmt::{Display, Formatter};
+    use std::sync::Arc;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestExpr {}
+
+    impl PhysicalExpr for TestExpr {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn data_type(&self, _schema: &Schema) -> datafusion_common::Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn nullable(&self, _schema: &Schema) -> datafusion_common::Result<bool> {
+            Ok(false)
+        }
+
+        fn evaluate(
+            &self,
+            batch: &RecordBatch,
+        ) -> datafusion_common::Result<ColumnarValue> {
+            let data = vec![1; batch.num_rows()];
+            Ok(ColumnarValue::Array(Arc::new(Int64Array::from(data))))
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(Self {}))
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.write_str("TestExpr")
+        }
+    }
+
+    impl Display for TestExpr {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.fmt_sql(f)
+        }
+    }
+
+    macro_rules! assert_arrays_eq {
+        ($EXPECTED: expr, $ACTUAL: expr, $MESSAGE: expr) => {
+            let expected = $EXPECTED.to_array(1).unwrap();
+            let actual = $ACTUAL;
+
+            let actual_array = actual.to_array(expected.len()).unwrap();
+            let actual_ref = actual_array.as_ref();
+            let expected_ref = expected.as_ref();
+            assert!(
+                actual_ref == expected_ref,
+                "{}: expected: {:?}, actual: {:?}",
+                $MESSAGE,
+                $EXPECTED,
+                actual_ref
+            );
+        };
+    }
+
+    fn test_evaluate_selection(
+        batch: &RecordBatch,
+        selection: &BooleanArray,
+        expected: &ColumnarValue,
+    ) {
+        let expr = TestExpr {};
+
+        // First check that the `evaluate_selection` is the expected one
+        let selection_result = expr.evaluate_selection(batch, selection).unwrap();
+        assert_eq!(
+            expected.to_array(1).unwrap().len(),
+            selection_result.to_array(1).unwrap().len(),
+            "evaluate_selection should output row count should match input record batch"
+        );
+        assert_arrays_eq!(
+            expected,
+            &selection_result,
+            "evaluate_selection returned unexpected value"
+        );
+
+        // If we're selecting all rows, the result should be the same as calling `evaluate`
+        // with the full record batch.
+        if (0..batch.num_rows())
+            .all(|row_idx| row_idx < selection.len() && selection.value(row_idx))
+        {
+            let empty_result = expr.evaluate(batch).unwrap();
+
+            assert_arrays_eq!(
+                empty_result,
+                &selection_result,
+                "evaluate_selection does not match unfiltered evaluate result"
+            );
+        }
+    }
+
+    fn test_evaluate_selection_error(batch: &RecordBatch, selection: &BooleanArray) {
+        let expr = TestExpr {};
+
+        // First check that the `evaluate_selection` is the expected one
+        let selection_result = expr.evaluate_selection(batch, selection);
+        assert!(selection_result.is_err(), "evaluate_selection should fail");
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_empty_record_batch() {
+        test_evaluate_selection(
+            &RecordBatch::new_empty(Arc::new(Schema::empty())),
+            &BooleanArray::from(vec![false; 0]),
+            &ColumnarValue::Array(Arc::new(Int64Array::new_null(0))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_empty_record_batch_with_larger_false_selection() {
+        test_evaluate_selection_error(
+            &RecordBatch::new_empty(Arc::new(Schema::empty())),
+            &BooleanArray::from(vec![false; 10]),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_empty_record_batch_with_larger_true_selection() {
+        test_evaluate_selection_error(
+            &RecordBatch::new_empty(Arc::new(Schema::empty())),
+            &BooleanArray::from(vec![true; 10]),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch() {
+        test_evaluate_selection(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![true; 10]),
+            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![1; 10]))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_false_selection(
+    ) {
+        test_evaluate_selection_error(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![false; 20]),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_true_selection(
+    ) {
+        test_evaluate_selection_error(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![true; 20]),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_false_selection(
+    ) {
+        test_evaluate_selection_error(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![false; 5]),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_true_selection(
+    ) {
+        test_evaluate_selection_error(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![true; 5]),
+        );
+    }
 }

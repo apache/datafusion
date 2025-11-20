@@ -41,14 +41,14 @@ pub trait EncryptionFactory: Send + Sync + std::fmt::Debug + 'static {
         config: &EncryptionFactoryOptions,
         schema: &SchemaRef,
         file_path: &Path,
-    ) -> Result<Option<FileEncryptionProperties>>;
+    ) -> Result<Option<Arc<FileEncryptionProperties>>>;
 
     /// Generate file decryption properties to use when reading a Parquet file.
     async fn get_file_decryption_properties(
         &self,
         config: &EncryptionFactoryOptions,
         file_path: &Path,
-    ) -> Result<Option<FileDecryptionProperties>>;
+    ) -> Result<Option<Arc<FileDecryptionProperties>>>;
 }
 
 /// Stores [`EncryptionFactory`] implementations that can be retrieved by a unique string identifier

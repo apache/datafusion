@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Array;
-use arrow::compute::is_not_null;
-use arrow::compute::kernels::zip::zip;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    type_coercion::binary::comparison_coercion, ColumnarValue, Documentation,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    conditional_expressions::CaseBuilder,
+    simplify::{ExprSimplifyResult, SimplifyInfo},
+    type_coercion::binary::comparison_coercion,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::sync::Arc;
 
 #[user_doc(
     doc_section(label = "Conditional Functions"),
@@ -95,8 +94,37 @@ impl ScalarUDFImpl for NVL2Func {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        nvl2_func(&args.args)
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable =
+            args.arg_fields[1].is_nullable() || args.arg_fields[2].is_nullable();
+        let return_type = args.arg_fields[1].data_type().clone();
+        Ok(Field::new(self.name(), return_type, nullable).into())
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        internal_err!("nvl2 should have been simplified to case")
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        let [test, if_non_null, if_null] = take_function_args(self.name(), args)?;
+
+        let expr = CaseBuilder::new(
+            None,
+            vec![test.is_not_null()],
+            vec![if_non_null],
+            Some(Box::new(if_null)),
+        )
+        .end()?;
+
+        Ok(ExprSimplifyResult::Simplified(expr))
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -121,44 +149,5 @@ impl ScalarUDFImpl for NVL2Func {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-fn nvl2_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let mut len = 1;
-    let mut is_array = false;
-    for arg in args {
-        if let ColumnarValue::Array(array) = arg {
-            len = array.len();
-            is_array = true;
-            break;
-        }
-    }
-    if is_array {
-        let args = args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len),
-                ColumnarValue::Array(array) => Ok(Arc::clone(array)),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let [tested, if_non_null, if_null] = take_function_args("nvl2", args)?;
-        let to_apply = is_not_null(&tested)?;
-        let value = zip(&to_apply, &if_non_null, &if_null)?;
-        Ok(ColumnarValue::Array(value))
-    } else {
-        let [tested, if_non_null, if_null] = take_function_args("nvl2", args)?;
-        match &tested {
-            ColumnarValue::Array(_) => {
-                internal_err!("except Scalar value, but got Array")
-            }
-            ColumnarValue::Scalar(scalar) => {
-                if scalar.is_null() {
-                    Ok(if_null.clone())
-                } else {
-                    Ok(if_non_null.clone())
-                }
-            }
-        }
     }
 }

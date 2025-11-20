@@ -705,6 +705,7 @@ mod tests {
         let acc_args = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
+            expr_fields: &[Field::new("a", DataType::Float64, true).into()],
             ignore_nulls: true,
             order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,
@@ -782,6 +783,7 @@ mod tests {
         let acc_args = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
+            expr_fields: &[Field::new("a", DataType::Float64, true).into()],
             ignore_nulls: true,
             order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,

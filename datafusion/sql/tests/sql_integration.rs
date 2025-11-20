@@ -38,10 +38,12 @@ use datafusion_sql::{
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
-    approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
-    min_max::min_udaf,
+    approx_median::approx_median_udaf,
+    average::avg_udaf,
+    count::count_udaf,
+    grouping::grouping_udaf,
+    min_max::{max_udaf, min_udaf},
 };
-use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
@@ -230,6 +232,22 @@ fn parse_ident_normalization_4() {
         Projection: person.age
           TableScan: person
         "#
+    );
+}
+
+#[test]
+fn within_group_rejected_for_non_ordered_set_udaf() {
+    // MIN is order-sensitive by nature but does not implement the
+    // ordered-set `WITHIN GROUP` opt-in. The planner must reject
+    // explicit `WITHIN GROUP` syntax for functions that do not
+    // advertise `supports_within_group_clause()`.
+    let sql = "SELECT min(c1) WITHIN GROUP (ORDER BY c1) FROM person";
+    let err = logical_plan(sql)
+        .expect_err("expected planning to fail for MIN WITHIN GROUP")
+        .to_string();
+    assert_contains!(
+        err,
+        "WITHIN GROUP is only supported for ordered-set aggregate functions"
     );
 }
 
@@ -669,10 +687,10 @@ fn plan_insert() {
     assert_snapshot!(
         plan,
         @r#"
-        Dml: op=[Insert Into] table=[person]
-          Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
-            Values: (CAST(Int64(1) AS UInt32), Utf8("Alan"), Utf8("Turing"))
-        "#
+    Dml: op=[Insert Into] table=[person]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(ns)) AS birth_date, CAST(NULL AS Int32) AS 😀
+        Values: (CAST(Int64(1) AS UInt32), Utf8("Alan"), Utf8("Turing"))
+    "#
     );
 }
 
@@ -875,11 +893,11 @@ fn test_timestamp_filter() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: person.state
-          Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(Second, None)) AS Timestamp(Nanosecond, None))
-            TableScan: person
-        "#
+        @r"
+    Projection: person.state
+      Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(s)) AS Timestamp(ns))
+        TableScan: person
+    "
     );
 }
 
@@ -1586,11 +1604,11 @@ fn select_from_typed_string_values() {
     assert_snapshot!(
         plan,
         @r#"
-        Projection: t.col1, t.col2
-          SubqueryAlias: t
-            Projection: column1 AS col1, column2 AS col2
-              Values: (CAST(Utf8("2021-06-10 17:01:00Z") AS Timestamp(Nanosecond, None)), CAST(Utf8("2004-04-09") AS Date32))
-        "#
+    Projection: t.col1, t.col2
+      SubqueryAlias: t
+        Projection: column1 AS col1, column2 AS col2
+          Values: (CAST(Utf8("2021-06-10 17:01:00Z") AS Timestamp(ns)), CAST(Utf8("2004-04-09") AS Date32))
+    "#
     );
 }
 
@@ -3151,7 +3169,7 @@ fn select_typed_time_string() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("08:09:10.123") AS Time64(Nanosecond)) AS time
+    Projection: CAST(Utf8("08:09:10.123") AS Time64(ns)) AS time
       EmptyRelation: rows=1
     "#
     );
@@ -4686,7 +4704,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None))
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
       EmptyRelation: rows=1
     "#
     );
@@ -4696,7 +4714,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))
+    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns))
       EmptyRelation: rows=1
     "#
     );
@@ -4708,7 +4726,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(Nanosecond, None)))
+    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns)))
       EmptyRelation: rows=1
     "#
     );

@@ -28,7 +28,8 @@ use crate::PhysicalExpr;
 use arrow::datatypes::Schema;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, ColumnStatistics, Result, ScalarValue,
+    assert_or_internal_err, internal_datafusion_err, internal_err, ColumnStatistics,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::interval_arithmetic::{cardinality_ratio, Interval};
 
@@ -170,19 +171,16 @@ pub fn analyze(
         .iter()
         .all(|bound| bound.interval.is_none())
     {
-        if initial_boundaries
-            .iter()
-            .any(|bound| bound.distinct_count != Precision::Exact(0))
-        {
-            return internal_err!(
-                "ExprBoundaries has a non-zero distinct count although it represents an empty table"
-            );
-        }
-        if context.selectivity != Some(0.0) {
-            return internal_err!(
-                "AnalysisContext has a non-zero selectivity although it represents an empty table"
-            );
-        }
+        assert_or_internal_err!(
+            !initial_boundaries
+                .iter()
+                .any(|bound| bound.distinct_count != Precision::Exact(0)),
+            "ExprBoundaries has a non-zero distinct count although it represents an empty table"
+        );
+        assert_or_internal_err!(
+            context.selectivity == Some(0.0),
+            "AnalysisContext has a non-zero selectivity although it represents an empty table"
+        );
         Ok(context)
     } else if initial_boundaries
         .iter()
@@ -214,11 +212,9 @@ pub fn analyze(
             }
         }
 
-        match graph
-            .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
-        {
+        match graph.update_ranges(&mut target_indices_and_boundaries, Interval::TRUE)? {
             PropagationResult::Success => {
-                shrink_boundaries(graph, target_boundaries, target_expr_and_indices)
+                shrink_boundaries(&graph, target_boundaries, &target_expr_and_indices)
             }
             PropagationResult::Infeasible => {
                 // If the propagation result is infeasible, set intervals to None
@@ -239,9 +235,9 @@ pub fn analyze(
 /// Following this, it constructs and returns a new `AnalysisContext` with the
 /// updated parameters.
 fn shrink_boundaries(
-    graph: ExprIntervalGraph,
+    graph: &ExprIntervalGraph,
     mut target_boundaries: Vec<ExprBoundaries>,
-    target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
+    target_expr_and_indices: &[(Arc<dyn PhysicalExpr>, usize)],
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
     target_expr_and_indices.iter().for_each(|(expr, i)| {
@@ -257,9 +253,10 @@ fn shrink_boundaries(
 
     let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;
 
-    if !(0.0..=1.0).contains(&selectivity) {
-        return internal_err!("Selectivity is out of limit: {}", selectivity);
-    }
+    assert_or_internal_err!(
+        (0.0..=1.0).contains(&selectivity),
+        "Selectivity is out of limit: {selectivity}",
+    );
 
     Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
 }

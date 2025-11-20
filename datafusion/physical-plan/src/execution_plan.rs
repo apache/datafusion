@@ -47,7 +47,10 @@ use crate::stream::RecordBatchStreamAdapter;
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, Constraints, DataFusionError, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, exec_err, Constraints,
+    DataFusionError, Result,
+};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -354,12 +357,15 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///     fn execute(
     ///         &self,
     ///         partition: usize,
-    ///         context: Arc<TaskContext>
+    ///         context: Arc<TaskContext>,
     ///     ) -> Result<SendableRecordBatchStream> {
     ///         // use functions from futures crate convert the batch into a stream
     ///         let fut = futures::future::ready(Ok(self.batch.clone()));
     ///         let stream = futures::stream::once(fut);
-    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.batch.schema(), stream)))
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(
+    ///             self.batch.schema(),
+    ///             stream,
+    ///         )))
     ///     }
     /// }
     /// ```
@@ -389,11 +395,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///     fn execute(
     ///         &self,
     ///         partition: usize,
-    ///         context: Arc<TaskContext>
+    ///         context: Arc<TaskContext>,
     ///     ) -> Result<SendableRecordBatchStream> {
     ///         let fut = get_batch();
     ///         let stream = futures::stream::once(fut);
-    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(
+    ///             self.schema.clone(),
+    ///             stream,
+    ///         )))
     ///     }
     /// }
     /// ```
@@ -425,13 +434,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///     fn execute(
     ///         &self,
     ///         partition: usize,
-    ///         context: Arc<TaskContext>
+    ///         context: Arc<TaskContext>,
     ///     ) -> Result<SendableRecordBatchStream> {
     ///         // A future that yields a stream
     ///         let fut = get_batch_stream();
     ///         // Use TryStreamExt::try_flatten to flatten the stream of streams
     ///         let stream = futures::stream::once(fut).try_flatten();
-    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(
+    ///             self.schema.clone(),
+    ///             stream,
+    ///         )))
     ///     }
     /// }
     /// ```
@@ -475,13 +487,12 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         if let Some(idx) = partition {
             // Validate partition index
             let partition_count = self.properties().partitioning.partition_count();
-            if idx >= partition_count {
-                return internal_err!(
-                    "Invalid partition index: {}, the partition count is {}",
-                    idx,
-                    partition_count
-                );
-            }
+            assert_or_internal_err!(
+                idx < partition_count,
+                "Invalid partition index: {}, the partition count is {}",
+                idx,
+                partition_count
+            );
         }
         Ok(Statistics::new_unknown(&self.schema()))
     }
@@ -788,7 +799,7 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
 /// For unbounded streams, it also tracks whether the operator requires finite memory
 /// to process the stream or if memory usage could grow unbounded.
 ///
-/// Boundedness of the output stream is based on the the boundedness of the input stream and the nature of
+/// Boundedness of the output stream is based on the boundedness of the input stream and the nature of
 /// the operator. For example, limit or topk with fetch operator can convert an unbounded stream to a bounded stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Boundedness {
@@ -1073,15 +1084,15 @@ impl PlanProperties {
 macro_rules! check_len {
     ($target:expr, $func_name:ident, $expected_len:expr) => {
         let actual_len = $target.$func_name().len();
-        if actual_len != $expected_len {
-            return internal_err!(
-                "{}::{} returned Vec with incorrect size: {} != {}",
-                $target.name(),
-                stringify!($func_name),
-                actual_len,
-                $expected_len
-            );
-        }
+        assert_eq_or_internal_err!(
+            actual_len,
+            $expected_len,
+            "{}::{} returned Vec with incorrect size: {} != {}",
+            $target.name(),
+            stringify!($func_name),
+            actual_len,
+            $expected_len
+        );
     };
 }
 
@@ -1118,9 +1129,12 @@ pub fn with_new_children_if_necessary(
     children: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let old_children = plan.children();
-    if children.len() != old_children.len() {
-        internal_err!("Wrong number of children")
-    } else if children.is_empty()
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "Wrong number of children"
+    );
+    if children.is_empty()
         || children
             .iter()
             .zip(old_children.iter())

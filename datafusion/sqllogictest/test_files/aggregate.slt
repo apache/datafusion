@@ -129,6 +129,16 @@ CREATE TABLE group_median_table_nullable (
 # Error tests
 #######
 
+statement error DataFusion error: Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
+SELECT SUM(c2) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+
+# WITHIN GROUP rejected for non-ordered-set UDAF
+# MIN does not implement ordered-set semantics (`supports_within_group_clause()`),
+# so the planner should reject the WITHIN GROUP syntax.
+statement error DataFusion error: Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
+SELECT MIN(c) WITHIN GROUP (ORDER BY c) FROM (VALUES (1),(2)) as t(c);
+
+
 # https://github.com/apache/datafusion/issues/3353
 statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
@@ -144,7 +154,7 @@ statement error Failed to coerce arguments to satisfy a call to 'approx_percenti
 SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
+statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
 statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
@@ -156,10 +166,10 @@ SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c3) FROM aggre
 statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Float64, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
-statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
+statement error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
 SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
-statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
+statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
 SELECT approx_percentile_cont(0.95, c5) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for approx_percentile_cont
@@ -491,6 +501,12 @@ SELECT bit_xor(distinct c5 % 2) FROM aggregate_test_100
 ----
 -2
 
+# edge case for null accumulator state fields
+query ???I
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL), approx_distinct(NULL) from aggregate_test_100
+----
+NULL NULL NULL 0
+
 # csv_query_covariance_1
 query R
 SELECT covar_pop(c2, c12) FROM aggregate_test_100
@@ -590,6 +606,70 @@ select corr(f, b)
 from data
 ----
 1
+
+# group correlation_query_with_nans_f32
+query IR
+select id, corr(f, b)
+from values
+    (1, 1, 'nan'::float),
+    (2, 'nan'::float, 1),
+    (3, 'nan'::float, null),
+    (4, null, 'nan'::float),
+    (5, 'nan'::float, 'nan'::float),
+    (5, 1, 1),
+    (5, 2, 2),
+    (6, 'nan'::float, 'nan'::float) t(id, f, b)
+group by id
+order by id
+----
+1 NULL
+2 NULL
+3 NULL
+4 NULL
+5 NaN
+6 NaN
+
+# correlation_query_with_nans_f32
+query RR
+with data as (
+    select 'nan'::float as f, 'nan'::float as b
+)
+select corr(f, b), corr('nan'::float, 'nan'::float)
+from data
+----
+NaN NaN
+
+# group correlation_query_with_nans_f64
+query IR
+select id, corr(f, b)
+from values
+    (1, 1, 'nan'::double),
+    (2, 'nan'::double, 1),
+    (3, 'nan'::double, null),
+    (4, null, 'nan'::float),
+    (5, 'nan'::double, 'nan'::double),
+    (5, 1, 1),
+    (5, 2, 2),
+    (6, 'nan'::double, 'nan'::double) t(id, f, b)
+group by id
+order by id
+----
+1 NULL
+2 NULL
+3 NULL
+4 NULL
+5 NaN
+6 NaN
+
+# correlation_query_with_nans_f64
+query RR
+with data as (
+    select 'nan'::double as f, 'nan'::double as b
+)
+select corr(f, b), corr('nan'::double, 'nan'::double)
+from data
+----
+NaN NaN
 
 # csv_query_variance_1
 query R
@@ -837,6 +917,13 @@ SELECT approx_median(distinct col_i8) FROM median_table
 
 statement error DataFusion error: This feature is not implemented: APPROX_MEDIAN\(DISTINCT\) aggregations are not available
 SELECT approx_median(col_i8), approx_median(distinct col_i8) FROM median_table
+
+# null handling clauses not supported
+query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS are not permitted for median
+SELECT median(c2) IGNORE NULLS FROM aggregate_test_100
+
+query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS are not permitted for median
+SELECT median(c2) RESPECT NULLS FROM aggregate_test_100
 
 # median_i16
 query I
@@ -1180,10 +1267,9 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
-10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -3355,6 +3441,342 @@ b 5
 c 4
 d 4
 e 4
+
+#####################
+## percentile_cont tests (exact percentile calculation)
+#####################
+
+# Test error conditions for percentile_cont
+statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
+SELECT percentile_cont(1.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
+SELECT percentile_cont(-0.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be a literal
+SELECT percentile_cont(c2) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) IGNORE NULLS FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) RESPECT NULLS FROM aggregate_test_100
+
+statement error DataFusion error: This feature is not implemented: Only a single ordering expression is permitted in a WITHIN GROUP clause
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3, c2) FROM aggregate_test_100
+
+# Not supported over sliding windows
+query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause cannot be used together
+SELECT percentile_cont(0.5)
+WITHIN GROUP (ORDER BY c3)
+OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM aggregate_test_100
+
+# Test basic percentile_cont with WITHIN GROUP syntax
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+3
+
+query R
+SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+1
+
+query R
+SELECT percentile_cont(1.0) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+5
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+2
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+4
+
+# Test that percentile_cont(0.5) equals median
+query I
+SELECT median(c2) FROM aggregate_test_100
+----
+3
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+3
+
+# Test with descending order
+query R
+SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
+----
+-101.25
+
+query R
+SELECT percentile_cont(0.05) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
+----
+118.099998
+
+# Test with GROUP BY
+query TR
+SELECT c1, percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a -25
+b 17
+c 1
+d 46.5
+e 64
+
+query TR
+SELECT c1, percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a 65
+b 68
+c 118
+d 123.299998
+e 112
+
+# Test with NULLs
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v)
+----
+2
+
+# Test with all NULLs
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v)
+----
+NULL
+
+# Test with empty set
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1)) as t (v) WHERE v > 10
+----
+NULL
+
+# Test with single value
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (42)) as t (v)
+----
+42
+
+# Test with float values for interpolation
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0), (3.0), (4.0)) as t (v)
+----
+2.5
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0), (3.0), (4.0)) as t (v)
+----
+1.75
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0), (3.0), (4.0)) as t (v)
+----
+3.25
+
+# Test with various numeric types
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c7) FROM aggregate_test_100
+----
+134.5
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c8) FROM aggregate_test_100
+----
+30634
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c11) FROM aggregate_test_100
+----
+0.4906719
+
+# Test edge case with two values (tests interpolation)
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.0)) as t (v)
+----
+15
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.0)) as t (v)
+----
+12.5
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.0)) as t (v)
+----
+17.5
+
+# Test integer inputs requiring interpolation (should return float)
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+2.5
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+1.75
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+3.25
+
+# Test with exact percentile values (no interpolation needed)
+query R
+SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+1
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+2
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+3
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+4
+
+query R
+SELECT percentile_cont(1.0) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+5
+
+# Test with negative numbers
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
+----
+0
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
+----
+-5
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
+----
+5
+
+# Test comparison: percentile_cont should give exact results
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+----
+15.5
+
+# Compare with approx_percentile_cont (should be close but may not be exact)
+query B
+SELECT ABS(percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) - approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c3)) < 5 FROM aggregate_test_100
+----
+true
+
+# Test percentile_cont without WITHIN GROUP clause (alternate syntax)
+query R
+SELECT percentile_cont(c2, 0.5) FROM aggregate_test_100
+----
+3
+
+query R
+SELECT percentile_cont(c2, 0.0) FROM aggregate_test_100
+----
+1
+
+query R
+SELECT percentile_cont(c2, 1.0) FROM aggregate_test_100
+----
+5
+
+query R
+SELECT percentile_cont(c2, 0.25) FROM aggregate_test_100
+----
+2
+
+query R
+SELECT percentile_cont(c2, 0.75) FROM aggregate_test_100
+----
+4
+
+# Verify alternate syntax gives same results as WITHIN GROUP syntax
+query B
+SELECT percentile_cont(c2, 0.5) = percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+true
+
+query B
+SELECT percentile_cont(c3, 0.5) = percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+----
+true
+
+# Test alternate syntax with GROUP BY
+query TR
+SELECT c1, percentile_cont(c3, 0.5) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a -25
+b 17
+c 1
+d 46.5
+e 64
+
+# Verify alternate syntax with GROUP BY gives same results as WITHIN GROUP
+query TB
+SELECT c1, percentile_cont(c3, 0.95) = percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a true
+b true
+c true
+d true
+e true
+
+# Test ascending vs descending equivalence: percentile_cont(0.4) ASC should equal percentile_cont(0.6) DESC
+# This tests the mathematical property that the pth percentile ascending = (1-p)th percentile descending
+# Using a simple controlled dataset to demonstrate the property
+
+# Show 0.4 ascending
+query R
+SELECT percentile_cont(0.4) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+2.6
+
+# Show 0.6 descending (should be same as 0.4 ascending)
+query R
+SELECT percentile_cont(0.6) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+2.6
+
+# Show 0.3 ascending
+query R
+SELECT percentile_cont(0.3) WITHIN GROUP (ORDER BY v) FROM (VALUES (10), (20), (30), (40), (50)) as t (v)
+----
+21.99999
+
+# Show 0.7 descending (should be same as 0.3 ascending)
+query R
+SELECT percentile_cont(0.7) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (10), (20), (30), (40), (50)) as t (v)
+----
+22
+
+# Show 0.25 ascending on larger dataset
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) as t (v)
+----
+2.75
+
+# Show 0.75 descending (should be same as 0.25 ascending)
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) as t (v)
+----
+2.75
 
 # array_agg_zero
 query ?
@@ -5687,10 +6109,9 @@ physical_plan
 07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
 08)--------------CoalescePartitionsExec
 09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
-10)------------------CoalesceBatchesExec: target_batch_size=8192
-11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+10)------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c3 order by c3 limit 4;
@@ -6798,10 +7219,15 @@ statement ok
 drop table employee_csv;
 
 # test null literal handling in supported aggregate functions
-query I??III?T
+query I??????T
 select count(null), min(null), max(null), bit_and(NULL), bit_or(NULL), bit_xor(NULL), nth_value(NULL, 1), string_agg(NULL, ',');
 ----
 0 NULL NULL NULL NULL NULL NULL NULL
+
+query TTT
+SELECT arrow_typeof(bit_and(NULL)), arrow_typeof(bit_or(NULL)), arrow_typeof(bit_xor(NULL))
+----
+Null Null Null
 
 statement ok
 create table having_test(v1 int, v2 int)
@@ -6830,14 +7256,12 @@ logical_plan
 03)----Aggregate: groupBy=[[having_test.v1, having_test.v2]], aggr=[[max(having_test.v1)]]
 04)------TableScan: having_test projection=[v1, v2]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
-03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
+02)--AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query error
@@ -7515,17 +7939,15 @@ VALUES
 ----
 x 1
 
-query ?
+query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-----
-[a, a, c, d]
 
-query ?
+
+query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(DISTINCT a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-----
-[a, c, d]
+
 
 query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
 SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)

@@ -25,8 +25,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
-    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    DFSchema, HashMap, JoinType, Result,
+    assert_eq_or_internal_err, get_required_group_by_exprs_indices,
+    internal_datafusion_err, internal_err, Column, DFSchema, DataFusionError, HashMap,
+    JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
@@ -341,11 +342,14 @@ fn optimize_projections(
                 return Ok(Transformed::no(plan));
             };
             let children = extension.node.inputs();
-            if children.len() != necessary_children_indices.len() {
-                return internal_err!("Inconsistent length between children and necessary children indices. \
-                Make sure `.necessary_children_exprs` implementation of the `UserDefinedLogicalNode` is \
-                consistent with actual children length for the node.");
-            }
+            assert_eq_or_internal_err!(
+                children.len(),
+                necessary_children_indices.len(),
+                "Inconsistent length between children and necessary children indices. \
+                Make sure `.necessary_children_exprs` implementation of the \
+                `UserDefinedLogicalNode` is consistent with actual children length \
+                for the node."
+            );
             children
                 .into_iter()
                 .zip(necessary_children_indices)
@@ -432,11 +436,11 @@ fn optimize_projections(
     // Required indices are currently ordered (child0, child1, ...)
     // but the loop pops off the last element, so we need to reverse the order
     child_required_indices.reverse();
-    if child_required_indices.len() != plan.inputs().len() {
-        return internal_err!(
-            "OptimizeProjection: child_required_indices length mismatch with plan inputs"
-        );
-    }
+    assert_eq_or_internal_err!(
+        child_required_indices.len(),
+        plan.inputs().len(),
+        "OptimizeProjection: child_required_indices length mismatch with plan inputs"
+    );
 
     // Rewrite children of the plan
     let transformed_plan = plan.map_children(|child| {

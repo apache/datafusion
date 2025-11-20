@@ -23,6 +23,9 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+// https://github.com/apache/datafusion/issues/18503
+#![deny(clippy::needless_pass_by_value)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 mod column;
 mod dfschema;
@@ -39,6 +42,7 @@ pub mod alias;
 pub mod cast;
 pub mod config;
 pub mod cse;
+pub mod datatype;
 pub mod diagnostic;
 pub mod display;
 pub mod encryption;
@@ -47,6 +51,7 @@ pub mod file_options;
 pub mod format;
 pub mod hash_utils;
 pub mod instant;
+pub mod metadata;
 pub mod nested_struct;
 mod null_equality;
 pub mod parsers;
@@ -108,6 +113,12 @@ pub use error::{
 // The HashMap and HashSet implementations that should be used as the uniform defaults
 pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
 pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
+pub mod hash_map {
+    pub use hashbrown::hash_map::Entry;
+}
+pub mod hash_set {
+    pub use hashbrown::hash_set::Entry;
+}
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.

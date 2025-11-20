@@ -36,16 +36,20 @@ use crate::execution_plan::{
     boundedness_from_children, check_default_invariants, emission_type_from_children,
     InvariantLevel,
 };
+use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::metrics::BaselineMetrics;
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_datafusion_err, internal_err, Result};
+use datafusion_common::{
+    assert_or_internal_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
+use datafusion_physical_expr::{calculate_union, EquivalenceProperties, PhysicalExpr};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -65,14 +69,14 @@ use tokio::macros::support::thread_rng_n;
 /// partitions, and then next `M` output partitions are from Input 2.
 ///
 /// ```text
-///                       ▲       ▲           ▲         ▲
-///                       │       │           │         │
-///     Output            │  ...  │           │         │
-///   Partitions          │0      │N-1        │ N       │N+M-1
-///(passes through   ┌────┴───────┴───────────┴─────────┴───┐
-/// the N+M input    │              UnionExec               │
-///  partitions)     │                                      │
-///                  └──────────────────────────────────────┘
+///                        ▲       ▲           ▲         ▲
+///                        │       │           │         │
+///      Output            │  ...  │           │         │
+///    Partitions          │0      │N-1        │ N       │N+M-1
+/// (passes through   ┌────┴───────┴───────────┴─────────┴───┐
+///  the N+M input    │              UnionExec               │
+///   partitions)     │                                      │
+///                   └──────────────────────────────────────┘
 ///                                      ▲
 ///                                      │
 ///                                      │
@@ -218,10 +222,6 @@ impl ExecutionPlan for UnionExec {
         })
     }
 
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        self.inputs.iter().collect()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         // If the Union has an output ordering, it maintains at least one
         // child's ordering (i.e. the meet).
@@ -245,6 +245,14 @@ impl ExecutionPlan for UnionExec {
         } else {
             vec![false; self.inputs().len()]
         }
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false; self.children().len()]
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inputs.iter().collect()
     }
 
     fn with_new_children(
@@ -324,10 +332,6 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
-    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![false; self.children().len()]
-    }
-
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
@@ -351,6 +355,15 @@ impl ExecutionPlan for UnionExec {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Some(UnionExec::try_new(new_children.clone())?))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        FilterDescription::from_children(parent_filters, &self.children())
     }
 }
 
@@ -399,11 +412,10 @@ pub struct InterleaveExec {
 impl InterleaveExec {
     /// Create a new InterleaveExec
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
-        if !can_interleave(inputs.iter()) {
-            return internal_err!(
-                "Not all InterleaveExec children have a consistent hash partitioning"
-            );
-        }
+        assert_or_internal_err!(
+            can_interleave(inputs.iter()),
+            "Not all InterleaveExec children have a consistent hash partitioning"
+        );
         let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
             inputs,
@@ -474,11 +486,10 @@ impl ExecutionPlan for InterleaveExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // New children are no longer interleavable, which might be a bug of optimization rewrite.
-        if !can_interleave(children.iter()) {
-            return internal_err!(
-                "Can not create InterleaveExec: new children can not be interleaved"
-            );
-        }
+        assert_or_internal_err!(
+            can_interleave(children.iter()),
+            "Can not create InterleaveExec: new children can not be interleaved"
+        );
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 

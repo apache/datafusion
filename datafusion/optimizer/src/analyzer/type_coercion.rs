@@ -2117,7 +2117,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8("1998-03-18") AS Date32) AS Timestamp(Nanosecond, None))
+        Projection: CAST(Utf8("1998-03-18") AS Timestamp(ns)) = CAST(CAST(Utf8("1998-03-18") AS Date32) AS Timestamp(ns))
           EmptyRelation: rows=0
         "#
         )
@@ -2258,7 +2258,7 @@ mod test {
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
-            @"Error during planning: Failed to coerce then (Date32, Float32, Binary) and else (Timestamp(Nanosecond, None)) to common types in CASE WHEN expression"
+            @"Error during planning: Failed to coerce then (Date32, Float32, Binary) and else (Timestamp(ns)) to common types in CASE WHEN expression"
         );
 
         Ok(())
@@ -2465,7 +2465,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: a = CAST(CAST(a AS Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false)) AS Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))
+        Projection: a = CAST(CAST(a AS Map("key_value": Struct("key": Utf8, "value": nullable Float64), unsorted)) AS Map("entries": Struct("key": Utf8, "value": nullable Float64), unsorted))
           EmptyRelation: rows=0
         "#
         )
@@ -2488,7 +2488,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: IntervalYearMonth("12") + CAST(Utf8("2000-01-01T00:00:00") AS Timestamp(Nanosecond, None))
+        Projection: IntervalYearMonth("12") + CAST(Utf8("2000-01-01T00:00:00") AS Timestamp(ns))
           EmptyRelation: rows=0
         "#
         )
@@ -2513,7 +2513,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None)) - CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None))
+        Projection: CAST(Utf8("1998-03-18") AS Timestamp(ns)) - CAST(Utf8("1998-03-18") AS Timestamp(ns))
           EmptyRelation: rows=0
         "#
         )
