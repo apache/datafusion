@@ -63,13 +63,17 @@ The [test_util](https://github.com/apache/datafusion/tree/main/datafusion/common
 
 ## sqllogictests Tests
 
-DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest). You can run these tests 
+DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest). You can run these tests with a command like this:
 
 ```shell
 cargo test --profile=ci --test sqllogictests
 ```
 
-`sqllogictests` may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via `cargo test --test sqllogictests -- --complete`.
+```shell
+cargo test ---profile=ci -test sqllogictests -- --complete
+```
+
+`sqllogictests` may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated.
 
 Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
