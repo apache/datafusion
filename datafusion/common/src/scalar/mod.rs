@@ -92,6 +92,103 @@ use chrono::{Duration, NaiveDate};
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
+const SECONDS_PER_DAY: i64 = 86_400;
+const MILLIS_PER_DAY: i64 = SECONDS_PER_DAY * 1_000;
+const MICROS_PER_DAY: i64 = MILLIS_PER_DAY * 1_000;
+const NANOS_PER_DAY: i64 = MICROS_PER_DAY * 1_000;
+const MICROS_PER_MILLISECOND: i64 = 1_000;
+const NANOS_PER_MILLISECOND: i64 = 1_000_000;
+
+/// Returns the multiplier that converts the input date representation into the
+/// desired timestamp unit, if the conversion requires a multiplication that can
+/// overflow an `i64`.
+pub fn date_to_timestamp_multiplier(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Option<i64> {
+    let DataType::Timestamp(target_unit, _) = target_type else {
+        return None;
+    };
+
+    // Only `Timestamp` target types have a time unit; otherwise no
+    // multiplier applies (handled above). The function returns `Some(m)`
+    // when converting the `source_type` to `target_type` requires a
+    // multiplication that could overflow `i64`. It returns `None` when
+    // the conversion is a division or otherwise doesn't require a
+    // multiplication (e.g. Date64 -> Second).
+    match source_type {
+        // Date32 stores days since epoch. Converting to any timestamp
+        // unit requires multiplying by the per-day factor (seconds,
+        // milliseconds, microseconds, nanoseconds).
+        DataType::Date32 => Some(match target_unit {
+            TimeUnit::Second => SECONDS_PER_DAY,
+            TimeUnit::Millisecond => MILLIS_PER_DAY,
+            TimeUnit::Microsecond => MICROS_PER_DAY,
+            TimeUnit::Nanosecond => NANOS_PER_DAY,
+        }),
+
+        // Date64 stores milliseconds since epoch. Converting to
+        // seconds is a division (no multiplication), so return `None`.
+        // Converting to milliseconds is 1:1 (multiplier 1). Converting
+        // to micro/nano requires multiplying by 1_000 / 1_000_000.
+        DataType::Date64 => match target_unit {
+            TimeUnit::Second => None,
+            // Converting Date64 (ms since epoch) to millisecond timestamps
+            // is an identity conversion and does not require multiplication.
+            // Returning `None` indicates no multiplication-based overflow
+            // check is necessary.
+            TimeUnit::Millisecond => None,
+            TimeUnit::Microsecond => Some(MICROS_PER_MILLISECOND),
+            TimeUnit::Nanosecond => Some(NANOS_PER_MILLISECOND),
+        },
+
+        _ => None,
+    }
+}
+
+/// Ensures the provided value can be represented as a timestamp with the given
+/// multiplier. Returns an [`DataFusionError::Execution`] when the converted
+/// value would overflow the timestamp range.
+pub fn ensure_timestamp_in_bounds(
+    value: i64,
+    multiplier: i64,
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Result<()> {
+    if multiplier <= 1 {
+        return Ok(());
+    }
+
+    if value.checked_mul(multiplier).is_none() {
+        let target = format_timestamp_type_for_error(target_type);
+        _exec_err!(
+            "Cannot cast {} value {} to {}: converted value exceeds the representable i64 range",
+            source_type,
+            value,
+            target
+        )
+    } else {
+        Ok(())
+    }
+}
+
+/// Format a `DataType::Timestamp` into a short, stable string used in
+/// user-facing error messages.
+pub(crate) fn format_timestamp_type_for_error(target_type: &DataType) -> String {
+    match target_type {
+        DataType::Timestamp(unit, _) => {
+            let s = match unit {
+                TimeUnit::Second => "s",
+                TimeUnit::Millisecond => "ms",
+                TimeUnit::Microsecond => "us",
+                TimeUnit::Nanosecond => "ns",
+            };
+            format!("Timestamp({s})")
+        }
+        other => format!("{other}"),
+    }
+}
+
 /// A dynamically typed, nullable single value.
 ///
 /// While an arrow  [`Array`]) stores one or more values of the same type, in a
@@ -3619,9 +3716,25 @@ impl ScalarValue {
         target_type: &DataType,
         cast_options: &CastOptions<'static>,
     ) -> Result<Self> {
+        let source_type = self.data_type();
+        if let Some(multiplier) = date_to_timestamp_multiplier(&source_type, target_type)
+        {
+            if let Some(value) = self.date_scalar_value_as_i64() {
+                ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
+            }
+        }
+
         let scalar_array = self.to_array()?;
         let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
+    }
+
+    fn date_scalar_value_as_i64(&self) -> Option<i64> {
+        match self {
+            ScalarValue::Date32(Some(value)) => Some(i64::from(*value)),
+            ScalarValue::Date64(Some(value)) => Some(*value),
+            _ => None,
+        }
     }
 
     fn eq_array_decimal32(
@@ -4991,7 +5104,7 @@ mod tests {
     use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{
-        ArrowNumericType, Fields, Float64Type, DECIMAL256_MAX_PRECISION,
+        ArrowNumericType, Fields, Float64Type, TimeUnit, DECIMAL256_MAX_PRECISION,
     };
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
@@ -5022,6 +5135,52 @@ mod tests {
         let map_arr = sv.to_array().unwrap();
         let actual = as_map_array(&map_arr).unwrap();
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_format_timestamp_type_for_error_and_bounds() {
+        // format helper
+        let ts_ns = format_timestamp_type_for_error(&DataType::Timestamp(
+            TimeUnit::Nanosecond,
+            None,
+        ));
+        assert_eq!(ts_ns, "Timestamp(ns)");
+
+        let ts_us = format_timestamp_type_for_error(&DataType::Timestamp(
+            TimeUnit::Microsecond,
+            None,
+        ));
+        assert_eq!(ts_us, "Timestamp(us)");
+
+        // ensure_timestamp_in_bounds: Date32 non-overflow
+        let ok = ensure_timestamp_in_bounds(
+            1000,
+            NANOS_PER_DAY,
+            &DataType::Date32,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        assert!(ok.is_ok());
+
+        // Date32 overflow -- known large day value (9999-12-31 -> 2932896)
+        let err = ensure_timestamp_in_bounds(
+            2932896,
+            NANOS_PER_DAY,
+            &DataType::Date32,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("Cannot cast Date32 value 2932896 to Timestamp(ns): converted value exceeds the representable i64 range"));
+
+        // Date64 overflow for ns (millis * 1_000_000)
+        let overflow_millis: i64 = (i64::MAX / NANOS_PER_MILLISECOND) + 1;
+        let err2 = ensure_timestamp_in_bounds(
+            overflow_millis,
+            NANOS_PER_MILLISECOND,
+            &DataType::Date64,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        assert!(err2.is_err());
     }
 
     #[test]
@@ -8603,6 +8762,19 @@ mod tests {
             UnionMode::Dense,
         );
         assert!(dense_scalar.is_null());
+    }
+
+    #[test]
+    fn cast_date_to_timestamp_overflow_returns_error() {
+        let scalar = ScalarValue::Date32(Some(i32::MAX));
+        let err = scalar
+            .cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None))
+            .expect_err("expected cast to fail");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{Transformed, TreeNode};
