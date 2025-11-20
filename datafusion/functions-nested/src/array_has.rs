@@ -231,12 +231,12 @@ fn array_has_inner_for_scalar(
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
     let haystack = haystack.as_ref().try_into()?;
-    array_has_dispatch_for_scalar(haystack, needle)
+    array_has_dispatch_for_scalar(&haystack, needle)
 }
 
 fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<ArrayRef> {
     let haystack = haystack.as_ref().try_into()?;
-    array_has_dispatch_for_array(haystack, needle)
+    array_has_dispatch_for_array(&haystack, needle)
 }
 
 enum ArrayWrapper<'a> {
@@ -317,8 +317,8 @@ impl<'a> ArrayWrapper<'a> {
     }
 }
 
-fn array_has_dispatch_for_array(
-    haystack: ArrayWrapper<'_>,
+fn array_has_dispatch_for_array<'a>(
+    haystack: &ArrayWrapper<'a>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -338,7 +338,7 @@ fn array_has_dispatch_for_array(
 }
 
 fn array_has_dispatch_for_scalar(
-    haystack: ArrayWrapper<'_>,
+    haystack: &ArrayWrapper<'_>,
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
     let values = haystack.values();
@@ -402,8 +402,8 @@ fn general_array_has_for_all_and_any<'a>(
             let arr_values = converter.convert_columns(&[arr])?;
             let sub_arr_values = converter.convert_columns(&[sub_arr])?;
             boolean_builder.append_value(general_array_has_all_and_any_kernel(
-                arr_values,
-                sub_arr_values,
+                &arr_values,
+                &sub_arr_values,
                 comparison_type,
             ));
         } else {
@@ -427,8 +427,8 @@ fn array_has_all_and_any_string_internal<'a>(
                 let haystack_array = string_array_to_vec(&arr);
                 let needle_array = string_array_to_vec(&sub_arr);
                 boolean_builder.append_value(array_has_string_kernel(
-                    haystack_array,
-                    needle_array,
+                    &haystack_array,
+                    &needle_array,
                     comparison_type,
                 ));
             }
@@ -633,8 +633,8 @@ enum ComparisonType {
 }
 
 fn array_has_string_kernel(
-    haystack: Vec<Option<&str>>,
-    needle: Vec<Option<&str>>,
+    haystack: &[Option<&str>],
+    needle: &[Option<&str>],
     comparison_type: ComparisonType,
 ) -> bool {
     match comparison_type {
@@ -650,8 +650,8 @@ fn array_has_string_kernel(
 }
 
 fn general_array_has_all_and_any_kernel(
-    haystack_rows: Rows,
-    needle_rows: Rows,
+    haystack_rows: &Rows,
+    needle_rows: &Rows,
     comparison_type: ComparisonType,
 ) -> bool {
     match comparison_type {

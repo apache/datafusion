@@ -346,7 +346,7 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
     field: Arc<Field>,
-    set_op: SetOp,
+    set_op: &SetOp,
 ) -> Result<ArrayRef> {
     if l.is_empty() || l.value_type().is_null() {
         let field = Arc::new(Field::new_list_field(r.value_type(), true));
@@ -380,7 +380,7 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 
         let l_iter = l_values.iter().sorted().dedup();
         let values_set: HashSet<_> = l_iter.clone().collect();
-        let mut rows = if set_op == SetOp::Union {
+        let mut rows = if *set_op == SetOp::Union {
             l_iter.collect()
         } else {
             vec![]
@@ -428,7 +428,7 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 fn general_set_op(
     array1: &ArrayRef,
     array2: &ArrayRef,
-    set_op: SetOp,
+    set_op: &SetOp,
 ) -> Result<ArrayRef> {
     fn empty_array(data_type: &DataType, len: usize, large: bool) -> Result<ArrayRef> {
         let field = Arc::new(Field::new_list_field(data_type.clone(), true));
@@ -456,28 +456,28 @@ fn general_set_op(
             array1.len(),
         ))),
         (Null, List(field)) => {
-            if set_op == SetOp::Intersect {
+            if *set_op == SetOp::Intersect {
                 return empty_array(field.data_type(), array1.len(), false);
             }
             let array = as_list_array(&array2)?;
             general_array_distinct::<i32>(array, field)
         }
         (List(field), Null) => {
-            if set_op == SetOp::Intersect {
+            if *set_op == SetOp::Intersect {
                 return empty_array(field.data_type(), array1.len(), false);
             }
             let array = as_list_array(&array1)?;
             general_array_distinct::<i32>(array, field)
         }
         (Null, LargeList(field)) => {
-            if set_op == SetOp::Intersect {
+            if *set_op == SetOp::Intersect {
                 return empty_array(field.data_type(), array1.len(), true);
             }
             let array = as_large_list_array(&array2)?;
             general_array_distinct::<i64>(array, field)
         }
         (LargeList(field), Null) => {
-            if set_op == SetOp::Intersect {
+            if *set_op == SetOp::Intersect {
                 return empty_array(field.data_type(), array1.len(), true);
             }
             let array = as_large_list_array(&array1)?;
@@ -504,13 +504,13 @@ fn general_set_op(
 /// Array_union SQL function
 fn array_union_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_union", args)?;
-    general_set_op(array1, array2, SetOp::Union)
+    general_set_op(array1, array2, &SetOp::Union)
 }
 
 /// array_intersect SQL function
 fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_intersect", args)?;
-    general_set_op(array1, array2, SetOp::Intersect)
+    general_set_op(array1, array2, &SetOp::Intersect)
 }
 
 fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
