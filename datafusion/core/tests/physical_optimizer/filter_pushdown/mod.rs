@@ -3173,16 +3173,14 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         .unwrap();
 
     // Verify that hash_lookup is used instead of IN (SET)
-    let plan_str = format!("{}", format_plan_for_test(&plan));
+    let plan_str = format_plan_for_test(&plan).to_string();
     assert!(
         plan_str.contains("hash_lookup"),
-        "Expected hash_lookup in plan but got: {}",
-        plan_str
+        "Expected hash_lookup in plan but got: {plan_str}"
     );
     assert!(
         !plan_str.contains("IN (SET)"),
-        "Expected no IN (SET) in plan but got: {}",
-        plan_str
+        "Expected no IN (SET) in plan but got: {plan_str}"
     );
 
     let result = format!("{}", pretty_format_batches(&batches).unwrap());
@@ -3325,16 +3323,14 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
         .unwrap();
 
     // Verify that hash_lookup is used instead of IN (SET)
-    let plan_str = format!("{}", format_plan_for_test(&plan));
+    let plan_str = format_plan_for_test(&plan).to_string();
     assert!(
         plan_str.contains("hash_lookup"),
-        "Expected hash_lookup in plan but got: {}",
-        plan_str
+        "Expected hash_lookup in plan but got: {plan_str}"
     );
     assert!(
         !plan_str.contains("IN (SET)"),
-        "Expected no IN (SET) in plan but got: {}",
-        plan_str
+        "Expected no IN (SET) in plan but got: {plan_str}"
     );
 
     let result = format!("{}", pretty_format_batches(&batches).unwrap());
@@ -3448,16 +3444,14 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
         .unwrap();
 
     // Verify hash_lookup is used
-    let plan_str = format!("{}", format_plan_for_test(&plan));
+    let plan_str = format_plan_for_test(&plan).to_string();
     assert!(
         plan_str.contains("hash_lookup"),
-        "Expected hash_lookup in plan but got: {}",
-        plan_str
+        "Expected hash_lookup in plan but got: {plan_str}"
     );
     assert!(
         !plan_str.contains("IN (SET)"),
-        "Expected no IN (SET) in plan but got: {}",
-        plan_str
+        "Expected no IN (SET) in plan but got: {plan_str}"
     );
 
     let result = format!("{}", pretty_format_batches(&batches).unwrap());
