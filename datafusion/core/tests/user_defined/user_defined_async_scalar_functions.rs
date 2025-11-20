@@ -46,7 +46,7 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
             Arc::new(Int32Array::from((0..num_rows).collect::<Vec<i32>>())),
             Arc::new(StringArray::from(
                 (0..num_rows)
-                    .map(|i| format!("prompt{}", i))
+                    .map(|i| format!("prompt{i}"))
                     .collect::<Vec<_>>(),
             )),
         ],
