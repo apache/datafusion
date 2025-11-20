@@ -90,7 +90,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
-    create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
+    create_physical_sort_exprs, Distribution, LexOrdering, PhysicalSortExpr,
 };
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -810,12 +810,19 @@ impl DefaultPhysicalPlanner {
                 // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
-                let next_partition_mode = if can_repartition {
-                    // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+                // Check if input is already hash-partitioned on a subset of the group-by
+                // columns.
+                let input_already_partitioned = !groups.is_empty()
+                    && initial_aggr.input().output_partitioning().partition_count() > 1
+                    && initial_aggr.input().output_partitioning().satisfy(
+                        &Distribution::HashPartitioned(groups.input_exprs()),
+                        initial_aggr.input().equivalence_properties(),
+                    );
+
+                let next_partition_mode = if can_repartition || input_already_partitioned
+                {
                     AggregateMode::FinalPartitioned
                 } else {
-                    // construct a second aggregation, keeping the final column name equal to the
-                    // first aggregation and the expressions corresponding to the respective aggregate
                     AggregateMode::Final
                 };
 

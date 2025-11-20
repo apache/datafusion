@@ -1914,7 +1914,7 @@ pub struct RepartitionExecNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {
-    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3")]
+    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3, 4")]
     pub partition_method: ::core::option::Option<partitioning::PartitionMethod>,
 }
 /// Nested message and enum types in `Partitioning`.
@@ -1927,6 +1927,8 @@ pub mod partitioning {
         Hash(super::PhysicalHashRepartition),
         #[prost(uint64, tag = "3")]
         Unknown(u64),
+        #[prost(message, tag = "4")]
+        SingleValuePartitioned(super::PhysicalHashRepartition),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

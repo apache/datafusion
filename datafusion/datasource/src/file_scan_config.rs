@@ -570,6 +570,35 @@ impl DataSource for FileScanConfig {
     }
 
     fn output_partitioning(&self) -> Partitioning {
+        if self.is_properly_partitioned() {
+            // Use the projected schema to find the column index, not the virtual
+            // partition column position.
+            let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = self
+                .table_partition_cols()
+                .iter()
+                .filter_map(|field| {
+                    self.projected_schema()
+                        .fields()
+                        .iter()
+                        .position(|f| f.name() == field.name())
+                        .map(|idx| {
+                            Arc::new(Column::new(field.name(), idx))
+                                as Arc<dyn PhysicalExpr>
+                        })
+                })
+                .collect();
+
+            if partition_exprs.len() == self.table_partition_cols().len() {
+                // Use SingleValuePartitioned for Hive-style partitioning where each file group
+                // corresponds to exactly one distinct value of the partition columns.
+                return Partitioning::SingleValuePartitioned(
+                    partition_exprs,
+                    self.file_groups.len(),
+                );
+            }
+        }
+
+        // Fall back to UnknownPartitioning
         Partitioning::UnknownPartitioning(self.file_groups.len())
     }
 
@@ -734,6 +763,25 @@ impl FileScanConfig {
                 + self.table_partition_cols().len())
                 .collect(),
         }
+    }
+
+    fn is_properly_partitioned(&self) -> bool {
+        if self.file_groups.is_empty() || self.table_partition_cols().is_empty() {
+            return false;
+        }
+
+        self.file_groups.iter().all(|file_group| {
+            let files = file_group.files();
+            if files.is_empty() {
+                return true;
+            }
+
+            let reference_values = &files[0].partition_values;
+
+            files
+                .iter()
+                .all(|file| file.partition_values == *reference_values)
+        })
     }
 
     pub fn projected_stats(&self) -> Statistics {
@@ -2672,5 +2720,171 @@ mod tests {
         // Verify row count and byte size are preserved
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(1024));
+    }
+
+    #[test]
+    fn test_is_properly_partitioned() {
+        // All file groups have consistent partition values
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+
+        let partition_cols = [Field::new(
+            "f_dkey",
+            wrap_partition_type_in_dict(DataType::Utf8),
+            false,
+        )];
+
+        // Case 1: Multiple file groups, each with consistent values
+        let file_groups = vec![
+            FileGroup::new(vec![
+                {
+                    let mut file =
+                        PartitionedFile::new("data/f_dkey=A/file1.parquet", 1024);
+                    file.partition_values =
+                        vec![wrap_partition_value_in_dict(ScalarValue::from("A"))];
+                    file
+                },
+                {
+                    let mut file =
+                        PartitionedFile::new("data/f_dkey=A/file2.parquet", 2048);
+                    file.partition_values =
+                        vec![wrap_partition_value_in_dict(ScalarValue::from("A"))];
+                    file
+                },
+            ]),
+            FileGroup::new(vec![{
+                let mut file = PartitionedFile::new("data/f_dkey=B/file1.parquet", 512);
+                file.partition_values =
+                    vec![wrap_partition_value_in_dict(ScalarValue::from("B"))];
+                file
+            }]),
+            FileGroup::new(vec![{
+                let mut file = PartitionedFile::new("data/f_dkey=C/file1.parquet", 1024);
+                file.partition_values =
+                    vec![wrap_partition_value_in_dict(ScalarValue::from("C"))];
+                file
+            }]),
+        ];
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(TableSchema::new(
+                Arc::clone(&file_schema),
+                partition_cols.iter().map(|f| Arc::new(f.clone())).collect(),
+            ))),
+        )
+        .with_file_groups(file_groups)
+        .build();
+
+        assert!(
+            config.is_properly_partitioned(),
+            "Expected true when all file groups have consistent partition values"
+        );
+
+        // Case 2: Mixed partition values within a group (should return false)
+        let mixed_file_groups = vec![FileGroup::new(vec![
+            {
+                let mut file = PartitionedFile::new("data/f_dkey=A/file1.parquet", 1024);
+                file.partition_values =
+                    vec![wrap_partition_value_in_dict(ScalarValue::from("A"))];
+                file
+            },
+            {
+                let mut file = PartitionedFile::new("data/f_dkey=B/file2.parquet", 2048);
+                file.partition_values =
+                    vec![wrap_partition_value_in_dict(ScalarValue::from("B"))];
+                file
+            },
+        ])];
+
+        let config_mixed = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(TableSchema::new(
+                Arc::clone(&file_schema),
+                partition_cols.iter().map(|f| Arc::new(f.clone())).collect(),
+            ))),
+        )
+        .with_file_groups(mixed_file_groups)
+        .build();
+
+        assert!(
+            !config_mixed.is_properly_partitioned(),
+            "Expected false when file group has mixed partition values"
+        );
+
+        // Case 3: Empty file groups
+        let config_empty = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(TableSchema::new(
+                Arc::clone(&file_schema),
+                partition_cols.iter().map(|f| Arc::new(f.clone())).collect(),
+            ))),
+        )
+        .with_file_groups(vec![])
+        .build();
+
+        assert!(
+            !config_empty.is_properly_partitioned(),
+            "Expected false for empty file groups"
+        );
+    }
+
+    #[test]
+    fn test_output_partitioning_column_indices() {
+        // Test that output_partitioning returns correct column indices in projected schema
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, false),
+            Field::new("timestamp", DataType::Int64, false),
+        ]));
+
+        let partition_cols = [Field::new(
+            "f_dkey",
+            wrap_partition_type_in_dict(DataType::Utf8),
+            false,
+        )];
+
+        let file_groups = vec![FileGroup::new(vec![{
+            let mut file = PartitionedFile::new("data/f_dkey=A/file1.parquet", 1024);
+            file.partition_values =
+                vec![wrap_partition_value_in_dict(ScalarValue::from("A"))];
+            file
+        }])];
+
+        // Full schema is [value@0, timestamp@1, f_dkey@2]
+        // Project indices [0, 2] -> [value@0, f_dkey@1] in projected schema
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(TableSchema::new(
+                Arc::clone(&file_schema),
+                partition_cols.iter().map(|f| Arc::new(f.clone())).collect(),
+            ))),
+        )
+        .with_projection_indices(Some(vec![0, 2]))
+        .with_file_groups(file_groups)
+        .build();
+
+        let partitioning = config.output_partitioning();
+
+        match partitioning {
+            Partitioning::SingleValuePartitioned(exprs, count) => {
+                assert_eq!(count, 1, "Expected 1 partition (single file group)");
+                assert_eq!(exprs.len(), 1, "Expected 1 partition expression");
+
+                let col = exprs[0]
+                    .as_any()
+                    .downcast_ref::<Column>()
+                    .expect("Expected Column expression");
+                assert_eq!(col.name(), "f_dkey", "Column name should be f_dkey");
+                assert_eq!(
+                    col.index(),
+                    1,
+                    "Column index should be 1 in projected schema [value@0, f_dkey@1]"
+                );
+            }
+            _ => panic!("Expected SingleValuePartitioned, got: {partitioning:?}"),
+        }
     }
 }

@@ -117,6 +117,8 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
+    /// Partitioning where each partition contains exactly one distinct value of the partitioning
+    SingleValuePartitioned(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -133,6 +135,14 @@ impl Display for Partitioning {
                     .join(", ");
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
+            Partitioning::SingleValuePartitioned(phy_exprs, size) => {
+                let phy_exprs_str = phy_exprs
+                    .iter()
+                    .map(|e| format!("{e}"))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "SingleValuePartitioned([{phy_exprs_str}], {size})")
+            }
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
@@ -144,7 +154,10 @@ impl Partitioning {
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
-            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
+            RoundRobinBatch(n)
+            | Hash(_, n)
+            | SingleValuePartitioned(_, n)
+            | UnknownPartitioning(n) => *n,
         }
     }
 
@@ -181,6 +194,9 @@ impl Partitioning {
                                     .iter()
                                     .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
                                     .collect::<Vec<_>>();
+
+                                // Only exact match for Hash partitioning
+                                // Subset matching is NOT safe for general hash partitioning
                                 return physical_exprs_equal(
                                     &normalized_required_exprs,
                                     &normalized_partition_exprs,
@@ -188,6 +204,40 @@ impl Partitioning {
                             }
                         }
                         fast_match
+                    }
+                    // SingleValuePartitioned supports subset matching because each partition
+                    // contains exactly one distinct value of the partition columns
+                    Partitioning::SingleValuePartitioned(partition_exprs, _) => {
+                        let fast_match =
+                            physical_exprs_equal(required_exprs, partition_exprs);
+                        if fast_match {
+                            return true;
+                        }
+
+                        let eq_groups = eq_properties.eq_group();
+                        if !eq_groups.is_empty() {
+                            let normalized_required_exprs = required_exprs
+                                .iter()
+                                .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
+                                .collect::<Vec<_>>();
+                            let normalized_partition_exprs = partition_exprs
+                                .iter()
+                                .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
+                                .collect::<Vec<_>>();
+
+                            normalized_partition_exprs.iter().all(|part_expr| {
+                                normalized_required_exprs
+                                    .iter()
+                                    .any(|req_expr| req_expr.eq(part_expr))
+                            })
+                        } else {
+                            // No equivalence groups, check subset matching with original expressions
+                            partition_exprs.iter().all(|part_expr| {
+                                required_exprs
+                                    .iter()
+                                    .any(|req_expr| req_expr.eq(part_expr))
+                            })
+                        }
                     }
                     _ => false,
                 }
@@ -202,19 +252,32 @@ impl Partitioning {
         mapping: &ProjectionMapping,
         input_eq_properties: &EquivalenceProperties,
     ) -> Self {
-        if let Partitioning::Hash(exprs, part) = self {
-            let normalized_exprs = input_eq_properties
-                .project_expressions(exprs, mapping)
-                .zip(exprs)
-                .map(|(proj_expr, expr)| {
-                    proj_expr.unwrap_or_else(|| {
-                        Arc::new(UnKnownColumn::new(&expr.to_string()))
+        match self {
+            Partitioning::Hash(exprs, part)
+            | Partitioning::SingleValuePartitioned(exprs, part) => {
+                let normalized_exprs: Vec<Arc<dyn PhysicalExpr>> = input_eq_properties
+                    .project_expressions(exprs, mapping)
+                    .zip(exprs.iter())
+                    .map(|(proj_expr, expr)| {
+                        if let Some(projected) = proj_expr {
+                            projected
+                        } else {
+                            Arc::new(UnKnownColumn::new(&expr.to_string()))
+                        }
                     })
-                })
-                .collect();
-            Partitioning::Hash(normalized_exprs, *part)
-        } else {
-            self.clone()
+                    .collect();
+                // Preserve the partitioning type through projection
+                match self {
+                    Partitioning::Hash(_, _) => {
+                        Partitioning::Hash(normalized_exprs, *part)
+                    }
+                    Partitioning::SingleValuePartitioned(_, _) => {
+                        Partitioning::SingleValuePartitioned(normalized_exprs, *part)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => self.clone(),
         }
     }
 }
@@ -231,6 +294,10 @@ impl PartialEq for Partitioning {
             {
                 true
             }
+            (
+                Partitioning::SingleValuePartitioned(exprs1, count1),
+                Partitioning::SingleValuePartitioned(exprs2, count2),
+            ) if physical_exprs_equal(exprs1, exprs2) && (count1 == count2) => true,
             _ => false,
         }
     }
@@ -336,6 +403,106 @@ mod tests {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn partitioning_satisfy_hash_vs_single_value() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Float64, false),
+        ]));
+
+        let col_a = Arc::new(Column::new_with_schema("a", &schema).unwrap())
+            as Arc<dyn PhysicalExpr>;
+        let col_b = Arc::new(Column::new_with_schema("b", &schema).unwrap())
+            as Arc<dyn PhysicalExpr>;
+        let col_c = Arc::new(Column::new_with_schema("c", &schema).unwrap())
+            as Arc<dyn PhysicalExpr>;
+
+        let eq_properties = EquivalenceProperties::new(schema);
+
+        // Case 1: Hash([a]) should NOT satisfy Hash([a, b])
+        let hash_a = Partitioning::Hash(vec![Arc::clone(&col_a)], 4);
+        let required_ab =
+            Distribution::HashPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)]);
+        assert!(
+            !hash_a.satisfy(&required_ab, &eq_properties),
+            "Hash([a]) should NOT satisfy Hash([a,b]) - subset matching not safe for hash partitioning"
+        );
+
+        // Case 2: Hash([a]) SHOULD satisfy Hash([a])
+        let required_a = Distribution::HashPartitioned(vec![Arc::clone(&col_a)]);
+        assert!(
+            hash_a.satisfy(&required_a, &eq_properties),
+            "Hash([a]) should satisfy Hash([a]) - exact match"
+        );
+
+        // Case 3: Hash([a, b]) should satisfy Hash([a, b])
+        let hash_ab = Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4);
+        assert!(
+            hash_ab.satisfy(&required_ab, &eq_properties),
+            "Hash([a,b]) should satisfy Hash([a,b]) - exact match"
+        );
+
+        // Case 4: Hash([a, b]) should NOT satisfy Hash([a])
+        assert!(
+            !hash_ab.satisfy(&required_a, &eq_properties),
+            "Hash([a,b]) should NOT satisfy Hash([a]) - subset matching not allowed for Hash"
+        );
+
+        // Case 5: SingleValuePartitioned([a]) should satisfy Hash([a, b])
+        let single_a = Partitioning::SingleValuePartitioned(vec![Arc::clone(&col_a)], 4);
+        assert!(
+            single_a.satisfy(&required_ab, &eq_properties),
+            "SingleValuePartitioned([a]) should satisfy Hash([a,b]) - subset matching is safe"
+        );
+
+        // Case 6: SingleValuePartitioned([a]) should satisfy Hash([a, b, c])
+        let required_abc = Distribution::HashPartitioned(vec![
+            Arc::clone(&col_a),
+            Arc::clone(&col_b),
+            Arc::clone(&col_c),
+        ]);
+        assert!(
+            single_a.satisfy(&required_abc, &eq_properties),
+            "SingleValuePartitioned([a]) should satisfy Hash([a,b,c])"
+        );
+
+        // Case 7: SingleValuePartitioned([a, b]) should satisfy Hash([a, b])
+        let single_ab = Partitioning::SingleValuePartitioned(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            4,
+        );
+        assert!(
+            single_ab.satisfy(&required_ab, &eq_properties),
+            "SingleValuePartitioned([a,b]) should satisfy Hash([a,b]) - exact match"
+        );
+
+        // Case 8: SingleValuePartitioned([a, b]) should NOT satisfy Hash([a])
+        assert!(
+            !single_ab.satisfy(&required_a, &eq_properties),
+            "SingleValuePartitioned([a,b]) should NOT satisfy Hash([a]) - partition has extra columns"
+        );
+
+        // Case 9: SingleValuePartitioned([a, c]) should satisfy Hash([a, b, c])
+        let single_ac = Partitioning::SingleValuePartitioned(
+            vec![Arc::clone(&col_a), Arc::clone(&col_c)],
+            4,
+        );
+        assert!(
+            single_ac.satisfy(&required_abc, &eq_properties),
+            "SingleValuePartitioned([a,c]) should satisfy Hash([a,b,c]) - subset match"
+        );
+
+        // Case 10: SingleValuePartitioned([a, c]) should NOT satisfy Hash([b])
+        let required_b = Distribution::HashPartitioned(vec![Arc::clone(&col_b)]);
+        assert!(
+            !single_ac.satisfy(&required_b, &eq_properties),
+            "SingleValuePartitioned([a,c]) should NOT satisfy Hash([b]) - no common columns"
+        );
 
         Ok(())
     }

@@ -464,6 +464,20 @@ pub fn parse_protobuf_partitioning(
                     codec,
                 )
             }
+            Some(protobuf::partitioning::PartitionMethod::SingleValuePartitioned(
+                hash_repartition,
+            )) => {
+                let expr = parse_physical_exprs(
+                    &hash_repartition.hash_expr,
+                    ctx,
+                    input_schema,
+                    codec,
+                )?;
+                Ok(Some(Partitioning::SingleValuePartitioned(
+                    expr,
+                    hash_repartition.partition_count.try_into().unwrap(),
+                )))
+            }
             Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
                 Ok(Some(Partitioning::UnknownPartitioning(
                     *partition_count as usize,

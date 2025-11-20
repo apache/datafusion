@@ -1,0 +1,167 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Partition Aggregation Optimization Tests
+##########
+
+statement ok
+SET datafusion.execution.target_partitions = 3;
+
+query I
+COPY (
+    SELECT TIMESTAMP '2024-01-15T10:00:00' AS ts, 100 AS value, 'metric_a' AS name
+    UNION ALL
+    SELECT TIMESTAMP '2024-01-15T10:05:00' AS ts, 150 AS value, 'metric_b' AS name
+    UNION ALL
+    SELECT TIMESTAMP '2024-01-15T10:10:00' AS ts, 200 AS value, 'metric_a' AS name
+    UNION ALL
+    SELECT TIMESTAMP '2024-01-15T10:15:00' AS ts, 175 AS value, 'metric_c' AS name
+) TO 'test_files/scratch/hive_partition_aggregation/partition=A/data.parquet';
+----
+4
+
+query I
+COPY (
+    SELECT TIMESTAMP '2024-01-15T10:00:00' AS ts, 300 AS value, 'metric_a' AS name
+    UNION ALL
+    SELECT TIMESTAMP '2024-01-15T10:05:00' AS ts, 350 AS value, 'metric_b' AS name
+    UNION ALL
+    SELECT TIMESTAMP '2024-01-15T10:10:00' AS ts, 400 AS value, 'metric_a' AS name
+) TO 'test_files/scratch/hive_partition_aggregation/partition=B/data.parquet';
+----
+3
+
+query I
+COPY (
+    SELECT TIMESTAMP '2024-01-15T10:00:00' AS ts, 500 AS value, 'metric_c' AS name
+    UNION ALL
+    SELECT TIMESTAMP '2024-01-15T10:05:00' AS ts, 550 AS value, 'metric_a' AS name
+) TO 'test_files/scratch/hive_partition_aggregation/partition=C/data.parquet';
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE hive_metrics
+STORED AS PARQUET
+LOCATION 'test_files/scratch/hive_partition_aggregation/'
+PARTITIONED BY (partition);
+
+##########
+## Test 1: Simple aggregate by partition column
+##########
+
+query TII rowsort
+SELECT partition, SUM(value) AS total, COUNT(*) AS cnt
+FROM hive_metrics
+GROUP BY partition;
+----
+A 625 4
+B 1050 3
+C 1050 2
+
+query TT
+EXPLAIN SELECT partition, SUM(value) AS total, COUNT(*) AS cnt FROM hive_metrics GROUP BY partition;
+----
+logical_plan
+01)Projection: hive_metrics.partition, sum(hive_metrics.value) AS total, count(Int64(1)) AS count(*) AS cnt
+02)--Aggregate: groupBy=[[hive_metrics.partition]], aggr=[[sum(hive_metrics.value), count(Int64(1))]]
+03)----TableScan: hive_metrics projection=[value, partition]
+physical_plan
+01)ProjectionExec: expr=[partition@0 as partition, sum(hive_metrics.value)@1 as total, count(Int64(1))@2 as cnt]
+02)--AggregateExec: mode=SinglePartitioned, gby=[partition@1 as partition], aggr=[sum(hive_metrics.value), count(Int64(1))]
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=C/data.parquet]]}, projection=[value, partition], file_type=parquet
+
+##########
+## Test 2: Aggregate with MIN/MAX
+##########
+
+query TII rowsort
+SELECT partition, MIN(value) AS min_val, MAX(value) AS max_val
+FROM hive_metrics
+GROUP BY partition;
+----
+A 100 200
+B 300 400
+C 500 550
+
+query TT
+EXPLAIN SELECT partition, MIN(value), MAX(value) FROM hive_metrics GROUP BY partition;
+----
+logical_plan
+01)Aggregate: groupBy=[[hive_metrics.partition]], aggr=[[min(hive_metrics.value), max(hive_metrics.value)]]
+02)--TableScan: hive_metrics projection=[value, partition]
+physical_plan
+01)AggregateExec: mode=SinglePartitioned, gby=[partition@1 as partition], aggr=[min(hive_metrics.value), max(hive_metrics.value)]
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=C/data.parquet]]}, projection=[value, partition], file_type=parquet
+
+##########
+## Test 3: Aggregate with WHERE clause
+##########
+
+query TI rowsort
+SELECT partition, COUNT(*) AS cnt
+FROM hive_metrics
+WHERE value >= 300
+GROUP BY partition;
+----
+B 3
+C 2
+
+query TT
+EXPLAIN SELECT partition, COUNT(*) FROM hive_metrics WHERE value >= 300 GROUP BY partition;
+----
+logical_plan
+01)Projection: hive_metrics.partition, count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[hive_metrics.partition]], aggr=[[count(Int64(1))]]
+03)----Projection: hive_metrics.partition
+04)------Filter: hive_metrics.value >= Int64(300)
+05)--------TableScan: hive_metrics projection=[value, partition], partial_filters=[hive_metrics.value >= Int64(300)]
+physical_plan
+01)ProjectionExec: expr=[partition@0 as partition, count(Int64(1))@1 as count(*)]
+02)--AggregateExec: mode=SinglePartitioned, gby=[partition@0 as partition], aggr=[count(Int64(1))]
+03)----FilterExec: value@0 >= 300, projection=[partition@1]
+04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=C/data.parquet]]}, projection=[value, partition], file_type=parquet, predicate=value@0 >= 300, pruning_predicate=value_null_count@1 != row_count@2 AND value_max@0 >= 300, required_guarantees=[]
+
+##########
+## Test 4: With repartition_aggregations=false
+##########
+
+statement ok
+SET datafusion.optimizer.repartition_aggregations = false;
+
+query TII rowsort
+SELECT partition, SUM(value) AS total, COUNT(*) AS cnt
+FROM hive_metrics
+GROUP BY partition;
+----
+A 625 4
+B 1050 3
+C 1050 2
+
+query TT
+EXPLAIN SELECT partition, SUM(value), COUNT(*) FROM hive_metrics GROUP BY partition;
+----
+logical_plan
+01)Projection: hive_metrics.partition, sum(hive_metrics.value), count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[hive_metrics.partition]], aggr=[[sum(hive_metrics.value), count(Int64(1))]]
+03)----TableScan: hive_metrics projection=[value, partition]
+physical_plan
+01)ProjectionExec: expr=[partition@0 as partition, sum(hive_metrics.value)@1 as sum(hive_metrics.value), count(Int64(1))@2 as count(*)]
+02)--AggregateExec: mode=SinglePartitioned, gby=[partition@1 as partition], aggr=[sum(hive_metrics.value), count(Int64(1))]
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/hive_partition_aggregation/partition=C/data.parquet]]}, projection=[value, partition], file_type=parquet
+

@@ -1085,6 +1085,9 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
+            SingleValuePartitioned(exprs, _) => {
+                SingleValuePartitioned(exprs, target_partitions)
+            }
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
         };
         Ok(Some(Arc::new(Self {

@@ -1280,6 +1280,7 @@ message Partitioning {
     uint64 round_robin = 1;
     PhysicalHashRepartition hash = 2;
     uint64 unknown = 3;
+    PhysicalHashRepartition single_value_partitioned = 4;
   }
 }
 

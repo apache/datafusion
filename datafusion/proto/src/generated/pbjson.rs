@@ -14695,6 +14695,9 @@ impl serde::Serialize for Partitioning {
                     #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("unknown", ToString::to_string(&v).as_str())?;
                 }
+                partitioning::PartitionMethod::SingleValuePartitioned(v) => {
+                    struct_ser.serialize_field("singleValuePartitioned", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -14711,6 +14714,8 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
             "roundRobin",
             "hash",
             "unknown",
+            "single_value_partitioned",
+            "singleValuePartitioned",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -14718,6 +14723,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
             RoundRobin,
             Hash,
             Unknown,
+            SingleValuePartitioned,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14742,6 +14748,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
                             "roundRobin" | "round_robin" => Ok(GeneratedField::RoundRobin),
                             "hash" => Ok(GeneratedField::Hash),
                             "unknown" => Ok(GeneratedField::Unknown),
+                            "singleValuePartitioned" | "single_value_partitioned" => Ok(GeneratedField::SingleValuePartitioned),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14782,6 +14789,13 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
                                 return Err(serde::de::Error::duplicate_field("unknown"));
                             }
                             partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| partitioning::PartitionMethod::Unknown(x.0));
+                        }
+                        GeneratedField::SingleValuePartitioned => {
+                            if partition_method__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("singleValuePartitioned"));
+                            }
+                            partition_method__ = map_.next_value::<::std::option::Option<_>>()?.map(partitioning::PartitionMethod::SingleValuePartitioned)
+;
                         }
                     }
                 }
