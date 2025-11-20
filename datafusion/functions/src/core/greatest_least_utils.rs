@@ -38,11 +38,11 @@ pub(super) trait GreatestLeastOperator {
 }
 
 fn keep_array<Op: GreatestLeastOperator>(
-    lhs: &ArrayRef,
-    rhs: &ArrayRef,
+    lhs: &dyn Array,
+    rhs: &dyn Array,
 ) -> Result<ArrayRef> {
     // True for values that we should keep from the left array
-    let keep_lhs = Op::get_indexes_to_keep(lhs.as_ref(), rhs.as_ref())?;
+    let keep_lhs = Op::get_indexes_to_keep(lhs, rhs)?;
 
     let result = zip(&keep_lhs, &lhs, &rhs)?;
 

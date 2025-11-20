@@ -247,13 +247,13 @@ impl ScalarUDFImpl for GetFieldFunc {
 
         fn process_map_with_nested_key(
             array: &dyn Array,
-            key_array: &Arc<dyn Array>,
+            key_array: &dyn Array,
         ) -> Result<ColumnarValue> {
             let map_array = as_map_array(array)?;
 
             let comparator = make_comparator(
                 map_array.keys().as_ref(),
-                key_array.as_ref(),
+                key_array,
                 SortOptions::default(),
             )?;
 
