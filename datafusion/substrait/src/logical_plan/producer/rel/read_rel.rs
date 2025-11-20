@@ -205,7 +205,8 @@ pub fn from_values(
 
 #[cfg(test)]
 mod tests {
-    use super::{TableFunctionReadRelExtension, TABLE_FUNCTION_TYPE_URL};
+    use super::TableFunctionReadRelExtension;
+    use crate::logical_plan::constants::TABLE_FUNCTION_TYPE_URL;
     use crate::logical_plan::producer::to_substrait_plan;
     use datafusion::prelude::SessionContext;
     use prost::Message;
