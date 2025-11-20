@@ -205,20 +205,20 @@ where
 
         // 2. Append the offsets
 
-        // Must be before adding the bytes to the buffer
-        let mut last_offset = self.buffer.len();
-
         if all_nulls {
+            let last_offset = self.buffer.len();
+
             // If all nulls, we can just repeat the last offset
-            self.offsets.extend(std::iter::repeat_n(O::usize_as(last_offset), length));
+            self.offsets
+                .extend(std::iter::repeat_n(O::usize_as(last_offset), length));
         } else {
+            let new_base = self.buffer.len();
+            let old_base = offsets[start].as_usize();
+
             self.offsets.extend(
-                offsets[start..=start + length].windows(2)
-                    .map(|start_and_end_values| {
-                        let length = start_and_end_values[1] - start_and_end_values[0];
-                        last_offset += length.as_usize();
-                        O::usize_as(last_offset)
-                    })
+                offsets[start + 1..start + length + 1]
+                    .iter()
+                    .map(|&offset| O::usize_as(new_base + offset.as_usize() - old_base)),
             );
         }
 
@@ -232,7 +232,10 @@ where
             self.buffer.append_slice(&bytes[values_start..values_end]);
 
             if self.buffer.len() > self.max_buffer_size {
-                return exec_err!( "offset overflow, buffer size > {}", self.max_buffer_size);
+                return exec_err!(
+                    "offset overflow, buffer size > {}",
+                    self.max_buffer_size
+                );
             }
         }
 

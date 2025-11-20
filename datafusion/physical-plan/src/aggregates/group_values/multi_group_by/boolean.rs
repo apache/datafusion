@@ -162,7 +162,12 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         true
     }
 
-    fn append_array_slice(&mut self, array: &ArrayRef, start: usize, length: usize) -> Result<()> {
+    fn append_array_slice(
+        &mut self,
+        array: &ArrayRef,
+        start: usize,
+        length: usize,
+    ) -> Result<()> {
         let array = array.as_boolean();
 
         if NULLABLE {
@@ -181,7 +186,7 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         }
 
         self.buffer
-          .append_buffer(&array.values().slice(start, length));
+            .append_buffer(&array.values().slice(start, length));
 
         Ok(())
     }
