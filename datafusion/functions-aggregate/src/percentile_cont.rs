@@ -385,7 +385,7 @@ enum PercentileRewriteTarget {
     Max,
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn simplify_percentile_cont_aggregate(
     aggregate_function: AggregateFunction,
     info: &dyn SimplifyInfo,
@@ -398,7 +398,7 @@ fn simplify_percentile_cont_aggregate(
     }
 
     let percentile_value = match extract_percentile_literal(&params.args[1]) {
-        Some(value) => value,
+        Some(value) if value >= 0.0 && value <= 1.0 => value,
         None => return Ok(original_expr),
     };
 
@@ -509,6 +509,7 @@ fn literal_scalar_to_f64(value: &ScalarValue) -> Option<f64> {
     match value {
         ScalarValue::Float64(Some(v)) => Some(*v),
         ScalarValue::Float32(Some(v)) => Some(*v as f64),
+        ScalarValue::Float16(Some(v)) => Some(v.to_f64()),
         ScalarValue::Int64(Some(v)) => Some(*v as f64),
         ScalarValue::Int32(Some(v)) => Some(*v as f64),
         ScalarValue::Int16(Some(v)) => Some(*v as f64),
