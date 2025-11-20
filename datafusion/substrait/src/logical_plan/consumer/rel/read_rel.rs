@@ -21,8 +21,8 @@ use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::catalog::TableProvider;
 use datafusion::common::{
-    not_impl_err, plan_err, substrait_datafusion_err, substrait_err, DFSchema,
-    DFSchemaRef, TableReference,
+    not_impl_err, plan_datafusion_err, plan_err, substrait_datafusion_err, substrait_err,
+    DFSchema, DFSchemaRef, TableReference,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::utils::split_conjunction_owned;
@@ -268,7 +268,7 @@ fn parse_table_function_metadata(
         return Ok(None);
     };
 
-    let metadata = TableFunctionMetadata::decode(any.value.as_slice()).map_err(|e| {
+    let metadata = TableFunctionMetadata::decode(any.value.as_ref()).map_err(|e| {
         substrait_datafusion_err!("Failed to decode table function metadata: {e}")
     })?;
 
@@ -284,7 +284,7 @@ async fn resolve_table_function(
 ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
     let table_function = consumer
         .get_table_function(invocation.name.as_str())
-        .ok_or_else(|| plan_err!("No table function named '{}'", invocation.name))?;
+        .ok_or_else(|| plan_datafusion_err!("No table function named '{}'", invocation.name))?;
 
     let mut args = Vec::with_capacity(invocation.arguments.len());
     for argument in &invocation.arguments {
