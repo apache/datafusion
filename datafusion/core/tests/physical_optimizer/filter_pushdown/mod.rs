@@ -1309,6 +1309,10 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     "
     );
 
+    // When hash collisions force all data into a single partition, we optimize away the CASE expression.
+    // This avoids calling create_hashes() for every row on the probe side, since hash % 1 == 0 always,
+    // meaning the WHEN 0 branch would always match. This optimization is also important for primary key
+    // joins or any scenario where all build-side data naturally lands in one partition.
     #[cfg(feature = "force_hash_collisions")]
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),

@@ -56,40 +56,19 @@ fn flatten_dictionary_array(array: &ArrayRef) -> ArrayRef {
 ///    that is: this will produce `IN LIST ((1, "a"), (2, "b"))` expected to be used as `(2, "b") IN LIST ((1, "a"), (2, "b"))`.
 ///    The field names of the struct are auto-generated as "c0", "c1", ... and should match the struct expression used in the join keys.
 ///
-/// Note that this will not deduplicate values, that will happen later when building an InList expression from this array.
+/// Note that this function does not deduplicate values - deduplication will happen later
+/// when building an InList expression from this array via `InListExpr::try_new_from_array`.
 ///
-/// Returns `None` if the estimated size exceeds `max_size_bytes`.
-/// Performs deduplication to ensure unique values only.
+/// Returns `None` if the estimated size exceeds `max_size_bytes` or if the number of rows
+/// exceeds `max_distinct_values`.
 pub(super) fn build_struct_inlist_values(
     join_key_arrays: &[ArrayRef],
-    max_size_bytes: usize,
 ) -> Result<Option<ArrayRef>> {
-    if join_key_arrays.is_empty() {
-        return Ok(None);
-    }
-
-    let num_rows = join_key_arrays[0].len();
-    if num_rows == 0 {
-        return Ok(None);
-    }
-
     // Flatten any dictionary-encoded arrays
     let flattened_arrays: Vec<ArrayRef> = join_key_arrays
         .iter()
         .map(flatten_dictionary_array)
         .collect();
-
-    // Size check using built-in method
-    // This is not 1:1 with the actual size of ScalarValues, but it is a good approximation
-    // and at this point is basically "free" to compute since we have the arrays already.
-    let estimated_size = flattened_arrays
-        .iter()
-        .map(|arr| arr.get_array_memory_size())
-        .sum::<usize>();
-
-    if estimated_size > max_size_bytes {
-        return Ok(None);
-    }
 
     // Build the source array/struct
     let source_array: ArrayRef = if flattened_arrays.len() == 1 {
@@ -127,10 +106,9 @@ mod tests {
     #[test]
     fn test_build_single_column_inlist_array() {
         let array = Arc::new(Int32Array::from(vec![1, 2, 3, 2, 1])) as ArrayRef;
-        let result =
-            build_struct_inlist_values(std::slice::from_ref(&array), 1024 * 1024)
-                .unwrap()
-                .unwrap();
+        let result = build_struct_inlist_values(std::slice::from_ref(&array))
+            .unwrap()
+            .unwrap();
 
         assert!(array.eq(&result));
     }
@@ -141,7 +119,7 @@ mod tests {
         let array2 =
             Arc::new(StringArray::from(vec!["a", "b", "c", "b", "a"])) as ArrayRef;
 
-        let result = build_struct_inlist_values(&[array1, array2], 1024 * 1024)
+        let result = build_struct_inlist_values(&[array1, array2])
             .unwrap()
             .unwrap();
 
@@ -151,24 +129,5 @@ mod tests {
                 build_struct_fields(&[DataType::Int32, DataType::Utf8]).unwrap()
             )
         );
-    }
-
-    #[test]
-    fn test_size_limit_exceeded() {
-        let array = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef;
-
-        // Set a very small size limit
-        let result = build_struct_inlist_values(&[array], 10).unwrap();
-
-        // Should return None due to size limit
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_empty_array() {
-        let array = Arc::new(Int32Array::from(vec![] as Vec<i32>)) as ArrayRef;
-        let result = build_struct_inlist_values(&[array], 1024).unwrap();
-
-        assert!(result.is_none());
     }
 }
