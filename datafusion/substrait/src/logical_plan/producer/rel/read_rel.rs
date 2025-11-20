@@ -18,9 +18,10 @@
 use crate::logical_plan::producer::{
     to_substrait_literal, to_substrait_named_struct, SubstraitProducer,
 };
-use datafusion::common::{not_impl_err, substrait_datafusion_err, DFSchema, ToDFSchema};
+use datafusion::common::{substrait_datafusion_err, DFSchema, ToDFSchema};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
+use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 use substrait::proto::expression::literal::Struct;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
@@ -87,22 +88,39 @@ pub fn from_empty_relation(
     producer: &mut impl SubstraitProducer,
     e: &EmptyRelation,
 ) -> datafusion::common::Result<Box<Rel>> {
-    if e.produce_one_row {
-        return not_impl_err!("Producing a row from empty relation is unsupported");
-    }
+    let base_schema = to_substrait_named_struct(producer, &e.schema)?;
+
+    let read_type = if e.produce_one_row {
+        let fields = e
+            .schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let scalar = ScalarValue::try_from(f.data_type())?;
+                to_substrait_literal(producer, &scalar)
+            })
+            .collect::<datafusion::common::Result<_>>()?;
+
+        ReadType::VirtualTable(VirtualTable {
+            values: vec![Struct { fields }],
+            expressions: vec![],
+        })
+    } else {
+        ReadType::VirtualTable(VirtualTable {
+            values: vec![],
+            expressions: vec![],
+        })
+    };
     #[allow(deprecated)]
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
-            base_schema: Some(to_substrait_named_struct(producer, &e.schema)?),
+            base_schema: Some(base_schema),
             filter: None,
             best_effort_filter: None,
             projection: None,
             advanced_extension: None,
-            read_type: Some(ReadType::VirtualTable(VirtualTable {
-                values: vec![],
-                expressions: vec![],
-            })),
+            read_type: Some(read_type),
         }))),
     }))
 }

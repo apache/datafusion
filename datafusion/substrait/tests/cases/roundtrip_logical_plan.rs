@@ -186,6 +186,11 @@ async fn simple_select() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_literal_without_from() -> Result<()> {
+    roundtrip("SELECT 1 AS one").await
+}
+
+#[tokio::test]
 async fn wildcard_select() -> Result<()> {
     let plan = generate_plan_from_sql("SELECT * FROM data", true, false).await?;
 

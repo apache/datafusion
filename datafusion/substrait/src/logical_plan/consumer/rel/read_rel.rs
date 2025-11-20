@@ -121,6 +121,17 @@ pub async fn from_read_rel(
                 }));
             }
 
+            if vt.values.len() == 1
+                && vt.expressions.is_empty()
+                && substrait_schema.fields().is_empty()
+                && vt.values[0].fields.is_empty()
+            {
+                return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: true,
+                    schema: DFSchemaRef::new(substrait_schema),
+                }));
+            }
+
             let values = if !vt.expressions.is_empty() {
                 let mut exprs = vec![];
                 for row in &vt.expressions {
