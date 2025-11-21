@@ -53,7 +53,7 @@ For example, to run tests in the `datafusion` crate:
 cargo test -p datafusion
 ```
 
-The [test_util](https://github.com/apache/datafusion/tree/main/datafusion/common/src/test_util.rs) module provides useful macros to write unit tests effectively, such as [`assert_batches_sorted_eq`] and [`assert_batches_eq`] for RecordBatches and [`assert_contains`] / [`assert_not_contains`] which are used extensively in the codebase.
+The [test_util] module provides useful macros to write unit tests effectively, such as [`assert_batches_sorted_eq`] and [`assert_batches_eq`] for RecordBatches and [`assert_contains`] / [`assert_not_contains`] which are used extensively in the codebase.
 
 [test_util]: https://github.com/apache/datafusion/tree/main/datafusion/common/src/test_util.rs
 [`assert_batches_sorted_eq`]: https://docs.rs/datafusion/latest/datafusion/macro.assert_batches_sorted_eq.html
