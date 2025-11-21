@@ -490,26 +490,16 @@ impl FileOpener for ParquetOpener {
                     .map(|&idx| rg_metadata[idx].num_rows() as usize)
                     .collect();
 
-                if let Some(limit) = limit {
-                    Box::pin(ReversedParquetStreamWithLimit::new(
-                        schema_mapped,
-                        final_schema,
-                        limit,
-                        row_group_row_counts,
-                        file_metrics.row_groups_reversed.clone(),
-                        file_metrics.batches_reversed.clone(),
-                        file_metrics.reverse_time.clone(),
-                    ))
-                } else {
-                    Box::pin(ReversedParquetStream::new(
-                        schema_mapped,
-                        final_schema,
-                        row_group_row_counts,
-                        file_metrics.row_groups_reversed.clone(),
-                        file_metrics.batches_reversed.clone(),
-                        file_metrics.reverse_time.clone(),
-                    ))
-                }
+                // Use the unified ReversedParquetStream with optional limit
+                Box::pin(ReversedParquetStream::new(
+                    schema_mapped,
+                    final_schema,
+                    row_group_row_counts,
+                    file_metrics.row_groups_reversed.clone(),
+                    file_metrics.batches_reversed.clone(),
+                    file_metrics.reverse_time.clone(),
+                    limit, // Pass limit directly, can be None or Some(value)
+                ))
             } else {
                 let error_adapted = stream.map_err(DataFusionError::from);
                 let schema_mapped = error_adapted.map(move |result| {
@@ -843,6 +833,10 @@ struct ReversedParquetStream<S> {
     input: S,
     schema: SchemaRef,
 
+    // Optional limit on the number of rows to output
+    limit: Option<usize>,
+    rows_produced: usize,
+
     // Current row group being processed
     current_rg_batches: Vec<RecordBatch>,
     current_rg_rows_read: usize,
@@ -873,12 +867,15 @@ impl<S> ReversedParquetStream<S> {
         row_groups_reversed: Count,
         batches_reversed: Count,
         reverse_time: Time,
+        limit: Option<usize>,
     ) -> Self {
         let current_rg_total_rows = row_group_metadata.first().copied().unwrap_or(0);
 
         Self {
             input: stream,
             schema,
+            limit,
+            rows_produced: 0,
             current_rg_batches: Vec::new(),
             current_rg_rows_read: 0,
             current_rg_total_rows,
@@ -927,6 +924,12 @@ impl<S> ReversedParquetStream<S> {
             .copied()
             .unwrap_or(0);
     }
+
+    /// Check if we've reached the limit
+    #[inline]
+    fn is_limit_reached(&self) -> bool {
+        self.limit.is_some_and(|limit| self.rows_produced >= limit)
+    }
 }
 
 impl<S> Stream for ReversedParquetStream<S>
@@ -941,7 +944,7 @@ where
     ) -> Poll<Option<Self::Item>> {
         let this = unsafe { self.as_mut().get_unchecked_mut() };
 
-        if this.done {
+        if this.done || this.is_limit_reached() {
             return Poll::Ready(None);
         }
 
@@ -950,7 +953,25 @@ where
             if this.output_index < this.output_batches.len() {
                 let batch = this.output_batches[this.output_index].clone();
                 this.output_index += 1;
-                return Poll::Ready(Some(Ok(batch)));
+
+                // Apply limit if specified
+                if let Some(limit) = this.limit {
+                    let remaining = limit.saturating_sub(this.rows_produced);
+
+                    if batch.num_rows() <= remaining {
+                        this.rows_produced += batch.num_rows();
+                        return Poll::Ready(Some(Ok(batch)));
+                    } else {
+                        // Slice batch to fit within limit
+                        let sliced = batch.slice(0, remaining);
+                        this.rows_produced += remaining;
+                        this.done = true;
+                        return Poll::Ready(Some(Ok(sliced)));
+                    }
+                } else {
+                    // No limit, return full batch
+                    return Poll::Ready(Some(Ok(batch)));
+                }
             }
 
             // Need to read more data
@@ -984,166 +1005,6 @@ where
 }
 
 impl<S> RecordBatchStream for ReversedParquetStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    fn schema(&self) -> SchemaRef {
-        SchemaRef::clone(&self.schema)
-    }
-}
-
-/// Stream adapter for reversed parquet reading with limit support.
-/// Same strategy as ReversedParquetStream but applies limit during output.
-struct ReversedParquetStreamWithLimit<S> {
-    input: S,
-    schema: SchemaRef,
-    limit: usize,
-    rows_produced: usize,
-
-    // Current row group state
-    current_rg_batches: Vec<RecordBatch>,
-    current_rg_rows_read: usize,
-    current_rg_total_rows: usize,
-
-    // Output buffer
-    output_batches: Vec<RecordBatch>,
-    output_index: usize,
-
-    // Row group metadata
-    row_group_metadata: Vec<usize>,
-    current_rg_index: usize,
-
-    done: bool,
-
-    // Metrics
-    row_groups_reversed: Count,
-    batches_reversed: Count,
-    reverse_time: Time,
-}
-
-impl<S> ReversedParquetStreamWithLimit<S> {
-    fn new(
-        stream: S,
-        schema: SchemaRef,
-        limit: usize,
-        row_group_metadata: Vec<usize>,
-        row_groups_reversed: Count,
-        batches_reversed: Count,
-        reverse_time: Time,
-    ) -> Self {
-        let current_rg_total_rows = row_group_metadata.first().copied().unwrap_or(0);
-
-        Self {
-            input: stream,
-            schema,
-            limit,
-            rows_produced: 0,
-            current_rg_batches: Vec::new(),
-            current_rg_rows_read: 0,
-            current_rg_total_rows,
-            output_batches: Vec::new(),
-            output_index: 0,
-            row_group_metadata,
-            current_rg_index: 0,
-            done: false,
-            row_groups_reversed,
-            batches_reversed,
-            reverse_time,
-        }
-    }
-
-    fn finalize_current_row_group(&mut self) {
-        if self.current_rg_batches.is_empty() {
-            return;
-        }
-
-        let _timer = self.reverse_time.timer();
-        let batch_count = self.current_rg_batches.len();
-
-        let reversed_batches: Vec<_> = self
-            .current_rg_batches
-            .drain(..)
-            .map(|batch| reverse_batch(batch).unwrap())
-            .collect();
-
-        self.output_batches = reversed_batches.into_iter().rev().collect();
-        self.output_index = 0;
-
-        self.row_groups_reversed.add(1);
-        self.batches_reversed.add(batch_count);
-
-        self.current_rg_rows_read = 0;
-        self.current_rg_index += 1;
-        self.current_rg_total_rows = self
-            .row_group_metadata
-            .get(self.current_rg_index)
-            .copied()
-            .unwrap_or(0);
-    }
-}
-
-impl<S> Stream for ReversedParquetStreamWithLimit<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let this = unsafe { self.as_mut().get_unchecked_mut() };
-
-        if this.done || this.rows_produced >= this.limit {
-            return Poll::Ready(None);
-        }
-
-        loop {
-            // Output ready batches with limit enforcement
-            if this.output_index < this.output_batches.len() {
-                let batch = this.output_batches[this.output_index].clone();
-                this.output_index += 1;
-
-                let remaining = this.limit - this.rows_produced;
-
-                if batch.num_rows() <= remaining {
-                    this.rows_produced += batch.num_rows();
-                    return Poll::Ready(Some(Ok(batch)));
-                } else {
-                    // Slice batch to fit within limit
-                    let sliced = batch.slice(0, remaining);
-                    this.rows_produced += remaining;
-                    this.done = true;
-                    return Poll::Ready(Some(Ok(sliced)));
-                }
-            }
-
-            // Read more data
-            match ready!(Pin::new(&mut this.input).poll_next(cx)) {
-                Some(Ok(batch)) => {
-                    let batch_rows = batch.num_rows();
-                    this.current_rg_batches.push(batch);
-                    this.current_rg_rows_read += batch_rows;
-
-                    if this.current_rg_rows_read >= this.current_rg_total_rows {
-                        this.finalize_current_row_group();
-                    }
-                }
-                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-                None => {
-                    if !this.current_rg_batches.is_empty() {
-                        this.finalize_current_row_group();
-                    } else {
-                        this.done = true;
-                        return Poll::Ready(None);
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<S> RecordBatchStream for ReversedParquetStreamWithLimit<S>
 where
     S: Stream<Item = Result<RecordBatch>> + Unpin,
 {
