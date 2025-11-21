@@ -111,7 +111,7 @@ impl RowGroupAccessPlanFilter {
             let new_num_accessible_row_groups = fully_matched_row_group_indexes.len();
             let pruned_count = original_num_accessible_row_groups
                 .saturating_sub(new_num_accessible_row_groups);
-            metrics.limit_pruned_row_groups.add(pruned_count);
+            metrics.limit_pruned_row_groups.add_pruned(pruned_count);
 
             let mut new_access_plan = ParquetAccessPlan::new_none(rg_metadata.len());
             for &idx in &fully_matched_row_group_indexes {
@@ -194,7 +194,6 @@ impl RowGroupAccessPlanFilter {
                     } else {
                         metrics.row_groups_pruned_statistics.add_matched(1);
                         fully_contained_candidates_original_idx.push(*idx);
-                        metrics.row_groups_matched_statistics.add(1);
                     }
                 }
 
@@ -231,7 +230,9 @@ impl RowGroupAccessPlanFilter {
                                 // it implies that *all* rows in this group satisfy the original predicate.
                                 if !inverted_values[i] {
                                     self.is_fully_matched[original_row_group_idx] = true;
-                                    metrics.row_groups_fully_matched_statistics.add(1);
+                                    metrics
+                                        .row_groups_pruned_statistics
+                                        .add_fully_matched(1);
                                 }
                             }
                         }
