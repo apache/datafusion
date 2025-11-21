@@ -57,6 +57,18 @@ logical_plan
 02)--TableScan: parquet_reverse_multi_rg projection=[id, value, name]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_rowgroup.parquet]]}, projection=[id, value, name], limit=10, output_ordering=[id@0 DESC], file_type=parquet
 
+
+# The metrics will include the row group reversal details, but the exact numbers may vary slightly based on execution environment and optimizations. So we add them as comments for reference.
+# query TT
+# EXPLAIN analyze SELECT * FROM parquet_reverse_multi_rg ORDER BY id DESC LIMIT 10;
+# ----
+# Plan with Metrics DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_rowgroup.parquet]]}, projection=[id, value, name], limit=10, output_ordering=[id@0 DESC], file_type=parquet, metrics=[output_rows=10, elapsed_compute=1ns, output_bytes=2.5 KB, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=10 total → 10 matched, row_groups_pruned_bloom_filter=10 total → 10 matched, page_index_rows_pruned=0 total → 0 matched, batches_reversed=1, batches_split=0, bytes_scanned=1.02 K, file_open_errors=0, file_scan_errors=0, num_predicate_creation_errors=0, predicate_cache_inner_records=0, predicate_cache_records=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, row_groups_reversed=1, bloom_filter_eval_time=2ns, metadata_load_time=236.00µs, page_index_eval_time=2ns, reverse_time=25.83µs, row_pushdown_eval_time=2ns, statistics_eval_time=2ns, time_elapsed_opening=342.46µs, time_elapsed_processing=965.71µs, time_elapsed_scanning_total=673.04µs, time_elapsed_scanning_until_data=673.04µs, scan_efficiency_ratio=7.1% (1.02 K/14.34 K)]
+#
+# query TT
+# EXPLAIN analyze SELECT * FROM parquet_reverse_multi_rg ORDER BY id DESC;
+# ----
+# Plan with Metrics DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_rowgroup.parquet]]}, projection=[id, value, name], output_ordering=[id@0 DESC], file_type=parquet, metrics=[output_rows=1.00 K, elapsed_compute=1ns, output_bytes=24.7 KB, output_batches=10, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=10 total → 10 matched, row_groups_pruned_bloom_filter=10 total → 10 matched, page_index_rows_pruned=0 total → 0 matched, batches_reversed=10, batches_split=0, bytes_scanned=9.89 K, file_open_errors=0, file_scan_errors=0, num_predicate_creation_errors=0, predicate_cache_inner_records=0, predicate_cache_records=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, row_groups_reversed=10, bloom_filter_eval_time=2ns, metadata_load_time=211.88µs, page_index_eval_time=2ns, reverse_time=85.59µs, row_pushdown_eval_time=2ns, statistics_eval_time=2ns, time_elapsed_opening=239.50µs, time_elapsed_processing=2.12ms, time_elapsed_scanning_total=2.27ms, time_elapsed_scanning_until_data=257.46µs, scan_efficiency_ratio=69% (9.89 K/14.34 K)]
+
 # Test 2: Reverse scan returns correct top 10 rows
 query IIT
 SELECT * FROM parquet_reverse_multi_rg ORDER BY id DESC LIMIT 10;

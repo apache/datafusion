@@ -1175,3 +1175,140 @@ async fn explain_analyze_hash_join() {
         );
     }
 }
+
+#[tokio::test]
+async fn parquet_explain_analyze_reverse_scan_metrics() {
+    use parquet::arrow::arrow_writer::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+
+    let temp_dir = TempDir::new().unwrap();
+    let parquet_path = temp_dir.path().join("reverse_scan_test.parquet");
+
+    // Create test data with multiple row groups
+    // Each row group will have 5 rows, total 15 rows = 3 row groups
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("value", DataType::Int32, false),
+    ]));
+
+    let file = File::create(&parquet_path).unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_size(5)
+        .build();
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
+
+    // Write 3 row groups: [1-5], [6-10], [11-15]
+    for group_start in [1, 6, 11] {
+        let ids = Int32Array::from(vec![
+            group_start,
+            group_start + 1,
+            group_start + 2,
+            group_start + 3,
+            group_start + 4,
+        ]);
+        let values = Int32Array::from(vec![
+            group_start * 100,
+            (group_start + 1) * 100,
+            (group_start + 2) * 100,
+            (group_start + 3) * 100,
+            (group_start + 4) * 100,
+        ]);
+
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(values)])
+                .unwrap();
+        writer.write(&batch).unwrap();
+    }
+    writer.close().unwrap();
+
+    let ctx = SessionContext::new();
+
+    // Register table with ORDER BY clause to enable reverse scan optimization
+    let sql = format!(
+        "CREATE EXTERNAL TABLE reverse_scan_test (
+            id INT NOT NULL,
+            value INT NOT NULL
+        )
+        STORED AS PARQUET
+        WITH ORDER (id ASC NULLS LAST)
+        LOCATION '{}'",
+        parquet_path.to_str().unwrap()
+    );
+    ctx.sql(&sql).await.unwrap().collect().await.unwrap();
+
+    // Test 1: Reverse scan with LIMIT 10
+    // With 3 row groups of 5 rows each, LIMIT 10 requires reading 2 row groups
+    // Expected: row_groups_reversed=2, batches_reversed=2
+    // (last row group gives 5 rows, second-to-last gives 5 more rows = 10 total)
+    let sql = "EXPLAIN ANALYZE SELECT * FROM reverse_scan_test ORDER BY id DESC LIMIT 10";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // Verify the reverse scan optimization was applied
+    assert_contains!(&formatted, "output_ordering=[id@0 DESC]");
+
+    // Verify reverse scan metrics with LIMIT
+    // After the bugfix in ReversedParquetStreamWithLimit::finalize_current_row_group,
+    // these metrics should be correctly reported (previously they were 0)
+    assert_metrics!(&formatted, "DataSourceExec", "row_groups_reversed=2");
+    assert_metrics!(&formatted, "DataSourceExec", "batches_reversed=2");
+    assert_metrics!(&formatted, "DataSourceExec", "output_rows=10");
+
+    // Test 2: Full reverse scan (no LIMIT)
+    // Expected: row_groups_reversed=3, batches_reversed=3
+    // (all 3 row groups need to be reversed)
+    let sql = "EXPLAIN ANALYZE SELECT * FROM reverse_scan_test ORDER BY id DESC";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // Verify reverse scan metrics without LIMIT
+    assert_metrics!(&formatted, "DataSourceExec", "row_groups_reversed=3");
+    assert_metrics!(&formatted, "DataSourceExec", "batches_reversed=3");
+    assert_metrics!(&formatted, "DataSourceExec", "output_rows=15");
+
+    // Verify that reverse_time metric exists and is non-zero
+    assert_contains!(&formatted, "reverse_time=");
+
+    // Test 3: Verify data correctness with LIMIT
+    let sql = "SELECT * FROM reverse_scan_test ORDER BY id DESC LIMIT 10";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    // Collect all rows from all batches
+    let total_rows: usize = actual.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_rows, 10,
+        "Should return exactly 10 rows with LIMIT 10"
+    );
+
+    // Collect all id values
+    let mut all_ids = Vec::new();
+    for batch in &actual {
+        let id_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        for i in 0..id_col.len() {
+            all_ids.push(id_col.value(i));
+        }
+    }
+
+    // Should get ids from 15 down to 6 (10 rows total in descending order)
+    assert_eq!(all_ids.len(), 10);
+    assert_eq!(all_ids[0], 15, "First row should be id=15");
+    assert_eq!(all_ids[9], 6, "Last row should be id=6");
+
+    // Verify all values are in descending order
+    for i in 0..all_ids.len() - 1 {
+        assert!(
+            all_ids[i] > all_ids[i + 1],
+            "IDs should be in descending order: {} > {}",
+            all_ids[i],
+            all_ids[i + 1]
+        );
+    }
+}

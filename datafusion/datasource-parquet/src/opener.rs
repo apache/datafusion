@@ -41,7 +41,7 @@ use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
 };
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics,
+    Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics, Time,
 };
 use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 
@@ -496,12 +496,18 @@ impl FileOpener for ParquetOpener {
                         final_schema,
                         limit,
                         row_group_row_counts,
+                        file_metrics.row_groups_reversed.clone(),
+                        file_metrics.batches_reversed.clone(),
+                        file_metrics.reverse_time.clone(),
                     ))
                 } else {
                     Box::pin(ReversedParquetStream::new(
                         schema_mapped,
                         final_schema,
                         row_group_row_counts,
+                        file_metrics.row_groups_reversed.clone(),
+                        file_metrics.batches_reversed.clone(),
+                        file_metrics.reverse_time.clone(),
                     ))
                 }
             } else {
@@ -852,10 +858,22 @@ struct ReversedParquetStream<S> {
     current_rg_index: usize,
 
     done: bool,
+
+    // Metrics
+    row_groups_reversed: Count,
+    batches_reversed: Count,
+    reverse_time: Time,
 }
 
 impl<S> ReversedParquetStream<S> {
-    fn new(stream: S, schema: SchemaRef, row_group_metadata: Vec<usize>) -> Self {
+    fn new(
+        stream: S,
+        schema: SchemaRef,
+        row_group_metadata: Vec<usize>,
+        row_groups_reversed: Count,
+        batches_reversed: Count,
+        reverse_time: Time,
+    ) -> Self {
         let current_rg_total_rows = row_group_metadata.first().copied().unwrap_or(0);
 
         Self {
@@ -869,6 +887,9 @@ impl<S> ReversedParquetStream<S> {
             row_group_metadata,
             current_rg_index: 0,
             done: false,
+            row_groups_reversed,
+            batches_reversed,
+            reverse_time,
         }
     }
 
@@ -877,6 +898,10 @@ impl<S> ReversedParquetStream<S> {
         if self.current_rg_batches.is_empty() {
             return;
         }
+
+        // Start timing
+        let _timer = self.reverse_time.timer();
+        let batch_count = self.current_rg_batches.len();
 
         // Step 1: Reverse rows within each batch
         let reversed_batches: Vec<_> = self
@@ -888,6 +913,10 @@ impl<S> ReversedParquetStream<S> {
         // Step 2: Reverse the order of batches
         self.output_batches = reversed_batches.into_iter().rev().collect();
         self.output_index = 0;
+
+        // Update metrics
+        self.row_groups_reversed.add(1);
+        self.batches_reversed.add(batch_count);
 
         // Prepare for next row group
         self.current_rg_rows_read = 0;
@@ -985,6 +1014,11 @@ struct ReversedParquetStreamWithLimit<S> {
     current_rg_index: usize,
 
     done: bool,
+
+    // Metrics
+    row_groups_reversed: Count,
+    batches_reversed: Count,
+    reverse_time: Time,
 }
 
 impl<S> ReversedParquetStreamWithLimit<S> {
@@ -993,6 +1027,9 @@ impl<S> ReversedParquetStreamWithLimit<S> {
         schema: SchemaRef,
         limit: usize,
         row_group_metadata: Vec<usize>,
+        row_groups_reversed: Count,
+        batches_reversed: Count,
+        reverse_time: Time,
     ) -> Self {
         let current_rg_total_rows = row_group_metadata.first().copied().unwrap_or(0);
 
@@ -1009,6 +1046,9 @@ impl<S> ReversedParquetStreamWithLimit<S> {
             row_group_metadata,
             current_rg_index: 0,
             done: false,
+            row_groups_reversed,
+            batches_reversed,
+            reverse_time,
         }
     }
 
@@ -1016,6 +1056,9 @@ impl<S> ReversedParquetStreamWithLimit<S> {
         if self.current_rg_batches.is_empty() {
             return;
         }
+
+        let _timer = self.reverse_time.timer();
+        let batch_count = self.current_rg_batches.len();
 
         let reversed_batches: Vec<_> = self
             .current_rg_batches
@@ -1025,6 +1068,9 @@ impl<S> ReversedParquetStreamWithLimit<S> {
 
         self.output_batches = reversed_batches.into_iter().rev().collect();
         self.output_index = 0;
+
+        self.row_groups_reversed.add(1);
+        self.batches_reversed.add(batch_count);
 
         self.current_rg_rows_read = 0;
         self.current_rg_index += 1;
