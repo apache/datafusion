@@ -30,6 +30,39 @@ use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
 use substrait::proto::{ReadRel, Rel};
 
+/// Converts rows of literal expressions into Substrait literal structs.
+///
+/// Each row is expected to contain only `Expr::Literal` or `Expr::Alias` wrapping literals.
+/// Aliases are unwrapped and the underlying literal is converted.
+fn convert_literal_rows(
+    producer: &mut impl SubstraitProducer,
+    rows: &[Vec<Expr>],
+) -> datafusion::common::Result<Vec<LiteralStruct>> {
+    rows.iter()
+        .map(|row| {
+            let fields = row
+                .iter()
+                .map(|expr| match expr {
+                    Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
+                    Expr::Alias(alias) => match alias.expr.as_ref() {
+                        // The schema gives us the names, so we can skip aliases
+                        Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
+                        _ => Err(substrait_datafusion_err!(
+                            "Only literal types can be aliased in Virtual Tables, got: {}",
+                            alias.expr.variant_name()
+                        )),
+                    },
+                    _ => Err(substrait_datafusion_err!(
+                        "Only literal types and aliases are supported in Virtual Tables, got: {}",
+                        expr.variant_name()
+                    )),
+                })
+                .collect::<datafusion::common::Result<_>>()?;
+            Ok(LiteralStruct { fields })
+        })
+        .collect()
+}
+
 pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
@@ -124,30 +157,7 @@ pub fn from_values(
     });
 
     let (values, expressions) = if use_literals {
-        let values = v
-            .values
-            .iter()
-            .map(|row| {
-                let fields = row
-                    .iter()
-                    .map(|v| match v {
-                        Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
-                        Expr::Alias(alias) => match alias.expr.as_ref() {
-                            // The schema gives us the names, so we can skip aliases
-                            Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
-                            _ => Err(substrait_datafusion_err!(
-                                        "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
-                                    )),
-                        },
-                        _ => Err(substrait_datafusion_err!(
-                                    "Only literal types and aliases are supported in Virtual Tables, got: {}", v.variant_name()
-                                )),
-                    })
-                    .collect::<datafusion::common::Result<_>>()?;
-                Ok(LiteralStruct { fields })
-            })
-            .collect::<datafusion::common::Result<_>>()?;
-
+        let values = convert_literal_rows(producer, &v.values)?;
         (values, vec![])
     } else {
         let expressions = v
