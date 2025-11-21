@@ -320,6 +320,26 @@ async fn aggregate_grouping_rollup() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_grouping_cube() -> Result<()> {
+    let plan = generate_plan_from_sql(
+        "SELECT a, c, avg(b) FROM data GROUP BY CUBE (a, c)",
+        true,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+        Projection: data.a, data.c, avg(data.b)
+          Aggregate: groupBy=[[GROUPING SETS ((), (data.a), (data.c), (data.a, data.c))]], aggr=[[avg(data.b)]]
+            TableScan: data projection=[a, b, c]
+        "#
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn multilayer_aggregate() -> Result<()> {
     let plan = generate_plan_from_sql(
         "SELECT a, sum(partial_count_b) FROM (SELECT a, count(b) as partial_count_b FROM data GROUP BY a) GROUP BY a",
