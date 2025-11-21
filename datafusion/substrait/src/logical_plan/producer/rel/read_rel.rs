@@ -116,7 +116,7 @@ pub fn from_empty_relation(
 
         ReadType::VirtualTable(VirtualTable {
             // Use deprecated 'values' field instead of 'expressions' because the consumer's
-            // nested expression support (RexType::Nested) is not yet implemented.
+            // nested expression support (RelType::Nested) is not yet implemented.
             // The 'values' field uses literal::Struct which the consumer can properly
             // deserialize with field name preservation.
             #[allow(deprecated)]
