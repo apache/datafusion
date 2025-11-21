@@ -58,6 +58,10 @@ pub trait ExprSchemable {
     fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr>;
 
     /// Given a schema, return the type and nullability of the expr
+    #[deprecated(
+        since = "51.0.0",
+        note = "Use `to_field().1.is_nullable` and `to_field().1.data_type()` directly instead"
+    )]
     fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
         -> Result<(DataType, bool)>;
 }
@@ -150,7 +154,7 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::ScalarFunction(_func) => {
-                let (return_type, _) = self.data_type_and_nullable(schema)?;
+                let return_type = self.to_field(schema)?.1.data_type().clone();
                 Ok(return_type)
             }
             Expr::WindowFunction(window_function) => self
@@ -300,7 +304,9 @@ impl ExprSchemable for Expr {
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarFunction(_func) => {
-                let (_, nullable) = self.data_type_and_nullable(input_schema)?;
+                let field = self.to_field(input_schema)?.1;
+
+                let nullable = field.is_nullable();
                 Ok(nullable)
             }
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
@@ -480,9 +486,14 @@ impl ExprSchemable for Expr {
                 ref right,
                 ref op,
             }) => {
-                let (lhs_type, lhs_nullable) = left.data_type_and_nullable(schema)?;
-                let (rhs_type, rhs_nullable) = right.data_type_and_nullable(schema)?;
-                let mut coercer = BinaryTypeCoercer::new(&lhs_type, op, &rhs_type);
+                let (left_field, right_field) =
+                    (left.to_field(schema)?.1, right.to_field(schema)?.1);
+
+                let (lhs_type, lhs_nullable) =
+                    (left_field.data_type(), left_field.is_nullable());
+                let (rhs_type, rhs_nullable) =
+                    (right_field.data_type(), right_field.is_nullable());
+                let mut coercer = BinaryTypeCoercer::new(lhs_type, op, rhs_type);
                 coercer.set_lhs_spans(left.spans().cloned().unwrap_or_default());
                 coercer.set_rhs_spans(right.spans().cloned().unwrap_or_default());
                 Ok(Arc::new(Field::new(
@@ -936,16 +947,18 @@ mod tests {
             ),
         ));
 
+        let field = expr.to_field(&schema).unwrap().1;
         assert_eq!(
-            expr.data_type_and_nullable(&schema).unwrap(),
-            (DataType::Utf8, true)
+            (field.data_type(), field.is_nullable()),
+            (&DataType::Utf8, true)
         );
         assert_eq!(placeholder_meta, expr.metadata(&schema).unwrap());
 
         let expr_alias = expr.alias("a placeholder by any other name");
+        let expr_alias_field = expr_alias.to_field(&schema).unwrap().1;
         assert_eq!(
-            expr_alias.data_type_and_nullable(&schema).unwrap(),
-            (DataType::Utf8, true)
+            (expr_alias_field.data_type(), expr_alias_field.is_nullable()),
+            (&DataType::Utf8, true)
         );
         assert_eq!(placeholder_meta, expr_alias.metadata(&schema).unwrap());
 
@@ -954,14 +967,17 @@ mod tests {
             "".to_string(),
             Some(Field::new("", DataType::Utf8, false).into()),
         ));
+        let expr_field = expr.to_field(&schema).unwrap().1;
         assert_eq!(
-            expr.data_type_and_nullable(&schema).unwrap(),
-            (DataType::Utf8, false)
+            (expr_field.data_type(), expr_field.is_nullable()),
+            (&DataType::Utf8, false)
         );
+
         let expr_alias = expr.alias("a placeholder by any other name");
+        let expr_alias_field = expr_alias.to_field(&schema).unwrap().1;
         assert_eq!(
-            expr_alias.data_type_and_nullable(&schema).unwrap(),
-            (DataType::Utf8, false)
+            (expr_alias_field.data_type(), expr_alias_field.is_nullable()),
+            (&DataType::Utf8, false)
         );
     }
 
