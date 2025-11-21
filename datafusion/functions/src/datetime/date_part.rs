@@ -232,7 +232,10 @@ impl ScalarUDFImpl for DatePartFunc {
         })
     }
 
-    /// Cast the year to the right datatype
+    // Only casting the year is supported since pruning other IntervalUnit is not possible
+    // date_part(col, YEAR) = 2024 => col >= '2024-01-01' and col < '2025-01-01'
+    // But for anything less than YEAR simplifying is not possible without specifying the bigger interval
+    // date_part(col, MONTH) = 1 => col = '2023-01-01' or col = '2024-01-01' or ... or col = '3000-01-01'
     fn preimage_cast(
         &self,
         lit_value: &ScalarValue,
@@ -257,7 +260,7 @@ impl ScalarUDFImpl for DatePartFunc {
         };
 
         let naive_date =
-            NaiveDate::from_ymd_opt(updated_year, 1, 1).expect("Invalid year");
+            NaiveDate::from_ymd_opt(updated_year, 1, 1)?;
 
         let casted = match target_type {
             Date32 => {

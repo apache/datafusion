@@ -697,7 +697,26 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
-    /// Applies simplification on a predicate expression to get a preimage expression
+    /// Attempts to convert a literal value to the corresponding datatype
+    /// of a column expression so that a **preimage** can be computed for
+    /// pruning comparison predicates.
+    /// 
+    /// This is used during predicate-pushdown optimization
+    /// (see `datafusion-optimizer-udf_preimage::preimage_in_comparison_for_binary`)
+    /// 
+    /// Currently is only implemented by:
+    /// - `date_part(YEAR, expr)`
+    /// 
+    /// # Arguments:
+    /// * `lit_value`:  The literal `&ScalarValue` used in comparison
+    /// * `target_type`: The datatype of the column expression inside the function
+    /// * `op`: The comparison `Operator` (e.g. `=`, `<`, `>=`).
+    /// 
+    /// # Returns
+    ///
+    /// Returns a `ScalarValue` converted to the appropriate target type if a
+    /// preimage cast is supported for the given function/operator combination;
+    /// otherwise returns `None`.
     fn preimage_cast(
         &self,
         _lit_value: &ScalarValue,

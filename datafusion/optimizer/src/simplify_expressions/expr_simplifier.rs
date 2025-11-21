@@ -1965,11 +1965,11 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }
 
             // =======================================
-            // unwrap_date_part_in_comparison
+            // preimage_in_comparison
             // =======================================
             //
             // For case:
-            // date_part(expr as data_type) op literal
+            // date_part(expr as 'YEAR') op literal
             //
             // Background:
             // Datasources such as Parquet can prune partitions using simple predicates,
