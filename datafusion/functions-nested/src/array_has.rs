@@ -236,9 +236,10 @@ fn array_has_inner_for_scalar(
 
 fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<ArrayRef> {
     let haystack = haystack.as_ref().try_into()?;
-    array_has_dispatch_for_array(&haystack, needle)
+    array_has_dispatch_for_array(haystack, needle)
 }
 
+#[derive(Copy, Clone)]
 enum ArrayWrapper<'a> {
     FixedSizeList(&'a arrow::array::FixedSizeListArray),
     List(&'a arrow::array::GenericListArray<i32>),
@@ -318,7 +319,7 @@ impl<'a> ArrayWrapper<'a> {
 }
 
 fn array_has_dispatch_for_array<'a>(
-    haystack: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
