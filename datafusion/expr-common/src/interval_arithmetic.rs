@@ -1822,9 +1822,35 @@ impl NullableInterval {
         self == &Self::TRUE
     }
 
+    /// Returns the set of possible values after applying the `is true` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
+    pub fn is_true(&self) -> Result<Self> {
+        let (t, f, u) = self.is_true_false_unknown()?;
+
+        match (t, f, u) {
+            (true, false, false) => Ok(Self::TRUE),
+            (true, _, _) => Ok(Self::TRUE_OR_FALSE),
+            (false, _, _) => Ok(Self::FALSE),
+        }
+    }
+
     /// Return true if the value is definitely false (and not null).
     pub fn is_certainly_false(&self) -> bool {
         self == &Self::FALSE
+    }
+
+    /// Returns the set of possible values after applying the `is false` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
+    pub fn is_false(&self) -> Result<Self> {
+        let (t, f, u) = self.is_true_false_unknown()?;
+
+        match (t, f, u) {
+            (false, true, false) => Ok(Self::TRUE),
+            (_, true, _) => Ok(Self::TRUE_OR_FALSE),
+            (_, false, _) => Ok(Self::FALSE),
+        }
     }
 
     /// Return true if the value is definitely null (and not true or false).
@@ -1832,8 +1858,50 @@ impl NullableInterval {
         self == &Self::UNKNOWN
     }
 
-    /// Perform logical negation on a boolean nullable interval.
-    fn not(&self) -> Result<Self> {
+    /// Returns the set of possible values after applying the `is unknown` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
+    pub fn is_unknown(&self) -> Result<Self> {
+        let (t, f, u) = self.is_true_false_unknown()?;
+
+        match (t, f, u) {
+            (false, false, true) => Ok(Self::TRUE),
+            (_, _, true) => Ok(Self::TRUE_OR_FALSE),
+            (_, _, false) => Ok(Self::FALSE),
+        }
+    }
+
+    /// Returns a tuple of booleans indicating if this interval contains the
+    /// true, false, and unknown truth values respectively.
+    fn is_true_false_unknown(&self) -> Result<(bool, bool, bool), DataFusionError> {
+        Ok(match self {
+            NullableInterval::Null { .. } => (false, false, true),
+            NullableInterval::MaybeNull { values } => (
+                values.contains_value(ScalarValue::Boolean(Some(true)))?,
+                values.contains_value(ScalarValue::Boolean(Some(false)))?,
+                true,
+            ),
+            NullableInterval::NotNull { values } => (
+                values.contains_value(ScalarValue::Boolean(Some(true)))?,
+                values.contains_value(ScalarValue::Boolean(Some(false)))?,
+                false,
+            ),
+        })
+    }
+
+    /// Returns an interval representing the set of possible values after applying
+    /// SQL three-valued logical NOT on possible value in this interval.
+    ///
+    /// This method uses the following truth table.
+    ///
+    /// ```text
+    ///  A  | ¬A
+    /// ----|----
+    ///  F  |  T
+    ///  U  |  U
+    ///  T  |  F
+    /// ```
+    pub fn not(&self) -> Result<Self> {
         match self {
             Self::Null { datatype } => {
                 assert_eq_or_internal_err!(
@@ -1852,8 +1920,20 @@ impl NullableInterval {
         }
     }
 
-    /// Compute the logical conjunction of this (boolean) interval with the
-    /// given boolean interval.
+    /// Returns an interval representing the set of possible values after applying SQL
+    /// three-valued logical AND on each combination of possible values from `self` and `other`.
+    ///
+    /// This method uses the following truth table.
+    ///
+    /// ```text
+    ///       │   B
+    /// A ∧ B ├──────
+    ///       │ F U T
+    /// ──┬───┼──────
+    ///   │ F │ F F F
+    /// A │ U │ F U U
+    ///   │ T │ F U T
+    /// ```
     pub fn and<T: Borrow<Self>>(&self, rhs: T) -> Result<Self> {
         if self == &Self::FALSE || rhs.borrow() == &Self::FALSE {
             return Ok(Self::FALSE);
@@ -1880,8 +1960,20 @@ impl NullableInterval {
         }
     }
 
-    /// Compute the logical disjunction of this (boolean) interval with the
-    /// given boolean interval.
+    /// Returns an interval representing the set of possible values after applying SQL three-valued
+    /// logical OR on each combination of possible values from `self` and `other`.
+    ///
+    /// This method uses the following truth table.
+    ///
+    /// ```text
+    ///       │   B
+    /// A ∨ B ├──────
+    ///       │ F U T
+    /// ──┬───┼──────
+    ///   │ F │ F U T
+    /// A │ U │ U U T
+    ///   │ T │ T T T
+    /// ```
     pub fn or<T: Borrow<Self>>(&self, rhs: T) -> Result<Self> {
         if self == &Self::TRUE || rhs.borrow() == &Self::TRUE {
             return Ok(Self::TRUE);
@@ -2039,6 +2131,30 @@ impl NullableInterval {
             Ok(Self::Null {
                 datatype: DataType::Boolean,
             })
+        }
+    }
+
+    /// Determines if this interval contains a [`ScalarValue`] or not.
+    pub fn contains_value<T: Borrow<ScalarValue>>(&self, value: T) -> Result<bool> {
+        match value.borrow() {
+            ScalarValue::Null => match self {
+                NullableInterval::Null { .. } | NullableInterval::MaybeNull { .. } => {
+                    Ok(true)
+                }
+                NullableInterval::NotNull { .. } => Ok(false),
+            },
+            s if s.is_null() => match self {
+                NullableInterval::Null { datatype } => Ok(datatype.eq(&s.data_type())),
+                NullableInterval::MaybeNull { values } => {
+                    Ok(values.data_type().eq(&s.data_type()))
+                }
+                NullableInterval::NotNull { .. } => Ok(false),
+            },
+            s => match self {
+                NullableInterval::Null { .. } => Ok(false),
+                NullableInterval::MaybeNull { values }
+                | NullableInterval::NotNull { values } => values.contains_value(s),
+            },
         }
     }
 
@@ -4458,5 +4574,176 @@ mod tests {
             assert_eq!(case.0.not().unwrap(), case.1, "Failed for NOT {}", case.0,);
         }
         Ok(())
+    }
+
+    #[test]
+    fn nullable_interval_is_certainly_true() {
+        // Test cases: (interval, expected) => interval.is_certainly_true() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, true),
+            (NullableInterval::FALSE, false),
+            (NullableInterval::UNKNOWN, false),
+            (NullableInterval::TRUE_OR_FALSE, false),
+            (NullableInterval::TRUE_OR_UNKNOWN, false),
+            (NullableInterval::FALSE_OR_UNKNOWN, false),
+            (NullableInterval::ANY_TRUTH_VALUE, false),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_certainly_true();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_true() {
+        // Test cases: (interval, expected) => interval.is_true() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_FALSE,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::ANY_TRUTH_VALUE,NullableInterval::TRUE_OR_FALSE),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_true().unwrap();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_certainly_false() {
+        // Test cases: (interval, expected) => interval.is_certainly_false() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, false),
+            (NullableInterval::FALSE, true),
+            (NullableInterval::UNKNOWN, false),
+            (NullableInterval::TRUE_OR_FALSE, false),
+            (NullableInterval::TRUE_OR_UNKNOWN, false),
+            (NullableInterval::FALSE_OR_UNKNOWN, false),
+            (NullableInterval::ANY_TRUTH_VALUE, false),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_certainly_false();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_false() {
+        // Test cases: (interval, expected) => interval.is_false() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_FALSE,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::FALSE_OR_UNKNOWN,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::ANY_TRUTH_VALUE,NullableInterval::TRUE_OR_FALSE),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_false().unwrap();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_certainly_unknown() {
+        // Test cases: (interval, expected) => interval.is_certainly_unknown() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, false),
+            (NullableInterval::FALSE, false),
+            (NullableInterval::UNKNOWN, true),
+            (NullableInterval::TRUE_OR_FALSE, false),
+            (NullableInterval::TRUE_OR_UNKNOWN, false),
+            (NullableInterval::FALSE_OR_UNKNOWN, false),
+            (NullableInterval::ANY_TRUTH_VALUE, false),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_certainly_unknown();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_unknown() {
+        // Test cases: (interval, expected) => interval.is_unknown() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::FALSE_OR_UNKNOWN,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::ANY_TRUTH_VALUE,NullableInterval::TRUE_OR_FALSE),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_unknown().unwrap();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_contains_value() {
+        // Test cases: (interval, value, expected) => interval.contains_value(value) = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, ScalarValue::Boolean(Some(true)), true),
+            (NullableInterval::TRUE, ScalarValue::Boolean(Some(false)), false),
+            (NullableInterval::TRUE, ScalarValue::Boolean(None), false),
+            (NullableInterval::TRUE, ScalarValue::Null, false),
+            (NullableInterval::TRUE, ScalarValue::UInt32(None), false),
+            (NullableInterval::FALSE, ScalarValue::Boolean(Some(true)), false),
+            (NullableInterval::FALSE, ScalarValue::Boolean(Some(false)), true),
+            (NullableInterval::FALSE, ScalarValue::Boolean(None), false),
+            (NullableInterval::FALSE, ScalarValue::Null, false),
+            (NullableInterval::FALSE, ScalarValue::UInt32(None), false),
+            (NullableInterval::UNKNOWN, ScalarValue::Boolean(Some(true)), false),
+            (NullableInterval::UNKNOWN, ScalarValue::Boolean(Some(false)), false),
+            (NullableInterval::UNKNOWN, ScalarValue::Boolean(None), true),
+            (NullableInterval::UNKNOWN, ScalarValue::Null, true),
+            (NullableInterval::UNKNOWN, ScalarValue::UInt32(None), false),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::Boolean(Some(true)), true),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::Boolean(Some(false)), true),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::Boolean(None), false),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::Null, false),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::UInt32(None), false),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::Boolean(Some(true)), true),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::Boolean(Some(false)), false),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::Boolean(None), true),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::Null, true),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::UInt32(None), false),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::Boolean(Some(true)), false),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::Boolean(Some(false)), true),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::Boolean(None), true),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::Null, true),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::UInt32(None), false),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::Boolean(Some(true)), true),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::Boolean(Some(false)), true),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::Boolean(None), true),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::Null, true),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::UInt32(None), false),
+        ];
+
+        for (interval, value, expected) in test_cases {
+            let result = interval.contains_value(value.clone()).unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for interval: {interval} and value {value:?}",
+            );
+        }
     }
 }

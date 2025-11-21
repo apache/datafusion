@@ -40,7 +40,7 @@ use datafusion_datasource::{as_file_source, TableSchema};
 use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
-use datafusion_common::{exec_datafusion_err, Statistics};
+use datafusion_common::exec_datafusion_err;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::PartitionedFile;
@@ -250,7 +250,6 @@ pub struct ArrowSource {
     format: ArrowFormat,
     table_schema: TableSchema,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -261,7 +260,6 @@ impl ArrowSource {
             format: ArrowFormat::File,
             table_schema: table_schema.into(),
             metrics: ExecutionPlanMetricsSet::new(),
-            projected_statistics: None,
             schema_adapter_factory: None,
         }
     }
@@ -272,7 +270,6 @@ impl ArrowSource {
             format: ArrowFormat::Stream,
             table_schema: table_schema.into(),
             metrics: ExecutionPlanMetricsSet::new(),
-            projected_statistics: None,
             schema_adapter_factory: None,
         }
     }
@@ -305,25 +302,12 @@ impl FileSource for ArrowSource {
         Arc::new(Self { ..self.clone() })
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set"))
     }
 
     fn file_type(&self) -> &str {
