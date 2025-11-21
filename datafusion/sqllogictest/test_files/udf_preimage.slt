@@ -1,0 +1,159 @@
+# Licensed to the Apache Software Foundation (asF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The asF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "as IS" BasIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+###############################################
+# ScalarUDF predicate expression simplification 
+###############################################
+
+############################
+# date_part(year, col) tests
+############################
+statement ok
+create table t(
+    c1_date32 DATE,
+    c2_ts_sec timestamp,
+    c3_ts_mili timestamp,
+    c4_ts_micro timestamp,
+    c5_ts_nano timestamp
+) as VALUES
+    ('2024-01-01',
+     '2024-01-01T00:00:00'::timestamp,
+     '2024-01-01T00:00:00.123'::timestamp,
+     '2024-01-01T00:00:00.123456'::timestamp,
+     '2024-01-01T00:00:00.123456789'::timestamp),
+    ('1990-05-20',
+     '1990-05-20T00:00:10'::timestamp,
+     '1990-05-20T00:00:10.987'::timestamp,
+     '1990-05-20T00:00:10.987654'::timestamp,
+     '1990-05-20T00:00:10.987654321'::timestamp),
+    ('2030-12-31',
+     '2030-12-31T23:59:59'::timestamp,
+     '2030-12-31T23:59:59.001'::timestamp,
+     '2030-12-31T23:59:59.001234'::timestamp,
+     '2030-12-31T23:59:59.001234567'::timestamp)
+;
+
+
+# Explain eq
+query TT
+explain select c1_date32 from t where extract (year from c1_date32) = 2024
+----
+logical_plan
+01)Filter: t.c1_date32 >= Date32("2024-01-01") AND t.c1_date32 < Date32("2025-01-01")
+02)--TableScan: t projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 >= 2024-01-01 AND c1_date32@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+## eq
+query DPPPP
+select
+  (select c1_date32    from t where extract(year from c1_date32) = 2024),
+  (select c2_ts_sec    from t where extract(year from c2_ts_sec) = 2024),
+  (select c3_ts_mili   from t where extract(year from c3_ts_mili) = 2024),
+  (select c4_ts_micro  from t where extract(year from c4_ts_micro) = 2024),
+  (select c5_ts_nano   from t where extract(year from c5_ts_nano) = 2024);
+----
+2024-01-01 2024-01-01T00:00:00 2024-01-01T00:00:00.123 2024-01-01T00:00:00.123456 2024-01-01T00:00:00.123456789
+
+# Explain not_eq
+query TT
+explain select c1_date32 from t where extract (year from c1_date32) <> 2024
+----
+logical_plan
+01)Filter: t.c1_date32 < Date32("2024-01-01") OR t.c1_date32 >= Date32("2025-01-01")
+02)--TableScan: t projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 < 2024-01-01 OR c1_date32@0 >= 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+## not_eq
+query D
+select c1_date32 from t where extract(year from c1_date32) <> 2024;
+----
+1990-05-20
+2030-12-31 
+
+# Explain gt
+query TT
+explain select c2_ts_sec from t where extract (year from c2_ts_sec) > 2024
+----
+logical_plan
+01)Filter: t.c2_ts_sec >= TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t projection=[c2_ts_sec]
+physical_plan
+01)FilterExec: c2_ts_sec@0 >= 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+## gt
+query P
+select c2_ts_sec from t where extract(year from c2_ts_sec) > 2024;
+----
+2030-12-31T23:59:59
+
+# Explain lt
+query TT
+explain select c3_ts_mili from t where extract (year from c3_ts_mili) < 2024
+----
+logical_plan
+01)Filter: t.c3_ts_mili < TimestampNanosecond(1704067200000000000, None)
+02)--TableScan: t projection=[c3_ts_mili]
+physical_plan
+01)FilterExec: c3_ts_mili@0 < 1704067200000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+## lt
+query P
+select c3_ts_mili from t where extract(year from c3_ts_mili) < 2024;
+----
+1990-05-20T00:00:10.987
+
+# Explain gt_eq
+query TT
+explain select c4_ts_micro from t where extract (year from c4_ts_micro) >= 2024
+----
+logical_plan
+01)Filter: t.c4_ts_micro >= TimestampNanosecond(1704067200000000000, None)
+02)--TableScan: t projection=[c4_ts_micro]
+physical_plan
+01)FilterExec: c4_ts_micro@0 >= 1704067200000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+## gt_eq
+query P
+select c4_ts_micro from t where extract(year from c4_ts_micro) >= 2024;
+----
+2024-01-01T00:00:00.123456
+2030-12-31T23:59:59.001234
+
+# Explain lt_eq
+query TT
+explain select c5_ts_nano from t where extract (year from c5_ts_nano) <= 2024
+----
+logical_plan
+01)Filter: t.c5_ts_nano < TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t projection=[c5_ts_nano]
+physical_plan
+01)FilterExec: c5_ts_nano@0 < 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+## lt_eq
+query P
+select c5_ts_nano from t where extract(year from c5_ts_nano) <= 2024;
+----
+2024-01-01T00:00:00.123456789
+1990-05-20T00:00:10.987654321
