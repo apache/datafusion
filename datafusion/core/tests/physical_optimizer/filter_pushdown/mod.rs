@@ -272,6 +272,7 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     stream.next().await.unwrap().unwrap();
 
     // Test that filters are pushed down correctly to each side of the join
+    // NOTE: We dropped the CASE expression here because we now optimize that away if there's only 1 partition
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
         @r"
