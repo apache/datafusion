@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::env;
 use std::sync::Arc;
 
@@ -29,17 +31,12 @@ use object_store::aws::AmazonS3Builder;
 use url::Url;
 
 /// This example demonstrates querying data from Amazon S3 and writing
-/// the result of a query back to Amazon S3
+/// the result of a query back to Amazon S3.
 ///
 /// The following environment variables must be defined:
 ///
 /// - AWS_ACCESS_KEY_ID
 /// - AWS_SECRET_ACCESS_KEY
-///
-/// If you are using temporary session credentials (e.g. AWS SSO),
-/// also set:
-///
-/// - AWS_SESSION_TOKEN
 pub async fn dataframe_to_s3() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
@@ -53,7 +50,6 @@ pub async fn dataframe_to_s3() -> Result<()> {
         .with_region(region)
         .with_access_key_id(env::var("AWS_ACCESS_KEY_ID").unwrap())
         .with_secret_access_key(env::var("AWS_SECRET_ACCESS_KEY").unwrap())
-        .with_token(env::var("AWS_SESSION_TOKEN").unwrap_or_default())
         .build()?;
 
     let path = format!("s3://{bucket_name}");

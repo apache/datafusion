@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use object_store::aws::AmazonS3Builder;
@@ -22,47 +24,41 @@ use std::env;
 use std::sync::Arc;
 use url::Url;
 
-/// To run this example successfully, upload a Parquet file to
-/// your own Amazon S3 bucket and update the path accordingly.
-///
-/// Make sure your AWS credentials allow `GetObject` access.
+/// This example demonstrates querying data in a public S3 bucket
+/// (the NYC TLC open dataset: `s3://nyc-tlc`).
 ///
 /// The following environment variables must be defined:
-///
-/// - AWS_ACCESS_KEY_ID
-/// - AWS_SECRET_ACCESS_KEY
-///
-/// If you are using temporary session credentials (e.g. AWS SSO),
-/// also set:
-///
-/// - AWS_SESSION_TOKEN
+/// - `AWS_ACCESS_KEY_ID`
+/// - `AWS_SECRET_ACCESS_KEY`
 pub async fn query_aws_s3() -> Result<()> {
-    // create local execution context
     let ctx = SessionContext::new();
 
-    // enter region and bucket to which your credentials have GET access
-    let region = "<bucket-region-here>";
-    let bucket_name = "<bucket-name-here>";
+    // the region must be set to the region where the bucket exists until the following
+    // issue is resolved
+    // https://github.com/apache/arrow-rs/issues/2795
+    let region = "us-east-1";
+    let bucket_name = "nyc-tlc";
 
     let s3 = AmazonS3Builder::new()
         .with_bucket_name(bucket_name)
         .with_region(region)
         .with_access_key_id(env::var("AWS_ACCESS_KEY_ID").unwrap())
         .with_secret_access_key(env::var("AWS_SECRET_ACCESS_KEY").unwrap())
-        .with_token(env::var("AWS_SESSION_TOKEN").unwrap_or_default())
         .build()?;
 
     let path = format!("s3://{bucket_name}");
     let s3_url = Url::parse(&path).unwrap();
     ctx.register_object_store(&s3_url, Arc::new(s3));
 
-    // point to your own file (must exist)
-    let path = format!("s3://{bucket_name}/path/to/test.parquet");
-    ctx.register_parquet("test", &path, ParquetReadOptions::default())
+    // cannot query the parquet files from this bucket because the path contains a whitespace
+    // and we don't support that yet
+    // https://github.com/apache/arrow-rs/issues/2799
+    let path = format!("s3://{bucket_name}/csv_backup/yellow_tripdata_2022-02.csv");
+    ctx.register_csv("trips", &path, CsvReadOptions::default())
         .await?;
 
     // execute the query
-    let df = ctx.sql("SELECT * FROM test LIMIT 10").await?;
+    let df = ctx.sql("SELECT * FROM trips LIMIT 10").await?;
 
     // print the results
     df.show().await?;
