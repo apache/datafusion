@@ -52,16 +52,16 @@ use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::udf_preimage::{
+    is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary,
+    preimage_in_comparison_for_binary,
+};
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
     unwrap_cast_in_comparison_for_binary,
 };
 use crate::simplify_expressions::SimplifyInfo;
-use crate::simplify_expressions::udf_preimage::{
-        is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary,
-        preimage_in_comparison_for_binary,
-};
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;

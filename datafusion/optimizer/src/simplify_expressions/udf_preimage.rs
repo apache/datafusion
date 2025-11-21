@@ -50,7 +50,9 @@ pub(super) fn preimage_in_comparison_for_binary(
         Operator::Lt | Operator::GtEq => {
             let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
                 Some(v) => v,
-                None => return internal_err!("Preimage cast did work"),
+                None => {
+                    return internal_err!("Could not cast literal to the column type")
+                }
             };
             Expr::BinaryExpr(BinaryExpr {
                 left: expr,
@@ -61,7 +63,9 @@ pub(super) fn preimage_in_comparison_for_binary(
         Operator::Gt => {
             let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
                 Some(v) => v,
-                None => return internal_err!("Preimage cast did work"),
+                None => {
+                    return internal_err!("Could not cast literal to the column type")
+                }
             };
             Expr::BinaryExpr(BinaryExpr {
                 left: expr,
@@ -72,7 +76,9 @@ pub(super) fn preimage_in_comparison_for_binary(
         Operator::LtEq => {
             let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
                 Some(v) => v,
-                None => return internal_err!("Preimage cast did work"),
+                None => {
+                    return internal_err!("Could not cast literal to the column type")
+                }
             };
             Expr::BinaryExpr(BinaryExpr {
                 left: expr,
@@ -85,13 +91,17 @@ pub(super) fn preimage_in_comparison_for_binary(
                 match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::GtEq)
                 {
                     Some(v) => v,
-                    None => return internal_err!("Preimage cast did work"),
+                    None => {
+                        return internal_err!("Could not cast literal to the column type")
+                    }
                 };
             let upper =
                 match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::LtEq)
                 {
                     Some(v) => v,
-                    None => return internal_err!("Preimage cast did work"),
+                    None => {
+                        return internal_err!("Could not cast literal to the column type")
+                    }
                 };
             and(
                 Expr::BinaryExpr(BinaryExpr {
@@ -110,12 +120,16 @@ pub(super) fn preimage_in_comparison_for_binary(
             let lower =
                 match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::Lt) {
                     Some(v) => v,
-                    None => return internal_err!("Preimage cast did work"),
+                    None => {
+                        return internal_err!("Could not cast literal to the column type")
+                    }
                 };
             let upper =
                 match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::Gt) {
                     Some(v) => v,
-                    None => return internal_err!("Preimage cast did work"),
+                    None => {
+                        return internal_err!("Could not cast literal to the column type")
+                    }
                 };
             or(
                 Expr::BinaryExpr(BinaryExpr {
