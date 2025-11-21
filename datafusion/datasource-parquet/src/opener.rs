@@ -1014,10 +1014,7 @@ where
 {
     type Item = Result<RecordBatch>;
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut(); // Safe: We own the Pin and ReversedParquetStream is Unpin
 
         if this.done || this.is_limit_reached() {
