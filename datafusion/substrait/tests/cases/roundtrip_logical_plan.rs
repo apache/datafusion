@@ -1275,9 +1275,7 @@ async fn roundtrip_values_with_scalar_function() -> Result<()> {
     let plan = LogicalPlanBuilder::values(vec![vec![expr]])?.build()?;
     let expected = ctx.state().optimize(&plan)?;
 
-    let proto = to_substrait_plan(&expected, &ctx.state())?;
-    let actual = from_substrait_plan(&ctx.state(), &proto).await?;
-    let actual = ctx.state().optimize(&actual)?;
+    let actual = substrait_roundtrip(&plan, &ctx).await?;
 
     let normalize = |plan: &LogicalPlan| match plan {
         LogicalPlan::Values(values_plan) => {
@@ -1496,9 +1494,7 @@ async fn roundtrip_repartition_roundrobin() -> Result<()> {
         partitioning_scheme: Partitioning::RoundRobinBatch(8),
     });
 
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     assert_eq!(format!("{plan}"), format!("{plan2}"));
     Ok(())
@@ -1513,9 +1509,7 @@ async fn roundtrip_repartition_hash() -> Result<()> {
         partitioning_scheme: Partitioning::Hash(vec![col("data.a")], 8),
     });
 
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     assert_eq!(format!("{plan}"), format!("{plan2}"));
     Ok(())
@@ -1697,9 +1691,7 @@ async fn assert_expected_plan(
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     if assert_schema {
         assert_eq!(plan.schema(), plan2.schema());
@@ -1741,9 +1733,7 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     // Format plan string and replace all None's with 0
     let plan1str = format!("{plan}").replace("None", "0");
@@ -1753,6 +1743,18 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
 
     assert_eq!(plan.schema(), plan2.schema());
     Ok(())
+}
+
+/// Converts a logical plan to Substrait and back, applying optimization.
+/// Returns the roundtripped and optimized logical plan.
+async fn substrait_roundtrip(
+    plan: &LogicalPlan,
+    ctx: &SessionContext,
+) -> Result<LogicalPlan> {
+    let proto = to_substrait_plan(plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+    Ok(plan2)
 }
 
 async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
@@ -1782,8 +1784,7 @@ async fn roundtrip_logical_plan_with_ctx(
     ctx: SessionContext,
 ) -> Result<Box<Plan>> {
     let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     let plan1str = format!("{plan}");
     let plan2str = format!("{plan2}");
