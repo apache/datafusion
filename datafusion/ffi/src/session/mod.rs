@@ -76,7 +76,7 @@ pub mod config;
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
-pub struct FFI_SessionRef {
+pub(crate) struct FFI_SessionRef {
     session_id: unsafe extern "C" fn(&Self) -> RStr,
 
     config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
