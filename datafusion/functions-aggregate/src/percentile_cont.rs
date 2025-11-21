@@ -393,9 +393,7 @@ fn simplify_percentile_cont_aggregate(
     let original_expr = Expr::AggregateFunction(aggregate_function.clone());
     let params = &aggregate_function.params;
 
-    if params.args.len() != 2 {
-        return Ok(original_expr);
-    }
+    let [value, percentile] = take_function_args("percentile_cont", &params.args)?;
 
     let percentile_value = match extract_percentile_literal(&params.args[1]) {
         Some(value) if (0.0..=1.0).contains(&value) => value,
