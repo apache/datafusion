@@ -192,10 +192,7 @@ impl SeriesValue for TimestampValue {
 #[derive(Debug, Clone)]
 pub enum GenSeriesArgs {
     /// ContainsNull signifies that at least one argument(start, end, step) was null, thus no series will be generated.
-    ContainsNull {
-        name: &'static str,
-        arg_count: usize,
-    },
+    ContainsNull { name: &'static str },
     /// Int64Args holds the start, end, and step values for generating integer series when all arguments are not null.
     Int64Args {
         start: i64,
@@ -239,8 +236,9 @@ impl GenSeriesArgs {
 
     pub fn evaluated_args(&self) -> Vec<ScalarValue> {
         match self {
-            GenSeriesArgs::ContainsNull { arg_count, .. } => {
-                vec![ScalarValue::Null; *arg_count]
+            GenSeriesArgs::ContainsNull { .. } => {
+                // All table functions use 3 arguments: start, end, step
+                vec![ScalarValue::Null; 3]
             }
             GenSeriesArgs::Int64Args {
                 start, end, step, ..
@@ -626,10 +624,7 @@ impl GenerateSeriesFuncImpl {
             // contain null
             return Ok(Arc::new(GenerateSeriesTable::new(
                 schema,
-                GenSeriesArgs::ContainsNull {
-                    name: self.name,
-                    arg_count: arguments.len(),
-                },
+                GenSeriesArgs::ContainsNull { name: self.name },
                 arguments,
             )));
         }
@@ -749,10 +744,7 @@ impl GenerateSeriesFuncImpl {
         else {
             return Ok(Arc::new(GenerateSeriesTable::new(
                 schema,
-                GenSeriesArgs::ContainsNull {
-                    name: self.name,
-                    arg_count: arguments.len(),
-                },
+                GenSeriesArgs::ContainsNull { name: self.name },
                 arguments,
             )));
         };
@@ -858,10 +850,7 @@ impl GenerateSeriesFuncImpl {
         else {
             return Ok(Arc::new(GenerateSeriesTable::new(
                 schema,
-                GenSeriesArgs::ContainsNull {
-                    name: self.name,
-                    arg_count: arguments.len(),
-                },
+                GenSeriesArgs::ContainsNull { name: self.name },
                 arguments,
             )));
         };

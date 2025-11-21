@@ -294,9 +294,7 @@ async fn resolve_table_function(
 ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
     let table_function = consumer
         .get_table_function(invocation.name.as_str())
-        .ok_or_else(|| {
-            plan_datafusion_err!("No table function named '{}'", invocation.name)
-        })?;
+        .ok_or_else(|| plan_err!("No table function named '{}'", invocation.name))?;
 
     let mut args = Vec::with_capacity(invocation.arguments.len());
     for literal in &invocation.arguments {

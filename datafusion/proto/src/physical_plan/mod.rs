@@ -1907,7 +1907,6 @@ impl protobuf::PhysicalPlanNode {
             Some(protobuf::generate_series_node::Args::ContainsNull(args)) => {
                 GenSeriesArgs::ContainsNull {
                     name: Self::generate_series_name_to_str(args.name()),
-                    arg_count: 0,
                 }
             }
             Some(protobuf::generate_series_node::Args::Int64Args(args)) => {

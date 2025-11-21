@@ -36,7 +36,7 @@ not recognize the extension, it can still fall back to the accompanying `NamedTa
 
 Table functions must expose their evaluated arguments via the [`TableProvider::table_function_details`] hook.
 This allows custom and built-in table providers to be serialized by the Substrait producer without requiring
-downcasting to concrete types. For example, `GenerateSeriesTable` implements this hook and returns ``
+downcasting to concrete types. For example, `GenerateSeriesTable` implements this hook and returns
 the function name and a slice of evaluated `ScalarValue`s.
 
 [apache arrow]: https://arrow.apache.org/
