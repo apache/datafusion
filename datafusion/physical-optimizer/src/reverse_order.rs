@@ -421,8 +421,15 @@ impl PushdownReverse for DataSourceExec {
                         reverse_parquet_source.with_predicate(predicate);
                 }
 
-                let cfg = FileScanConfigBuilder::from(cfg.clone()).with_source(Arc::<dyn FileSource>::from(reverse_parquet_source)).
-                    with_statistics(cfg.clone().partition_statistics(None).unwrap_or_default().clone()).build();
+                let cfg = FileScanConfigBuilder::from(cfg.clone())
+                    .with_source(Arc::<dyn FileSource>::from(reverse_parquet_source))
+                    .with_statistics(
+                        cfg.clone()
+                            .partition_statistics(None)
+                            .unwrap_or_default()
+                            .clone(),
+                    )
+                    .build();
 
                 return Some(DataSourceExec::new(Arc::new(cfg)));
             }
