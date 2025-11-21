@@ -194,7 +194,9 @@ impl SkipAggregationProbe {
         if self.input_rows >= self.probe_rows_threshold {
             self.should_skip = self.num_groups as f64 / self.input_rows as f64
                 >= self.probe_ratio_threshold;
-            self.is_locked = true;
+            // Set is_locked to true only if we have decided to skip, otherwise we can try to skip
+            // during processing the next record_batch.
+            self.is_locked = self.should_skip;
         }
     }
 
