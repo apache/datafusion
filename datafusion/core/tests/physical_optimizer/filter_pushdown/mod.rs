@@ -20,7 +20,6 @@ use std::sync::{Arc, LazyLock};
 use arrow::{
     array::{record_batch, Float64Array, Int32Array, RecordBatch, StringArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use arrow_schema::SortOptions;
