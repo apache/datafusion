@@ -29,8 +29,8 @@ use datafusion::{
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 use tokio::runtime::Handle;
 
-use crate::util::FFIResult;
 use crate::execution::FFI_TaskContext;
+use crate::util::FFIResult;
 use crate::{
     df_result, plan_properties::FFI_PlanProperties,
     record_batch_stream::FFI_RecordBatchStream, rresult,
