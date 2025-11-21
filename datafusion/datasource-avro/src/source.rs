@@ -23,7 +23,6 @@ use std::sync::Arc;
 use crate::avro_to_arrow::Reader as AvroReader;
 
 use datafusion_common::error::Result;
-use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
@@ -41,7 +40,6 @@ pub struct AvroSource {
     batch_size: Option<usize>,
     projection: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -53,7 +51,6 @@ impl AvroSource {
             batch_size: None,
             projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            projected_statistics: None,
             schema_adapter_factory: None,
         }
     }
@@ -95,12 +92,6 @@ impl FileSource for AvroSource {
         Arc::new(conf)
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projection = config.projected_file_column_names();
@@ -109,13 +100,6 @@ impl FileSource for AvroSource {
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set"))
     }
 
     fn file_type(&self) -> &str {
