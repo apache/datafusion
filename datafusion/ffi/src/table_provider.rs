@@ -28,7 +28,7 @@ use datafusion::{
     catalog::{Session, TableProvider},
     datasource::TableType,
     error::DataFusionError,
-    execution::{TaskContext, session_state::SessionStateBuilder},
+    execution::session_state::SessionStateBuilder,
     logical_expr::{TableProviderFilterPushDown, logical_plan::dml::InsertOp},
     physical_plan::ExecutionPlan,
     prelude::{Expr, SessionContext},
@@ -271,11 +271,7 @@ unsafe extern "C" fn scan_fn_wrapper(
                 .await
         );
 
-        RResult::ROk(FFI_ExecutionPlan::new(
-            plan,
-            ctx.task_ctx(),
-            runtime.clone(),
-        ))
+        RResult::ROk(FFI_ExecutionPlan::new(plan, runtime.clone()))
     }
     .into_ffi()
 }
@@ -309,11 +305,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
                 .await
         );
 
-        RResult::ROk(FFI_ExecutionPlan::new(
-            plan,
-            ctx.task_ctx(),
-            runtime.clone(),
-        ))
+        RResult::ROk(FFI_ExecutionPlan::new(plan, runtime.clone()))
     }
     .into_ffi()
 }
@@ -498,8 +490,7 @@ impl TableProvider for ForeignTableProvider {
         let session_config: FFI_SessionConfig = session.config().into();
 
         let rc = Handle::try_current().ok();
-        let input =
-            FFI_ExecutionPlan::new(input, Arc::new(TaskContext::from(session)), rc);
+        let input = FFI_ExecutionPlan::new(input, rc);
         let insert_op: FFI_InsertOp = insert_op.into();
 
         let plan = unsafe {

@@ -177,9 +177,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
 
             let physical_plan = session.create_physical_plan(&logical_plan).await;
 
-            rresult!(
-                physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, task_ctx, runtime))
-            )
+            rresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, runtime)))
         }
         .into_ffi()
     }
