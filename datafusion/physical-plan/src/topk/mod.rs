@@ -591,9 +591,12 @@ impl TopK {
             common_sort_prefix_converter: _,
             common_sort_prefix: _,
             finished: _,
-            filter: _,
+            filter,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
+
+        // Mark the dynamic filter as complete now that TopK processing is finished.
+        filter.read().expr().mark_complete();
 
         // break into record batches as needed
         let mut batches = vec![];
@@ -1195,6 +1198,54 @@ mod tests {
             ],
             &results
         );
+
+        Ok(())
+    }
+
+    /// This test verifies that the dynamic filter is marked as complete after TopK processing finishes.
+    #[tokio::test]
+    async fn test_topk_marks_filter_complete() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+
+        let full_expr = LexOrdering::from([sort_expr.clone()]);
+        let prefix = vec![sort_expr];
+
+        // Create a dummy runtime environment and metrics
+        let runtime = Arc::new(RuntimeEnv::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // Create a dynamic filter that we'll check for completion
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+
+        // Create a TopK instance
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            prefix,
+            full_expr,
+            2,
+            10,
+            runtime,
+            &metrics,
+            Arc::new(RwLock::new(TopKDynamicFilters::new(dynamic_filter))),
+        )?;
+
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(1), Some(2)]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array])?;
+        topk.insert_batch(batch)?;
+
+        // Call emit to finish TopK processing
+        let _results: Vec<_> = topk.emit()?.try_collect().await?;
+
+        // After emit is called, the dynamic filter should be marked as complete
+        // wait_complete() should return immediately
+        dynamic_filter_clone.wait_complete().await;
 
         Ok(())
     }
