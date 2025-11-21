@@ -94,7 +94,7 @@ pub(crate) mod test_util {
                 .with_statistics(statistics)
                 .with_projection_indices(projection)
                 .with_limit(limit)
-                .build(),
+                .build()?,
             )
             .await?;
         Ok(exec)

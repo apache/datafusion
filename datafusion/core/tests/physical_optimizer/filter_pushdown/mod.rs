@@ -869,7 +869,8 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
                 // Partition 1
                 FileGroup::new(vec![PartitionedFile::new("test2.parquet", 123)]),
             ])
-            .build();
+            .build()
+            .unwrap();
 
     let scan = DataSourceExec::from_data_source(base_config);
 

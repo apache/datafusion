@@ -237,7 +237,8 @@ fn parquet_exec_multiple_sorted(
         FileGroup::new(vec![PartitionedFile::new("y".to_string(), 100)]),
     ])
     .with_output_ordering(output_ordering)
-    .build();
+    .build()
+    .unwrap();
 
     DataSourceExec::from_data_source(config)
 }
@@ -259,7 +260,8 @@ fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> 
         })
         .with_file(PartitionedFile::new("x".to_string(), 100))
         .with_output_ordering(output_ordering)
-        .build();
+        .build()
+        .unwrap();
 
     DataSourceExec::from_data_source(config)
 }
@@ -285,7 +287,8 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
             FileGroup::new(vec![PartitionedFile::new("y".to_string(), 100)]),
         ])
         .with_output_ordering(output_ordering)
-        .build();
+        .build()
+        .unwrap();
 
     DataSourceExec::from_data_source(config)
 }
@@ -2557,7 +2560,8 @@ fn parallelization_compressed_csv() -> Result<()> {
                     })
                     .with_file(PartitionedFile::new("x".to_string(), 100))
                     .with_file_compression_type(compression_type)
-                    .build(),
+                    .build()
+                    .unwrap(),
                 ),
                 vec![("a".to_string(), "a".to_string())],
             );

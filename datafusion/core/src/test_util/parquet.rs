@@ -187,13 +187,13 @@ impl TestParquetFile {
                     .with_table_parquet_options(parquet_options)
                     .with_predicate(Arc::clone(&physical_filter_expr)),
             );
-            let config = scan_config_builder.with_source(source).build();
+            let config = scan_config_builder.with_source(source).build()?;
             let parquet_exec = DataSourceExec::from_data_source(config);
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            let config = scan_config_builder.build();
+            let config = scan_config_builder.build()?;
             Ok(DataSourceExec::from_data_source(config))
         }
     }

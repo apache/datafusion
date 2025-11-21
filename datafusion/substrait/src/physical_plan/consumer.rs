@@ -157,7 +157,7 @@ pub async fn from_substrait_rel(
                     }
 
                     Ok(
-                        DataSourceExec::from_data_source(base_config_builder.build())
+                        DataSourceExec::from_data_source(base_config_builder.build()?)
                             as Arc<dyn ExecutionPlan>,
                     )
                 }

@@ -119,7 +119,7 @@ use log::{debug, warn};
 ///   .with_file_group(FileGroup::new(vec![
 ///    PartitionedFile::new("file2.parquet", 56),
 ///    PartitionedFile::new("file3.parquet", 78),
-///   ])).build();
+///   ])).build().unwrap();
 /// // create an execution plan from the config
 /// let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
 /// ```
@@ -403,7 +403,10 @@ impl FileScanConfigBuilder {
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
     /// Any unset optional fields will use their default values.
-    pub fn build(self) -> FileScanConfig {
+    ///
+    /// # Errors
+    /// Returns an error if projection pushdown fails or if schema operations fail.
+    pub fn build(self) -> Result<FileScanConfig> {
         let Self {
             object_store_url,
             mut file_source,
@@ -436,18 +439,19 @@ impl FileScanConfigBuilder {
             )
         });
         if let Some(projection_exprs) = projection_exprs {
-            // This does not seem totally safe, we discard the projection if the file source doesn't support it!
-            // But this is the current behavior anyway, it just happens hidden in each implementations `with_projection`
-            // TODO: make this method return a Result<> and propagate errors
             let new_source = file_source
                 .try_pushdown_projection(&projection_exprs)
-                .expect("handle error");
+                .map_err(|e| {
+                    internal_datafusion_err!(
+                        "Failed to push down projection in FileScanConfigBuilder::build: {e}"
+                    )
+                })?;
             if let Some(new_source) = new_source {
                 file_source = new_source;
             }
         }
 
-        FileScanConfig {
+        Ok(FileScanConfig {
             object_store_url,
             file_source,
             limit,
@@ -459,7 +463,7 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
-        }
+        })
     }
 }
 
@@ -508,7 +512,7 @@ impl DataSource for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let schema = self.projected_schema();
+                let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
                 let orderings = get_projected_output_ordering(self, &schema);
 
                 write!(f, "file_groups=")?;
@@ -604,11 +608,20 @@ impl DataSource for FileScanConfig {
         }
 
         if let Some(projection) = self.file_source.projection() {
-            let output_schema = projection.project_schema(schema).expect("handle error");
-            eq_properties = eq_properties.project(
-                &projection.projection_mapping(schema).expect("handle error"),
-                Arc::new(output_schema),
-            );
+            match (
+                projection.project_schema(schema),
+                projection.projection_mapping(schema),
+            ) {
+                (Ok(output_schema), Ok(mapping)) => {
+                    eq_properties =
+                        eq_properties.project(&mapping, Arc::new(output_schema));
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    warn!("Failed to project equivalence properties: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to project equivalence properties: {e}");
+                }
+            }
         }
 
         eq_properties
@@ -646,7 +659,7 @@ impl DataSource for FileScanConfig {
                 }
             }
             // If no statistics available for this partition, return unknown
-            Ok(Statistics::new_unknown(&self.projected_schema()))
+            Ok(Statistics::new_unknown(self.projected_schema()?.as_ref()))
         } else {
             // Return aggregate statistics across all partitions
             Ok(self.projected_stats())
@@ -656,7 +669,8 @@ impl DataSource for FileScanConfig {
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
         let source = FileScanConfigBuilder::from(self.clone())
             .with_limit(limit)
-            .build();
+            .build()
+            .ok()?;
         Some(Arc::new(source))
     }
 
@@ -801,11 +815,11 @@ impl FileScanConfig {
         }
     }
 
-    pub fn projected_schema(&self) -> Arc<Schema> {
+    pub fn projected_schema(&self) -> Result<Arc<Schema>> {
         let schema = self.file_source.table_schema().table_schema();
         match self.file_source.projection() {
-            Some(proj) => Arc::new(proj.project_schema(schema).expect("handle error")),
-            None => Arc::clone(schema),
+            Some(proj) => Ok(Arc::new(proj.project_schema(schema)?)),
+            None => Ok(Arc::clone(schema)),
         }
     }
 
@@ -1044,7 +1058,7 @@ impl Debug for FileScanConfig {
 
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let schema = self.projected_schema();
+        let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
         let orderings = get_projected_output_ordering(self, &schema);
 
         write!(f, "file_groups=")?;
@@ -1239,7 +1253,7 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let proj_schema = conf.projected_schema();
+        let proj_schema = conf.projected_schema().unwrap();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -1641,6 +1655,7 @@ mod tests {
         .with_projection_indices(projection)
         .with_statistics(statistics)
         .build()
+        .unwrap()
     }
 
     /// Convert partition columns from Vec<String DataType> to Vec<Field>
@@ -1689,7 +1704,8 @@ mod tests {
             .into()])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .with_newlines_in_values(true)
-            .build();
+            .build()
+            .unwrap();
 
         // Verify the built config has all the expected values
         assert_eq!(config.object_store_url, object_store_url);
@@ -1740,7 +1756,8 @@ mod tests {
             Arc::clone(&file_source),
         )
         .with_projection_indices(Some(vec![0, 1, 2]))
-        .build();
+        .build()
+        .unwrap();
 
         // Simulate projection being updated. Since the filter has already been pushed down,
         // the new projection won't include the filtered column.
@@ -1785,7 +1802,8 @@ mod tests {
             object_store_url.clone(),
             Arc::clone(&file_source),
         )
-        .build();
+        .build()
+        .unwrap();
 
         // Verify default values
         assert_eq!(config.object_store_url, object_store_url);
@@ -1856,13 +1874,14 @@ mod tests {
         .with_file(file.clone())
         .with_constraints(Constraints::default())
         .with_newlines_in_values(true)
-        .build();
+        .build()
+        .unwrap();
 
         // Create a new builder from the config
         let new_builder = FileScanConfigBuilder::from(original_config);
 
         // Build a new config from this builder
-        let new_config = new_builder.build();
+        let new_config = new_builder.build().unwrap();
 
         // Verify properties match
         let partition_cols = partition_cols.into_iter().map(Arc::new).collect::<Vec<_>>();
@@ -2097,7 +2116,8 @@ mod tests {
         )
         .with_projection_indices(Some(vec![0, 2])) // Only project columns 0 and 2
         .with_file_groups(vec![file_group])
-        .build();
+        .build()
+        .unwrap();
 
         // Create a DataSourceExec from the config
         let exec = DataSourceExec::from_data_source(config);

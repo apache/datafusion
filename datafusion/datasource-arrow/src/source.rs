@@ -602,7 +602,8 @@ mod tests {
                 ObjectStoreUrl::local_filesystem(),
                 source.clone(),
             )
-            .build();
+            .build()
+            .unwrap();
 
             let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
             let mut stream = file_opener.open(partitioned_file)?.await?;
@@ -644,7 +645,8 @@ mod tests {
             ObjectStoreUrl::local_filesystem(),
             source.clone(),
         )
-        .build();
+        .build()
+        .unwrap();
 
         let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
         let mut stream = file_opener.open(partitioned_file)?.await?;
@@ -685,7 +687,8 @@ mod tests {
             ObjectStoreUrl::local_filesystem(),
             source.clone(),
         )
-        .build();
+        .build()
+        .unwrap();
 
         let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
         let result = file_opener.open(partitioned_file);
@@ -704,7 +707,8 @@ mod tests {
             ObjectStoreUrl::local_filesystem(),
             Arc::new(source.clone()) as Arc<dyn FileSource>,
         )
-        .build();
+        .build()
+        .unwrap();
 
         for target_partitions in [2, 4, 8, 16] {
             let result =

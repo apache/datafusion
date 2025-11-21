@@ -88,7 +88,8 @@ async fn get_parquet_exec(
     );
     let base_config = FileScanConfigBuilder::new(object_store_url, source)
         .with_file(partitioned_file)
-        .build();
+        .build()
+        .unwrap();
 
     DataSourceExec::new(Arc::new(base_config))
 }

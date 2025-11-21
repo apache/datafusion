@@ -265,7 +265,7 @@ impl TableProvider for DefaultValueTableProvider {
         .with_expr_adapter(Some(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _));
 
         Ok(Arc::new(DataSourceExec::new(Arc::new(
-            file_scan_config.build(),
+            file_scan_config.build()?,
         ))))
     }
 }

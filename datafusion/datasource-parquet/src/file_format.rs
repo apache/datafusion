@@ -488,7 +488,7 @@ impl FileFormat for ParquetFormat {
 
         let conf = FileScanConfigBuilder::from(conf)
             .with_source(file_source)
-            .build();
+            .build()?;
         Ok(DataSourceExec::from_data_source(conf))
     }
 

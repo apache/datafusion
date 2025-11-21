@@ -85,7 +85,7 @@ mod tests {
         let conf = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
             .with_file(meta.into())
             .with_projection_indices(Some(vec![0, 1, 2]))
-            .build();
+            .build()?;
 
         let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
@@ -157,7 +157,7 @@ mod tests {
         let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file(meta.into())
             .with_projection_indices(projection)
-            .build();
+            .build()?;
 
         let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
@@ -233,7 +233,7 @@ mod tests {
             // column which is supposed to be the last column in the table schema.
             .with_projection_indices(projection)
             .with_file(partitioned_file)
-            .build();
+            .build()?;
 
         let source_exec = DataSourceExec::from_data_source(conf);
 

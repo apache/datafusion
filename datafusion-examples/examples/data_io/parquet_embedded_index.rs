@@ -467,7 +467,7 @@ impl TableProvider for DistinctIndexTable {
                 PartitionedFile::new(path.to_str().unwrap().to_string(), len);
             builder = builder.with_file(partitioned_file);
         }
-        Ok(DataSourceExec::from_data_source(builder.build()))
+        Ok(DataSourceExec::from_data_source(builder.build()?))
     }
 
     /// Tell DataFusion that we can handle filters on the "category" column

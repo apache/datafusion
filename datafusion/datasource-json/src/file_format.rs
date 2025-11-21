@@ -258,7 +258,7 @@ impl FileFormat for JsonFormat {
             .with_file_compression_type(FileCompressionType::from(
                 self.options.compression,
             ))
-            .build();
+            .build()?;
         Ok(DataSourceExec::from_data_source(conf))
     }
 

@@ -50,7 +50,7 @@ async fn parquet_exec() -> Result<()> {
                     123,
                 )]),
             ])
-            .build();
+            .build()?;
     let parquet_exec: Arc<dyn ExecutionPlan> =
         DataSourceExec::from_data_source(scan_config);
 

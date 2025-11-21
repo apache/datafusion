@@ -504,7 +504,7 @@ impl TableProvider for IndexTableProvider {
             .with_limit(limit)
             .with_projection_indices(projection.cloned())
             .with_file(partitioned_file)
-            .build();
+            .build()?;
 
         // Finally, put it all together into a DataSourceExec
         Ok(DataSourceExec::from_data_source(file_scan_config))

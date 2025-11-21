@@ -185,7 +185,8 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned())
-            .build();
+            .build()
+            .unwrap();
         let exec = DataSourceExec::from_data_source(conf);
 
         // TODO: this is not where schema inference should be tested
@@ -260,7 +261,8 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned())
-            .build();
+            .build()
+            .unwrap();
         let exec = DataSourceExec::from_data_source(conf);
 
         let mut it = exec.execute(0, task_ctx)?;
@@ -303,7 +305,8 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection_indices(Some(vec![0, 2]))
             .with_file_compression_type(file_compression_type.to_owned())
-            .build();
+            .build()
+            .unwrap();
         let exec = DataSourceExec::from_data_source(conf);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
@@ -351,7 +354,8 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection_indices(Some(vec![3, 0, 2]))
             .with_file_compression_type(file_compression_type.to_owned())
-            .build();
+            .build()
+            .unwrap();
         let exec = DataSourceExec::from_data_source(conf);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);

@@ -73,7 +73,7 @@ impl FileStream {
         file_opener: Arc<dyn FileOpener>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let projected_schema = config.projected_schema();
+        let projected_schema = config.projected_schema()?;
 
         let file_group = config.file_groups[partition].clone();
 
@@ -585,7 +585,8 @@ mod tests {
             )
             .with_file_group(file_group)
             .with_limit(self.limit)
-            .build();
+            .build()
+            .unwrap();
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream =
                 FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)

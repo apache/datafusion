@@ -260,7 +260,7 @@ impl TableProvider for IndexTableProvider {
             );
         }
         Ok(DataSourceExec::from_data_source(
-            file_scan_config_builder.build(),
+            file_scan_config_builder.build()?,
         ))
     }
 

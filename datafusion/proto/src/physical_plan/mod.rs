@@ -639,7 +639,7 @@ impl protobuf::PhysicalPlanNode {
         )?)
         .with_newlines_in_values(scan.newlines_in_values)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build();
+        .build()?;
         Ok(DataSourceExec::from_data_source(conf))
     }
 

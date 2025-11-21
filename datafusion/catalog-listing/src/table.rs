@@ -508,7 +508,7 @@ impl TableProvider for ListingTable {
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())
-                    .build(),
+                    .build()?,
             )
             .await?;
 
