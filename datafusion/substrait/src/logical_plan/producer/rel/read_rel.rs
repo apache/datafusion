@@ -63,6 +63,35 @@ fn convert_literal_rows(
         .collect()
 }
 
+/// Converts rows of arbitrary expressions into Substrait nested structs.
+///
+/// Validates that each row has the expected schema length and converts each expression
+/// using the producer's expression handler.
+fn convert_expression_rows(
+    producer: &mut impl SubstraitProducer,
+    rows: &[Vec<Expr>],
+    schema_len: usize,
+    empty_schema: &Arc<DFSchema>,
+) -> datafusion::common::Result<Vec<NestedStruct>> {
+    rows.iter()
+        .map(|row| {
+            if row.len() != schema_len {
+                return Err(substrait_datafusion_err!(
+                    "Names list must match exactly to nested schema, but found {} uses for {} names",
+                    row.len(),
+                    schema_len
+                ));
+            }
+
+            let fields = row
+                .iter()
+                .map(|expr| producer.handle_expr(expr, empty_schema))
+                .collect::<datafusion::common::Result<_>>()?;
+            Ok(NestedStruct { fields })
+        })
+        .collect()
+}
+
 pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
@@ -160,26 +189,8 @@ pub fn from_values(
         let values = convert_literal_rows(producer, &v.values)?;
         (values, vec![])
     } else {
-        let expressions = v
-            .values
-            .iter()
-            .map(|row| {
-                if row.len() != schema_len {
-                    return Err(substrait_datafusion_err!(
-                            "Names list must match exactly to nested schema, but found {} uses for {} names",
-                            row.len(),
-                            schema_len
-                        ));
-                }
-
-                let fields = row
-                    .iter()
-                    .map(|expr| producer.handle_expr(expr, &empty_schema))
-                    .collect::<datafusion::common::Result<_>>()?;
-                Ok(NestedStruct { fields })
-            })
-            .collect::<datafusion::common::Result<_>>()?;
-
+        let expressions =
+            convert_expression_rows(producer, &v.values, schema_len, &empty_schema)?;
         (vec![], expressions)
     };
     #[allow(deprecated)]
