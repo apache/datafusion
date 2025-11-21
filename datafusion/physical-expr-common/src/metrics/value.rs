@@ -372,6 +372,7 @@ impl Drop for ScopedTimerGuard<'_> {
 pub struct PruningMetrics {
     pruned: Arc<AtomicUsize>,
     matched: Arc<AtomicUsize>,
+    fully_matched: Arc<AtomicUsize>,
 }
 
 impl Display for PruningMetrics {
@@ -400,6 +401,7 @@ impl PruningMetrics {
         Self {
             pruned: Arc::new(AtomicUsize::new(0)),
             matched: Arc::new(AtomicUsize::new(0)),
+            fully_matched: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -415,6 +417,13 @@ impl PruningMetrics {
         // relaxed ordering for operations on `value` poses no issues
         // we're purely using atomic ops with no associated memory ops
         self.matched.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Add `n` to the metric's fully matched value
+    pub fn add_fully_matched(&self, n: usize) {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.fully_matched.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Subtract `n` to the metric's matched value.
