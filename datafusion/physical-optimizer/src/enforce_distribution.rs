@@ -1285,6 +1285,9 @@ pub fn ensure_distribution(
                             add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
                     }
                 }
+                Distribution::KeyPartitioned(_) => {
+                    // Nothing to do: treated as satisfied upstream
+                }
                 Distribution::UnspecifiedDistribution => {
                     if add_roundrobin {
                         // Add round-robin repartitioning on top of the operator
@@ -1331,6 +1334,9 @@ pub fn ensure_distribution(
                     // Operator requires specific distribution.
                     Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
                         // Since there is no ordering requirement, preserving ordering is pointless
+                        child = replace_order_preserving_variants(child)?;
+                    }
+                    Distribution::KeyPartitioned(_) => {
                         child = replace_order_preserving_variants(child)?;
                     }
                     Distribution::UnspecifiedDistribution => {

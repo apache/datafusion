@@ -18,8 +18,9 @@
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
 use crate::{
-    equivalence::ProjectionMapping, expressions::UnKnownColumn, physical_exprs_equal,
-    EquivalenceProperties, PhysicalExpr,
+    equivalence::ProjectionMapping,
+    expressions::{CastExpr, Column, TryCastExpr, UnKnownColumn},
+    physical_exprs_equal, EquivalenceProperties, PhysicalExpr,
 };
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use std::fmt;
@@ -117,6 +118,9 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
+    /// Partitions that are already organized by disjoint key values for the provided expressions.
+    /// Rows that have the same values for these expressions are guaranteed to be in the same partition.
+    KeyPartitioned(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -133,6 +137,14 @@ impl Display for Partitioning {
                     .join(", ");
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
+            Partitioning::KeyPartitioned(phy_exprs, size) => {
+                let phy_exprs_str = phy_exprs
+                    .iter()
+                    .map(|e| format!("{e}"))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "KeyPartitioned([{phy_exprs_str}], {size})")
+            }
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
@@ -144,7 +156,10 @@ impl Partitioning {
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
-            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
+            RoundRobinBatch(n)
+            | Hash(_, n)
+            | KeyPartitioned(_, n)
+            | UnknownPartitioning(n) => *n,
         }
     }
 
@@ -160,38 +175,76 @@ impl Partitioning {
             Distribution::SinglePartition if self.partition_count() == 1 => true,
             // When partition count is 1, hash requirement is satisfied.
             Distribution::HashPartitioned(_) if self.partition_count() == 1 => true,
-            Distribution::HashPartitioned(required_exprs) => {
-                match self {
-                    // Here we do not check the partition count for hash partitioning and assumes the partition count
-                    // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
-                    // then we need to have the partition count and hash functions validation.
-                    Partitioning::Hash(partition_exprs, _) => {
-                        let fast_match =
-                            physical_exprs_equal(required_exprs, partition_exprs);
-                        // If the required exprs do not match, need to leverage the eq_properties provided by the child
-                        // and normalize both exprs based on the equivalent groups.
-                        if !fast_match {
-                            let eq_groups = eq_properties.eq_group();
-                            if !eq_groups.is_empty() {
-                                let normalized_required_exprs = required_exprs
-                                    .iter()
-                                    .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
-                                    .collect::<Vec<_>>();
-                                let normalized_partition_exprs = partition_exprs
-                                    .iter()
-                                    .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
-                                    .collect::<Vec<_>>();
-                                return physical_exprs_equal(
-                                    &normalized_required_exprs,
-                                    &normalized_partition_exprs,
-                                );
-                            }
+            Distribution::HashPartitioned(required_exprs) => match self {
+                // Here we do not check the partition count for hash partitioning and assumes the partition count
+                // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
+                // then we need to have the partition count and hash functions validation.
+                Partitioning::Hash(partition_exprs, _) => {
+                    let fast_match =
+                        physical_exprs_equal(required_exprs, partition_exprs);
+                    if !fast_match {
+                        let eq_groups = eq_properties.eq_group();
+                        if !eq_groups.is_empty() {
+                            let normalized_required_exprs = required_exprs
+                                .iter()
+                                .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
+                                .collect::<Vec<_>>();
+                            let normalized_partition_exprs = partition_exprs
+                                .iter()
+                                .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
+                                .collect::<Vec<_>>();
+                            return physical_exprs_equal(
+                                &normalized_required_exprs,
+                                &normalized_partition_exprs,
+                            );
                         }
-                        fast_match
                     }
-                    _ => false,
+                    fast_match
                 }
-            }
+                Partitioning::KeyPartitioned(partition_exprs, _) => {
+                    let eq_groups = eq_properties.eq_group();
+                    if partition_exprs.iter().all(|partition_expr| {
+                        required_exprs.iter().any(|required| {
+                            let fast_match = physical_exprs_equal(
+                                &[Arc::clone(required)],
+                                &[Arc::clone(partition_expr)],
+                            );
+                            if fast_match {
+                                return true;
+                            }
+                            if !eq_groups.is_empty() {
+                                let normalized_req =
+                                    eq_groups.normalize_expr(Arc::clone(required));
+                                let normalized_part =
+                                    eq_groups.normalize_expr(Arc::clone(partition_expr));
+                                if physical_exprs_equal(
+                                    &[normalized_req],
+                                    &[normalized_part],
+                                ) {
+                                    return true;
+                                }
+                            }
+                            // fall back to comparing normalized labels
+                            match (
+                                normalize_partition_label(required),
+                                normalize_partition_label(partition_expr),
+                            ) {
+                                (Some(req_label), Some(part_label)) => {
+                                    req_label == part_label
+                                }
+                                _ => false,
+                            }
+                        })
+                    }) {
+                        true
+                    } else {
+                        // As a last resort, try comparing entire sets of labels so
+                        // we can accept cases where we fail to normalize individual expressions.
+                        partition_labels_subset(required_exprs, partition_exprs)
+                    }
+                }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -213,9 +266,58 @@ impl Partitioning {
                 })
                 .collect();
             Partitioning::Hash(normalized_exprs, *part)
+        } else if let Partitioning::KeyPartitioned(exprs, part) = self {
+            let normalized_exprs = input_eq_properties
+                .project_expressions(exprs, mapping)
+                .zip(exprs)
+                .map(|(proj_expr, expr)| {
+                    proj_expr.unwrap_or_else(|| {
+                        Arc::new(UnKnownColumn::new(&expr.to_string()))
+                    })
+                })
+                .collect();
+            Partitioning::KeyPartitioned(normalized_exprs, *part)
         } else {
             self.clone()
         }
+    }
+}
+
+fn normalize_partition_label(expr: &Arc<dyn PhysicalExpr>) -> Option<String> {
+    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        Some(column.name().to_string())
+    } else if let Some(unknown) = expr.as_any().downcast_ref::<UnKnownColumn>() {
+        Some(strip_projection_suffix(unknown.name()))
+    } else if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
+        normalize_partition_label(cast.expr())
+    } else if let Some(try_cast) = expr.as_any().downcast_ref::<TryCastExpr>() {
+        normalize_partition_label(try_cast.expr())
+    } else {
+        None
+    }
+}
+
+fn strip_projection_suffix(name: &str) -> String {
+    name.split('@').next().unwrap_or(name).to_string()
+}
+
+fn partition_labels_subset(
+    required_exprs: &[Arc<dyn PhysicalExpr>],
+    partition_exprs: &[Arc<dyn PhysicalExpr>],
+) -> bool {
+    let required_labels: Option<Vec<_>> = required_exprs
+        .iter()
+        .map(normalize_partition_label)
+        .collect();
+    let partition_labels: Option<Vec<_>> = partition_exprs
+        .iter()
+        .map(normalize_partition_label)
+        .collect();
+    match (required_labels, partition_labels) {
+        (Some(required), Some(partitions)) => partitions
+            .iter()
+            .all(|label| required.iter().any(|r| r == label)),
+        _ => false,
     }
 }
 
@@ -231,6 +333,10 @@ impl PartialEq for Partitioning {
             {
                 true
             }
+            (
+                Partitioning::KeyPartitioned(exprs1, count1),
+                Partitioning::KeyPartitioned(exprs2, count2),
+            ) if physical_exprs_equal(exprs1, exprs2) && (count1 == count2) => true,
             _ => false,
         }
     }
@@ -247,6 +353,9 @@ pub enum Distribution {
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
+    /// Requires children to be distributed such that each key (or key range)
+    /// is guaranteed to be contained within a single partition.
+    KeyPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
 impl Distribution {
@@ -260,6 +369,9 @@ impl Distribution {
             Distribution::HashPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
             }
+            Distribution::KeyPartitioned(expr) => {
+                Partitioning::KeyPartitioned(expr, partition_count)
+            }
         }
     }
 }
@@ -271,6 +383,9 @@ impl Display for Distribution {
             Distribution::SinglePartition => write!(f, "SinglePartition"),
             Distribution::HashPartitioned(exprs) => {
                 write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
+            }
+            Distribution::KeyPartitioned(exprs) => {
+                write!(f, "KeyPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }
@@ -331,7 +446,7 @@ mod tests {
                 Distribution::SinglePartition => {
                     assert_eq!(result, (true, false, false, false, false))
                 }
-                Distribution::HashPartitioned(_) => {
+                Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_) => {
                     assert_eq!(result, (true, false, false, true, false))
                 }
             }

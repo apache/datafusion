@@ -591,6 +591,12 @@ config_namespace! {
         /// inferred and will be represented in the table schema).
         pub listing_table_factory_infer_partitions: bool, default = true
 
+        /// Should a `ListingTable` created through the `ListingTableFactory` keep files that share
+        /// the same partition column values in the same execution partition when `PARTITIONED BY`
+        /// columns are declared. Defaults to true so Hive-style layouts automatically surface
+        /// `KeyPartitioned` metadata and enable partition-aware aggregations.
+        pub listing_table_preserve_partition_values: bool, default = true
+
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
 

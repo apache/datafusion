@@ -269,6 +269,7 @@ PARTITIONED BY (year, month)
 LOCATION '/mnt/nyctaxi';
 ```
 
+
 ## CREATE TABLE
 
 An in-memory table can be created with a query or values list.

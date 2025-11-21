@@ -87,7 +87,7 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
@@ -798,8 +798,60 @@ impl DefaultPhysicalPlanner {
                     Arc::clone(&physical_input_schema),
                 )?);
 
-                let can_repartition = !groups.is_empty()
-                    && session_state.config().target_partitions() > 1
+                let grouping_input_exprs = groups.input_exprs();
+                let key_partition_on_group =
+                    if groups.is_single() && !groups.expr().is_empty() {
+                        match initial_aggr.properties().output_partitioning() {
+                            Partitioning::KeyPartitioned(partition_exprs, _) => {
+                                let normalize_label = |label: String| -> String {
+                                    label
+                                        .split('@')
+                                        .next()
+                                        .unwrap_or(label.as_str())
+                                        .to_string()
+                                };
+                                let label_for = |expr: &Arc<dyn PhysicalExpr>| {
+                                    let raw_label = expr
+                                        .as_any()
+                                        .downcast_ref::<Column>()
+                                        .map(|col| col.name().to_string())
+                                        .unwrap_or_else(|| expr.to_string());
+                                    normalize_label(raw_label)
+                                };
+                                let partition_labels: Vec<_> = partition_exprs
+                                    .iter()
+                                    .map(|expr| label_for(expr))
+                                    .collect();
+                                let group_labels: Vec<_> = grouping_input_exprs
+                                    .iter()
+                                    .map(|expr| label_for(expr))
+                                    .collect();
+                                partition_labels.iter().all(|label| {
+                                    group_labels
+                                        .iter()
+                                        .any(|group_label| group_label == label)
+                                })
+                            }
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    };
+
+                let target_partitions = session_state.config().target_partitions();
+                let child_partition_count = initial_aggr
+                    .properties()
+                    .output_partitioning()
+                    .partition_count();
+                let effective_partition_count = if key_partition_on_group {
+                    child_partition_count.max(2)
+                } else {
+                    child_partition_count
+                };
+                // Hash repartitioning is only helpful if we have grouping keys, the session
+                // allows repartitioning, and there is more than one target partition.
+                let hash_repartition_enabled = !groups.is_empty()
+                    && target_partitions > 1
                     && session_state.config().repartition_aggregations();
 
                 // Some aggregators may be modified during initialization for
@@ -808,8 +860,24 @@ impl DefaultPhysicalPlanner {
                 // To reflect such changes to subsequent stages, use the updated
                 // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+                let has_ordered_aggregate = updated_aggregates
+                    .iter()
+                    .any(|agg| !agg.order_bys().is_empty());
 
-                let next_partition_mode = if can_repartition {
+                // Ordered aggregations (e.g. LAST_VALUE ORDER BY …) and global aggregates must
+                // remain single-partition to preserve semantics.
+                let requires_single_partition =
+                    groups.expr().is_empty() || has_ordered_aggregate;
+
+                // Two independent ways to keep the final stage parallel:
+                //   1. The scan is already KeyPartitioned on the grouping keys, producing
+                //      multiple partitions that can run independently.
+                //   2. We are allowed to insert a hash repartition before the final stage.
+                let key_partition_supports_parallel =
+                    key_partition_on_group && effective_partition_count > 1;
+                let use_partitioned_final = !requires_single_partition
+                    && (key_partition_supports_parallel || hash_repartition_enabled);
+                let next_partition_mode = if use_partitioned_final {
                     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
                     AggregateMode::FinalPartitioned
                 } else {

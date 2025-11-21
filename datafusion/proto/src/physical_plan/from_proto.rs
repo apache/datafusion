@@ -443,6 +443,25 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
+pub fn parse_protobuf_key_partitioning(
+    partitioning: Option<&protobuf::PhysicalKeyPartition>,
+    ctx: &TaskContext,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Option<Partitioning>> {
+    match partitioning {
+        Some(key_part) => {
+            let expr =
+                parse_physical_exprs(&key_part.key_expr, ctx, input_schema, codec)?;
+            Ok(Some(Partitioning::KeyPartitioned(
+                expr,
+                key_part.partition_count.try_into().unwrap(),
+            )))
+        }
+        None => Ok(None),
+    }
+}
+
 pub fn parse_protobuf_partitioning(
     partitioning: Option<&protobuf::Partitioning>,
     ctx: &TaskContext,
@@ -459,6 +478,14 @@ pub fn parse_protobuf_partitioning(
             Some(protobuf::partitioning::PartitionMethod::Hash(hash_repartition)) => {
                 parse_protobuf_hash_partitioning(
                     Some(hash_repartition),
+                    ctx,
+                    input_schema,
+                    codec,
+                )
+            }
+            Some(protobuf::partitioning::PartitionMethod::Key(key_partition)) => {
+                parse_protobuf_key_partitioning(
+                    Some(key_partition),
                     ctx,
                     input_schema,
                     codec,
@@ -558,6 +585,7 @@ pub fn parse_protobuf_file_scan_config(
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
         .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .with_preserve_partition_values(proto.preserve_partition_values)
         .build();
     Ok(config)
 }

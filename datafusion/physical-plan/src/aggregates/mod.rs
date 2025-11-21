@@ -741,7 +741,6 @@ impl AggregateExec {
         } else {
             input_partitioning.clone()
         };
-
         // TODO: Emission type and boundedness information can be enhanced here
         let emission_type = if *input_order_mode == InputOrderMode::Linear {
             EmissionType::Final

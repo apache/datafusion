@@ -64,6 +64,7 @@ use datafusion_physical_expr::{
     ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
+use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -320,6 +321,11 @@ impl FilterExec {
             let out_schema = project_schema(schema, Some(projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
+            if let Some(repaired) =
+                rebuild_key_partitioning(input.output_partitioning(), &projection_mapping)
+            {
+                output_partitioning = repaired;
+            }
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
 
@@ -329,6 +335,23 @@ impl FilterExec {
             input.pipeline_behavior(),
             input.boundedness(),
         ))
+    }
+}
+
+fn rebuild_key_partitioning(
+    input_partitioning: &Partitioning,
+    mapping: &ProjectionMapping,
+) -> Option<Partitioning> {
+    if let Partitioning::KeyPartitioned(exprs, part) = input_partitioning {
+        let mut mapped_exprs = Vec::with_capacity(exprs.len());
+        for expr in exprs {
+            let targets = mapping.get(expr)?;
+            let (target_expr, _) = targets.first();
+            mapped_exprs.push(Arc::clone(target_expr));
+        }
+        Some(Partitioning::KeyPartitioned(mapped_exprs, *part))
+    } else {
+        None
     }
 }
 

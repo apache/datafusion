@@ -1308,20 +1308,30 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
-        assert_eq!(file_list.len(), 1);
+        assert_eq!(file_list.len(), 2);
 
-        let files = file_list[0].clone();
+        let mut grouped_paths: Vec<Vec<String>> = file_list
+            .iter()
+            .map(|files| {
+                let mut paths: Vec<String> =
+                    files.iter().map(|f| f.path().to_string()).collect();
+                paths.sort();
+                paths
+            })
+            .collect();
+        grouped_paths.sort();
 
         assert_eq!(
-            files
-                .iter()
-                .map(|f| f.path().to_string())
-                .collect::<Vec<_>>(),
+            grouped_paths,
             vec![
-                "bucket/test/pid=1/file1",
-                "bucket/test/pid=1/file2",
-                "bucket/test/pid=2/file3",
-                "bucket/test/pid=2/file4",
+                vec![
+                    "bucket/test/pid=1/file1".to_string(),
+                    "bucket/test/pid=1/file2".to_string()
+                ],
+                vec![
+                    "bucket/test/pid=2/file3".to_string(),
+                    "bucket/test/pid=2/file4".to_string()
+                ]
             ]
         );
 
