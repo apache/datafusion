@@ -16,318 +16,320 @@
 # under the License.
 
 ##########
-## Reverse Parquet Scan Tests - Test reverse scan optimization
+## Reverse Parquet Scan Tests - Test reverse scan optimization with multiple row groups
 ##########
 
-# Setup: Create a table with sorted data
+# Setup: Create a table with more data to generate multiple row groups
 statement ok
 CREATE TABLE test_reverse_scan(id INT, value INT, name VARCHAR) AS
-VALUES
-    (1, 100, 'a'),
-    (2, 200, 'b'),
-    (3, 300, 'c'),
-    (4, 400, 'd'),
-    (5, 500, 'e'),
-    (6, 600, 'f'),
-    (7, 700, 'g'),
-    (8, 800, 'h'),
-    (9, 900, 'i'),
-    (10, 1000, 'j');
+SELECT
+    i as id,
+    i * 100 as value,
+    chr(97 + (i % 26)) as name
+FROM generate_series(1, 1000) as t(i);
 
-# Copy to parquet (data is already sorted by id ASC)
+# Copy to parquet with small row group size to force multiple row groups (1000 rows / 100 = 10 row groups)
 query I
 COPY (SELECT * FROM test_reverse_scan ORDER BY id ASC)
-TO 'test_files/scratch/reverse_parquet_scan/sorted_data.parquet'
-STORED AS PARQUET;
+TO 'test_files/scratch/reverse_parquet_scan/multi_rowgroup.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 100);
 ----
-10
+1000
 
-# Create external table WITH ORDER clause to tell DataFusion the data is sorted
+# Create external table WITH ORDER clause
 statement ok
-CREATE EXTERNAL TABLE parquet_reverse_test (
+CREATE EXTERNAL TABLE parquet_reverse_multi_rg (
     id INT NOT NULL,
     value INT NOT NULL,
     name TEXT NOT NULL
 )
 STORED AS PARQUET
 WITH ORDER (id ASC NULLS LAST)
-LOCATION 'test_files/scratch/reverse_parquet_scan/sorted_data.parquet';
+LOCATION 'test_files/scratch/reverse_parquet_scan/multi_rowgroup.parquet';
 
-# Test EXPLAIN for DESC order - should show reverse optimization applied
+# Test 1: EXPLAIN shows reverse optimization
 query TT
-EXPLAIN SELECT * FROM parquet_reverse_test ORDER BY id DESC;
+EXPLAIN SELECT * FROM parquet_reverse_multi_rg ORDER BY id DESC LIMIT 10;
 ----
 logical_plan
-01)Sort: parquet_reverse_test.id DESC NULLS FIRST
-02)--TableScan: parquet_reverse_test projection=[id, value, name]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id, value, name], output_ordering=[id@0 DESC], file_type=parquet
+01)Sort: parquet_reverse_multi_rg.id DESC NULLS FIRST, fetch=10
+02)--TableScan: parquet_reverse_multi_rg projection=[id, value, name]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_rowgroup.parquet]]}, projection=[id, value, name], limit=10, output_ordering=[id@0 DESC], file_type=parquet
 
-# Test 1: Basic reverse scan - data should come out in reverse order
+# Test 2: Reverse scan returns correct top 10 rows
 query IIT
-SELECT * FROM parquet_reverse_test ORDER BY id DESC;
+SELECT * FROM parquet_reverse_multi_rg ORDER BY id DESC LIMIT 10;
 ----
-10 1000 j
-9 900 i
-8 800 h
-7 700 g
-6 600 f
-5 500 e
-4 400 d
-3 300 c
-2 200 b
-1 100 a
+1000 100000 m
+999 99900 l
+998 99800 k
+997 99700 j
+996 99600 i
+995 99500 h
+994 99400 g
+993 99300 f
+992 99200 e
+991 99100 d
 
-# Test 2: Forward scan still works (should use original ordering)
+# Test 3: Forward scan still works correctly
+query IIT
+SELECT * FROM parquet_reverse_multi_rg ORDER BY id ASC LIMIT 10;
+----
+1 100 b
+2 200 c
+3 300 d
+4 400 e
+5 500 f
+6 600 g
+7 700 h
+8 800 i
+9 900 j
+10 1000 k
+
+# Test 4: Reverse scan with middle range (spans multiple row groups)
+query IIT
+SELECT * FROM parquet_reverse_multi_rg WHERE id BETWEEN 495 AND 505 ORDER BY id DESC;
+----
+505 50500 l
+504 50400 k
+503 50300 j
+502 50200 i
+501 50100 h
+500 50000 g
+499 49900 f
+498 49800 e
+497 49700 d
+496 49600 c
+495 49500 b
+
+# Test 5: Reverse scan across multiple row group boundaries
+# Row groups: [1-100], [101-200], [201-300], ...
+# This query spans row groups 1, 2, and 3
+query I
+SELECT id FROM parquet_reverse_multi_rg WHERE id IN (99, 100, 101, 199, 200, 201, 299, 300, 301) ORDER BY id DESC;
+----
+301
+300
+299
+201
+200
+199
+101
+100
+99
+
+# Test 6: Test LIMIT 1 optimization (should only read last row group)
 query TT
-EXPLAIN SELECT * FROM parquet_reverse_test ORDER BY id ASC;
+EXPLAIN SELECT * FROM parquet_reverse_multi_rg ORDER BY id DESC LIMIT 1;
 ----
 logical_plan
-01)Sort: parquet_reverse_test.id ASC NULLS LAST
-02)--TableScan: parquet_reverse_test projection=[id, value, name]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id, value, name], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+01)Sort: parquet_reverse_multi_rg.id DESC NULLS FIRST, fetch=1
+02)--TableScan: parquet_reverse_multi_rg projection=[id, value, name]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_rowgroup.parquet]]}, projection=[id, value, name], limit=1, output_ordering=[id@0 DESC], file_type=parquet
 
 query IIT
-SELECT * FROM parquet_reverse_test ORDER BY id ASC;
+SELECT * FROM parquet_reverse_multi_rg ORDER BY id DESC LIMIT 1;
 ----
-1 100 a
-2 200 b
-3 300 c
-4 400 d
-5 500 e
-6 600 f
-7 700 g
-8 800 h
-9 900 i
-10 1000 j
+1000 100000 m
 
-# Test 3: Reverse scan with LIMIT
-query IIT
-SELECT * FROM parquet_reverse_test ORDER BY id DESC LIMIT 3;
+# Test 7: EXPLAIN for full reverse scan
+query TT
+EXPLAIN SELECT * FROM parquet_reverse_multi_rg ORDER BY id DESC;
 ----
-10 1000 j
-9 900 i
-8 800 h
+logical_plan
+01)Sort: parquet_reverse_multi_rg.id DESC NULLS FIRST
+02)--TableScan: parquet_reverse_multi_rg projection=[id, value, name]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_rowgroup.parquet]]}, projection=[id, value, name], output_ordering=[id@0 DESC], file_type=parquet
 
-# Test 4: Reverse scan with WHERE clause
-query IIT
-SELECT * FROM parquet_reverse_test WHERE id > 5 ORDER BY id DESC;
+# Test 8: Full reverse scan (all 1000 rows)
+query I
+SELECT COUNT(*) FROM (
+    SELECT id FROM parquet_reverse_multi_rg ORDER BY id DESC
+) as t;
 ----
-10 1000 j
-9 900 i
-8 800 h
-7 700 g
-6 600 f
+1000
 
-# Test 5: Multiple column sort with DESC
-query IIT
-SELECT * FROM parquet_reverse_test ORDER BY id DESC, value DESC LIMIT 5;
-----
-10 1000 j
-9 900 i
-8 800 h
-7 700 g
-6 600 f
-
-# Test 6: Test with aggregation
+# Test 9: Verify first and last values are swapped correctly
 query II
-SELECT id, SUM(value) as total
-FROM parquet_reverse_test
-WHERE id <= 5
-GROUP BY id
-ORDER BY id DESC;
+SELECT MIN(id), MAX(id) FROM (
+    SELECT id FROM parquet_reverse_multi_rg ORDER BY id DESC LIMIT 100
+) as t;
 ----
-5 500
-4 400
-3 300
-2 200
+901 1000
+
+query II
+SELECT MIN(id), MAX(id) FROM (
+    SELECT id FROM parquet_reverse_multi_rg ORDER BY id ASC LIMIT 100
+) as t;
+----
 1 100
 
-# Test 7: BETWEEN with DESC
-query IIT
-SELECT * FROM parquet_reverse_test WHERE id BETWEEN 3 AND 7 ORDER BY id DESC;
+# Test 10: Aggregation with reverse order (every 100th row, crosses all row groups)
+query II
+SELECT id, value
+FROM parquet_reverse_multi_rg
+WHERE id % 100 = 0
+ORDER BY id DESC;
 ----
-7 700 g
-6 600 f
-5 500 e
-4 400 d
-3 300 c
-
-# Test 8: Verify first/last swap
-query I
-SELECT id FROM parquet_reverse_test ORDER BY id ASC LIMIT 1;
-----
-1
-
-query I
-SELECT id FROM parquet_reverse_test ORDER BY id DESC LIMIT 1;
-----
-10
-
-query TT
-EXPLAIN SELECT id FROM parquet_reverse_test ORDER BY id DESC LIMIT 1;
-----
-logical_plan
-01)Sort: parquet_reverse_test.id DESC NULLS FIRST, fetch=1
-02)--TableScan: parquet_reverse_test projection=[id]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], limit=1, output_ordering=[id@0 DESC], file_type=parquet
-
-query TT
-EXPLAIN verbose SELECT id FROM parquet_reverse_test ORDER BY id DESC LIMIT 1;
-----
-initial_logical_plan
-01)Limit: skip=0, fetch=1
-02)--Sort: parquet_reverse_test.id DESC NULLS FIRST
-03)----Projection: parquet_reverse_test.id
-04)------TableScan: parquet_reverse_test
-logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
-logical_plan after type_coercion SAME TEXT AS ABOVE
-analyzed_logical_plan SAME TEXT AS ABOVE
-logical_plan after optimize_unions SAME TEXT AS ABOVE
-logical_plan after simplify_expressions SAME TEXT AS ABOVE
-logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
-logical_plan after eliminate_join SAME TEXT AS ABOVE
-logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
-logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
-logical_plan after decorrelate_lateral_join SAME TEXT AS ABOVE
-logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
-logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
-logical_plan after eliminate_filter SAME TEXT AS ABOVE
-logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
-logical_plan after eliminate_limit SAME TEXT AS ABOVE
-logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
-logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
-logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
-logical_plan after push_down_limit
-01)Limit: skip=0, fetch=1
-02)--Sort: parquet_reverse_test.id DESC NULLS FIRST, fetch=1
-03)----Projection: parquet_reverse_test.id
-04)------TableScan: parquet_reverse_test
-logical_plan after push_down_filter SAME TEXT AS ABOVE
-logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
-logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
-logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
-logical_plan after optimize_projections
-01)Limit: skip=0, fetch=1
-02)--Sort: parquet_reverse_test.id DESC NULLS FIRST, fetch=1
-03)----TableScan: parquet_reverse_test projection=[id]
-logical_plan after optimize_unions SAME TEXT AS ABOVE
-logical_plan after simplify_expressions SAME TEXT AS ABOVE
-logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
-logical_plan after eliminate_join SAME TEXT AS ABOVE
-logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
-logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
-logical_plan after decorrelate_lateral_join SAME TEXT AS ABOVE
-logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
-logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
-logical_plan after eliminate_filter SAME TEXT AS ABOVE
-logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
-logical_plan after eliminate_limit SAME TEXT AS ABOVE
-logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
-logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
-logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
-logical_plan after push_down_limit
-01)Sort: parquet_reverse_test.id DESC NULLS FIRST, fetch=1
-02)--TableScan: parquet_reverse_test projection=[id]
-logical_plan after push_down_filter SAME TEXT AS ABOVE
-logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
-logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
-logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
-logical_plan after optimize_projections SAME TEXT AS ABOVE
-logical_plan after optimize_unions SAME TEXT AS ABOVE
-logical_plan after simplify_expressions SAME TEXT AS ABOVE
-logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
-logical_plan after eliminate_join SAME TEXT AS ABOVE
-logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
-logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
-logical_plan after decorrelate_lateral_join SAME TEXT AS ABOVE
-logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
-logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
-logical_plan after eliminate_filter SAME TEXT AS ABOVE
-logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
-logical_plan after eliminate_limit SAME TEXT AS ABOVE
-logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
-logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
-logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
-logical_plan after push_down_limit SAME TEXT AS ABOVE
-logical_plan after push_down_filter SAME TEXT AS ABOVE
-logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
-logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
-logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
-logical_plan after optimize_projections SAME TEXT AS ABOVE
-logical_plan
-01)Sort: parquet_reverse_test.id DESC NULLS FIRST, fetch=1
-02)--TableScan: parquet_reverse_test projection=[id]
-initial_physical_plan
-01)SortExec: TopK(fetch=1), expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
-initial_physical_plan_with_stats
-01)SortExec: TopK(fetch=1), expr=[id@0 DESC], preserve_partitioning=[false], statistics=[Rows=Exact(1), Bytes=Inexact(27), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(10)) Null=Inexact(0))]]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, statistics=[Rows=Exact(10), Bytes=Exact(271), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(10)) Null=Exact(0))]]
-initial_physical_plan_with_schema
-01)SortExec: TopK(fetch=1), expr=[id@0 DESC], preserve_partitioning=[false], schema=[id:Int32]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, schema=[id:Int32]
-physical_plan after OutputRequirements
-01)OutputRequirementExec: order_by=[(id@0, desc)], dist_by=SinglePartition
-02)--SortExec: TopK(fetch=1), expr=[id@0 DESC], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
-physical_plan after aggregate_statistics SAME TEXT AS ABOVE
-physical_plan after join_selection SAME TEXT AS ABOVE
-physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
-physical_plan after FilterPushdown SAME TEXT AS ABOVE
-physical_plan after EnforceDistribution SAME TEXT AS ABOVE
-physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
-physical_plan after EnforceSorting SAME TEXT AS ABOVE
-physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
-physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
-physical_plan after coalesce_batches SAME TEXT AS ABOVE
-physical_plan after OutputRequirements
-01)SortExec: TopK(fetch=1), expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
-physical_plan after LimitAggregation SAME TEXT AS ABOVE
-physical_plan after LimitPushPastWindows SAME TEXT AS ABOVE
-physical_plan after LimitPushdown SAME TEXT AS ABOVE
-physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
-physical_plan after ReverseOrder DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], limit=1, output_ordering=[id@0 DESC], file_type=parquet
-physical_plan after EnsureCooperative SAME TEXT AS ABOVE
-physical_plan after FilterPushdown(Post) SAME TEXT AS ABOVE
-physical_plan after SanityCheckPlan SAME TEXT AS ABOVE
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], limit=1, output_ordering=[id@0 DESC], file_type=parquet
-physical_plan_with_stats DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], limit=1, output_ordering=[id@0 DESC], file_type=parquet, statistics=[Rows=Exact(10), Bytes=Exact(271), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(10)) Null=Exact(0))]]
-physical_plan_with_schema DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/sorted_data.parquet]]}, projection=[id], limit=1, output_ordering=[id@0 DESC], file_type=parquet, schema=[id:Int32]
-
-# Test 9: Test all rows DESC (full table scan with reverse)
-query I
-SELECT id FROM parquet_reverse_test ORDER BY id DESC;
-----
-10
-9
-8
-7
-6
-5
-4
-3
-2
-1
-
-# Test 10: Test all rows ASC (verify correctness)
-query I
-SELECT id FROM parquet_reverse_test ORDER BY id ASC;
-----
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
+1000 100000
+900 90000
+800 80000
+700 70000
+600 60000
+500 50000
+400 40000
+300 30000
+200 20000
+100 10000
 
 # Cleanup
 statement ok
 DROP TABLE test_reverse_scan;
 
 statement ok
-DROP TABLE parquet_reverse_test;
+DROP TABLE parquet_reverse_multi_rg;
+
+
+##########
+## Test Multiple Files with Multiple Row Groups Each
+##########
+
+# Setup: Create test data
+statement ok
+CREATE TABLE test_multi_files(id INT, value INT, name VARCHAR) AS
+SELECT
+    i as id,
+    i * 100 as value,
+    chr(97 + (i % 26)) as name
+FROM generate_series(1, 300) as t(i);
+
+# Create 3 files, each with multiple row groups (100 rows / 50 = 2 row groups per file)
+# File 1: id 1-100 (2 row groups: [1-50], [51-100])
+query I
+COPY (SELECT * FROM test_multi_files WHERE id BETWEEN 1 AND 100 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/file_1.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+# File 2: id 101-200 (2 row groups: [101-150], [151-200])
+query I
+COPY (SELECT * FROM test_multi_files WHERE id BETWEEN 101 AND 200 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/file_2.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+# File 3: id 201-300 (2 row groups: [201-250], [251-300])
+query I
+COPY (SELECT * FROM test_multi_files WHERE id BETWEEN 201 AND 300 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/file_3.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+# Force into single partition to test file reversal within a FileGroup
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# Create external table
+statement ok
+CREATE EXTERNAL TABLE parquet_multi_files_rg (
+    id INT NOT NULL,
+    value INT NOT NULL,
+    name TEXT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (id ASC NULLS LAST)
+LOCATION 'test_files/scratch/reverse_parquet_scan/file_*.parquet';
+
+# Test 1: Reverse scan should read files in reverse order: file_3, file_2, file_1
+# Within each file, row groups should also be read in reverse
+# file_3: [251-300] then [201-250]
+# file_2: [151-200] then [101-150]
+# file_1: [51-100] then [1-50]
+query IIT
+SELECT * FROM parquet_multi_files_rg ORDER BY id DESC LIMIT 10;
+----
+300 30000 o
+299 29900 n
+298 29800 m
+297 29700 l
+296 29600 k
+295 29500 j
+294 29400 i
+293 29300 h
+292 29200 g
+291 29100 f
+
+# Test 2: Verify transition between files is correct
+query I
+SELECT id FROM parquet_multi_files_rg WHERE id IN (100, 101, 200, 201) ORDER BY id DESC;
+----
+201
+200
+101
+100
+
+# Test 3: Verify row group boundaries within files
+# These IDs are at row group boundaries: 50, 51, 150, 151, 250, 251
+query I
+SELECT id FROM parquet_multi_files_rg WHERE id IN (50, 51, 150, 151, 250, 251) ORDER BY id DESC;
+----
+251
+250
+151
+150
+51
+50
+
+# Test 4: Forward scan should work normally
+query IIT
+SELECT * FROM parquet_multi_files_rg ORDER BY id ASC LIMIT 10;
+----
+1 100 b
+2 200 c
+3 300 d
+4 400 e
+5 500 f
+6 600 g
+7 700 h
+8 800 i
+9 900 j
+10 1000 k
+
+# Test 5: Full reverse scan verification
+query I
+SELECT id FROM parquet_multi_files_rg ORDER BY id DESC LIMIT 20;
+----
+300
+299
+298
+297
+296
+295
+294
+293
+292
+291
+290
+289
+288
+287
+286
+285
+284
+283
+282
+281
+
+# Cleanup
+statement ok
+DROP TABLE test_multi_files;
+
+statement ok
+DROP TABLE parquet_multi_files_rg;
