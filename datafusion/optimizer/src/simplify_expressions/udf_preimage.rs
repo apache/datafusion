@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, tree_node::Transformed, Result};
+use std::str::FromStr;
+
+use arrow::compute::kernels::cast_utils::IntervalUnit;
+use datafusion_common::{Result, ScalarValue, internal_err, tree_node::Transformed};
 use datafusion_expr::{
     and, expr::ScalarFunction, lit, or, simplify::SimplifyInfo, BinaryExpr, Expr,
     Operator, ScalarUDFImpl,
@@ -173,7 +176,14 @@ pub(super) fn is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary<
 
     match func.name() {
         "date_part" => {
-            let left_expr = Box::new(args[1].clone()); // len args is variable and the position of args can vary too
+            let left_expr = Box::new(args[1].clone());
+            let Some(ScalarValue::Utf8(Some(part))) = args[0].as_literal() else {
+                return false;
+            };
+            match IntervalUnit::from_str(part) {
+                Ok(IntervalUnit::Year) => {},
+                _ => return false
+            };
             let Ok(expr_type) = info.get_data_type(&left_expr) else {
                 return false;
             };
@@ -310,6 +320,16 @@ mod tests {
             Some(19723 * 86_400_000_000_000),
             None,
         )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    #[test]
+    // Should not try to simplify
+    fn test_preimage_date_part_not_year_date32_eq() {
+        let schema = expr_test_schema();
+        // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
+        let expr_lt = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
+        let expected = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected)
     }
 

@@ -70,6 +70,17 @@ select
 ----
 2024-01-01 2024-01-01T00:00:00 2024-01-01T00:00:00.123 2024-01-01T00:00:00.123456 2024-01-01T00:00:00.123456789
 
+# Explain eq not year
+query TT
+explain select c1_date32 from t where extract (month from c1_date32) = 2024
+----
+logical_plan
+01)Filter: date_part(Utf8("MONTH"), t.c1_date32) = Int32(2024)
+02)--TableScan: t projection=[c1_date32]
+physical_plan
+01)FilterExec: date_part(MONTH, c1_date32@0) = 2024
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Explain not_eq
 query TT
 explain select c1_date32 from t where extract (year from c1_date32) <> 2024
