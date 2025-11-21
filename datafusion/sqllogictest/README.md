@@ -142,6 +142,17 @@ select substr('Andrew Lamb', 1, 6), '|'
 Andrew |
 ```
 
+## Cookbook: Ignoring volatile output
+
+Sometimes parts of a result change every run (timestamps, counters, etc). To keep the rest of the snapshot checked in, replace those fragments with the `<slt:ignore>` marker inside the expected block. During validation the marker acts like a wildcard, so only the surrounding text must match.
+
+```text
+query TT
+EXPLAIN ANALYZE SELECT * FROM generate_series(100);
+----
+Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
+```
+
 # Reference
 
 ## Running tests: Validation Mode
