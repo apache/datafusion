@@ -16,6 +16,8 @@
 // under the License.
 
 use crate::ScalarFunctionExpr;
+use arrow::array::RecordBatch;
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
@@ -28,8 +30,6 @@ use std::any::Any;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use arrow::array::RecordBatch;
-use arrow::compute::concat;
 
 /// Wrapper around a scalar function that can be evaluated asynchronously
 #[derive(Debug, Clone, Eq)]
