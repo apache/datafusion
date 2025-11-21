@@ -391,8 +391,8 @@ fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 // General row comparison for array_has_all and array_has_any
 fn general_array_has_for_all_and_any<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -417,8 +417,8 @@ fn general_array_has_for_all_and_any<'a>(
 
 // String comparison for array_has_all and array_has_any
 fn array_has_all_and_any_string_internal<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -443,8 +443,8 @@ fn array_has_all_and_any_string_internal<'a>(
 }
 
 fn array_has_all_and_any_dispatch<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     if needle.values().is_empty() {
@@ -469,7 +469,7 @@ fn array_has_all_and_any_inner(
 ) -> Result<ArrayRef> {
     let haystack: ArrayWrapper = args[0].as_ref().try_into()?;
     let needle: ArrayWrapper = args[1].as_ref().try_into()?;
-    array_has_all_and_any_dispatch(&haystack, &needle, comparison_type)
+    array_has_all_and_any_dispatch(haystack, needle, comparison_type)
 }
 
 fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
