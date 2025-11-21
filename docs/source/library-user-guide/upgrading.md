@@ -164,14 +164,14 @@ and you wish to use this as a `SchemaProvider`. In the old approach you would do
 something like:
 
 ```rust,ignore
-    let foreign_provider: ForeignSchemaProvider = provider.into();
+    let foreign_provider: ForeignSchemaProvider = ffi_provider.into();
     let foreign_provider = Arc::new(foreign_provider) as Arc<dyn SchemaProvider>;
 ```
 
 This code should now be written as:
 
 ```rust,ignore
-    let foreign_provider: Arc<dyn SchemaProvider + Send> = provider.into();
+    let foreign_provider: Arc<dyn SchemaProvider + Send> = ffi_provider.into();
     let foreign_provider = foreign_provider as Arc<dyn SchemaProvider>;
 ```
 

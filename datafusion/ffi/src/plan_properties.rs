@@ -78,7 +78,7 @@ pub struct FFI_PlanProperties {
 
     /// Utility to identify when FFI objects are accessed locally through
     /// the foreign interface.
-    pub library_marker_id: extern "C" fn() -> u64,
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 struct PlanPropertiesPrivateData {
@@ -347,13 +347,13 @@ mod tests {
 
         // Verify local libraries
         let foreign_plan: PlanProperties = ffi_plan.try_into()?;
-        assert_eq!(format!("{foreign_plan:?}"), format!("{:?}", foreign_plan));
+        assert_eq!(format!("{foreign_plan:?}"), format!("{props:?}"));
 
         // Verify different library markers still can produce identical properties
         let mut ffi_plan = FFI_PlanProperties::from(&props);
         ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_plan: PlanProperties = ffi_plan.try_into()?;
-        assert_eq!(format!("{foreign_plan:?}"), format!("{:?}", foreign_plan));
+        assert_eq!(format!("{foreign_plan:?}"), format!("{props:?}"));
 
         Ok(())
     }

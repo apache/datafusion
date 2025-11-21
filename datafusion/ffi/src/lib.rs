@@ -72,15 +72,15 @@ static LIBRARY_MARKER: u8 = 0;
 /// a different address for the marker. By checking the marker
 /// address we can determine if a struct is truly Foreign or is
 /// actually within the same originating library.
-pub extern "C" fn get_library_marker_id() -> u64 {
-    &LIBRARY_MARKER as *const u8 as u64
+pub extern "C" fn get_library_marker_id() -> usize {
+    &LIBRARY_MARKER as *const u8 as usize
 }
 
 /// For unit testing in this crate we need to trick the providers
 /// into thinking we have a foreign call. We do this by overwriting
 /// their `library_marker_id` function to return a different value.
 #[cfg(test)]
-pub(crate) extern "C" fn mock_foreign_marker_id() -> u64 {
+pub(crate) extern "C" fn mock_foreign_marker_id() -> usize {
     get_library_marker_id() + 1
 }
 

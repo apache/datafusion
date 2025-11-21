@@ -104,7 +104,7 @@ the example in `FFI_TableProvider`.
 ## Library Marker ID
 
 When reviewing the code, many of the structs in this crate contain a call to
-a `library_maker_id`. The purpose of this call is to determine if a library is
+a `library_marker_id`. The purpose of this call is to determine if a library is
 accessing _local_ code through the FFI structs. Consider this example: you have
 a `primary` program that exposes functions to create a schema provider. You
 have a `secondary` library that exposes a function to create a catalog provider

@@ -41,7 +41,7 @@ mod tests {
         )?(synchronous);
 
         // In order to access the table provider within this executable, we need to
-        // turn it into a `ForeignTableProvider`.
+        // turn it into a `TableProvider`.
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_table_provider).into();
 
         let ctx = SessionContext::new();

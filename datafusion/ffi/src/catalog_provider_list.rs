@@ -61,7 +61,7 @@ pub struct FFI_CatalogProviderList {
 
     /// Utility to identify when FFI objects are accessed locally through
     /// the foreign interface.
-    pub library_marker_id: extern "C" fn() -> u64,
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_CatalogProviderList {}
