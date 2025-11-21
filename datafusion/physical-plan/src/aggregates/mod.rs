@@ -1293,12 +1293,31 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
 
+        // If this node tried to pushdown some dynamic filter before, now we check
+        // if the child accept the filter
         if matches!(phase, FilterPushdownPhase::Post) && self.dynamic_filter.is_some() {
-            let child_accepts_dyn_filter = child_pushdown_result
-                .self_filters
-                .first()
-                .map(|filters| !filters.is_empty())
-                .unwrap_or(false);
+            // let child_accepts_dyn_filter = child_pushdown_result
+            //     .self_filters
+            //     .first()
+            //     .map(|filters| {
+            //         assert_eq_or_internal_err!(
+            //             filters.len(),
+            //             1,
+            //             "Aggregate only pushdown one self dynamic filter"
+            //         );
+            //         let filter = filters.get(0).unwrap(); // Asserted above
+            //         Ok(matches!(filter.discriminant, PushedDown::Yes))
+            //     })
+            //     .unwrap_or_else(|| internal_err!("The length of self filters equals to the number of child of this ExecutionPlan, so it must be 1"))?;
+
+            // HACK: The above snippet should be used, however, now the child reply
+            // `PushDown::No` can indicate they're not able to push down row-level
+            // filter, but still keep the filter for statistics pruning.
+            // So here, we try to use ref count to determine if the dynamic filter
+            // has actually be pushed down.
+            // Issue: <https://github.com/apache/datafusion/issues/18856>
+            let dyn_filter = self.dynamic_filter.as_ref().unwrap();
+            let child_accepts_dyn_filter = Arc::strong_count(dyn_filter) > 1;
 
             if !child_accepts_dyn_filter {
                 // Child can't consume the self dynamic filter, so disable it by setting
