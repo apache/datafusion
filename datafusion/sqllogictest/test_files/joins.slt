@@ -2052,14 +2052,12 @@ physical_plan
 01)ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id]
 02)--NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
 03)----CoalescePartitionsExec
-04)------CoalesceBatchesExec: target_batch_size=2
-05)--------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)----CoalesceBatchesExec: target_batch_size=2
-09)------FilterExec: t1_id@0 > 10
-10)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----FilterExec: t1_id@0 > 10
+08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT join_t1.t1_id, join_t2.t2_id
@@ -2092,14 +2090,12 @@ logical_plan
 physical_plan
 01)NestedLoopJoinExec: join_type=Right, filter=t1_id@0 < t2_id@1
 02)--CoalescePartitionsExec
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------FilterExec: t1_id@0 > 22
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)--CoalesceBatchesExec: target_batch_size=2
-08)----FilterExec: t2_id@0 > 11
-09)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)--------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----FilterExec: t1_id@0 > 22
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--FilterExec: t2_id@0 > 11
+07)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT join_t1.t1_id, join_t2.t2_id
@@ -4108,9 +4104,8 @@ physical_plan
 04)------CoalesceBatchesExec: target_batch_size=3
 05)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@3, currency_from@1)], filter=ts@0 >= ts@1, projection=[ts@0, sn@1, amount@2, currency@3, rate@6]
 06)----------DataSourceExec: partitions=1, partition_sizes=[0]
-07)----------CoalesceBatchesExec: target_batch_size=3
-08)------------FilterExec: currency_to@2 = USD, projection=[ts@0, currency_from@1, rate@3]
-09)--------------DataSourceExec: partitions=1, partition_sizes=[0]
+07)----------FilterExec: currency_to@2 = USD, projection=[ts@0, currency_from@1, rate@3]
+08)------------DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
 DROP TABLE sales_global;
@@ -4459,11 +4454,10 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=3
 03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(a@0, a@0)]
 04)------CoalescePartitionsExec
-05)--------CoalesceBatchesExec: target_batch_size=3
-06)----------FilterExec: b@1 > 3, projection=[a@0]
-07)------------DataSourceExec: partitions=2, partition_sizes=[1, 1]
-08)------SortExec: expr=[c@2 DESC], preserve_partitioning=[true]
-09)--------DataSourceExec: partitions=2, partition_sizes=[1, 1]
+05)--------FilterExec: b@1 > 3, projection=[a@0]
+06)----------DataSourceExec: partitions=2, partition_sizes=[1, 1]
+07)------SortExec: expr=[c@2 DESC], preserve_partitioning=[true]
+08)--------DataSourceExec: partitions=2, partition_sizes=[1, 1]
 
 query TT
 explain select * from test where a in (select a from test where b > 3) order by c desc nulls last;
@@ -4481,11 +4475,10 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=3
 03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(a@0, a@0)]
 04)------CoalescePartitionsExec
-05)--------CoalesceBatchesExec: target_batch_size=3
-06)----------FilterExec: b@1 > 3, projection=[a@0]
-07)------------DataSourceExec: partitions=2, partition_sizes=[1, 1]
-08)------SortExec: expr=[c@2 DESC NULLS LAST], preserve_partitioning=[true]
-09)--------DataSourceExec: partitions=2, partition_sizes=[1, 1]
+05)--------FilterExec: b@1 > 3, projection=[a@0]
+06)----------DataSourceExec: partitions=2, partition_sizes=[1, 1]
+07)------SortExec: expr=[c@2 DESC NULLS LAST], preserve_partitioning=[true]
+08)--------DataSourceExec: partitions=2, partition_sizes=[1, 1]
 
 query III
 select * from test where a in (select a from test where b > 3) order by c desc nulls first;
@@ -5085,12 +5078,11 @@ WHERE k2 > 0
     )
 ----
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=3
-02)--FilterExec: k2@0 > 0 OR mark@2, projection=[k2@0, v2@1]
-03)----CoalesceBatchesExec: target_batch_size=3
-04)------HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k2@0, k1@0)]
-05)--------DataSourceExec: partitions=1, partition_sizes=[0]
-06)--------DataSourceExec: partitions=1, partition_sizes=[10000]
+01)FilterExec: k2@0 > 0 OR mark@2, projection=[k2@0, v2@1]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k2@0, k1@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[0]
+05)------DataSourceExec: partitions=1, partition_sizes=[10000]
 
 query II
 SELECT *
@@ -5136,9 +5128,8 @@ physical_plan
 01)CoalesceBatchesExec: target_batch_size=3
 02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k2@0, k1@0)]
 03)----DataSourceExec: partitions=1, partition_sizes=[0]
-04)----CoalesceBatchesExec: target_batch_size=3
-05)------FilterExec: k1@0 < 0
-06)--------DataSourceExec: partitions=1, partition_sizes=[10000]
+04)----FilterExec: k1@0 < 0
+05)------DataSourceExec: partitions=1, partition_sizes=[10000]
 
 query II
 SELECT *
@@ -5205,12 +5196,10 @@ physical_plan
 01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
 03)----SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
-04)------CoalesceBatchesExec: target_batch_size=3
-05)--------FilterExec: t1_id@0 > 10
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----CoalesceBatchesExec: target_batch_size=3
-08)------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
-09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------FilterExec: t1_id@0 > 10
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+07)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE t1;

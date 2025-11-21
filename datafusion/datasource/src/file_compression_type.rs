@@ -43,12 +43,12 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
+#[cfg(feature = "compression")]
+use liblzma::read::XzDecoder;
 use object_store::buffered::BufWriter;
 use tokio::io::AsyncWrite;
 #[cfg(feature = "compression")]
 use tokio_util::io::{ReaderStream, StreamReader};
-#[cfg(feature = "compression")]
-use xz2::read::XzDecoder;
 #[cfg(feature = "compression")]
 use zstd::Decoder as ZstdDecoder;
 

@@ -17,12 +17,19 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::{Array, ArrayRef, NullArray};
-use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::DataType;
-use arrow::util::pretty::pretty_format_columns;
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use arrow::{
+    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
+    compute::{kernels, max, min, CastOptions},
+    datatypes::DataType,
+    util::pretty::pretty_format_columns,
+};
+use datafusion_common::internal_datafusion_err;
+use datafusion_common::{
+    format::DEFAULT_CAST_OPTIONS,
+    internal_err,
+    scalar::{date_to_timestamp_multiplier, ensure_timestamp_in_bounds},
+    Result, ScalarValue,
+};
 use std::fmt;
 use std::sync::Arc;
 
@@ -113,10 +120,12 @@ impl ColumnarValue {
         }
     }
 
-    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
-    /// number of rows. [`Self::Scalar`] is converted by repeating the same
-    /// scalar multiple times which is not as efficient as handling the scalar
-    /// directly.
+    /// Convert any [`Self::Scalar`] into an Arrow [`ArrayRef`] with the specified
+    /// number of rows  by repeating the same scalar multiple times,
+    /// which is not as efficient as handling the scalar directly.
+    /// [`Self::Array`] will just be returned as is.
+    ///
+    /// See [`Self::into_array_of_size`] if you need to validate the length of the output array.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -135,6 +144,38 @@ impl ColumnarValue {
     /// number of rows. [`Self::Scalar`] is converted by repeating the same
     /// scalar multiple times which is not as efficient as handling the scalar
     /// directly.
+    /// This validates that if this is [`Self::Array`], it has the expected length.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size or
+    /// if the array length does not match the expected length
+    pub fn into_array_of_size(self, num_rows: usize) -> Result<ArrayRef> {
+        match self {
+            ColumnarValue::Array(array) => {
+                if array.len() == num_rows {
+                    Ok(array)
+                } else {
+                    internal_err!(
+                        "Array length {} does not match expected length {}",
+                        array.len(),
+                        num_rows
+                    )
+                }
+            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+        }
+    }
+
+    /// Convert any [`Self::Scalar`] into an Arrow [`ArrayRef`] with the specified
+    /// number of rows  by repeating the same scalar multiple times,
+    /// which is not as efficient as handling the scalar directly.
+    /// [`Self::Array`] will just be returned as is.
+    ///
+    /// See [`Self::to_array_of_size`] if you need to validate the length of the output array.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -147,6 +188,36 @@ impl ColumnarValue {
             ColumnarValue::Array(array) => Arc::clone(array),
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
         })
+    }
+
+    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
+    /// scalar multiple times which is not as efficient as handling the scalar
+    /// directly.
+    /// This validates that if this is [`Self::Array`], it has the expected length.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size or
+    /// if the array length does not match the expected length
+    pub fn to_array_of_size(&self, num_rows: usize) -> Result<ArrayRef> {
+        match self {
+            ColumnarValue::Array(array) => {
+                if array.len() == num_rows {
+                    Ok(Arc::clone(array))
+                } else {
+                    internal_err!(
+                        "Array length {} does not match expected length {}",
+                        array.len(),
+                        num_rows
+                    )
+                }
+            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+        }
     }
 
     /// Null columnar values are implemented as a null array in order to pass batch
@@ -183,7 +254,8 @@ impl ColumnarValue {
                         Some(array_len)
                     } else {
                         return internal_err!(
-                            "Arguments has mixed length. Expected length: {array_len}, found length: {}", a.len()
+                            "Arguments has mixed length. Expected length: {array_len}, found length: {}",
+                            a.len()
                         );
                     }
                 }
@@ -210,14 +282,72 @@ impl ColumnarValue {
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
-            )),
+            ColumnarValue::Array(array) => {
+                ensure_date_array_timestamp_bounds(array, cast_type)?;
+                Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
+                    array,
+                    cast_type,
+                    &cast_options,
+                )?))
+            }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
             )),
         }
     }
+}
+
+fn ensure_date_array_timestamp_bounds(
+    array: &ArrayRef,
+    cast_type: &DataType,
+) -> Result<()> {
+    let source_type = array.data_type().clone();
+    let Some(multiplier) = date_to_timestamp_multiplier(&source_type, cast_type) else {
+        return Ok(());
+    };
+
+    if multiplier <= 1 {
+        return Ok(());
+    }
+
+    // Use compute kernels to find min/max instead of iterating all elements
+    let (min_val, max_val): (Option<i64>, Option<i64>) = match &source_type {
+        DataType::Date32 => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<Date32Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected Date32Array but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr).map(|v| v as i64), max(arr).map(|v| v as i64))
+        }
+        DataType::Date64 => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<Date64Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected Date64Array but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        _ => return Ok(()), // Not a date type, nothing to do
+    };
+
+    // Only validate the min and max values instead of all elements
+    if let Some(min) = min_val {
+        ensure_timestamp_in_bounds(min, multiplier, &source_type, cast_type)?;
+    }
+    if let Some(max) = max_val {
+        ensure_timestamp_in_bounds(max, multiplier, &source_type, cast_type)?;
+    }
+
+    Ok(())
 }
 
 // Implement Display trait for ColumnarValue
@@ -247,7 +377,38 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
+    use arrow::{
+        array::{Date64Array, Int32Array},
+        datatypes::TimeUnit,
+    };
+
+    #[test]
+    fn into_array_of_size() {
+        // Array case
+        let arr = make_array(1, 3);
+        let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
+        assert_eq!(&arr_columnar_value.into_array_of_size(3).unwrap(), &arr);
+
+        // Scalar case
+        let scalar_columnar_value = ColumnarValue::Scalar(ScalarValue::Int32(Some(42)));
+        let expected_array = make_array(42, 100);
+        assert_eq!(
+            &scalar_columnar_value.into_array_of_size(100).unwrap(),
+            &expected_array
+        );
+
+        // Array case with wrong size
+        let arr = make_array(1, 3);
+        let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
+        let result = arr_columnar_value.into_array_of_size(5);
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().starts_with(
+                "Internal error: Array length 3 does not match expected length 5"
+            ),
+            "Found: {err}"
+        );
+    }
 
     #[test]
     fn values_to_arrays() {
@@ -389,6 +550,21 @@ mod tests {
                 "| 3                       |\n",
                 "+-------------------------+"
             )
+        );
+    }
+
+    #[test]
+    fn cast_date64_array_to_timestamp_overflow() {
+        let overflow_value = i64::MAX / 1_000_000 + 1;
+        let array: ArrayRef = Arc::new(Date64Array::from(vec![Some(overflow_value)]));
+        let value = ColumnarValue::Array(array);
+        let result =
+            value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None), None);
+        let err = result.expect_err("expected overflow to be detected");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
         );
     }
 }

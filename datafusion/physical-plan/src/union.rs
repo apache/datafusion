@@ -45,7 +45,9 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_datafusion_err, internal_err, Result};
+use datafusion_common::{
+    assert_or_internal_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties, PhysicalExpr};
 
@@ -410,11 +412,10 @@ pub struct InterleaveExec {
 impl InterleaveExec {
     /// Create a new InterleaveExec
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
-        if !can_interleave(inputs.iter()) {
-            return internal_err!(
-                "Not all InterleaveExec children have a consistent hash partitioning"
-            );
-        }
+        assert_or_internal_err!(
+            can_interleave(inputs.iter()),
+            "Not all InterleaveExec children have a consistent hash partitioning"
+        );
         let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
             inputs,
@@ -485,11 +486,10 @@ impl ExecutionPlan for InterleaveExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // New children are no longer interleavable, which might be a bug of optimization rewrite.
-        if !can_interleave(children.iter()) {
-            return internal_err!(
-                "Can not create InterleaveExec: new children can not be interleaved"
-            );
-        }
+        assert_or_internal_err!(
+            can_interleave(children.iter()),
+            "Can not create InterleaveExec: new children can not be interleaved"
+        );
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 

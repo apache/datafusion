@@ -29,7 +29,10 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
+use datafusion_common::{
+    assert_or_internal_err, plan_err, project_schema, DataFusionError, Result,
+    ScalarValue,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::utils::collect_columns;
@@ -282,6 +285,7 @@ impl MemorySourceConfig {
     }
 
     /// Create a new execution plan from a list of constant values (`ValuesExec`)
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_as_values(
         schema: SchemaRef,
         data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
@@ -339,6 +343,7 @@ impl MemorySourceConfig {
     ///
     /// Errors if any of the batches don't match the provided schema, or if no
     /// batches are provided.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_from_batches(
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
@@ -438,12 +443,11 @@ impl MemorySourceConfig {
                     .map(|field| field.name() != col.name())
                     .unwrap_or(true)
             });
-        if let Some(col) = ambiguous_column {
-            return internal_err!(
-                "Column {:?} is not found in the original schema of the MemorySourceConfig",
-                col
-            );
-        }
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the MemorySourceConfig",
+            ambiguous_column.as_ref().unwrap()
+        );
 
         // If there is a projection on the source, we also need to project orderings
         if self.projection.is_some() {
@@ -943,10 +947,9 @@ mod tests {
             vec![lit(ScalarValue::Null)],
         ];
         let rows = data.len();
-        let values = MemorySourceConfig::try_new_as_values(
-            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
-            data,
-        )?;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)]));
+        let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
             values.partition_statistics(None)?,
