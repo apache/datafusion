@@ -18,7 +18,7 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
+use datafusion_common::{config::ConfigOptions, internal_err, Result};
 use datafusion_datasource::{
     file::FileSource, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
@@ -108,7 +108,6 @@ impl FileOpener for TestOpener {
 pub struct TestSource {
     support: bool,
     predicate: Option<Arc<dyn PhysicalExpr>>,
-    statistics: Option<Statistics>,
     batch_size: Option<usize>,
     batches: Vec<RecordBatch>,
     schema: SchemaRef,
@@ -128,7 +127,6 @@ impl TestSource {
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
             predicate: None,
-            statistics: None,
             batch_size: None,
             projection: None,
             schema_adapter_factory: None,
@@ -175,23 +173,8 @@ impl FileSource for TestSource {
         })
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            statistics: Some(statistics),
-            ..self.clone()
-        })
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self
-            .statistics
-            .as_ref()
-            .expect("statistics not set")
-            .clone())
     }
 
     fn file_type(&self) -> &str {
