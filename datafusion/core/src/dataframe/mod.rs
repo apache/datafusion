@@ -2351,11 +2351,7 @@ impl DataFrame {
         if let Some(cache_factory) = self.session_state.cache_factory() {
             let new_plan =
                 cache_factory.create(self.plan, self.session_state.as_ref())?;
-            Ok(Self {
-                session_state: self.session_state,
-                plan: new_plan,
-                projection_requires_validation: self.projection_requires_validation,
-            })
+            Ok(Self::new(*self.session_state, new_plan))
         } else {
             let context = SessionContext::new_with_state((*self.session_state).clone());
             // The schema is consistent with the output
