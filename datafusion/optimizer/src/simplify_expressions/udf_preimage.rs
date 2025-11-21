@@ -18,7 +18,7 @@
 use std::str::FromStr;
 
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use datafusion_common::{Result, ScalarValue, internal_err, tree_node::Transformed};
+use datafusion_common::{internal_err, tree_node::Transformed, Result, ScalarValue};
 use datafusion_expr::{
     and, expr::ScalarFunction, lit, or, simplify::SimplifyInfo, BinaryExpr, Expr,
     Operator, ScalarUDFImpl,
@@ -181,8 +181,8 @@ pub(super) fn is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary<
                 return false;
             };
             match IntervalUnit::from_str(part) {
-                Ok(IntervalUnit::Year) => {},
-                _ => return false
+                Ok(IntervalUnit::Year) => {}
+                _ => return false,
             };
             let Ok(expr_type) = info.get_data_type(&left_expr) else {
                 return false;

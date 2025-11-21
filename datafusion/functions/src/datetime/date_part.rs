@@ -259,8 +259,7 @@ impl ScalarUDFImpl for DatePartFunc {
             _ => return None,
         };
 
-        let naive_date =
-            NaiveDate::from_ymd_opt(updated_year, 1, 1)?;
+        let naive_date = NaiveDate::from_ymd_opt(updated_year, 1, 1)?;
 
         let casted = match target_type {
             Date32 => {
