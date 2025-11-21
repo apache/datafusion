@@ -692,10 +692,12 @@ impl DataSource for FileScanConfig {
         // This is necessary because filters may have been created against a different schema
         // (e.g., after projection pushdown) and need to be remapped to the table schema
         // before being passed to the file source and ultimately serialized.
+        // For example, the filter being pushed down is `c1_c2 > 5` and it was created
+        // against the output schema of the this `DataSource` which has projection `c1 + c2 as c1_c2`.
+        // Thus we need to rewrite the filter back to `c1 + c2 > 5` before passing it to the file source.
         let table_schema = self.file_source.table_schema().table_schema();
-
         // If there's a projection with aliases, first map the filters back through
-        // the projection expressions before remapping to the table schema
+        // the projection expressions before remapping to the table schema.
         let filters_to_remap = if let Some(projection) = self.file_source.projection() {
             use datafusion_physical_plan::projection::update_expr;
             filters
@@ -712,7 +714,7 @@ impl DataSource for FileScanConfig {
         } else {
             filters
         };
-
+        // Now remap column indices to match the table schema.
         let remapped_filters: Result<Vec<_>> = filters_to_remap
             .into_iter()
             .map(|filter| reassign_expr_columns(filter, table_schema.as_ref()))
@@ -847,16 +849,6 @@ impl FileScanConfig {
     /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
     pub fn newlines_in_values(&self) -> bool {
         self.new_lines_in_values
-    }
-
-    /// Projects only file schema, ignoring partition columns
-    pub fn projected_file_schema(&self) -> SchemaRef {
-        let file_schema = self.file_source.table_schema().file_schema();
-        if let Some(file_indices) = self.file_column_projection_indices() {
-            Arc::new(file_schema.project(&file_indices).expect("handle error"))
-        } else {
-            Arc::clone(file_schema)
-        }
     }
 
     pub fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
@@ -1271,13 +1263,13 @@ mod tests {
         ];
 
         // Projected file schema for config with projection including partition column
-        let projection = config_for_projection(
+        let config = config_for_projection(
             schema.clone(),
             Some(vec![0, 3, 5, schema.fields().len()]),
             Statistics::new_unknown(&schema),
             to_partition_cols(partition_cols),
-        )
-        .projected_file_schema();
+        );
+        let projection = projected_file_schema(&config);
 
         // Assert partition column filtered out in projected file schema
         let expected_columns = vec!["c1", "c4", "c6"];
@@ -1287,6 +1279,16 @@ mod tests {
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
         assert_eq!(expected_columns, actual_columns);
+    }
+
+    /// Projects only file schema, ignoring partition columns
+    fn projected_file_schema(config: &FileScanConfig) -> SchemaRef {
+        let file_schema = config.file_source.table_schema().file_schema();
+        if let Some(file_indices) = config.file_column_projection_indices() {
+            Arc::new(file_schema.project(&file_indices).unwrap())
+        } else {
+            Arc::clone(file_schema)
+        }
     }
 
     #[test]
@@ -1304,13 +1306,13 @@ mod tests {
         ];
 
         // Projected file schema for config without projection
-        let projection = config_for_projection(
+        let config = config_for_projection(
             schema.clone(),
             None,
             Statistics::new_unknown(&schema),
             to_partition_cols(partition_cols),
-        )
-        .projected_file_schema();
+        );
+        let projection = projected_file_schema(&config);
 
         // Assert projected file schema is equal to file schema
         assert_eq!(projection.fields(), schema.fields());
