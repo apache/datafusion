@@ -25,12 +25,14 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::error::Result;
 use datafusion_common::{TableReference, not_impl_err};
 use datafusion_datasource::file_format::FileFormatFactory;
-use datafusion_execution::TaskContext;
+use datafusion_execution::{TaskContext, TaskContextProvider};
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, Extension, LogicalPlan, ScalarUDF, ScalarUDFImpl,
     WindowUDF, WindowUDFImpl,
 };
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
+use datafusion_proto::logical_plan::{
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+};
 use tokio::runtime::Handle;
 
 use crate::arrow_wrappers::WrappedSchema;
@@ -95,7 +97,7 @@ pub struct FFI_LogicalExtensionCodec {
     try_encode_udwf:
         unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> FFIResult<RVec<u8>>,
 
-    task_ctx_provider: FFI_TaskContextProvider,
+    pub task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -148,18 +150,23 @@ unsafe extern "C" fn try_decode_table_provider_fn_wrapper(
 ) -> FFIResult<FFI_TableProvider> {
     let ctx = rresult_return!(codec.task_ctx());
     let runtime = codec.runtime().clone();
-    let codec = codec.inner();
+    let codec_inner = codec.inner();
     let table_ref = TableReference::from(table_ref.as_str());
     let schema: SchemaRef = schema.into();
 
-    let table_provider = rresult_return!(codec.try_decode_table_provider(
+    let table_provider = rresult_return!(codec_inner.try_decode_table_provider(
         buf.as_ref(),
         &table_ref,
         schema,
         ctx.as_ref()
     ));
 
-    RResult::ROk(FFI_TableProvider::new(table_provider, true, runtime))
+    RResult::ROk(FFI_TableProvider::new_with_ffi_codec(
+        table_provider,
+        true,
+        runtime,
+        codec.clone(),
+    ))
 }
 
 unsafe extern "C" fn try_encode_table_provider_fn_wrapper(
@@ -312,6 +319,13 @@ impl FFI_LogicalExtensionCodec {
             library_marker_id: crate::get_library_marker_id,
         }
     }
+
+    pub fn new_default(task_ctx_provider: &Arc<dyn TaskContextProvider>) -> Self {
+        let task_ctx_provider = FFI_TaskContextProvider::from(task_ctx_provider);
+        let codec = Arc::new(DefaultLogicalExtensionCodec {});
+
+        Self::new(codec, None, task_ctx_provider)
+    }
 }
 
 /// This wrapper struct exists on the receiver side of the FFI interface, so it has
@@ -383,7 +397,8 @@ impl LogicalExtensionCodec for ForeignLogicalExtensionCodec {
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         let table_ref = table_ref.to_string();
-        let node = FFI_TableProvider::new(node, true, None);
+        let node =
+            FFI_TableProvider::new_with_ffi_codec(node, true, None, self.0.clone());
 
         let bytes = df_result!(unsafe {
             (self.0.try_encode_table_provider)(&self.0, table_ref.as_str().into(), node)
