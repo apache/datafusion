@@ -412,10 +412,7 @@ fn simplify_percentile_cont_aggregate(
     };
 
     let value_expr = params.args[0].clone();
-    let input_type = match info.get_data_type(&value_expr) {
-        Ok(data_type) => data_type,
-        Err(_) => return Ok(original_expr),
-    };
+    let input_type = match info.get_data_type(&value_expr)?;
 
     let expected_return_type = match percentile_cont_result_type(&input_type) {
         Some(data_type) => data_type,
