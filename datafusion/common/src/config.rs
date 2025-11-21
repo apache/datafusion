@@ -1046,7 +1046,7 @@ config_namespace! {
         ///
         /// The default is 150 values per partition.
         /// This is inspired by Trino's `max-filter-keys-per-column` setting.
-        /// See: https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds
+        /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
         pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
 
         /// The default filter selectivity used by Filter Statistics
