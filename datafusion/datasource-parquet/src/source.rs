@@ -445,7 +445,7 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
-    /// Number of row groups to prefetch while scanning parquet files
+    /// Number of row groups to prefetch
     pub fn prefetch_row_groups(&self) -> usize {
         self.table_parquet_options.global.prefetch_row_groups
     }

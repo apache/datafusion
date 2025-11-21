@@ -115,7 +115,7 @@ pub(super) struct ParquetOpener {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
-    /// Number of row groups to prefetch while scanning parquet files
+    /// Number of row groups to prefetch
     pub prefetch_row_groups: usize,
 }
 
