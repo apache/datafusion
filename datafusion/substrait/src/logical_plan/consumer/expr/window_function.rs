@@ -19,15 +19,12 @@ use crate::logical_plan::consumer::{
     from_substrait_func_args, from_substrait_rex_vec, from_substrait_sorts,
     substrait_fun_name, SubstraitConsumer,
 };
-use datafusion::common::{
-    not_impl_err, plan_datafusion_err, plan_err, substrait_err, DFSchema, ScalarValue,
-};
+use crate::logical_plan::BoundsTypeExt;
+use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::WindowFunctionParams;
-use datafusion::logical_expr::{
-    expr, Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
-};
-use substrait::proto::expression::window_function::{Bound, BoundsType};
+use datafusion::logical_expr::{expr, Expr, WindowFrameBound, WindowFunctionDefinition};
+use substrait::proto::expression::window_function::Bound;
 use substrait::proto::expression::WindowFunction;
 use substrait::proto::expression::{
     window_function::bound as SubstraitBound, window_function::bound::Kind as BoundKind,
@@ -66,22 +63,8 @@ pub async fn from_window_function(
     let mut order_by =
         from_substrait_sorts(consumer, &window.sorts, input_schema).await?;
 
-    let bound_units = match BoundsType::try_from(window.bounds_type).map_err(|e| {
-        plan_datafusion_err!("Invalid bound type {}: {e}", window.bounds_type)
-    })? {
-        BoundsType::Rows => WindowFrameUnits::Rows,
-        BoundsType::Range => WindowFrameUnits::Range,
-        BoundsType::Unspecified => {
-            // If the plan does not specify the bounds type, then we use a simple logic to determine the units
-            // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
-            // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
-            if order_by.is_empty() {
-                WindowFrameUnits::Rows
-            } else {
-                WindowFrameUnits::Range
-            }
-        }
-    };
+    let bounds_type_ext = BoundsTypeExt::from_i32(window.bounds_type)?;
+    let bound_units = bounds_type_ext.to_window_frame_units(order_by.is_empty());
     let window_frame = datafusion::logical_expr::WindowFrame::new_bounds(
         bound_units,
         from_substrait_bound(&window.lower_bound, true)?,

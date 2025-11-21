@@ -17,12 +17,13 @@
 
 use crate::logical_plan::producer::utils::substrait_sort_field;
 use crate::logical_plan::producer::SubstraitProducer;
-use datafusion::common::{not_impl_err, DFSchemaRef, ScalarValue};
+use crate::logical_plan::BoundsTypeExt;
+use datafusion::common::{DFSchemaRef, ScalarValue};
 use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use substrait::proto::expression::window_function::bound as SubstraitBound;
 use substrait::proto::expression::window_function::bound::Kind as BoundKind;
-use substrait::proto::expression::window_function::{Bound, BoundsType};
+use substrait::proto::expression::window_function::Bound;
 use substrait::proto::expression::RexType;
 use substrait::proto::expression::WindowFunction as SubstraitWindowFunction;
 use substrait::proto::function_argument::ArgType;
@@ -84,7 +85,7 @@ fn make_substrait_window_function(
     partitions: Vec<Expression>,
     sorts: Vec<SortField>,
     bounds: (Bound, Bound),
-    bounds_type: BoundsType,
+    bounds_type: BoundsTypeExt,
 ) -> Expression {
     #[allow(deprecated)]
     Expression {
@@ -100,20 +101,20 @@ fn make_substrait_window_function(
             lower_bound: Some(bounds.0),
             upper_bound: Some(bounds.1),
             args: vec![],
-            bounds_type: bounds_type as i32,
+            bounds_type: bounds_type.to_i32(),
         })),
     }
 }
 
 fn to_substrait_bound_type(
     window_frame: &WindowFrame,
-) -> datafusion::common::Result<BoundsType> {
-    match window_frame.units {
-        WindowFrameUnits::Rows => Ok(BoundsType::Rows), // ROWS
-        WindowFrameUnits::Range => Ok(BoundsType::Range), // RANGE
-        // TODO: Support GROUPS
-        unit => not_impl_err!("Unsupported window frame unit: {unit:?}"),
-    }
+) -> datafusion::common::Result<BoundsTypeExt> {
+    let bounds_type = match window_frame.units {
+        WindowFrameUnits::Rows => BoundsTypeExt::Rows,
+        WindowFrameUnits::Range => BoundsTypeExt::Range,
+        WindowFrameUnits::Groups => BoundsTypeExt::Groups,
+    };
+    Ok(bounds_type)
 }
 
 fn to_substrait_bounds(
