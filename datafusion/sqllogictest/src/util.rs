@@ -82,12 +82,35 @@ pub fn df_value_validator(
     actual: &[Vec<String>],
     expected: &[String],
 ) -> bool {
+    // Support ignore marker <slt:ignore> to skip volatile parts of output.
+    const IGNORE_MARKER: &str = "<slt:ignore>";
+    let contains_ignore_marker = expected.iter().any(|line| line.contains(IGNORE_MARKER));
+
     let normalized_expected = expected.iter().map(normalizer).collect::<Vec<_>>();
     let normalized_actual = actual
         .iter()
         .map(|strs| strs.iter().join(" "))
         .map(|str| str.trim_end().to_string())
         .collect_vec();
+
+    // If ignore marker present, perform fragment-based matching on the full snapshot.
+    if contains_ignore_marker {
+        let expected_snapshot = normalized_expected.join("\n");
+        let actual_snapshot = normalized_actual.join("\n");
+        let fragments: Vec<&str> = expected_snapshot.split(IGNORE_MARKER).collect();
+        let mut pos = 0;
+        for frag in fragments {
+            if frag.is_empty() {
+                continue;
+            }
+            if let Some(idx) = actual_snapshot[pos..].find(frag) {
+                pos += idx + frag.len();
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
 
     if log_enabled!(Warn) && normalized_actual != normalized_expected {
         warn!("df validation failed. actual vs expected:");
