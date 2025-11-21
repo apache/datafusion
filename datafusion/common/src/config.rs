@@ -697,7 +697,7 @@ config_namespace! {
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
-        pub reorder_filters: bool, default = true
+        pub reorder_filters: bool, default = false
 
         /// (reading) Force the use of RowSelections for filter results, when
         /// pushdown_filters is enabled. If false, the reader will automatically
