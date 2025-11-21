@@ -601,8 +601,7 @@ physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 02)--UnionExec
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], file_type=csv, has_header=true
-04)----ProjectionExec: expr=[c1a@0 as c1]
-05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a], output_ordering=[c1a@0 ASC NULLS LAST], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a@0 as c1], file_type=csv, has_header=true
 
 statement ok
 drop table t1
