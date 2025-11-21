@@ -231,7 +231,7 @@ fn array_has_inner_for_scalar(
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
     let haystack = haystack.as_ref().try_into()?;
-    array_has_dispatch_for_scalar(&haystack, needle)
+    array_has_dispatch_for_scalar(haystack, needle)
 }
 
 fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<ArrayRef> {
@@ -339,7 +339,7 @@ fn array_has_dispatch_for_array<'a>(
 }
 
 fn array_has_dispatch_for_scalar(
-    haystack: &ArrayWrapper<'_>,
+    haystack: ArrayWrapper<'_>,
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
     let values = haystack.values();
