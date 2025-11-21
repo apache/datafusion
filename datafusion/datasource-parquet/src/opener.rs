@@ -432,7 +432,13 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
-            let row_group_indexes = access_plan.row_group_indexes();
+            let mut row_group_indexes = access_plan.row_group_indexes();
+            // CRITICAL: For reverse scan, reverse the order of row groups BEFORE building the stream.
+            // This allows the parquet reader to read row groups in reverse order while still
+            // utilizing internal optimizations like row group caching and prefetching.
+            if reverse_scan {
+                row_group_indexes.reverse();
+            }
             if let Some(row_selection) =
                 access_plan.into_overall_row_selection(rg_metadata)?
             {
@@ -455,7 +461,7 @@ impl FileOpener for ParquetOpener {
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
-                .with_row_groups(row_group_indexes)
+                .with_row_groups(row_group_indexes.clone())
                 .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
@@ -478,14 +484,25 @@ impl FileOpener for ParquetOpener {
                     result.and_then(|batch| schema_mapping.map_batch(batch))
                 });
 
+                // Extract row counts for each row group (already in reverse order after the reverse above)
+                let row_group_row_counts: Vec<usize> = row_group_indexes
+                    .iter()
+                    .map(|&idx| rg_metadata[idx].num_rows() as usize)
+                    .collect();
+
                 if let Some(limit) = limit {
                     Box::pin(ReversedParquetStreamWithLimit::new(
                         schema_mapped,
                         final_schema,
                         limit,
+                        row_group_row_counts,
                     ))
                 } else {
-                    Box::pin(ReversedParquetStream::new(schema_mapped, final_schema))
+                    Box::pin(ReversedParquetStream::new(
+                        schema_mapped,
+                        final_schema,
+                        row_group_row_counts,
+                    ))
                 }
             } else {
                 let error_adapted = stream.map_err(DataFusionError::from);
@@ -804,21 +821,82 @@ fn reverse_batch(batch: RecordBatch) -> Result<RecordBatch> {
     RecordBatch::try_new(batch.schema(), reversed_columns).map_err(DataFusionError::from)
 }
 
+/// Stream adapter for reversed parquet reading.
+///
+/// Strategy:
+/// 1. Row groups are already in reverse order (reversed before building the stream)
+/// 2. As batches arrive, we track which row group they belong to using row counts
+/// 3. When a complete row group is collected, we:
+///    a. Reverse each batch's rows
+///    b. Reverse the order of batches within that row group
+/// 4. Output the reversed batches progressively
+///
+/// This approach allows row-group level caching and prefetching optimizations
+/// while maintaining reverse order semantics.
 struct ReversedParquetStream<S> {
     input: S,
     schema: SchemaRef,
-    buffered_batches: Option<Vec<RecordBatch>>,
-    current_index: usize,
+
+    // Current row group being processed
+    current_rg_batches: Vec<RecordBatch>,
+    current_rg_rows_read: usize,
+    current_rg_total_rows: usize,
+
+    // Output buffer for reversed batches
+    output_batches: Vec<RecordBatch>,
+    output_index: usize,
+
+    // Row group metadata (each element is the number of rows in that row group)
+    // Already in reverse order since row_group_indexes was reversed
+    row_group_metadata: Vec<usize>,
+    current_rg_index: usize,
+
+    done: bool,
 }
 
 impl<S> ReversedParquetStream<S> {
-    fn new(stream: S, schema: SchemaRef) -> Self {
+    fn new(stream: S, schema: SchemaRef, row_group_metadata: Vec<usize>) -> Self {
+        let current_rg_total_rows = row_group_metadata.first().copied().unwrap_or(0);
+
         Self {
             input: stream,
             schema,
-            buffered_batches: None,
-            current_index: 0,
+            current_rg_batches: Vec::new(),
+            current_rg_rows_read: 0,
+            current_rg_total_rows,
+            output_batches: Vec::new(),
+            output_index: 0,
+            row_group_metadata,
+            current_rg_index: 0,
+            done: false,
         }
+    }
+
+    /// Finalize the current row group: reverse each batch's rows and reverse batch order
+    fn finalize_current_row_group(&mut self) {
+        if self.current_rg_batches.is_empty() {
+            return;
+        }
+
+        // Step 1: Reverse rows within each batch
+        let reversed_batches: Vec<_> = self
+            .current_rg_batches
+            .drain(..)
+            .map(|batch| reverse_batch(batch).unwrap())
+            .collect();
+
+        // Step 2: Reverse the order of batches
+        self.output_batches = reversed_batches.into_iter().rev().collect();
+        self.output_index = 0;
+
+        // Prepare for next row group
+        self.current_rg_rows_read = 0;
+        self.current_rg_index += 1;
+        self.current_rg_total_rows = self
+            .row_group_metadata
+            .get(self.current_rg_index)
+            .copied()
+            .unwrap_or(0);
     }
 }
 
@@ -834,35 +912,44 @@ where
     ) -> Poll<Option<Self::Item>> {
         let this = unsafe { self.as_mut().get_unchecked_mut() };
 
-        if this.buffered_batches.is_none() {
-            let mut batches = Vec::new();
-
-            loop {
-                match ready!(Pin::new(&mut this.input).poll_next(cx)) {
-                    Some(Ok(batch)) => match reverse_batch(batch) {
-                        Ok(rev) => batches.push(rev),
-                        Err(e) => return Poll::Ready(Some(Err(e))),
-                    },
-                    Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-                    None => break,
-                }
-            }
-
-            batches.reverse();
-            this.buffered_batches = Some(batches);
-            this.current_index = 0;
+        if this.done {
+            return Poll::Ready(None);
         }
 
-        if let Some(batches) = &this.buffered_batches {
-            if this.current_index < batches.len() {
-                let batch = batches[this.current_index].clone();
-                this.current_index += 1;
-                Poll::Ready(Some(Ok(batch)))
-            } else {
-                Poll::Ready(None)
+        loop {
+            // First, output any ready batches
+            if this.output_index < this.output_batches.len() {
+                let batch = this.output_batches[this.output_index].clone();
+                this.output_index += 1;
+                return Poll::Ready(Some(Ok(batch)));
             }
-        } else {
-            Poll::Ready(None)
+
+            // Need to read more data
+            match ready!(Pin::new(&mut this.input).poll_next(cx)) {
+                Some(Ok(batch)) => {
+                    let batch_rows = batch.num_rows();
+                    this.current_rg_batches.push(batch);
+                    this.current_rg_rows_read += batch_rows;
+
+                    // Check if current row group is complete
+                    if this.current_rg_rows_read >= this.current_rg_total_rows {
+                        this.finalize_current_row_group();
+                        // Continue loop to output the reversed batches
+                    }
+                    // Otherwise continue reading next batch from current row group
+                }
+                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                None => {
+                    // Handle the last row group if any
+                    if !this.current_rg_batches.is_empty() {
+                        this.finalize_current_row_group();
+                        // Continue loop to output final batches
+                    } else {
+                        this.done = true;
+                        return Poll::Ready(None);
+                    }
+                }
+            }
         }
     }
 }
@@ -876,25 +963,76 @@ where
     }
 }
 
+/// Stream adapter for reversed parquet reading with limit support.
+/// Same strategy as ReversedParquetStream but applies limit during output.
 struct ReversedParquetStreamWithLimit<S> {
     input: S,
     schema: SchemaRef,
-    buffered_batches: Option<Vec<RecordBatch>>,
-    current_index: usize,
     limit: usize,
     rows_produced: usize,
+
+    // Current row group state
+    current_rg_batches: Vec<RecordBatch>,
+    current_rg_rows_read: usize,
+    current_rg_total_rows: usize,
+
+    // Output buffer
+    output_batches: Vec<RecordBatch>,
+    output_index: usize,
+
+    // Row group metadata
+    row_group_metadata: Vec<usize>,
+    current_rg_index: usize,
+
+    done: bool,
 }
 
 impl<S> ReversedParquetStreamWithLimit<S> {
-    fn new(stream: S, schema: SchemaRef, limit: usize) -> Self {
+    fn new(
+        stream: S,
+        schema: SchemaRef,
+        limit: usize,
+        row_group_metadata: Vec<usize>,
+    ) -> Self {
+        let current_rg_total_rows = row_group_metadata.first().copied().unwrap_or(0);
+
         Self {
             input: stream,
             schema,
-            buffered_batches: None,
-            current_index: 0,
             limit,
             rows_produced: 0,
+            current_rg_batches: Vec::new(),
+            current_rg_rows_read: 0,
+            current_rg_total_rows,
+            output_batches: Vec::new(),
+            output_index: 0,
+            row_group_metadata,
+            current_rg_index: 0,
+            done: false,
         }
+    }
+
+    fn finalize_current_row_group(&mut self) {
+        if self.current_rg_batches.is_empty() {
+            return;
+        }
+
+        let reversed_batches: Vec<_> = self
+            .current_rg_batches
+            .drain(..)
+            .map(|batch| reverse_batch(batch).unwrap())
+            .collect();
+
+        self.output_batches = reversed_batches.into_iter().rev().collect();
+        self.output_index = 0;
+
+        self.current_rg_rows_read = 0;
+        self.current_rg_index += 1;
+        self.current_rg_total_rows = self
+            .row_group_metadata
+            .get(self.current_rg_index)
+            .copied()
+            .unwrap_or(0);
     }
 }
 
@@ -909,51 +1047,52 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let this = unsafe { self.as_mut().get_unchecked_mut() };
-        if this.rows_produced >= this.limit {
+
+        if this.done || this.rows_produced >= this.limit {
             return Poll::Ready(None);
         }
 
-        if this.buffered_batches.is_none() {
-            let mut batches = Vec::new();
-            loop {
-                match ready!(Pin::new(&mut this.input).poll_next(cx)) {
-                    Some(Ok(batch)) => match reverse_batch(batch) {
-                        Ok(rev) => batches.push(rev),
-                        Err(e) => return Poll::Ready(Some(Err(e))),
-                    },
-                    Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-                    None => break,
-                }
-            }
+        loop {
+            // Output ready batches with limit enforcement
+            if this.output_index < this.output_batches.len() {
+                let batch = this.output_batches[this.output_index].clone();
+                this.output_index += 1;
 
-            batches.reverse();
-            this.buffered_batches = Some(batches);
-            this.current_index = 0;
-        }
-
-        if let Some(batches) = &this.buffered_batches {
-            if this.current_index < batches.len() {
-                let batch = &batches[this.current_index];
                 let remaining = this.limit - this.rows_produced;
-
-                if remaining == 0 {
-                    return Poll::Ready(None);
-                }
 
                 if batch.num_rows() <= remaining {
                     this.rows_produced += batch.num_rows();
-                    this.current_index += 1;
-                    return Poll::Ready(Some(Ok(batch.clone())));
+                    return Poll::Ready(Some(Ok(batch)));
                 } else {
+                    // Slice batch to fit within limit
                     let sliced = batch.slice(0, remaining);
                     this.rows_produced += remaining;
-                    this.current_index += 1;
+                    this.done = true;
                     return Poll::Ready(Some(Ok(sliced)));
                 }
             }
-            Poll::Ready(None)
-        } else {
-            Poll::Ready(None)
+
+            // Read more data
+            match ready!(Pin::new(&mut this.input).poll_next(cx)) {
+                Some(Ok(batch)) => {
+                    let batch_rows = batch.num_rows();
+                    this.current_rg_batches.push(batch);
+                    this.current_rg_rows_read += batch_rows;
+
+                    if this.current_rg_rows_read >= this.current_rg_total_rows {
+                        this.finalize_current_row_group();
+                    }
+                }
+                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                None => {
+                    if !this.current_rg_batches.is_empty() {
+                        this.finalize_current_row_group();
+                    } else {
+                        this.done = true;
+                        return Poll::Ready(None);
+                    }
+                }
+            }
         }
     }
 }
@@ -999,6 +1138,7 @@ mod test {
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
     use futures::{Stream, StreamExt};
     use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use parquet::arrow::arrow_writer::ArrowWriterOptions;
     use parquet::arrow::ArrowWriter;
 
     async fn count_batches_and_rows(
@@ -1888,6 +2028,243 @@ mod test {
             .expect("Failed to downcast to ParquetSource");
 
         assert!(projected_source.reverse_scan());
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_multiple_row_groups() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // Create a parquet file with multiple row groups
+        // Each row group will have 5 rows
+        let mut out = BytesMut::new().writer();
+        {
+            // Set row group size to force multiple row groups
+            let props = parquet::file::properties::WriterProperties::builder()
+                .set_max_row_group_size(5)
+                .build();
+            let mut writer = ArrowWriter::try_new_with_options(
+                &mut out,
+                schema.clone(),
+                ArrowWriterOptions::new().with_properties(props),
+            )
+            .unwrap();
+
+            // Write 3 row groups: [1,2,3,4,5], [6,7,8,9,10], [11,12,13,14,15]
+            for group_start in [1, 6, 11] {
+                let batch = record_batch!((
+                    "id",
+                    Int32,
+                    vec![
+                        Some(group_start),
+                        Some(group_start + 1),
+                        Some(group_start + 2),
+                        Some(group_start + 3),
+                        Some(group_start + 4),
+                    ]
+                ))
+                .unwrap();
+                writer.write(&batch).unwrap();
+            }
+            writer.close().unwrap();
+        }
+
+        let data = out.into_inner().freeze();
+        let data_len = data.len();
+        store
+            .put(&Path::from("multi_rg.parquet"), data.into())
+            .await
+            .unwrap();
+
+        let file = PartitionedFile::new(
+            "multi_rg.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 1024, // Large enough to read entire row group at once
+            limit: None,
+            predicate: None,
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_scan,
+        };
+
+        // Test normal scan
+        let opener_normal = make_opener(false);
+        let stream_normal = opener_normal.open(file.clone()).unwrap().await.unwrap();
+        let batches_normal = collect_batches(stream_normal).await;
+
+        let mut normal_values = Vec::new();
+        for batch in &batches_normal {
+            let col = batch.column(0);
+            for i in 0..col.len() {
+                if let Some(val) = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int32Array>()
+                    .map(|arr| arr.value(i))
+                {
+                    normal_values.push(val);
+                }
+            }
+        }
+
+        // Test reverse scan
+        let opener_reverse = make_opener(true);
+        let stream_reverse = opener_reverse.open(file.clone()).unwrap().await.unwrap();
+        let batches_reverse = collect_batches(stream_reverse).await;
+
+        let mut reverse_values = Vec::new();
+        for batch in &batches_reverse {
+            let col = batch.column(0);
+            for i in 0..col.len() {
+                if let Some(val) = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int32Array>()
+                    .map(|arr| arr.value(i))
+                {
+                    reverse_values.push(val);
+                }
+            }
+        }
+
+        // Normal scan should be: [1,2,3,4,5, 6,7,8,9,10, 11,12,13,14,15]
+        assert_eq!(
+            normal_values,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+
+        // Reverse scan should be: [15,14,13,12,11, 10,9,8,7,6, 5,4,3,2,1]
+        // Note: row groups are reversed, then rows within each row group are reversed
+        assert_eq!(
+            reverse_values,
+            vec![15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_multiple_row_groups_with_limit() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // Create parquet file with 3 row groups
+        let mut out = BytesMut::new().writer();
+        {
+            let props = parquet::file::properties::WriterProperties::builder()
+                .set_max_row_group_size(5)
+                .build();
+            let mut writer = ArrowWriter::try_new_with_options(
+                &mut out,
+                schema.clone(),
+                ArrowWriterOptions::new().with_properties(props),
+            )
+            .unwrap();
+
+            for group_start in [1, 6, 11] {
+                let batch = record_batch!((
+                    "id",
+                    Int32,
+                    vec![
+                        Some(group_start),
+                        Some(group_start + 1),
+                        Some(group_start + 2),
+                        Some(group_start + 3),
+                        Some(group_start + 4),
+                    ]
+                ))
+                .unwrap();
+                writer.write(&batch).unwrap();
+            }
+            writer.close().unwrap();
+        }
+
+        let data = out.into_inner().freeze();
+        let data_len = data.len();
+        store
+            .put(&Path::from("multi_rg_limit.parquet"), data.into())
+            .await
+            .unwrap();
+
+        let file = PartitionedFile::new(
+            "multi_rg_limit.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+
+        let make_opener = |reverse_scan: bool, limit: Option<usize>| ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 1024,
+            limit,
+            predicate: None,
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_scan,
+        };
+
+        // Test reverse scan with LIMIT 7
+        let opener_reverse = make_opener(true, Some(7));
+        let stream_reverse = opener_reverse.open(file.clone()).unwrap().await.unwrap();
+        let batches_reverse = collect_batches(stream_reverse).await;
+
+        let mut reverse_values = Vec::new();
+        for batch in &batches_reverse {
+            let col = batch.column(0);
+            for i in 0..col.len() {
+                if let Some(val) = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int32Array>()
+                    .map(|arr| arr.value(i))
+                {
+                    reverse_values.push(val);
+                }
+            }
+        }
+
+        // With LIMIT 7 on reverse scan, we should get: [15,14,13,12,11, 10,9]
+        assert_eq!(reverse_values, vec![15, 14, 13, 12, 11, 10, 9]);
+        assert_eq!(reverse_values.len(), 7);
     }
 }
 
