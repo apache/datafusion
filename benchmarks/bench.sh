@@ -126,6 +126,7 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
+smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -311,6 +312,10 @@ main() {
                     # hj uses range() function, no data generation needed
                     echo "HJ benchmark does not require data generation"
                     ;;
+                smj)
+                    # smj uses range() function, no data generation needed
+                    echo "SMJ benchmark does not require data generation"
+                    ;;
                 compile_profile)
                     data_tpch "1"
                     ;;
@@ -384,6 +389,7 @@ main() {
                     run_external_aggr
                     run_nlj
                     run_hj
+                    run_smj
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -493,6 +499,9 @@ main() {
                     ;;
                 hj)
                     run_hj
+                    ;;
+                smj)
+                    run_smj
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -1152,6 +1161,14 @@ run_hj() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running hj benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the smj benchmark
+run_smj() {
+    RESULTS_FILE="${RESULTS_DIR}/smj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running smj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 
