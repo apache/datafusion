@@ -2000,12 +2000,12 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }
 
             // // For case:
-            // // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
+            // // try_cast/cast(expr as left_type) in (lit1, lit2, lit3)
             // Expr::InList(InList {
             //     expr: mut left,
             //     list,
             //     negated,
-            // }) if is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_inlist(
+            // }) if is_scalar_udf_expr_and_support_preimage_in_comparison_for_inlist(
             //     info, &left, &list,
             // ) =>
             // {

@@ -198,25 +198,36 @@ pub(super) fn is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary<
     }
 }
 
-// pub(super) fn is_date_part_expr_and_support_unwrap_date_part_in_comparison_for_inlist<
+// pub(super) fn is_scalar_udf_expr_and_support_preimage_in_comparison_for_inlist<
 //     S: SimplifyInfo,
 // >(
 //     info: &S,
 //     expr: &Expr,
 //     list: &[Expr],
 // ) -> bool {
-//     match expr {
-//         Expr::ScalarFunction(ScalarFunction { func, args })
-//             if func.name() == "date_part" =>
-//         {
+//     let (func, args) = match expr {
+//         Expr::ScalarFunction(ScalarFunction { func, args }) => (func, args),
+//         _ => return false,
+//     };
+//     match func.name() {
+//         "date_part" => {
 //             let left_expr = Box::new(args[1].clone());
+//             let Some(ScalarValue::Utf8(Some(part))) = args[0].as_literal() else {
+//                 return false;
+//             };
+//             match IntervalUnit::from_str(part) {
+//                 Ok(IntervalUnit::Year) => {}
+//                 _ => return false,
+//             };
 //             let Ok(expr_type) = info.get_data_type(&left_expr) else {
 //                 return false;
 //             };
 //             for right in list {
 //                 match right {
-//                     Expr::Literal(lit_val, _)
-//                         if year_literal_to_type(lit_val, &expr_type).is_some() => {}
+//                     Expr::Literal(lit_value, _)
+//                     if DatePartFunc::new()
+//                     .preimage_cast(lit_value, &expr_type, Operator::Eq)
+//                     .is_some() => {}
 //                     _ => return false,
 //                 }
 //             }
@@ -324,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    // Should not try to simplify
+    // Should not simplify
     fn test_preimage_date_part_not_year_date32_eq() {
         let schema = expr_test_schema();
         // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
