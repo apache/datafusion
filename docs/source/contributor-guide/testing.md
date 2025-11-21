@@ -63,13 +63,14 @@ The [test_util] module provides useful macros to write unit tests effectively, s
 
 ## sqllogictests Tests
 
-DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest). You can run these tests with a command like this:
+DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest). You can run these tests with commands like:
 
 ```shell
+# Run all tests
 cargo test --profile=ci --test sqllogictests
-```
-
-```shell
+# Run a specific test file
+cargo test --profile=ci --test sqllogictests -- aggregate.slt
+# Run and update expected outputs
 cargo test --profile=ci --test sqllogictests -- --complete
 ```
 
