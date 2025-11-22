@@ -1360,7 +1360,7 @@ mod tests {
         )];
 
         let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode where the race condition occurs
         let aggregate_exec = AggregateExec::try_new(
@@ -1374,7 +1374,7 @@ mod tests {
 
         // Execute and collect results
         let mut stream =
-            GroupedHashAggregateStream::new(&aggregate_exec, Arc::clone(&task_ctx), 0)?;
+            GroupedHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {
