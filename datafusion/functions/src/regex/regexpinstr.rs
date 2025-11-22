@@ -287,6 +287,7 @@ pub fn regexp_instr(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub fn regexp_instr_inner<'a, S>(
     values: S,
     regex_array: S,

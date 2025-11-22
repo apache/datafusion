@@ -328,7 +328,7 @@ fn general_replace<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     from_array: &ArrayRef,
     to_array: &ArrayRef,
-    arr_n: Vec<i64>,
+    arr_n: &[i64],
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
     let mut offsets: Vec<O> = vec![O::usize_as(0)];
@@ -426,11 +426,11 @@ pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, from, to, arr_n)
+            general_replace::<i32>(list_array, from, to, &arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, from, to, arr_n)
+            general_replace::<i64>(list_array, from, to, &arr_n)
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => exec_err!("array_replace does not support type '{array_type}'."),
@@ -445,11 +445,11 @@ pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, from, to, arr_n)
+            general_replace::<i32>(list_array, from, to, &arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, from, to, arr_n)
+            general_replace::<i64>(list_array, from, to, &arr_n)
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
@@ -466,11 +466,11 @@ pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, from, to, arr_n)
+            general_replace::<i32>(list_array, from, to, &arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, from, to, arr_n)
+            general_replace::<i64>(list_array, from, to, &arr_n)
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {

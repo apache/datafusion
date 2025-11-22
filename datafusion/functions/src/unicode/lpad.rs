@@ -141,7 +141,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     match (args.len(), args[0].data_type()) {
         (2, Utf8View) => lpad_impl::<&StringViewArray, &GenericStringArray<i32>, T>(
-            args[0].as_string_view(),
+            &args[0].as_string_view(),
             length_array,
             None,
         ),
@@ -149,14 +149,14 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             &GenericStringArray<T>,
             &GenericStringArray<T>,
             T,
-        >(args[0].as_string::<T>(), length_array, None),
+        >(&args[0].as_string::<T>(), length_array, None),
         (3, Utf8View) => lpad_with_replace::<&StringViewArray, T>(
-            args[0].as_string_view(),
+            &args[0].as_string_view(),
             length_array,
             &args[2],
         ),
         (3, Utf8 | LargeUtf8) => lpad_with_replace::<&GenericStringArray<T>, T>(
-            args[0].as_string::<T>(),
+            &args[0].as_string::<T>(),
             length_array,
             &args[2],
         ),
@@ -165,7 +165,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn lpad_with_replace<'a, V, T: OffsetSizeTrait>(
-    string_array: V,
+    string_array: &V,
     length_array: &Int64Array,
     fill_array: &'a ArrayRef,
 ) -> Result<ArrayRef>
@@ -195,7 +195,7 @@ where
 }
 
 fn lpad_impl<'a, V, V2, T>(
-    string_array: V,
+    string_array: &V,
     length_array: &Int64Array,
     fill_array: Option<V2>,
 ) -> Result<ArrayRef>

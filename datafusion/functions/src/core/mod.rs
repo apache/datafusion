@@ -110,11 +110,13 @@ pub mod expr_fn {
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn get_field(arg1: Expr, arg2: impl Literal) -> Expr {
         super::get_field().call(vec![arg1, arg2.lit()])
     }
 
     #[doc = "Returns the value of the field with the given name from the union when it's selected, or NULL otherwise"]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn union_extract(arg1: Expr, arg2: impl Literal) -> Expr {
         super::union_extract().call(vec![arg1, arg2.lit()])
     }

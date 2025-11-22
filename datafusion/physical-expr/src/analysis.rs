@@ -212,9 +212,7 @@ pub fn analyze(
             }
         }
 
-        match graph
-            .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
-        {
+        match graph.update_ranges(&mut target_indices_and_boundaries, Interval::TRUE)? {
             PropagationResult::Success => {
                 shrink_boundaries(&graph, target_boundaries, &target_expr_and_indices)
             }

@@ -31,12 +31,12 @@ version.workspace = true
 all-features = true
 
 [features]
-compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
+compression = ["async-compression", "liblzma", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
 
 [dependencies]
 arrow = { workspace = true }
-async-compression = { version = "0.4.19", features = [
+async-compression = { version = "0.4.30", features = [
     "bzip2",
     "gzip",
     "xz",
@@ -60,6 +60,7 @@ flate2 = { version = "1.1.4", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"
 itertools = { workspace = true }
+liblzma = { workspace = true, optional = true }
 log = { workspace = true }
 object_store = { workspace = true }
 rand = { workspace = true }
@@ -67,7 +68,6 @@ tempfile = { workspace = true, optional = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7.16", features = ["io"], optional = true }
 url = { workspace = true }
-xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
