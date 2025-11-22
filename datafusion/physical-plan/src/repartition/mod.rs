@@ -382,6 +382,9 @@ impl RepartitionExecState {
                 txs,
                 partitioning.clone(),
                 metrics,
+                // preser_order dep
+                if preserve_order { 0 } else { i },
+                num_input_partitions,
             ));
 
             // In a separate task, wait for each input to be done
@@ -428,12 +431,22 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
     ///
     /// The time spent repartitioning will be recorded to `timer`
-    pub fn try_new(partitioning: Partitioning, timer: metrics::Time) -> Result<Self> {
+    pub fn try_new(
+        partitioning: Partitioning,
+        timer: metrics::Time,
+        input_partition: usize,
+        num_input_partitions: usize,
+    ) -> Result<Self> {
         let state = match partitioning {
             Partitioning::RoundRobinBatch(num_partitions) => {
                 BatchPartitionerState::RoundRobin {
                     num_partitions,
-                    next_idx: 0,
+                    // Distribute starting index evenly based on input partition, number of input partitions and number of partitions
+                    // to avoid they all start at partition 0 and heavily skew on the lower partitions
+                    next_idx: (input_partition as f64
+                        * (num_partitions as f64 / num_input_partitions as f64))
+                        as usize
+                        % num_partitions,
                 }
             }
             Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
@@ -1196,9 +1209,15 @@ impl RepartitionExec {
         mut output_channels: HashMap<usize, OutputChannel>,
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
+        input_partition: usize,
+        num_input_partitions: usize,
     ) -> Result<()> {
-        let mut partitioner =
-            BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
+        let mut partitioner = BatchPartitioner::try_new(
+            partitioning,
+            metrics.repartition_time.clone(),
+            input_partition,
+            num_input_partitions,
+        )?;
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
@@ -1862,16 +1881,16 @@ mod tests {
         // output stream 1 should *not* error and have one of the input batches
         let batches = crate::common::collect(output_stream1).await.unwrap();
 
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +------------------+
-            | my_awesome_field |
-            +------------------+
-            | baz              |
-            | frob             |
-            | gaz              |
-            | grob             |
-            +------------------+
-            "#);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | baz              |
+        | frob             |
+        | gar              |
+        | goo              |
+        +------------------+
+        ");
     }
 
     #[tokio::test]
