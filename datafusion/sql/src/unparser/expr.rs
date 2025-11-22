@@ -1273,6 +1273,8 @@ impl Unparser<'_> {
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::ListView(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::LargeListView(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::Date32(Some(_)) => {
                 let date = v
                     .to_array()?
