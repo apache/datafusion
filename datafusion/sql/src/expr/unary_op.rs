@@ -41,8 +41,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let field = operand.to_field(schema)?.1;
                 let data_type = field.data_type();
                 if data_type.is_numeric()
-                    || is_interval(&data_type)
-                    || is_timestamp(&data_type)
+                    || is_interval(data_type)
+                    || is_timestamp(data_type)
                 {
                     Ok(operand)
                 } else {
