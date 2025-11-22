@@ -374,6 +374,12 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             ScalarValue::FixedSizeList(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
+            ScalarValue::ListView(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::LargeListView(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
             ScalarValue::Struct(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
@@ -1006,7 +1012,7 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// ScalarValue::List / FixedSizeList / LargeList / Struct / Map are serialized using
+// ScalarValue::List / FixedSizeList / LargeList / ListView / LargeListView / Struct / Map are serialized using
 // Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
@@ -1059,6 +1065,16 @@ fn encode_scalar_nested_value(
         }),
         ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
             value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::ListView(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::ListViewValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::LargeListView(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::LargeListViewValue(
                 scalar_list_value,
             )),
         }),

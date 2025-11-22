@@ -35,6 +35,7 @@ pub fn get_element_type(data_type: &DataType) -> Result<&DataType> {
         DataType::List(element)
         | DataType::LargeList(element)
         | DataType::FixedSizeList(element, _) => Ok(element.data_type()),
+        // TODO:: Support ListView / ListViewArray
         _ => exec_err!(
             "get_element_type expects List/LargeList/FixedSizeList/Null as argument, got {data_type:?}"
         ),
@@ -51,6 +52,7 @@ pub fn get_list_values(array: &ArrayRef) -> Result<&ArrayRef> {
         DataType::List(_) => Ok(array.as_list::<i32>().values()),
         DataType::LargeList(_) => Ok(array.as_list::<i64>().values()),
         DataType::FixedSizeList(..) => Ok(array.as_fixed_size_list().values()),
+        // TODO:: Support ListView / ListViewArray
         wrong_type => exec_err!(
             "get_list_values expects List/LargeList/FixedSizeList/Null as argument, got {wrong_type:?}"
         ),

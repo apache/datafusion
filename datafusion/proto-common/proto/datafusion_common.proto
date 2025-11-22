@@ -194,7 +194,7 @@ message Union{
   repeated int32 type_ids = 3;
 }
 
-// Used for List/FixedSizeList/LargeList/Struct/Map
+// Used for List/FixedSizeList/LargeList/ListView/LargeListView/Struct/Map
 message ScalarNestedValue {
   message Dictionary {
     bytes ipc_message = 1;
@@ -295,6 +295,8 @@ message ScalarValue{
     ScalarNestedValue large_list_value = 16;
     ScalarNestedValue list_value = 17;
     ScalarNestedValue fixed_size_list_value = 18;
+    ScalarNestedValue list_view_value = 45;
+    ScalarNestedValue large_list_view_value = 46;
     ScalarNestedValue struct_value = 32;
     ScalarNestedValue map_value = 41;
 
@@ -385,6 +387,8 @@ message ArrowType{
     List LIST = 25;
     List LARGE_LIST = 26;
     FixedSizeList FIXED_SIZE_LIST = 27;
+    List LIST_VIEW = 42;
+    List LARGE_LIST_VIEW = 43;
     Struct STRUCT = 28;
     Union UNION = 29;
     Dictionary DICTIONARY = 30;
