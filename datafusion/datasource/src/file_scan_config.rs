@@ -302,7 +302,7 @@ impl FileScanConfigBuilder {
         match self.clone().with_projection_indices(indices) {
             Ok(builder) => builder,
             Err(e) => {
-                warn!("Failed to push down projection in FileScanConfigBuilder::with_projection: {}", e);
+                warn!("Failed to push down projection in FileScanConfigBuilder::with_projection: {e}");
                 self
             }
         }
