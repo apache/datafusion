@@ -740,6 +740,7 @@ impl RepartitionExec {
 
 impl DisplayAs for RepartitionExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        let input_partition_count = self.input.output_partitioning().partition_count();
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
@@ -747,11 +748,17 @@ impl DisplayAs for RepartitionExec {
                     "{}: partitioning={}, input_partitions={}",
                     self.name(),
                     self.partitioning(),
-                    self.input.output_partitioning().partition_count()
+                    input_partition_count,
                 )?;
 
                 if self.preserve_order {
                     write!(f, ", preserve_order=true")?;
+                } else if input_partition_count <= 1
+                    && self.input.output_ordering().is_some()
+                {
+                    // Make it explicit that repartition maintains sortedness for a single input partition even
+                    // when `preserve_sort order` is false
+                    write!(f, ", maintains_sort_order=true")?;
                 }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
@@ -761,9 +768,6 @@ impl DisplayAs for RepartitionExec {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
-
-                let input_partition_count =
-                    self.input.output_partitioning().partition_count();
                 let output_partition_count = self.partitioning().partition_count();
                 let input_to_output_partition_str =
                     format!("{input_partition_count} -> {output_partition_count}");
@@ -2431,7 +2435,7 @@ mod test {
 
         // Repartition should not preserve order
         assert_plan!(&exec, @r"
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
           DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
         ");
 
@@ -2670,7 +2674,7 @@ mod test {
 
         // Repartition should not preserve order
         assert_plan!(exec.as_ref(), @r"
-        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1, maintains_sort_order=true
           DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
         ");
         Ok(())
