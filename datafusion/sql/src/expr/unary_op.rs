@@ -38,10 +38,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             UnaryOperator::Plus => {
                 let operand =
                     self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
-                let (data_type, _) = operand.data_type_and_nullable(schema)?;
+                let field = operand.to_field(schema)?.1;
+                let data_type = field.data_type();
                 if data_type.is_numeric()
-                    || is_interval(&data_type)
-                    || is_timestamp(&data_type)
+                    || is_interval(data_type)
+                    || is_timestamp(data_type)
                 {
                     Ok(operand)
                 } else {
