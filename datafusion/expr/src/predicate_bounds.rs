@@ -48,14 +48,19 @@ use datafusion_expr_common::operator::Operator;
 ///
 pub(super) fn evaluate_bounds(
     predicate: &Expr,
+    certainly_null_expr: Option<&Expr>,
     input_schema: &dyn ExprSchema,
 ) -> Result<NullableInterval> {
-    let evaluator = PredicateBoundsEvaluator { input_schema };
+    let evaluator = PredicateBoundsEvaluator {
+        input_schema,
+        certainly_null_expr,
+    };
     evaluator.evaluate_bounds(predicate)
 }
 
 struct PredicateBoundsEvaluator<'a> {
     input_schema: &'a dyn ExprSchema,
+    certainly_null_expr: Option<&'a Expr>,
 }
 
 impl PredicateBoundsEvaluator<'_> {
@@ -165,6 +170,13 @@ impl PredicateBoundsEvaluator<'_> {
             return NullableInterval::FALSE;
         }
 
+        // Check if the expression is the `certainly_null_expr` that was passed in.
+        if let Some(certainly_null_expr) = &self.certainly_null_expr {
+            if expr.eq(certainly_null_expr) {
+                return NullableInterval::TRUE;
+            }
+        }
+
         // `expr` is nullable, so our default answer for `is null` is going to be `{ TRUE, FALSE }`.
         // Try to see if we can narrow it down to just one option.
         match expr {
@@ -237,7 +249,7 @@ mod tests {
 
     fn eval_bounds(predicate: &Expr) -> Result<NullableInterval> {
         let schema = DFSchema::try_from(Schema::empty())?;
-        evaluate_bounds(predicate, &schema)
+        evaluate_bounds(predicate, None, &schema)
     }
 
     #[test]
@@ -467,7 +479,7 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                evaluate_bounds(&case.0, case.1).unwrap(),
+                evaluate_bounds(&case.0, None, case.1).unwrap(),
                 case.2,
                 "Failed for {}",
                 case.0
@@ -543,14 +555,14 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                evaluate_bounds(&case.0, &not_nullable_schema).unwrap(),
+                evaluate_bounds(&case.0, None, &not_nullable_schema).unwrap(),
                 case.1,
                 "Failed for {}",
                 case.0
             );
 
             assert_eq!(
-                evaluate_bounds(&case.0, &nullable_schema).unwrap(),
+                evaluate_bounds(&case.0, None, &nullable_schema).unwrap(),
                 NullableInterval::ANY_TRUTH_VALUE,
                 "Failed for {}",
                 case.0
@@ -623,14 +635,14 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                evaluate_bounds(&case.0, &not_nullable_schema).unwrap(),
+                evaluate_bounds(&case.0, None, &not_nullable_schema).unwrap(),
                 case.1,
                 "Failed for {}",
                 case.0
             );
 
             assert_eq!(
-                evaluate_bounds(&case.0, &nullable_schema).unwrap(),
+                evaluate_bounds(&case.0, None, &nullable_schema).unwrap(),
                 NullableInterval::ANY_TRUTH_VALUE,
                 "Failed for {}",
                 case.0
