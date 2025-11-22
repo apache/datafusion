@@ -534,10 +534,12 @@ impl GenerateSeriesFuncImpl {
             };
         }
 
+        // Relax the nullable to true since we will optimize to Max/Min aggregate for
+        // limit 1 case, so the nullable will check failing if
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::Int64,
-            false,
+            true,
         )]));
 
         if normalize_args.len() != exprs.len() {
@@ -629,7 +631,7 @@ impl GenerateSeriesFuncImpl {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
-            false,
+            true,
         )]));
 
         // Check if any argument is null
@@ -668,7 +670,7 @@ impl GenerateSeriesFuncImpl {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
+            true,
         )]));
 
         // Parse start date
