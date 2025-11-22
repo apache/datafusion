@@ -423,36 +423,38 @@ impl SharedBuildAccumulator {
                         //   * Bloom filter utilization (if present in Parquet files)
                         //   * Better pruning for data types where min/max isn't effective (e.g., UUIDs)
                         // Together, they provide complementary benefits and maximize data skipping.
-                        let filter_expr = match (membership_expr, bounds_expr) {
+                        // Only update the filter if we have something to push down
+                        if let Some(filter_expr) = match (membership_expr, bounds_expr) {
                             (Some(membership), Some(bounds)) => {
                                 // Both available: combine with AND
-                                Arc::new(BinaryExpr::new(
+                                Some(Arc::new(BinaryExpr::new(
                                     bounds,
                                     Operator::And,
                                     membership,
                                 ))
-                                    as Arc<dyn PhysicalExpr>
+                                    as Arc<dyn PhysicalExpr>)
                             }
                             (Some(membership), None) => {
                                 // Membership available but no bounds
                                 // This is reachable when we have data but bounds aren't available
                                 // (e.g., unsupported data types or no columns with bounds)
-                                membership
+                                Some(membership)
                             }
                             (None, Some(bounds)) => {
                                 // Bounds available but no membership.
                                 // This should be unreachable in practice: we can always push down a reference
                                 // to the hash table.
                                 // But it seems safer to handle it defensively.
-                                bounds
+                                Some(bounds)
                             }
                             (None, None) => {
-                                // No filter available, nothing to update
-                                return Ok(());
+                                // No filter available (e.g., empty build side)
+                                // Don't update the filter, but continue to mark complete
+                                None
                             }
-                        };
-
-                        self.dynamic_filter.update(filter_expr)?;
+                        } {
+                            self.dynamic_filter.update(filter_expr)?;
+                        }
                     }
                 }
                 // Partitioned: CASE expression routing to per-partition filters
