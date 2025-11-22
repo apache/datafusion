@@ -346,7 +346,7 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
     field: Arc<Field>,
-    set_op: &SetOp,
+    set_op: SetOp,
 ) -> Result<ArrayRef> {
     if l.is_empty() || l.value_type().is_null() {
         let field = Arc::new(Field::new_list_field(r.value_type(), true));
@@ -380,7 +380,7 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 
         let l_iter = l_values.iter().sorted().dedup();
         let values_set: HashSet<_> = l_iter.clone().collect();
-        let mut rows = if *set_op == SetOp::Union {
+        let mut rows = if set_op == SetOp::Union {
             l_iter.collect()
         } else {
             vec![]
@@ -486,12 +486,12 @@ fn general_set_op(
         (List(field), List(_)) => {
             let array1 = as_list_array(&array1)?;
             let array2 = as_list_array(&array2)?;
-            generic_set_lists::<i32>(array1, array2, Arc::clone(field), &set_op)
+            generic_set_lists::<i32>(array1, array2, Arc::clone(field), set_op)
         }
         (LargeList(field), LargeList(_)) => {
             let array1 = as_large_list_array(&array1)?;
             let array2 = as_large_list_array(&array2)?;
-            generic_set_lists::<i64>(array1, array2, Arc::clone(field), &set_op)
+            generic_set_lists::<i64>(array1, array2, Arc::clone(field), set_op)
         }
         (data_type1, data_type2) => {
             internal_err!(
