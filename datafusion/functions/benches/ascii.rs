@@ -60,6 +60,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         number_rows: N_ROWS,
                         return_field: Arc::clone(&return_field),
                         config_options: Arc::clone(&config_options),
+                        lambdas: None,
                     }))
                 })
             },
@@ -81,6 +82,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         number_rows: N_ROWS,
                         return_field: Arc::clone(&return_field),
                         config_options: Arc::clone(&config_options),
+                        lambdas: None,
                     }))
                 })
             },
@@ -108,6 +110,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         number_rows: N_ROWS,
                         return_field: Arc::clone(&return_field),
                         config_options: Arc::clone(&config_options),
+                        lambdas: None,
                     }))
                 })
             },
@@ -129,6 +132,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         number_rows: N_ROWS,
                         return_field: Arc::clone(&return_field),
                         config_options: Arc::clone(&config_options),
+                        lambdas: None,
                     }))
                 })
             },

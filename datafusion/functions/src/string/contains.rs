@@ -177,6 +177,7 @@ mod test {
             number_rows: 2,
             return_field: Field::new("f", DataType::Boolean, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
 
         let actual = udf.invoke_with_args(args).unwrap();

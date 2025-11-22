@@ -116,6 +116,7 @@ fn invoke_substr_with_args(
         number_rows,
         return_field: Field::new("f", DataType::Utf8View, true).into(),
         config_options: Arc::clone(&config_options),
+        lambdas: None,
     })
 }
 

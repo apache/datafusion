@@ -549,6 +549,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("f", expected.data_type(), true).into(),
                 config_options: Arc::new(ConfigOptions::default()),
+                lambdas: None,
             })
             .unwrap();
         match res {
@@ -620,6 +621,7 @@ mod tests {
                 )
                 .into(),
                 config_options: Arc::new(ConfigOptions::default()),
+                lambdas: None,
             };
             let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

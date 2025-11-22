@@ -186,6 +186,7 @@ mod tests {
             number_rows,
             return_field: Field::new("f", DataType::Date32, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         ToDateFunc::new().invoke_with_args(args)
     }

@@ -204,6 +204,7 @@ mod tests {
             let args = datafusion_expr::ReturnFieldArgs {
                 arg_fields: &[field],
                 scalar_arguments: &[None::<&ScalarValue>],
+                lambdas: &[false],
             };
 
             func.return_field_from_args(args).unwrap()

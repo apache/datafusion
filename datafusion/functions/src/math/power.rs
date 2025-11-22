@@ -222,6 +222,7 @@ mod tests {
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)
@@ -258,6 +259,7 @@ mod tests {
             number_rows: 4,
             return_field: Field::new("f", DataType::Int64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)

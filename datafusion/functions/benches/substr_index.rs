@@ -110,6 +110,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         number_rows: batch_len,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
                         config_options: Arc::clone(&config_options),
+                        lambdas: None,
                     })
                     .expect("substr_index should work on valid values"),
             )

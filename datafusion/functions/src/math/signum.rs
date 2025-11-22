@@ -173,6 +173,7 @@ mod test {
             number_rows: array.len(),
             return_field: Field::new("f", DataType::Float32, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -220,6 +221,7 @@ mod test {
             number_rows: array.len(),
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)

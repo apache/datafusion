@@ -370,6 +370,7 @@ mod tests {
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new().invoke_with_args(args);
         assert!(result.is_err());
@@ -390,6 +391,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
 
         let result = LogFunc::new().invoke_with_args(args);
@@ -407,6 +409,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Float32, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -437,6 +440,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -471,6 +475,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Float32, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -505,6 +510,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -537,6 +543,7 @@ mod tests {
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -572,6 +579,7 @@ mod tests {
             number_rows: 4,
             return_field: Field::new("f", DataType::Float32, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -613,6 +621,7 @@ mod tests {
             number_rows: 5,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -655,6 +664,7 @@ mod tests {
             number_rows: 4,
             return_field: Field::new("f", DataType::Float32, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -836,6 +846,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Decimal128(38, 0), true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -869,6 +880,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -903,6 +915,7 @@ mod tests {
             number_rows: 6,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -947,6 +960,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("f", DataType::Float64, true).into(),
                 config_options: Arc::new(ConfigOptions::default()),
+                lambdas: None,
             };
             let result = LogFunc::new()
                 .invoke_with_args(args)
@@ -987,6 +1001,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("f", DataType::Float64, true).into(),
                 config_options: Arc::new(ConfigOptions::default()),
+                lambdas: None,
             };
             let result = LogFunc::new()
                 .invoke_with_args(args)
@@ -1037,6 +1052,7 @@ mod tests {
             number_rows: 7,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -1078,6 +1094,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new().invoke_with_args(args);
         assert!(result.is_err());
@@ -1101,6 +1118,7 @@ mod tests {
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         let result = LogFunc::new().invoke_with_args(args);
         assert!(result.is_err());

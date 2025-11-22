@@ -76,6 +76,7 @@ fn invoke_repeat_with_args(
         number_rows: repeat_times as usize,
         return_field: Field::new("f", DataType::Utf8, true).into(),
         config_options: Arc::clone(&config_options),
+        lambdas: None,
     })
 }
 

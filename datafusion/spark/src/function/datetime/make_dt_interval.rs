@@ -317,6 +317,7 @@ mod tests {
             number_rows,
             return_field: Field::new("f", Duration(Microsecond), true).into(),
             config_options: Arc::new(Default::default()),
+            lambdas: None,
         };
         SparkMakeDtInterval::new().invoke_with_args(args)
     }

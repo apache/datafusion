@@ -1033,6 +1033,7 @@ mod tests {
                     number_rows: 4,
                     return_field: Field::new("f", rt, true).into(),
                     config_options: Arc::new(ConfigOptions::default()),
+                    lambdas: None,
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1083,6 +1084,7 @@ mod tests {
                     number_rows: 5,
                     return_field: Field::new("f", rt, true).into(),
                     config_options: Arc::new(ConfigOptions::default()),
+                    lambdas: None,
                 };
                 let res = udf
                     .invoke_with_args(args)

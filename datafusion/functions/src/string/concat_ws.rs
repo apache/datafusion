@@ -495,6 +495,7 @@ mod tests {
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -532,6 +533,7 @@ mod tests {
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;

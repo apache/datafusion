@@ -173,6 +173,7 @@ mod tests {
             fields,
             UnionMode::Dense,
         );
+        let arg_fields = vec![Field::new("a", scalar.data_type(), false).into()];
 
         let return_type =
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
@@ -180,10 +181,11 @@ mod tests {
         let result = UnionTagFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(scalar)],
+                arg_fields,
                 number_rows: 1,
                 return_field: Field::new("res", return_type, true).into(),
-                arg_fields: vec![],
                 config_options: Arc::new(ConfigOptions::default()),
+                lambdas: None,
             })
             .unwrap();
 
@@ -196,6 +198,7 @@ mod tests {
     #[test]
     fn union_scalar_empty() {
         let scalar = ScalarValue::Union(None, UnionFields::empty(), UnionMode::Dense);
+        let arg_fields = vec![Field::new("a", scalar.data_type(), false).into()];
 
         let return_type =
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
@@ -203,10 +206,11 @@ mod tests {
         let result = UnionTagFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(scalar)],
+                arg_fields,
                 number_rows: 1,
                 return_field: Field::new("res", return_type, true).into(),
-                arg_fields: vec![],
                 config_options: Arc::new(ConfigOptions::default()),
+                lambdas: None,
             })
             .unwrap();
 

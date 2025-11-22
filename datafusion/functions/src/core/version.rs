@@ -112,6 +112,7 @@ mod test {
                 number_rows: 0,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
                 config_options: Arc::new(ConfigOptions::default()),
+                lambdas: None,
             })
             .unwrap();
 

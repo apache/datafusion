@@ -37,6 +37,7 @@
 pub mod macros;
 
 pub mod array_has;
+pub mod array_transform;
 pub mod cardinality;
 pub mod concat;
 pub mod dimension;
@@ -78,6 +79,7 @@ pub mod expr_fn {
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::array_transform::array_transform;
     pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
@@ -145,6 +147,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),
+        array_transform::array_transform_udf(),
         empty::array_empty_udf(),
         length::array_length_udf(),
         distance::array_distance_udf(),

@@ -819,6 +819,7 @@ mod tests {
             number_rows: 1,
             return_field,
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         })?;
 
         let output = result.into_array(1)?;
@@ -847,6 +848,7 @@ mod tests {
             number_rows: 1,
             return_field,
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         })?;
 
         let output = result.into_array(1)?;

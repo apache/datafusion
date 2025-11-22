@@ -596,6 +596,7 @@ mod tests {
                 number_rows: 1,
                 return_field: input_field.clone().into(),
                 config_options: Arc::new(ConfigOptions::default()),
+                lambdas: None,
             })?;
 
             assert_eq!(

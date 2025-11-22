@@ -153,6 +153,7 @@ fn run_with_string_type<M: Measurement>(
                     number_rows: size,
                     return_field: Field::new("f", DataType::Utf8, true).into(),
                     config_options: Arc::clone(&config_options),
+                    lambdas: None,
                 }))
             })
         },

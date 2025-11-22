@@ -530,6 +530,7 @@ mod tests {
             number_rows,
             return_field: Arc::clone(return_field),
             config_options: Arc::new(ConfigOptions::default()),
+            lambdas: None,
         };
         DateBinFunc::new().invoke_with_args(args)
     }

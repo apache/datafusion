@@ -485,6 +485,7 @@ mod tests {
                     number_rows: cardinality,
                     return_field: Field::new("f", return_type, true).into(),
                     config_options: Arc::new(ConfigOptions::default()),
+                    lambdas: None,
                 });
                 assert!(result.is_ok());
 

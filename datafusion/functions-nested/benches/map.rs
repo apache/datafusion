@@ -117,6 +117,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         number_rows: 1,
                         return_field: Arc::clone(&return_field),
                         config_options: Arc::clone(&config_options),
+                        lambdas: None,
                     })
                     .expect("map should work on valid values"),
             );

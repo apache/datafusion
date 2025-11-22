@@ -234,6 +234,7 @@ pub mod test {
         let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
             arg_fields: &field_array,
             scalar_arguments: &scalar_arguments_refs,
+            lambdas: &vec![false; scalar_arguments_refs.len()],
         });
             let arg_fields = $ARGS.iter()
             .enumerate()
@@ -252,6 +253,7 @@ pub mod test {
                     arg_fields,
                     number_rows: cardinality,
                     return_field,
+                    lambdas: None,
                         config_options: $CONFIG_OPTIONS
                 });
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
@@ -274,6 +276,7 @@ pub mod test {
                         arg_fields,
                         number_rows: cardinality,
                         return_field,
+                        lambdas: None,
                         config_options: $CONFIG_OPTIONS,
                     }) {
                         Ok(_) => assert!(false, "expected error"),

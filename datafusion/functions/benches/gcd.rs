@@ -58,6 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
+                    lambdas: None,
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -79,6 +80,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
+                    lambdas: None,
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -100,6 +102,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
                     config_options: Arc::clone(&config_options),
+                    lambdas: None,
                 })
                 .expect("date_bin should work on valid values"),
             )
