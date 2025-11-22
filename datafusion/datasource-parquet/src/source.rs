@@ -445,6 +445,11 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
+    /// Number of row groups to prefetch
+    pub fn prefetch_row_groups(&self) -> usize {
+        self.table_parquet_options.global.prefetch_row_groups
+    }
+
     /// Applies schema adapter factory from the FileScanConfig if present.
     ///
     /// # Arguments
@@ -602,6 +607,7 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
+            prefetch_row_groups: self.prefetch_row_groups(),
         })
     }
 

@@ -585,6 +585,8 @@ message ParquetOptions {
   oneof max_predicate_cache_size_opt {
     uint64 max_predicate_cache_size = 33;
   }
+
+  uint64 prefetch_row_groups = 34;
 }
 
 enum JoinSide {

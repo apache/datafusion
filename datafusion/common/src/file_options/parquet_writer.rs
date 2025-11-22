@@ -209,6 +209,7 @@ impl ParquetOptions {
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
+            prefetch_row_groups: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -469,6 +470,7 @@ mod tests {
                 .maximum_parallel_row_group_writers,
             maximum_buffered_record_batches_per_stream: defaults
                 .maximum_buffered_record_batches_per_stream,
+            prefetch_row_groups: defaults.prefetch_row_groups,
             bloom_filter_on_read: defaults.bloom_filter_on_read,
             schema_force_view_types: defaults.schema_force_view_types,
             binary_as_string: defaults.binary_as_string,
@@ -583,6 +585,7 @@ mod tests {
                     .maximum_parallel_row_group_writers,
                 maximum_buffered_record_batches_per_stream: global_options_defaults
                     .maximum_buffered_record_batches_per_stream,
+                prefetch_row_groups: global_options_defaults.prefetch_row_groups,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
                 max_predicate_cache_size: global_options_defaults
                     .max_predicate_cache_size,
