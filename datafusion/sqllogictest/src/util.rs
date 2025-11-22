@@ -99,11 +99,18 @@ pub fn df_value_validator(
         let actual_snapshot = normalized_actual.join("\n");
         let fragments: Vec<&str> = expected_snapshot.split(IGNORE_MARKER).collect();
         let mut pos = 0;
-        for frag in fragments {
+        for (i, frag) in fragments.iter().enumerate() {
             if frag.is_empty() {
                 continue;
             }
             if let Some(idx) = actual_snapshot[pos..].find(frag) {
+                // Edge case: The following example is expected to fail
+                // Actual - 'foo bar baz'
+                // Expected - 'bar <slt:ignore>'
+                if (i == 0) && (idx != 0) {
+                    return false;
+                }
+
                 pos += idx + frag.len();
             } else {
                 return false;
@@ -132,4 +139,21 @@ pub fn df_value_validator(
 
 pub fn is_spark_path(relative_path: &Path) -> bool {
     relative_path.starts_with("spark/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Validation should fail for the below case:
+    // Actual - 'foo bar baz'
+    // Expected - 'bar <slt:ignore>'
+    #[test]
+    fn ignore_marker_does_not_skip_leading_text() {
+        // Actual snapshot contains unexpected prefix before the expected fragment.
+        let actual = vec![vec!["foo bar baz".to_string()]];
+        let expected = vec!["bar <slt:ignore>".to_string()];
+
+        assert!(!df_value_validator(value_normalizer, &actual, &expected));
+    }
 }
