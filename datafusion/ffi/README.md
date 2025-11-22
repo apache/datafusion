@@ -103,7 +103,7 @@ the example in `FFI_TableProvider`.
 
 ## Memory Management
 
-One of the advantages of Rust the ownership model, which means programmers 
+One of the advantages of Rust the ownership model, which means programmers
 _usually_ do not need to worry about memory management. When interacting with
 foreign code, this is not necessarily true. If you review the structures in
 this crate, you will find that many of them implement the `Drop` trait and
@@ -126,7 +126,7 @@ side, regardless of if it is called on either the local or foreign side.
 Most of the structs in this crate carry atomic reference counts to the
 underlying data, and this is straight forward. Some structs like the
 `FFI_Accumulator` contain an inner `Box<dyn Accumulator>`. The reason for
-this is that we need to be able to mutably acccess these based on the
+this is that we need to be able to mutably access these based on the
 `Accumulator` trait definition. For these we have slightly more complicated
 release code based on whether it is being dropped on the local or foreign side.
 Traits that use a `Box<>` for their underlying data also cannot implement
