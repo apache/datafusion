@@ -53,7 +53,9 @@ use futures::{ready, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, RowSelectionPolicy,
+};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
@@ -87,6 +89,8 @@ pub(super) struct ParquetOpener {
     pub pushdown_filters: bool,
     /// Should the filters be reordered to optimize the scan?
     pub reorder_filters: bool,
+    /// Should we force the reader to use RowSelections for filtering
+    pub force_filter_selections: bool,
     /// Should the page index be read from parquet files, if present, to skip
     /// data pages
     pub enable_page_index: bool,
@@ -147,6 +151,7 @@ impl FileOpener for ParquetOpener {
         let partition_fields = self.partition_fields.clone();
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
+        let force_filter_selections = self.force_filter_selections;
         let coerce_int96 = self.coerce_int96;
         let enable_bloom_filter = self.enable_bloom_filter;
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
@@ -347,6 +352,10 @@ impl FileOpener for ParquetOpener {
                     }
                 };
             };
+            if force_filter_selections {
+                builder =
+                    builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+            }
 
             // Determine which row groups to actually read. The idea is to skip
             // as many row groups as possible based on the metadata and query
@@ -887,6 +896,7 @@ mod test {
                 partition_fields: vec![],
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
+                force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
@@ -960,6 +970,7 @@ mod test {
                 ))],
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
+                force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
@@ -1049,6 +1060,7 @@ mod test {
                 ))],
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
+                force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
@@ -1141,6 +1153,7 @@ mod test {
                 ))],
                 pushdown_filters: true, // note that this is true!
                 reorder_filters: true,
+                force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
@@ -1233,6 +1246,7 @@ mod test {
                 ))],
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
+                force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
@@ -1383,6 +1397,7 @@ mod test {
             partition_fields: vec![],
             pushdown_filters: true,
             reorder_filters: false,
+            force_filter_selections: false,
             enable_page_index: false,
             enable_bloom_filter: false,
             schema_adapter_factory: Arc::new(CustomSchemaAdapterFactory),
