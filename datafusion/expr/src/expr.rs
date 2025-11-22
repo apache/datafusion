@@ -398,6 +398,10 @@ pub enum Expr {
     OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
+    /// Lambda expression, valid only as a scalar function argument
+    /// Note that it has it's own scoped schema, different from the plan schema,
+    /// that can be constructed with ScalarUDF::arguments_schemas and variants
+    Lambda(Lambda),
 }
 
 impl Default for Expr {
@@ -1211,6 +1215,23 @@ impl GroupingSet {
     }
 }
 
+/// Lambda expression.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct Lambda {
+    pub params: Vec<String>,
+    pub body: Box<Expr>,
+}
+
+impl Lambda {
+    /// Create a new lambda expression
+    pub fn new(params: Vec<String>, body: Expr) -> Self {
+        Self {
+            params,
+            body: Box::new(body),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 #[cfg(not(feature = "sql"))]
 pub struct IlikeSelectItem {
@@ -1525,6 +1546,7 @@ impl Expr {
             #[expect(deprecated)]
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
+            Expr::Lambda { .. } => "Lambda",
         }
     }
 
@@ -1908,9 +1930,11 @@ impl Expr {
     ///
     /// See [`Self::column_refs`] for details
     pub fn add_column_refs<'a>(&'a self, set: &mut HashSet<&'a Column>) {
-        self.apply(|expr| {
+        self.apply_with_lambdas_params(|expr, lambdas_params| {
             if let Expr::Column(col) = expr {
-                set.insert(col);
+                if col.relation.is_some() || !lambdas_params.contains(col.name()) {
+                    set.insert(col);
+                }
             }
             Ok(TreeNodeRecursion::Continue)
         })
@@ -1943,9 +1967,11 @@ impl Expr {
     ///
     /// See [`Self::column_refs_counts`] for details
     pub fn add_column_ref_counts<'a>(&'a self, map: &mut HashMap<&'a Column, usize>) {
-        self.apply(|expr| {
+        self.apply_with_lambdas_params(|expr, lambdas_params| {
             if let Expr::Column(col) = expr {
-                *map.entry(col).or_default() += 1;
+                if !col.is_lambda_parameter(lambdas_params) {
+                    *map.entry(col).or_default() += 1;
+                }
             }
             Ok(TreeNodeRecursion::Continue)
         })
@@ -1954,8 +1980,10 @@ impl Expr {
 
     /// Returns true if there are any column references in this Expr
     pub fn any_column_refs(&self) -> bool {
-        self.exists(|expr| Ok(matches!(expr, Expr::Column(_))))
-            .expect("exists closure is infallible")
+        self.exists_with_lambdas_params(|expr, lambdas_params| {
+            Ok(matches!(expr, Expr::Column(c) if !c.is_lambda_parameter(lambdas_params)))
+        })
+        .expect("exists closure is infallible")
     }
 
     /// Return true if the expression contains out reference(correlated) expressions.
@@ -1995,7 +2023,7 @@ impl Expr {
     /// at least one placeholder.
     pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<(Expr, bool)> {
         let mut has_placeholder = false;
-        self.transform(|mut expr| {
+        self.transform_with_schema(schema, |mut expr, schema| {
             match &mut expr {
                 // Default to assuming the arguments are the same type
                 Expr::BinaryExpr(BinaryExpr { left, op: _, right }) => {
@@ -2078,7 +2106,8 @@ impl Expr {
             | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
-            | Expr::Placeholder(..) => false,
+            | Expr::Placeholder(..)
+            | Expr::Lambda { .. } => false,
         }
     }
 
@@ -2674,6 +2703,12 @@ impl HashNode for Expr {
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Lambda(Lambda {
+                params,
+                body: _,
+            }) => {
+                params.hash(state);
+            }
         };
     }
 }
@@ -2987,6 +3022,12 @@ impl Display for SchemaDisplay<'_> {
                     }
                 }
             }
+            Expr::Lambda(Lambda {
+                params,
+                body,
+            }) => {
+                write!(f, "({}) -> {body}", display_comma_separated(params))
+            }
         }
     }
 }
@@ -3166,6 +3207,12 @@ impl Display for SqlDisplay<'_> {
                         write!(f, "got error from schema_name {e}")
                     }
                 }
+            }
+            Expr::Lambda(Lambda {
+                params,
+                body,
+            }) => {
+                write!(f, "({}) -> {}", params.join(", "), SchemaDisplay(body))
             }
             _ => write!(f, "{}", self.0),
         }
@@ -3473,6 +3520,12 @@ impl Display for Expr {
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
+            }
+            Expr::Lambda(Lambda {
+                params,
+                body,
+            }) => {
+                write!(f, "({}) -> {body}", params.join(", "))
             }
         }
     }

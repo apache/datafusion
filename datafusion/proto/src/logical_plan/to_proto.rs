@@ -622,6 +622,11 @@ pub fn serialize_expr(
                     .unwrap_or(HashMap::new()),
             })),
         },
+        Expr::Lambda { .. } => {
+            return Err(Error::General(
+                "Proto serialization error: Lambda not supported".to_string(),
+            ))
+        }
     };
 
     Ok(expr_node)

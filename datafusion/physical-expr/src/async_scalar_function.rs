@@ -168,6 +168,7 @@ impl AsyncFuncExpr {
                             number_rows: current_batch.num_rows(),
                             return_field: Arc::clone(&self.return_field),
                             config_options: Arc::clone(&config_options),
+                            lambdas: None,
                         })
                         .await?,
                 );
@@ -187,6 +188,7 @@ impl AsyncFuncExpr {
                         number_rows: batch.num_rows(),
                         return_field: Arc::clone(&self.return_field),
                         config_options: Arc::clone(&config_options),
+                        lambdas: None,
                     })
                     .await?,
             );

@@ -22,15 +22,20 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
+use crate::error::{
+    _exec_datafusion_err, _exec_err, _internal_datafusion_err, _internal_err,
+};
 use crate::{Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
     OffsetSizeTrait,
 };
+use arrow::array::{ArrowPrimitiveType, PrimitiveArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
+};
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
@@ -937,6 +942,124 @@ pub fn take_function_args<const N: usize, T>(
             v.len()
         )
     })
+}
+
+/// [0, 2, 2, 5, 6] -> [0, 0, 2, 2, 2, 3]
+pub fn make_list_array_indices<T: ArrowPrimitiveType>(
+    offsets: &OffsetBuffer<T::Native>,
+) -> PrimitiveArray<T> {
+    let mut indices = Vec::with_capacity(
+        offsets.last().unwrap().as_usize() - offsets.first().unwrap().as_usize(),
+    );
+
+    for (i, (&start, &end)) in std::iter::zip(&offsets[..], &offsets[1..]).enumerate() {
+        indices.extend(std::iter::repeat_n(
+            T::Native::usize_as(i),
+            end.as_usize() - start.as_usize(),
+        ));
+    }
+
+    PrimitiveArray::new(indices.into(), None)
+}
+
+/// [0, 2, 2, 5, 6] -> [0, 1, 0, 1, 2, 0]
+pub fn make_list_element_indices<T: ArrowPrimitiveType>(
+    offsets: &OffsetBuffer<T::Native>,
+) -> PrimitiveArray<T> {
+    let mut indices = vec![
+        T::default_value();
+        offsets.last().unwrap().as_usize()
+            - offsets.first().unwrap().as_usize()
+    ];
+
+    for (&start, &end) in std::iter::zip(&offsets[..], &offsets[1..]) {
+        for i in 0..end.as_usize() - start.as_usize() {
+            indices[start.as_usize() + i] = T::Native::usize_as(i);
+        }
+    }
+
+    PrimitiveArray::new(indices.into(), None)
+}
+
+/// (3, 2) -> [0, 0, 1, 1, 2, 2]
+pub fn make_fsl_array_indices(
+    list_size: i32,
+    array_len: usize,
+) -> PrimitiveArray<Int32Type> {
+    let mut indices = vec![0; list_size as usize * array_len];
+
+    for i in 0..array_len {
+        for j in 0..list_size as usize {
+            indices[i + j] = i as i32;
+        }
+    }
+
+    PrimitiveArray::new(indices.into(), None)
+}
+
+/// (3, 2) -> [0, 1, 0, 1, 0, 1]
+pub fn make_fsl_element_indices(
+    list_size: i32,
+    array_len: usize,
+) -> PrimitiveArray<Int32Type> {
+    let mut indices = vec![0; list_size as usize * array_len];
+
+    for i in 0..array_len {
+        for j in 0..list_size as usize {
+            indices[i + j] = j as i32;
+        }
+    }
+
+    PrimitiveArray::new(indices.into(), None)
+}
+
+pub fn list_values(array: &dyn Array) -> Result<&ArrayRef> {
+    match array.data_type() {
+        DataType::List(_) => Ok(array.as_list::<i32>().values()),
+        DataType::LargeList(_) => Ok(array.as_list::<i64>().values()),
+        DataType::FixedSizeList(_, _) => Ok(array.as_fixed_size_list().values()),
+        other => _exec_err!("expected list, got {other}"),
+    }
+}
+
+pub fn list_indices(array: &dyn Array) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::List(_) => Ok(Arc::new(make_list_array_indices::<Int32Type>(
+            array.as_list().offsets(),
+        ))),
+        DataType::LargeList(_) => Ok(Arc::new(make_list_array_indices::<Int64Type>(
+            array.as_list().offsets(),
+        ))),
+        DataType::FixedSizeList(_, _) => {
+            let fixed_size_list = array.as_fixed_size_list();
+
+            Ok(Arc::new(make_fsl_array_indices(
+                fixed_size_list.value_length(),
+                fixed_size_list.len(),
+            )))
+        }
+        other => _exec_err!("expected list, got {other}"),
+    }
+}
+
+pub fn elements_indices(array: &dyn Array) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::List(_) => Ok(Arc::new(make_list_element_indices::<Int32Type>(
+            array.as_list::<i32>().offsets(),
+        ))),
+        DataType::LargeList(_) => Ok(Arc::new(make_list_element_indices::<Int64Type>(
+            array.as_list::<i64>().offsets(),
+        ))),
+        DataType::FixedSizeList(_, _) => {
+            let fixed_size_list = array.as_fixed_size_list();
+
+            Ok(Arc::new(make_fsl_element_indices(
+                fixed_size_list.value_length(),
+                fixed_size_list.len(),
+            )))
+        }
+        other => _exec_err!("expected list, got {other}"),
+    }
 }
 
 #[cfg(test)]

@@ -33,7 +33,7 @@ use arrow::{
 };
 use arrow_schema::FieldRef;
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::ReturnFieldArgs;
+use datafusion::{common::exec_err, logical_expr::ReturnFieldArgs};
 use datafusion::{
     error::DataFusionError,
     logical_expr::type_coercion::functions::data_types_with_scalar_udf,
@@ -210,6 +210,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         return_field,
         // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
         config_options: Arc::new(ConfigOptions::default()),
+        lambdas: None,
     };
 
     let result = rresult_return!(udf
@@ -382,9 +383,14 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
+            lambdas,
             // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
             config_options: _config_options,
         } = invoke_args;
+
+        if lambdas.is_some_and(|lambdas| lambdas.iter().any(|l| l.is_some())) {
+            return exec_err!("ForeignScalarUDF doesn't support lambdas");
+        }
 
         let args = args
             .into_iter()

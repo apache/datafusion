@@ -22,10 +22,10 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{
-    NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction,
-};
-use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
+use datafusion_expr::expr::{Lambda, ScalarFunction, Unnest};
+use datafusion_expr::expr::{NullTreatment, WildcardOptions, WindowFunction};
+use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner::{RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
@@ -723,6 +723,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 let arg_name = crate::utils::normalize_ident(name);
                 Ok((expr, Some(arg_name)))
+            }
+            FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
+                sqlparser::ast::LambdaFunction { params, body },
+            ))) => {
+                let params = params
+                    .into_iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>();
+
+                Ok((
+                    Expr::Lambda(Lambda {
+                        params: params.clone(),
+                        body: Box::new(self.sql_expr_to_logical_expr(
+                            *body,
+                            schema,
+                            &mut planner_context.clone().with_lambda_parameters(params),
+                        )?),
+                    }),
+                    None,
+                ))
             }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;

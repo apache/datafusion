@@ -22,10 +22,8 @@ use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 
 use datafusion::assert_batches_eq;
-use datafusion::common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
-use datafusion::common::{assert_contains, exec_datafusion_err, Result};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNodeRecursion};
+use datafusion::common::{assert_contains, exec_datafusion_err, HashSet, Result};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
@@ -36,8 +34,8 @@ use datafusion::logical_expr::{
 };
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
-use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::{expressions, ScalarFunctionExpr};
+use datafusion::physical_expr::{PhysicalExpr, PhysicalExprExt};
 use datafusion::prelude::SessionConfig;
 use datafusion::scalar::ScalarValue;
 use datafusion_physical_expr_adapter::{
@@ -302,7 +300,9 @@ impl PhysicalExprAdapter for ShreddedJsonRewriter {
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         // First try our custom JSON shredding rewrite
         let rewritten = expr
-            .transform(|expr| self.rewrite_impl(expr, &self.physical_file_schema))
+            .transform_with_lambdas_params(|expr, lambdas_params| {
+                self.rewrite_impl(expr, &self.physical_file_schema, lambdas_params)
+            })
             .data()?;
 
         // Then apply the default adapter as a fallback to handle standard schema differences
@@ -335,6 +335,7 @@ impl ShreddedJsonRewriter {
         &self,
         expr: Arc<dyn PhysicalExpr>,
         physical_file_schema: &Schema,
+        lambdas_params: &HashSet<String>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
             if func.name() == "json_get_str" && func.args().len() == 2 {
@@ -348,6 +349,7 @@ impl ShreddedJsonRewriter {
                         if let Some(column) = func.args()[1]
                             .as_any()
                             .downcast_ref::<expressions::Column>()
+                            .filter(|col| !lambdas_params.contains(col.name()))
                         {
                             let column_name = column.name();
                             // Check if there's a flat column with underscore prefix

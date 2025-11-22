@@ -540,9 +540,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None => {
                         let mut columns = HashSet::new();
                         for expr in &aggr_expr {
-                            expr.apply(|expr| {
+                            expr.apply_with_lambdas_params(|expr, lambdas_params| {
                                 if let Expr::Column(c) = expr {
-                                    columns.insert(Expr::Column(c.clone()));
+                                    if !c.is_lambda_parameter(lambdas_params) {
+                                        columns.insert(Expr::Column(c.clone()));
+                                    }
                                 }
                                 Ok(TreeNodeRecursion::Continue)
                             })

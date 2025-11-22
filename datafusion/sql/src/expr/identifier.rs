@@ -53,6 +53,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // identifier. (e.g. it is "foo.bar" not foo.bar)
             let normalize_ident = self.ident_normalizer.normalize(id);
 
+            if planner_context
+                .lambdas_parameters()
+                .contains(&normalize_ident)
+            {
+                let mut column = Column::new_unqualified(normalize_ident);
+                if self.options.collect_spans {
+                    if let Some(span) = Span::try_from_sqlparser_span(id_span) {
+                        column.spans_mut().add_span(span);
+                    }
+                }
+                return Ok(Expr::Column(column));
+            }
+
             // Check for qualified field with unqualified name
             if let Ok((qualifier, _)) =
                 schema.qualified_field_with_unqualified_name(normalize_ident.as_str())

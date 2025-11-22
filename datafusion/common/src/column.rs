@@ -22,6 +22,7 @@ use crate::utils::parse_identifiers_normalized;
 use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
+use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -324,6 +325,11 @@ impl Column {
             relation: Some(relation),
             ..self.clone()
         }
+    }
+
+    pub fn is_lambda_parameter(&self, lambdas_params: &crate::HashSet<impl Borrow<str> + Eq + std::hash::Hash>) -> bool {
+        // currently, references to lambda parameters are always unqualified
+        self.relation.is_none() && lambdas_params.contains(self.name())
     }
 }
 

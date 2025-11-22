@@ -17,27 +17,30 @@
 
 //! Expression simplification API
 
+use std::collections::HashSet;
+use std::ops::Not;
+use std::{borrow::Cow, sync::Arc};
+
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
-use std::borrow::Cow;
-use std::collections::HashSet;
-use std::ops::Not;
-use std::sync::Arc;
 
+use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     metadata::FieldMetadata,
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
+    tree_node::{
+        Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    },
 };
 use datafusion_common::{
     exec_datafusion_err, internal_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility,
+    and, binary::BinaryTypeCoercer, lit, or, simplify::SimplifyContext, BinaryExpr, Case,
+    ColumnarValue, Expr, Like, Operator, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
@@ -267,7 +270,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// documentation for more details on type coercion
     pub fn coerce(&self, expr: Expr, schema: &DFSchema) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
-        expr.rewrite(&mut expr_rewrite).data()
+        expr.rewrite_with_schema(schema, &mut expr_rewrite).data()
     }
 
     /// Input guarantees about the values of columns.
@@ -649,7 +652,8 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::WindowFunction { .. }
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
-            | Expr::Placeholder(_) => false,
+            | Expr::Placeholder(_)
+            | Expr::Lambda { .. } => false,
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
@@ -753,6 +757,89 @@ impl<'a, S> Simplifier<'a, S> {
 
 impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
     type Node = Expr;
+
+    fn f_down(&mut self, expr: Self::Node) -> Result<Transformed<Expr>> {
+        match expr {
+            Expr::ScalarFunction(ScalarFunction { func, args })
+                if args.iter().any(|arg| matches!(arg, Expr::Lambda(_))) =>
+            {
+                // there's currently no way to adapt a generic SimplifyInfo with lambda parameters,
+                // so, if the scalar function has any lambda, we materialize a DFSchema using all the
+                // columns references in every arguments. Than we can call lambdas_schemas_from_args,
+                // and for each argument, we create a new SimplifyContext with the scoped schema, and
+                // simplify the argument using this 'sub-context'. Finally, we set Transformed.tnr to
+                // Jump so the parent context doesn't try to simplify the argument again, without the
+                // parameters info
+
+                // get all columns references
+                let mut columns_refs = HashSet::new();
+
+                for arg in &args {
+                    arg.add_column_refs(&mut columns_refs);
+                }
+
+                // materialize columns references into qualified fields
+                let qualified_fields = columns_refs
+                    .into_iter()
+                    .map(|captured_column| {
+                        let expr = Expr::Column(captured_column.clone());
+
+                        Ok((
+                            captured_column.relation.clone(),
+                            Arc::new(Field::new(
+                                captured_column.name(),
+                                self.info.get_data_type(&expr)?,
+                                self.info.nullable(&expr)?,
+                            )),
+                        ))
+                    })
+                    .collect::<Result<_>>()?;
+
+                // create a schema using the materialized fields
+                let dfschema =
+                    DFSchema::new_with_metadata(qualified_fields, Default::default())?;
+
+                let mut scoped_schemas = func
+                    .arguments_schema_from_logical_args(&args, &dfschema)?
+                    .into_iter();
+
+                let transformed_args = args
+                    .map_elements(|arg| {
+                        let scoped_schema = scoped_schemas.next().unwrap();
+
+                        // create a sub-context, using the scoped schema, that includes information about the lambda parameters
+                        let simplify_context =
+                            SimplifyContext::new(self.info.execution_props())
+                                .with_schema(Arc::new(scoped_schema.into_owned()));
+
+                        let mut simplifier = Simplifier::new(&simplify_context);
+
+                        // simplify the argument using it's context
+                        arg.rewrite(&mut simplifier)
+                    })?
+                    .update_data(|args| {
+                        Expr::ScalarFunction(ScalarFunction { func, args })
+                    });
+
+                Ok(Transformed::new(
+                    transformed_args.data,
+                    transformed_args.transformed,
+                    // return at least Jump so the parent contex doesn't try again to simplify the arguments
+                    // (and fail because it doesn't contain info about lambdas paramters)
+                    match transformed_args.tnr {
+                        TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {
+                            TreeNodeRecursion::Jump
+                        }
+                        TreeNodeRecursion::Stop => TreeNodeRecursion::Stop,
+                    },
+                ))
+
+                // Ok(transformed_args.update_data(|args| Expr::ScalarFunction(ScalarFunction { func, args})))
+            }
+            // Expr::Lambda(_) => Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump)),
+            _ => Ok(Transformed::no(expr)),
+        }
+    }
 
     /// rewrite the expression simplifying any constant expressions
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {

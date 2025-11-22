@@ -527,18 +527,17 @@ fn proj_exprs_evaluation_result_on_empty_batch(
     for expr in proj_expr.iter() {
         let result_expr = expr
             .clone()
-            .transform_up(|expr| {
-                if let Expr::Column(Column { name, .. }) = &expr {
+            .transform_up_with_lambdas_params(|expr, lambdas_params| match &expr {
+                Expr::Column(col) if !col.is_lambda_parameter(lambdas_params) => {
                     if let Some(result_expr) =
-                        input_expr_result_map_for_count_bug.get(name)
+                        input_expr_result_map_for_count_bug.get(col.name())
                     {
                         Ok(Transformed::yes(result_expr.clone()))
                     } else {
                         Ok(Transformed::no(expr))
                     }
-                } else {
-                    Ok(Transformed::no(expr))
                 }
+                _ => Ok(Transformed::no(expr)),
             })
             .data()?;
 
@@ -570,16 +569,17 @@ fn filter_exprs_evaluation_result_on_empty_batch(
 ) -> Result<Option<Expr>> {
     let result_expr = filter_expr
         .clone()
-        .transform_up(|expr| {
-            if let Expr::Column(Column { name, .. }) = &expr {
-                if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
+        .transform_up_with_lambdas_params(|expr, lambdas_params| match &expr {
+            Expr::Column(col) if !col.is_lambda_parameter(lambdas_params) => {
+                if let Some(result_expr) =
+                    input_expr_result_map_for_count_bug.get(col.name())
+                {
                     Ok(Transformed::yes(result_expr.clone()))
                 } else {
                     Ok(Transformed::no(expr))
                 }
-            } else {
-                Ok(Transformed::no(expr))
             }
+            _ => Ok(Transformed::no(expr)),
         })
         .data()?;
 

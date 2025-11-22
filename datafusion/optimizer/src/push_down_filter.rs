@@ -293,7 +293,8 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
-        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
+        | Expr::GroupingSet(_)
+        | Expr::Lambda { .. } => internal_err!("Unsupported predicate type"),
     })?;
     Ok(is_evaluate)
 }
@@ -1389,14 +1390,15 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    e.transform_up(|expr| {
-        Ok(if let Expr::Column(c) = &expr {
-            match replace_map.get(&c.flat_name()) {
-                Some(new_c) => Transformed::yes(new_c.clone()),
-                None => Transformed::no(expr),
+    e.transform_up_with_lambdas_params(|expr, lambdas_params| {
+        Ok(match &expr {
+            Expr::Column(c) if !c.is_lambda_parameter(lambdas_params) => {
+                match replace_map.get(&c.flat_name()) {
+                    Some(new_c) => Transformed::yes(new_c.clone()),
+                    None => Transformed::no(expr),
+                }
             }
-        } else {
-            Transformed::no(expr)
+            _ => Transformed::no(expr),
         })
     })
     .data()
@@ -1405,17 +1407,18 @@ pub fn replace_cols_by_name(
 /// check whether the expression uses the columns in `check_map`.
 fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     let mut is_contain = false;
-    e.apply(|expr| {
-        Ok(if let Expr::Column(c) = &expr {
-            match check_map.get(&c.flat_name()) {
-                Some(_) => {
-                    is_contain = true;
-                    TreeNodeRecursion::Stop
+    e.apply_with_lambdas_params(|expr, lambdas_params| {
+        Ok(match &expr {
+            Expr::Column(c) if !c.is_lambda_parameter(lambdas_params) => {
+                match check_map.get(&c.flat_name()) {
+                    Some(_) => {
+                        is_contain = true;
+                        TreeNodeRecursion::Stop
+                    }
+                    None => TreeNodeRecursion::Continue,
                 }
-                None => TreeNodeRecursion::Continue,
             }
-        } else {
-            TreeNodeRecursion::Continue
+            _ => TreeNodeRecursion::Continue,
         })
     })
     .unwrap();

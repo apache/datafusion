@@ -23,6 +23,7 @@
 use crate::PhysicalOptimizerRule;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::alias::AliasGenerator;
+use datafusion_physical_expr::PhysicalExprExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -243,9 +244,11 @@ fn minimize_join_filter(
     rhs_schema: &Schema,
 ) -> JoinFilter {
     let mut used_columns = HashSet::new();
-    expr.apply(|expr| {
+    expr.apply_with_lambdas_params(|expr, lambdas_params| {
         if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-            used_columns.insert(col.index());
+            if !lambdas_params.contains(col.name()) {
+                used_columns.insert(col.index());
+            }
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -267,17 +270,19 @@ fn minimize_join_filter(
         .collect::<Fields>();
 
     let final_expr = expr
-        .transform_up(|expr| match expr.as_any().downcast_ref::<Column>() {
-            None => Ok(Transformed::no(expr)),
-            Some(column) => {
-                let new_idx = used_columns
-                    .iter()
-                    .filter(|idx| **idx < column.index())
-                    .count();
-                let new_column = Column::new(column.name(), new_idx);
-                Ok(Transformed::yes(
-                    Arc::new(new_column) as Arc<dyn PhysicalExpr>
-                ))
+        .transform_up_with_lambdas_params(|expr, lambdas_params| {
+            match expr.as_any().downcast_ref::<Column>() {
+                Some(column) if !lambdas_params.contains(column.name()) => {
+                    let new_idx = used_columns
+                        .iter()
+                        .filter(|idx| **idx < column.index())
+                        .count();
+                    let new_column = Column::new(column.name(), new_idx);
+                    Ok(Transformed::yes(
+                        Arc::new(new_column) as Arc<dyn PhysicalExpr>
+                    ))
+                }
+                _ => Ok(Transformed::no(expr)),
             }
         })
         .expect("Closure cannot fail");
@@ -380,10 +385,9 @@ impl<'a> JoinFilterRewriter<'a> {
         // First, add a new projection. The expression must be rewritten, as it is no longer
         // executed against the filter schema.
         let new_idx = self.join_side_projections.len();
-        let rewritten_expr = expr.transform_up(|expr| {
+        let rewritten_expr = expr.transform_up_with_lambdas_params(|expr, lambdas_params| {
             Ok(match expr.as_any().downcast_ref::<Column>() {
-                None => Transformed::no(expr),
-                Some(column) => {
+                Some(column) if !lambdas_params.contains(column.name()) => {
                     let intermediate_column =
                         &self.intermediate_column_indices[column.index()];
                     assert_eq!(intermediate_column.side, self.join_side);
@@ -393,6 +397,7 @@ impl<'a> JoinFilterRewriter<'a> {
                     let new_column = Column::new(field.name(), join_side_index);
                     Transformed::yes(Arc::new(new_column) as Arc<dyn PhysicalExpr>)
                 }
+                _ => Transformed::no(expr),
             })
         })?;
         self.join_side_projections.push((rewritten_expr.data, name));
@@ -415,15 +420,17 @@ impl<'a> JoinFilterRewriter<'a> {
         join_side: JoinSide,
     ) -> Result<bool> {
         let mut result = false;
-        expr.apply(|expr| match expr.as_any().downcast_ref::<Column>() {
-            None => Ok(TreeNodeRecursion::Continue),
-            Some(c) => {
-                let column_index = &self.intermediate_column_indices[c.index()];
-                if column_index.side == join_side {
-                    result = true;
-                    return Ok(TreeNodeRecursion::Stop);
+        expr.apply_with_lambdas_params(|expr, lambdas_params| {
+            match expr.as_any().downcast_ref::<Column>() {
+                Some(c) if !lambdas_params.contains(c.name()) => {
+                    let column_index = &self.intermediate_column_indices[c.index()];
+                    if column_index.side == join_side {
+                        result = true;
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                    Ok(TreeNodeRecursion::Continue)
                 }
-                Ok(TreeNodeRecursion::Continue)
+                _ => Ok(TreeNodeRecursion::Continue),
             }
         })?;
 

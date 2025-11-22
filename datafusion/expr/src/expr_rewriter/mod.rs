@@ -62,11 +62,15 @@ pub trait FunctionRewrite: Debug {
 /// Recursively call `LogicalPlanBuilder::normalize` on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    expr.transform(|expr| {
+    expr.transform_up_with_lambdas_params(|expr, lambdas_params| {
         Ok({
             if let Expr::Column(c) = expr {
-                let col = LogicalPlanBuilder::normalize(plan, c)?;
-                Transformed::yes(Expr::Column(col))
+                if c.relation.is_some() || !lambdas_params.contains(c.name()) {
+                    let col = LogicalPlanBuilder::normalize(plan, c)?;
+                    Transformed::yes(Expr::Column(col))
+                } else {
+                    Transformed::no(Expr::Column(c))
+                }
             } else {
                 Transformed::no(expr)
             }
@@ -91,14 +95,21 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
         return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
     }
 
-    expr.transform(|expr| {
+    expr.transform_up_with_lambdas_params(|expr, lambdas_params| {
         Ok({
-            if let Expr::Column(c) = expr {
-                let col =
-                    c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
-                Transformed::yes(Expr::Column(col))
-            } else {
-                Transformed::no(expr)
+            match expr {
+                Expr::Column(c) => {
+                    if c.relation.is_none() && lambdas_params.contains(c.name()) {
+                        Transformed::no(Expr::Column(c))
+                    } else {
+                        let col = c.normalize_with_schemas_and_ambiguity_check(
+                            schemas,
+                            using_columns,
+                        )?;
+                        Transformed::yes(Expr::Column(col))
+                    }
+                }
+                _ => Transformed::no(expr),
             }
         })
     })
@@ -133,15 +144,18 @@ pub fn normalize_sorts(
 /// Recursively replace all [`Column`] expressions in a given expression tree with
 /// `Column` expressions provided by the hash map argument.
 pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
-    expr.transform(|expr| {
+    expr.transform_up_with_lambdas_params(|expr, lambdas_params| {
         Ok({
-            if let Expr::Column(c) = &expr {
-                match replace_map.get(c) {
-                    Some(new_c) => Transformed::yes(Expr::Column((*new_c).to_owned())),
-                    None => Transformed::no(expr),
+            match &expr {
+                Expr::Column(c) if !c.is_lambda_parameter(lambdas_params) => {
+                    match replace_map.get(c) {
+                        Some(new_c) => {
+                            Transformed::yes(Expr::Column((*new_c).to_owned()))
+                        }
+                        None => Transformed::no(expr),
+                    }
                 }
-            } else {
-                Transformed::no(expr)
+                _ => Transformed::no(expr),
             }
         })
     })
@@ -201,6 +215,7 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
             if let Expr::OuterReferenceColumn(_, col) = expr {
+                //todo: what if this col collides with a lambda parameter?
                 Transformed::yes(Expr::Column(col))
             } else {
                 Transformed::no(expr)

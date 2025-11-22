@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
+use datafusion_expr::expr::{AggregateFunctionParams, WindowFunctionParams};
+use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, CaseWhen, DuplicateTreatment, Expr as AstExpr, Function,
-    Ident, Interval, ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator,
-    ValueWithSpan,
+    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval,
+    LambdaFunction, ObjectName, Subscript, TimezoneInfo, UnaryOperator,
 };
+use sqlparser::ast::{CaseWhen, DuplicateTreatment, OrderByOptions, ValueWithSpan};
 use std::sync::Arc;
 use std::vec;
 
@@ -527,6 +528,14 @@ impl Unparser<'_> {
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
+            Expr::Lambda(Lambda { params, body }) => {
+                Ok(ast::Expr::Lambda(LambdaFunction {
+                    params: ast::OneOrManyWithParens::Many(
+                        params.iter().map(|param| param.as_str().into()).collect(),
+                    ),
+                    body: Box::new(self.expr_to_sql_inner(body)?),
+                }))
+            }
         }
     }
 
