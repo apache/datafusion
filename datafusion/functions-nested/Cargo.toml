@@ -71,6 +71,10 @@ name = "array_expression"
 
 [[bench]]
 harness = false
+name = "array_has"
+
+[[bench]]
+harness = false
 name = "array_reverse"
 
 [[bench]]
