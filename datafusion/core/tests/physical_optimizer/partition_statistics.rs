@@ -620,7 +620,7 @@ mod test {
         let plan_string = get_plan_string(&aggregate_exec_partial).swap_remove(0);
         assert_snapshot!(
             plan_string,
-            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
+            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)], ordering_mode=Sorted"
         );
 
         let p0_statistics = aggregate_exec_partial.partition_statistics(Some(0))?;

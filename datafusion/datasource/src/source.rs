@@ -342,7 +342,7 @@ impl ExecutionPlan for DataSourceExec {
             .collect_vec();
         let res = self
             .data_source
-            .try_pushdown_filters(parent_filters.clone(), config)?;
+            .try_pushdown_filters(parent_filters, config)?;
         match res.updated_node {
             Some(data_source) => {
                 let mut new_node = self.clone();

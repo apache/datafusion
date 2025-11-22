@@ -92,7 +92,7 @@ pub fn to_substrait_rel(
             };
 
             let mut select_struct = None;
-            if let Some(projection) = file_config.projection_exprs.as_ref() {
+            if let Some(projection) = file_config.file_source().projection().as_ref() {
                 let struct_items = projection
                     .column_indices()
                     .into_iter()

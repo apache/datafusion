@@ -928,7 +928,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_projection_indices(Some(vec![0, 1]))
+            .with_projection_indices(Some(vec![0, 1]))?
             .with_file_group(FileGroup::new(vec![file_group]))
             .with_newlines_in_values(false)
             .build();
@@ -1813,7 +1813,7 @@ async fn roundtrip_projection_source() -> Result<()> {
                 1024,
             )])])
             .with_statistics(statistics)
-            .with_projection_indices(Some(vec![0, 1, 2]))
+            .with_projection_indices(Some(vec![0, 1, 2]))?
             .build();
 
     let filter = Arc::new(

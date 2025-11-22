@@ -27,6 +27,7 @@ pub mod source;
 
 use std::sync::Arc;
 
+use datafusion_common::Result;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::{file::FileSource, file_scan_config::FileScanConfig};
@@ -37,8 +38,10 @@ pub use file_format::*;
 pub fn partitioned_csv_config(
     file_groups: Vec<FileGroup>,
     file_source: Arc<dyn FileSource>,
-) -> FileScanConfig {
-    FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-        .with_file_groups(file_groups)
-        .build()
+) -> Result<FileScanConfig> {
+    Ok(
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(file_groups)
+            .build(),
+    )
 }

@@ -1009,6 +1009,15 @@ message PhysicalSortExprNodeCollection {
   repeated PhysicalSortExprNode physical_sort_expr_nodes = 1;
 }
 
+message ProjectionExpr {
+  string alias = 1;
+  PhysicalExprNode expr = 2;
+}
+
+message ProjectionExprs {
+  repeated ProjectionExpr projections = 1;
+}
+
 message FileScanExecConf {
   repeated FileGroup file_groups = 1;
   datafusion_common.Schema schema = 2;
@@ -1024,6 +1033,8 @@ message FileScanExecConf {
 
   datafusion_common.Constraints constraints = 11;
   optional uint64 batch_size = 12;
+
+  optional ProjectionExprs projection_exprs = 13;
 }
 
 message ParquetScanExecNode {
