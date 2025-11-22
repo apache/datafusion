@@ -52,7 +52,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -489,7 +489,9 @@ impl TestConfig {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Add the ancillary output requirements operator at the start:
         let optimizer = OutputRequirements::new_add_mode();
-        let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
+        let session_config = SessionConfig::from(self.config.clone());
+        let optimizer_context = OptimizerContext::new(session_config.clone());
+        let mut optimized = optimizer.optimize_plan(plan.clone(), &optimizer_context)?;
 
         // This file has 2 rules that use tree node, apply these rules to original plan consecutively
         // After these operations tree nodes should be in a consistent state.
@@ -525,21 +527,25 @@ impl TestConfig {
         }
 
         for run in optimizers_to_run {
+            let session_config = SessionConfig::from(self.config.clone());
+            let optimizer_context = OptimizerContext::new(session_config.clone());
             optimized = match run {
                 Run::Distribution => {
                     let optimizer = EnforceDistribution::new();
-                    optimizer.optimize(optimized, &self.config)?
+                    optimizer.optimize_plan(optimized, &optimizer_context)?
                 }
                 Run::Sorting => {
                     let optimizer = EnforceSorting::new();
-                    optimizer.optimize(optimized, &self.config)?
+                    optimizer.optimize_plan(optimized, &optimizer_context)?
                 }
             };
         }
 
         // Remove the ancillary output requirements operator when done:
         let optimizer = OutputRequirements::new_remove_mode();
-        let optimized = optimizer.optimize(optimized, &self.config)?;
+        let session_config = SessionConfig::from(self.config.clone());
+        let optimizer_context = OptimizerContext::new(session_config.clone());
+        let optimized = optimizer.optimize_plan(optimized, &optimizer_context)?;
 
         Ok(optimized)
     }
@@ -3372,7 +3378,10 @@ SortRequiredExec: [a@0 ASC]
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
-    let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let dist_plan =
+        EnforceDistribution::new().optimize_plan(physical_plan, &optimizer_context)?;
     // Since at the start of the rule ordering requirement is not satisfied
     // EnforceDistribution rule doesn't satisfy this requirement either.
     assert_plan!(dist_plan, @r"
@@ -3408,7 +3417,10 @@ SortRequiredExec: [a@0 ASC]
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
-    let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let dist_plan =
+        EnforceDistribution::new().optimize_plan(physical_plan, &optimizer_context)?;
     // Since at the start of the rule ordering requirement is satisfied
     // EnforceDistribution rule satisfy this requirement also.
     assert_plan!(dist_plan, @r"

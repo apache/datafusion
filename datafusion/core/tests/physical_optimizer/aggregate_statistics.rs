@@ -25,12 +25,13 @@ use arrow::record_batch::RecordBatch;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast};
 use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
+use datafusion_physical_optimizer::OptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::aggregates::AggregateMode;
@@ -67,8 +68,10 @@ async fn assert_count_optim_success(
     let task_ctx = Arc::new(TaskContext::default());
     let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
 
-    let config = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &config)?;
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let optimized = AggregateStatistics::new()
+        .optimize_plan(Arc::clone(&plan), &optimizer_context)?;
 
     // A ProjectionExec is a sign that the count optimization was applied
     assert!(optimized.as_any().is::<ProjectionExec>());
@@ -264,8 +267,10 @@ async fn test_count_inexact_stat() -> Result<()> {
         Arc::clone(&schema),
     )?;
 
-    let conf = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let optimized = AggregateStatistics::new()
+        .optimize_plan(Arc::new(final_agg), &optimizer_context)?;
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.as_any().is::<AggregateExec>());
@@ -308,8 +313,10 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
         Arc::clone(&schema),
     )?;
 
-    let conf = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let optimized = AggregateStatistics::new()
+        .optimize_plan(Arc::new(final_agg), &optimizer_context)?;
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.as_any().is::<AggregateExec>());

@@ -20,13 +20,12 @@
 //! projections one by one if the operator below is amenable to this. If a
 //! projection reaches a source, it can even disappear from the plan entirely.
 
-use crate::PhysicalOptimizerRule;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::alias::AliasGenerator;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -57,10 +56,10 @@ impl ProjectionPushdown {
 }
 
 impl PhysicalOptimizerRule for ProjectionPushdown {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let alias_generator = AliasGenerator::new();
         let plan = plan
@@ -447,6 +446,8 @@ fn is_volatile_expression_tree(expr: &dyn PhysicalExpr) -> bool {
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_expr_common::operator::Operator;
     use datafusion_functions::math::random;
     use datafusion_physical_expr::expressions::{binary, lit};
@@ -672,7 +673,10 @@ mod test {
         )?;
 
         let optimizer = ProjectionPushdown::new();
-        let optimized_plan = optimizer.optimize(Arc::new(join), &Default::default())?;
+        let session_config = SessionConfig::new();
+        let optimizer_context = OptimizerContext::new(session_config);
+        let optimized_plan =
+            optimizer.optimize_plan(Arc::new(join), &optimizer_context)?;
 
         let displayable_plan = displayable(optimized_plan.as_ref()).indent(false);
         Ok(displayable_plan.to_string())
