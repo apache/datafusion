@@ -75,4 +75,8 @@ name = "array_reverse"
 
 [[bench]]
 harness = false
+name = "array_slice"
+
+[[bench]]
+harness = false
 name = "map"
