@@ -875,6 +875,7 @@ fn reverse_batch(batch: RecordBatch) -> Result<RecordBatch> {
 /// - **Latency**: First batch available after reading complete first (reversed) row group
 /// - **Throughput**: Near-native speed with ~5-10% overhead for reversal operations
 /// - **Memory**: O(row_group_size), not O(file_size)
+///   TODO should we support max cache size to limit memory usage further? But if we exceed the cache size we can't reverse properly, so we need to fall back to normal reading?
 struct ReversedParquetStream<S> {
     input: S,
     schema: SchemaRef,
@@ -903,6 +904,9 @@ struct ReversedParquetStream<S> {
     row_groups_reversed: Count,
     batches_reversed: Count,
     reverse_time: Time,
+
+    /// Pending error from batch reversal
+    pending_error: Option<DataFusionError>,
 }
 
 impl<S> ReversedParquetStream<S> {
@@ -933,6 +937,7 @@ impl<S> ReversedParquetStream<S> {
             row_groups_reversed,
             batches_reversed,
             reverse_time,
+            pending_error: None,
         }
     }
 
@@ -977,11 +982,17 @@ impl<S> ReversedParquetStream<S> {
         let batch_count = self.current_rg_batches.len();
 
         // Step 1: Reverse rows within each batch
-        let reversed_batches: Vec<_> = self
-            .current_rg_batches
-            .drain(..)
-            .map(|batch| reverse_batch(batch).unwrap())
-            .collect();
+        let mut reversed_batches = Vec::with_capacity(self.current_rg_batches.len());
+        for batch in self.current_rg_batches.drain(..) {
+            match reverse_batch(batch) {
+                Ok(reversed) => reversed_batches.push(reversed),
+                Err(e) => {
+                    // Store error and return it on next poll
+                    self.pending_error = Some(e);
+                    return;
+                }
+            }
+        }
 
         // Step 2: Reverse the order of batches
         self.output_batches = reversed_batches.into_iter().rev().collect();
@@ -1016,6 +1027,11 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut(); // Safe: We own the Pin and ReversedParquetStream is Unpin
+
+        // Check for pending errors first
+        if let Some(err) = this.pending_error.take() {
+            return Poll::Ready(Some(Err(err)));
+        }
 
         if this.done || this.is_limit_reached() {
             return Poll::Ready(None);

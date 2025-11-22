@@ -49,8 +49,16 @@ impl PhysicalOptimizerRule for ReverseOrder {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Check if reverse scan optimization is enabled
+        let enable_reverse_scan = config.execution.parquet.enable_reverse_scan;
+
+        // Return early if not enabled
+        if !enable_reverse_scan {
+            return Ok(plan);
+        }
+
         // Search for any SortExec nodes and try to optimize them
         plan.transform_up(&|plan: Arc<dyn ExecutionPlan>| {
             // First check if this is a GlobalLimitExec -> SortExec pattern

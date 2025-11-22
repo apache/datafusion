@@ -1312,3 +1312,134 @@ async fn parquet_explain_analyze_reverse_scan_metrics() {
         );
     }
 }
+
+#[tokio::test]
+async fn parquet_explain_analyze_disable_reverse_scan_metrics() {
+    use parquet::arrow::arrow_writer::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+
+    let temp_dir = TempDir::new().unwrap();
+    let parquet_path = temp_dir.path().join("reverse_scan_test.parquet");
+
+    // Create test data with multiple row groups
+    // Each row group will have 5 rows, total 15 rows = 3 row groups
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("value", DataType::Int32, false),
+    ]));
+
+    let file = File::create(&parquet_path).unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_size(5)
+        .build();
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
+
+    // Write 3 row groups: [1-5], [6-10], [11-15]
+    for group_start in [1, 6, 11] {
+        let ids = Int32Array::from(vec![
+            group_start,
+            group_start + 1,
+            group_start + 2,
+            group_start + 3,
+            group_start + 4,
+        ]);
+        let values = Int32Array::from(vec![
+            group_start * 100,
+            (group_start + 1) * 100,
+            (group_start + 2) * 100,
+            (group_start + 3) * 100,
+            (group_start + 4) * 100,
+        ]);
+
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(values)])
+                .unwrap();
+        writer.write(&batch).unwrap();
+    }
+    writer.close().unwrap();
+
+    // Create session context with reverse scan DISABLED
+    let session_config = SessionContext::new()
+        .task_ctx()
+        .session_config()
+        .clone()
+        .with_parquet_reverse_scan(false);
+    let ctx = SessionContext::new_with_config(session_config);
+
+    // Register table with ORDER BY clause
+    let sql = format!(
+        "CREATE EXTERNAL TABLE reverse_scan_test (
+            id INT NOT NULL,
+            value INT NOT NULL
+        )
+        STORED AS PARQUET
+        WITH ORDER (id ASC NULLS LAST)
+        LOCATION '{}'",
+        parquet_path.to_str().unwrap()
+    );
+    ctx.sql(&sql).await.unwrap().collect().await.unwrap();
+
+    // Test: Query with ORDER BY DESC and LIMIT
+    // Since reverse scan is DISABLED, this should use SortExec instead
+    let sql = "EXPLAIN ANALYZE SELECT * FROM reverse_scan_test ORDER BY id DESC LIMIT 10";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // ========== Key Assertions: Verify reverse scan was NOT applied ==========
+
+    // 1. Should have a SortExec node (reverse scan optimization not applied)
+    assert_contains!(&formatted, "SortExec:");
+
+    // 2. DataSourceExec should have FORWARD ordering (ASC), not reversed
+    assert_contains!(&formatted, "output_ordering=[id@0 ASC");
+
+    // 3. Reverse scan metrics should all be 0 (no reversal happened)
+    assert_metrics!(&formatted, "DataSourceExec", "row_groups_reversed=0");
+    assert_metrics!(&formatted, "DataSourceExec", "batches_reversed=0");
+
+    // 4. DataSourceExec should still output rows (just in forward order)
+    // The SortExec will handle the reversal
+    assert_metrics!(&formatted, "DataSourceExec", "output_rows=15");
+
+    // Test data correctness: result should still be correct (SortExec handles it)
+    let sql = "SELECT * FROM reverse_scan_test ORDER BY id DESC LIMIT 10";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    // Collect all rows from all batches
+    let total_rows: usize = actual.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_rows, 10,
+        "Should return exactly 10 rows with LIMIT 10"
+    );
+
+    // Collect all id values
+    let mut all_ids = Vec::new();
+    for batch in &actual {
+        let id_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        for i in 0..id_col.len() {
+            all_ids.push(id_col.value(i));
+        }
+    }
+
+    // Should get ids from 15 down to 6 (10 rows total in descending order)
+    // Even though reverse scan is disabled, SortExec should produce correct results
+    assert_eq!(all_ids.len(), 10);
+    assert_eq!(all_ids[0], 15, "First row should be id=15");
+    assert_eq!(all_ids[9], 6, "Last row should be id=6");
+
+    // Verify all values are in descending order
+    for i in 0..all_ids.len() - 1 {
+        assert!(
+            all_ids[i] > all_ids[i + 1],
+            "IDs should be in descending order: {} > {}",
+            all_ids[i],
+            all_ids[i + 1]
+        );
+    }
+}
