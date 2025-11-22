@@ -72,6 +72,8 @@ static LIBRARY_MARKER: u8 = 0;
 /// a different address for the marker. By checking the marker
 /// address we can determine if a struct is truly Foreign or is
 /// actually within the same originating library.
+///
+/// See the crate's `README.md` for additional information.
 pub extern "C" fn get_library_marker_id() -> usize {
     &LIBRARY_MARKER as *const u8 as usize
 }

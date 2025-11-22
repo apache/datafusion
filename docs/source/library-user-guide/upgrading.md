@@ -152,7 +152,7 @@ Instead of silently succeeding.
 
 The remove API no longer requires a mutable instance
 
-### FFI object conversion
+### FFI crate updates
 
 Many of the structs in the `datafusion-ffi` crate have been updated to allow easier
 conversion to the underlying trait types they represent. This simplifies some code
@@ -192,6 +192,10 @@ Instead this should now be:
     let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.try_into()?;
     let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
 ```
+
+Additionally, the FFI structure for Scalar UDF's no longer contains a
+`return_type` call. This code was not used since the `ForeignScalarUDF`
+struct implements the `return_field_from_args` instead.
 
 ## DataFusion `51.0.0`
 

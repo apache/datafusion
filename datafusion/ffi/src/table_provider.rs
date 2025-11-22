@@ -157,7 +157,8 @@ pub struct FFI_TableProvider {
     pub private_data: *mut c_void,
 
     /// Utility to identify when FFI objects are accessed locally through
-    /// the foreign interface.
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
     pub library_marker_id: extern "C" fn() -> usize,
 }
 

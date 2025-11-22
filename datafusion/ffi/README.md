@@ -101,6 +101,37 @@ In this crate we have a variety of structs which closely mimic the behavior of
 their internal counterparts. To see detailed notes about how to use them, see
 the example in `FFI_TableProvider`.
 
+## Memory Management
+
+One of the advantages of Rust the ownership model, which means programmers 
+_usually_ do not need to worry about memory management. When interacting with
+foreign code, this is not necessarily true. If you review the structures in
+this crate, you will find that many of them implement the `Drop` trait and
+perform a foreign call.
+
+Suppose we have a `FFI_CatalogProvider`, for example. This struct is safe to
+pass across the FFI boundary, so it may be owned be either the library that
+produces the underlying `CatalogProvider` or by another library that consumes
+it. If we look closer at the `FFI_CatalogProvider`, it has a pointer to
+some private data. That private data is only accessible on the producer's
+side. If you attempt to access it on the consumer's side, you may get
+segmentation faults or other bad behavior. Within that private data is the
+actual `Arc<dyn CatalogProvider`. That `Arc<>` must be freed, but if the
+`FFI_CatalogProvider` is only owned on the consumer's side, we have no way
+to access the private data and free it.
+
+To account for this most structs in this crate have a `release` method that
+is used to clean up any privately held data. This calls into the producer's
+side, regardless of if it is called on either the local or foreign side.
+Most of the structs in this crate carry atomic reference counts to the
+underlying data, and this is straight forward. Some structs like the
+`FFI_Accumulator` contain an inner `Box<dyn Accumulator>`. The reason for
+this is that we need to be able to mutably acccess these based on the
+`Accumulator` trait definition. For these we have slightly more complicated
+release code based on whether it is being dropped on the local or foreign side.
+Traits that use a `Box<>` for their underlying data also cannot implement
+`Clone`.
+
 ## Library Marker ID
 
 When reviewing the code, many of the structs in this crate contain a call to
@@ -119,9 +150,9 @@ this case that schema provider is actually local code to the `primary` program
 except that it is wrapped in the FFI code!
 
 We work around this by the `library_marker_id` calls. What this does is it
-creates a global variable within each library and returns a `u64` address
+creates a global variable within each library and returns a `usize` address
 of that library. This is guaranteed to be unique for every library that contains
-FFI code. By comparing these `u64` addresses we can determine if a FFI struct
+FFI code. By comparing these `usize` addresses we can determine if a FFI struct
 is local or foreign.
 
 In our example of the schema provider, if you were to make a call in your
@@ -130,6 +161,14 @@ catalog provider and send back a `FFI_SchemaProvider` object. By then
 comparing the `library_marker_id` of this object to the `primary` program, we
 determine it is local code. This means it is safe to access the underlying
 private data.
+
+Users of the FFI code should not need to access these function. If you are
+implementing a new FFI struct, then it is recommended that you follow the
+established patterns for converting from FFI struct into the underlying
+traits. Specifically you should use `crate::get_library_marker_id` and in
+your unit tests you should override this with
+`crate::mock_foreign_marker_id` to force your test to create the foreign
+variant of your struct.
 
 [apache datafusion]: https://datafusion.apache.org/
 [api docs]: http://docs.rs/datafusion-ffi/latest
