@@ -68,6 +68,10 @@ impl LimitedBatchCoalescer {
         }
     }
 
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
     /// Return the schema of the output batches
     pub fn schema(&self) -> SchemaRef {
         self.inner.schema()
@@ -123,6 +127,11 @@ impl LimitedBatchCoalescer {
     /// Return true if there is no data buffered
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    /// Return the total number of rows that have been pushed to this coalescer
+    pub fn total_rows(&self) -> usize {
+        self.total_rows
     }
 
     /// Complete the current buffered batch and finish the coalescer
