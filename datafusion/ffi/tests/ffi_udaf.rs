@@ -22,11 +22,11 @@ mod tests {
     use arrow::array::Float64Array;
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::logical_expr::AggregateUDF;
+    use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl};
     use datafusion::prelude::{col, SessionContext};
+    use std::sync::Arc;
 
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_ffi::udaf::ForeignAggregateUDF;
 
     #[tokio::test]
     async fn test_ffi_udaf() -> Result<()> {
@@ -38,9 +38,9 @@ mod tests {
                 .ok_or(DataFusionError::NotImplemented(
                     "External table provider failed to implement create_udaf".to_string(),
                 ))?();
-        let foreign_sum_func: ForeignAggregateUDF = (&ffi_sum_func).try_into()?;
+        let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).try_into()?;
 
-        let udaf: AggregateUDF = foreign_sum_func.into();
+        let udaf = AggregateUDF::new_from_shared_impl(foreign_sum_func);
 
         let ctx = SessionContext::default();
         let record_batch = record_batch!(
@@ -80,9 +80,10 @@ mod tests {
                 .ok_or(DataFusionError::NotImplemented(
                     "External table provider failed to implement create_udaf".to_string(),
                 ))?();
-        let foreign_stddev_func: ForeignAggregateUDF = (&ffi_stddev_func).try_into()?;
+        let foreign_stddev_func: Arc<dyn AggregateUDFImpl> =
+            (&ffi_stddev_func).try_into()?;
 
-        let udaf: AggregateUDF = foreign_stddev_func.into();
+        let udaf = AggregateUDF::new_from_shared_impl(foreign_stddev_func);
 
         let ctx = SessionContext::default();
         let record_batch = record_batch!(
