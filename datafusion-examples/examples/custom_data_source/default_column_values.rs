@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,25 +54,23 @@ use object_store::{ObjectStore, PutPayload};
 // Metadata key for storing default values in field metadata
 const DEFAULT_VALUE_METADATA_KEY: &str = "example.default_value";
 
-// Example showing how to implement custom default value handling for missing columns
-// using field metadata and PhysicalExprAdapter.
-//
-// This example demonstrates how to:
-// 1. Store default values in field metadata using a constant key
-// 2. Create a custom PhysicalExprAdapter that reads these defaults
-// 3. Inject default values for missing columns in filter predicates
-// 4. Use the DefaultPhysicalExprAdapter as a fallback for standard schema adaptation
-// 5. Wrap string default values in cast expressions for proper type conversion
-//
-// Important: PhysicalExprAdapter is specifically designed for rewriting filter predicates
-// that get pushed down to file scans. For handling missing columns in projections,
-// other mechanisms in DataFusion are used (like SchemaAdapter).
-//
-// The metadata-based approach provides a flexible way to store default values as strings
-// and cast them to the appropriate types at query time.
-
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Example showing how to implement custom default value handling for missing columns
+/// using field metadata and PhysicalExprAdapter.
+///
+/// This example demonstrates how to:
+/// 1. Store default values in field metadata using a constant key
+/// 2. Create a custom PhysicalExprAdapter that reads these defaults
+/// 3. Inject default values for missing columns in filter predicates
+/// 4. Use the DefaultPhysicalExprAdapter as a fallback for standard schema adaptation
+/// 5. Wrap string default values in cast expressions for proper type conversion
+///
+/// Important: PhysicalExprAdapter is specifically designed for rewriting filter predicates
+/// that get pushed down to file scans. For handling missing columns in projections,
+/// other mechanisms in DataFusion are used (like SchemaAdapter).
+///
+/// The metadata-based approach provides a flexible way to store default values as strings
+/// and cast them to the appropriate types at query time.
+pub async fn default_column_values() -> Result<()> {
     println!("=== Creating example data with missing columns and default values ===");
 
     // Create sample data where the logical schema has more columns than the physical schema
@@ -85,11 +85,10 @@ async fn main() -> Result<()> {
             .build();
 
         let mut writer =
-            ArrowWriter::try_new(&mut buf, physical_schema.clone(), Some(props))
-                .expect("creating writer");
+            ArrowWriter::try_new(&mut buf, physical_schema.clone(), Some(props))?;
 
-        writer.write(&batch).expect("Writing batch");
-        writer.close().unwrap();
+        writer.write(&batch)?;
+        writer.close()?;
         buf
     };
     let path = Path::from("example.parquet");
