@@ -627,7 +627,7 @@ mod test {
 
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Absent,
+            total_byte_size: Precision::Inexact(110),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
@@ -645,7 +645,7 @@ mod test {
 
         let expected_p1_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Absent,
+            total_byte_size: Precision::Inexact(110),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
