@@ -345,3 +345,426 @@ DROP TABLE test_multi_files;
 
 statement ok
 DROP TABLE parquet_multi_files_rg;
+
+
+##########
+## Multi-Partition Reverse Scan Tests
+## Tests reverse scan with multiple partitions, each containing multiple files with multiple row groups
+##########
+
+# Setup: Create test data for multiple partitions
+statement ok
+CREATE TABLE test_multi_partition(id INT, value INT, name VARCHAR) AS
+SELECT
+    i as id,
+    i * 100 as value,
+    chr(97 + (i % 26)) as name
+FROM generate_series(1, 900) as t(i);
+
+# Create 9 files (will be split across 3 partitions)
+# Each file has 100 rows with 2 row groups (50 rows each)
+
+# Partition 1 (files 1-3): id 1-300
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 1 AND 100 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_1.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 101 AND 200 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_2.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 201 AND 300 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_3.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+# Partition 2 (files 4-6): id 301-600
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 301 AND 400 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_4.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 401 AND 500 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_5.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 501 AND 600 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_6.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+# Partition 3 (files 7-9): id 601-900
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 601 AND 700 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_7.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 701 AND 800 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_8.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_multi_partition WHERE id BETWEEN 801 AND 900 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/multi_part/file_9.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+# Set target_partitions to 3 to force multi-partition execution
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+# Create external table
+statement ok
+CREATE EXTERNAL TABLE parquet_multi_partition_rg (
+    id INT NOT NULL,
+    value INT NOT NULL,
+    name TEXT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (id ASC NULLS LAST)
+LOCATION 'test_files/scratch/reverse_parquet_scan/multi_part/';
+
+# Test 1: EXPLAIN shows reverse scan with SortPreservingMergeExec
+# In multi-partition case, we should see:
+# - SortPreservingMergeExec to merge multiple partitions
+# - Each DataSourceExec partition scans in reverse
+# IMPORTANT: Notice that files are listed in reverse order in each partition:
+# - Partition 1: file_3 → file_2 → file_1 (reversed from original 1→2→3)
+# - Partition 2: file_6 → file_5 → file_4 (reversed from original 4→5→6)
+# - Partition 3: file_9 → file_8 → file_7 (reversed from original 7→8→9)
+query TT
+EXPLAIN SELECT * FROM parquet_multi_partition_rg ORDER BY id DESC LIMIT 10;
+----
+logical_plan
+01)Sort: parquet_multi_partition_rg.id DESC NULLS FIRST, fetch=10
+02)--TableScan: parquet_multi_partition_rg projection=[id, value, name]
+physical_plan
+01)SortPreservingMergeExec: [id@0 DESC], fetch=10
+02)--LocalLimitExec: fetch=10
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_3.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_6.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_5.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_4.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_9.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_8.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/reverse_parquet_scan/multi_part/file_7.parquet]]}, projection=[id, value, name], output_ordering=[id@0 DESC], file_type=parquet
+
+# Test 2: Reverse scan returns correct results with multiple partitions
+query IIT
+SELECT * FROM parquet_multi_partition_rg ORDER BY id DESC LIMIT 10;
+----
+900 90000 q
+899 89900 p
+898 89800 o
+897 89700 n
+896 89600 m
+895 89500 l
+894 89400 k
+893 89300 j
+892 89200 i
+891 89100 h
+
+# Test 3: Verify results across partition boundaries
+# Partition boundaries are at id 300, 600
+query I
+SELECT id FROM parquet_multi_partition_rg WHERE id IN (299, 300, 301, 599, 600, 601) ORDER BY id DESC;
+----
+601
+600
+599
+301
+300
+299
+
+# Test 4: Forward scan still works with multiple partitions
+query IIT
+SELECT * FROM parquet_multi_partition_rg ORDER BY id ASC LIMIT 10;
+----
+1 100 b
+2 200 c
+3 300 d
+4 400 e
+5 500 f
+6 600 g
+7 700 h
+8 800 i
+9 900 j
+10 1000 k
+
+# Test 5: Test with larger LIMIT that spans multiple partitions
+query I
+SELECT COUNT(*) FROM (
+    SELECT id FROM parquet_multi_partition_rg ORDER BY id DESC LIMIT 500
+) as t;
+----
+500
+
+query II
+SELECT MIN(id), MAX(id) FROM (
+    SELECT id FROM parquet_multi_partition_rg ORDER BY id DESC LIMIT 500
+) as t;
+----
+401 900
+
+# Test 6: Full reverse scan across all partitions
+query I
+SELECT COUNT(*) FROM parquet_multi_partition_rg;
+----
+900
+
+# Test 7: Verify file and row group boundaries are respected
+# Test IDs at file boundaries (100, 101, 200, 201, etc.) and row group boundaries (50, 51, 150, 151, etc.)
+query I
+SELECT id FROM parquet_multi_partition_rg
+WHERE id IN (50, 51, 100, 101, 150, 151, 200, 201, 300, 301, 400, 401, 600, 601, 800, 801)
+ORDER BY id DESC;
+----
+801
+800
+601
+600
+401
+400
+301
+300
+201
+200
+151
+150
+101
+100
+51
+50
+
+# Test 8: Aggregation with reverse order across multiple partitions
+query I
+SELECT COUNT(DISTINCT id % 100) FROM (
+    SELECT id FROM parquet_multi_partition_rg ORDER BY id DESC LIMIT 300
+) as t;
+----
+100
+
+# Test 9: Compare single-partition vs multi-partition behavior
+# Reset to single partition
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query IIT
+SELECT * FROM parquet_multi_partition_rg ORDER BY id DESC LIMIT 5;
+----
+900 90000 q
+899 89900 p
+898 89800 o
+897 89700 n
+896 89600 m
+
+# Set back to multi-partition and verify same results
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+query IIT
+SELECT * FROM parquet_multi_partition_rg ORDER BY id DESC LIMIT 5;
+----
+900 90000 q
+899 89900 p
+898 89800 o
+897 89700 n
+896 89600 m
+
+# Test 10: EXPLAIN ANALYZE to verify metrics for multi-partition reverse scan
+# This should show:
+# - Multiple DataSourceExec instances (one per partition)
+# - Each with row_groups_reversed > 0
+# - SortPreservingMergeExec combining them
+# Note: Commented out as exact metrics may vary
+# query TT
+# EXPLAIN ANALYZE SELECT * FROM parquet_multi_partition_rg ORDER BY id DESC LIMIT 10;
+# Expected to see:
+# - row_groups_reversed in each partition
+# - batches_reversed in each partition
+# - reverse_time tracked per partition
+
+# Test 11: Test with predicate pushdown and multi-partition reverse scan
+query I
+SELECT id FROM parquet_multi_partition_rg
+WHERE value > 50000
+ORDER BY id DESC
+LIMIT 10;
+----
+900
+899
+898
+897
+896
+895
+894
+893
+892
+891
+
+# Test 12: Verify partition pruning still works with reverse scan
+query I
+SELECT COUNT(*) FROM parquet_multi_partition_rg WHERE id > 800;
+----
+100
+
+# Test 13: Verify ORDER BY doesn't change aggregation results
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM parquet_multi_partition_rg ORDER BY id DESC
+) as t;
+----
+900
+
+# Test 14: Test DISTINCT with reverse scan
+query I
+SELECT COUNT(DISTINCT id) FROM parquet_multi_partition_rg;
+----
+900
+
+# Cleanup
+statement ok
+DROP TABLE test_multi_partition;
+
+statement ok
+DROP TABLE parquet_multi_partition_rg;
+
+# Reset to default
+statement ok
+set datafusion.execution.target_partitions = 0;
+
+
+##########
+## Edge Case: Multi-Partition with Different File Sizes
+##########
+
+# Test behavior when partitions have different numbers of files/rows
+statement ok
+CREATE TABLE test_uneven_partition(id INT, value INT) AS
+SELECT i as id, i * 100 as value FROM generate_series(1, 550) as t(i);
+
+# Partition 1: 3 files, 300 rows total
+query I
+COPY (SELECT * FROM test_uneven_partition WHERE id BETWEEN 1 AND 100 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/uneven/p1_file1.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_uneven_partition WHERE id BETWEEN 101 AND 200 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/uneven/p1_file2.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_uneven_partition WHERE id BETWEEN 201 AND 300 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/uneven/p1_file3.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+# Partition 2: 2 files, 200 rows total
+query I
+COPY (SELECT * FROM test_uneven_partition WHERE id BETWEEN 301 AND 400 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/uneven/p2_file1.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+query I
+COPY (SELECT * FROM test_uneven_partition WHERE id BETWEEN 401 AND 500 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/uneven/p2_file2.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+100
+
+# Partition 3: 1 file, 50 rows total (smaller partition)
+query I
+COPY (SELECT * FROM test_uneven_partition WHERE id BETWEEN 501 AND 550 ORDER BY id ASC)
+TO 'test_files/scratch/reverse_parquet_scan/uneven/p3_file1.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 50);
+----
+50
+
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+statement ok
+CREATE EXTERNAL TABLE parquet_uneven_partition (
+    id INT NOT NULL,
+    value INT NOT NULL
+)
+STORED AS PARQUET
+WITH ORDER (id ASC NULLS LAST)
+LOCATION 'test_files/scratch/reverse_parquet_scan/uneven/';
+
+# Test reverse scan with uneven partitions
+query II
+SELECT * FROM parquet_uneven_partition ORDER BY id DESC LIMIT 10;
+----
+550 55000
+549 54900
+548 54800
+547 54700
+546 54600
+545 54500
+544 54400
+543 54300
+542 54200
+541 54100
+
+# Verify correctness across all partitions
+query I
+SELECT COUNT(*) FROM parquet_uneven_partition;
+----
+550
+
+# Test across uneven partition boundaries (300, 500)
+query I
+SELECT id FROM parquet_uneven_partition WHERE id IN (299, 300, 301, 499, 500, 501) ORDER BY id DESC;
+----
+501
+500
+499
+301
+300
+299
+
+# Cleanup
+statement ok
+DROP TABLE test_uneven_partition;
+
+statement ok
+DROP TABLE parquet_uneven_partition;
