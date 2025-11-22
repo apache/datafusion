@@ -382,7 +382,7 @@ impl RepartitionExecState {
                 txs,
                 partitioning.clone(),
                 metrics,
-                // preserve_order depends on input partition to start from 0
+                // preserve_order depends on partition index to start from 0
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
             ));
@@ -443,8 +443,7 @@ impl BatchPartitioner {
                     num_partitions,
                     // Distribute starting index evenly based on input partition, number of input partitions and number of partitions
                     // to avoid they all start at partition 0 and heavily skew on the lower partitions
-                    next_idx: ((input_partition * num_partitions) / num_input_partitions)
-                        % num_partitions,
+                    next_idx: ((input_partition * num_partitions) / num_input_partitions),
                 }
             }
             Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
