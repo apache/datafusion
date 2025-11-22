@@ -85,7 +85,7 @@ async fn check_stats_precision_with_filter_pushdown() {
             as Arc<dyn ExecutionPlan>;
 
     let session_config = SessionConfig::from(options.clone());
-    let optimizer_context = OptimizerContext::new(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config);
     let optimized_exec = FilterPushdown::new()
         .optimize_plan(filtered_exec, &optimizer_context)
         .unwrap();
