@@ -382,7 +382,7 @@ impl RepartitionExecState {
                 txs,
                 partitioning.clone(),
                 metrics,
-                // preser_order dep
+                // preserve_order depends on input partition to start from 0
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
             ));
