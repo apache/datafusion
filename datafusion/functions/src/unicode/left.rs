@@ -122,7 +122,7 @@ impl ScalarUDFImpl for LeftFunc {
 /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
 /// left('abcde', 2) = 'ab'
 /// The implementation uses UTF-8 code points as characters
-pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let n_array = as_int64_array(&args[1])?;
 
     if args[0].data_type() == &DataType::Utf8View {

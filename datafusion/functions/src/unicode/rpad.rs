@@ -145,7 +145,7 @@ impl ScalarUDFImpl for RPadFunc {
     }
 }
 
-pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
+fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
@@ -205,7 +205,7 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
 
 /// Extends the string to length 'length' by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.
 /// rpad('hi', 5, 'xy') = 'hixyx'
-pub fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
+fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
     string_array: &StringArrType,
     length_array: &Int64Array,
     fill_array: Option<FillArrType>,

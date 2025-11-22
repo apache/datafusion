@@ -96,7 +96,7 @@ impl ScalarUDFImpl for IsZeroFunc {
 }
 
 /// Iszero SQL function
-pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Float64 => Ok(Arc::new(BooleanArray::from_unary(
             args[0].as_primitive::<Float64Type>(),

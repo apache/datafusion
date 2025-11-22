@@ -33,7 +33,7 @@ use datafusion_macros::user_doc;
 
 /// Returns the character with the given code.
 /// chr(65) = 'A'
-pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = as_int64_array(&args[0])?;
 
     let mut builder = GenericStringBuilder::<i32>::with_capacity(

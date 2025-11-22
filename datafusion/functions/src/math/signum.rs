@@ -107,7 +107,7 @@ impl ScalarUDFImpl for SignumFunc {
 }
 
 /// signum SQL function
-pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Float64 => Ok(Arc::new(
             args[0]

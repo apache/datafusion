@@ -113,14 +113,7 @@ impl ScalarUDFImpl for ArrayMax {
     }
 }
 
-/// array_max SQL function
-///
-/// There is one argument for array_max as the array.
-/// `array_max(array)`
-///
-/// For example:
-/// > array_max(\[1, 3, 2]) -> 3
-pub fn array_max_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_max_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_max", args)?;
     match array.data_type() {
         List(_) => array_min_max_helper(as_list_array(array)?, max_batch),
@@ -202,7 +195,7 @@ impl ScalarUDFImpl for ArrayMin {
     }
 }
 
-pub fn array_min_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_min_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_min", args)?;
     match array.data_type() {
         List(_) => array_min_max_helper(as_list_array(array)?, min_batch),

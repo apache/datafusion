@@ -263,10 +263,7 @@ fn find_in_set(str: &ArrayRef, str_list: &ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-pub fn find_in_set_general<'a, T, V>(
-    string_array: V,
-    str_list_array: V,
-) -> Result<ArrayRef>
+fn find_in_set_general<'a, T, V>(string_array: V, str_list_array: V) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
