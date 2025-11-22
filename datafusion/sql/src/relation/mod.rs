@@ -159,9 +159,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 let tbl_func_ref = self.object_name_to_table_reference(name)?;
                 let schema = planner_context
-                    .outer_query_schema()
+                    .outer_queries_schemas()
+                    .last()
                     .cloned()
-                    .unwrap_or_else(DFSchema::empty);
+                    .unwrap_or_else(|| Arc::new(DFSchema::empty()));
                 let func_args = args
                     .into_iter()
                     .map(|arg| match arg {
