@@ -78,6 +78,7 @@ use log::{debug, warn};
 /// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_datasource::table_schema::TableSchema;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # use datafusion_physical_expr::projection::ProjectionExprs;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 /// # use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
