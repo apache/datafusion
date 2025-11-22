@@ -20,7 +20,9 @@
 use super::CustomMetricValue;
 use chrono::{DateTime, Utc};
 use datafusion_common::instant::Instant;
-use datafusion_execution::memory_pool::human_readable_size;
+use datafusion_execution::memory_pool::{
+    human_readable_count, human_readable_duration, human_readable_size,
+};
 use parking_lot::Mutex;
 use std::{
     borrow::{Borrow, Cow},
@@ -49,7 +51,7 @@ impl PartialEq for Count {
 
 impl Display for Count {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.value())
+        write!(f, "{}", human_readable_count(self.value()))
     }
 }
 
@@ -169,8 +171,7 @@ impl PartialEq for Time {
 
 impl Display for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let duration = Duration::from_nanos(self.value() as u64);
-        write!(f, "{duration:?}")
+        write!(f, "{}", human_readable_duration(self.value() as u64))
     }
 }
 
@@ -379,7 +380,12 @@ impl Display for PruningMetrics {
         let matched = self.matched.load(Ordering::Relaxed);
         let total = self.pruned.load(Ordering::Relaxed) + matched;
 
-        write!(f, "{total} total → {matched} matched")
+        write!(
+            f,
+            "{} total → {} matched",
+            human_readable_count(total),
+            human_readable_count(matched)
+        )
     }
 }
 
@@ -543,12 +549,18 @@ impl Display for RatioMetrics {
             if part == 0 {
                 write!(f, "N/A (0/0)")
             } else {
-                write!(f, "N/A ({part}/0)")
+                write!(f, "N/A ({}/0)", human_readable_count(part))
             }
         } else {
             let percentage = (part as f64 / total as f64) * 100.0;
 
-            write!(f, "{}% ({part}/{total})", fmt_significant(percentage, 2))
+            write!(
+                f,
+                "{}% ({}/{})",
+                fmt_significant(percentage, 2),
+                human_readable_count(part),
+                human_readable_count(total)
+            )
         }
     }
 }
@@ -983,8 +995,14 @@ impl Display for MetricValue {
                 let readable_count = human_readable_size(count.value());
                 write!(f, "{readable_count}")
             }
-            Self::CurrentMemoryUsage(gauge) | Self::Gauge { gauge, .. } => {
-                write!(f, "{gauge}")
+            Self::CurrentMemoryUsage(gauge) => {
+                // CurrentMemoryUsage is in bytes, format like SpilledBytes
+                let readable_size = human_readable_size(gauge.value());
+                write!(f, "{readable_size}")
+            }
+            Self::Gauge { gauge, .. } => {
+                // Generic gauge metrics - format with human-readable count
+                write!(f, "{}", human_readable_count(gauge.value()))
             }
             Self::ElapsedCompute(time) | Self::Time { time, .. } => {
                 // distinguish between no time recorded and very small
@@ -1154,7 +1172,7 @@ mod tests {
 
         time.add_duration(Duration::from_nanos(1042));
         for value in &values {
-            assert_eq!("1.042µs", value.to_string(), "value {value:?}");
+            assert_eq!("1.04µs", value.to_string(), "value {value:?}");
         }
     }
 
@@ -1181,7 +1199,7 @@ mod tests {
         };
         tiny_ratio_metrics.add_part(1);
         tiny_ratio_metrics.add_total(3000);
-        assert_eq!("0.033% (1/3000)", tiny_ratio.to_string());
+        assert_eq!("0.033% (1/3.00 K)", tiny_ratio.to_string());
     }
 
     #[test]
@@ -1360,6 +1378,106 @@ mod tests {
         assert!(
             (10_000_000..=10_100_000).contains(&new_recorded),
             "Expected ~10ms total, got {new_recorded} ns",
+        );
+    }
+
+    #[test]
+    fn test_human_readable_metric_formatting() {
+        // Test Count formatting with various sizes
+        let small_count = Count::new();
+        small_count.add(42);
+        assert_eq!(
+            MetricValue::OutputRows(small_count.clone()).to_string(),
+            "42"
+        );
+
+        let thousand_count = Count::new();
+        thousand_count.add(10_100);
+        assert_eq!(
+            MetricValue::OutputRows(thousand_count.clone()).to_string(),
+            "10.10 K"
+        );
+
+        let million_count = Count::new();
+        million_count.add(1_532_000);
+        assert_eq!(
+            MetricValue::SpilledRows(million_count.clone()).to_string(),
+            "1.53 M"
+        );
+
+        let billion_count = Count::new();
+        billion_count.add(2_500_000_000);
+        assert_eq!(
+            MetricValue::OutputBatches(billion_count.clone()).to_string(),
+            "2.50 B"
+        );
+
+        // Test Time formatting with various durations
+        let micros_time = Time::new();
+        micros_time.add_duration(Duration::from_nanos(1_234));
+        assert_eq!(
+            MetricValue::ElapsedCompute(micros_time.clone()).to_string(),
+            "1.23µs"
+        );
+
+        let millis_time = Time::new();
+        millis_time.add_duration(Duration::from_nanos(11_295_377));
+        assert_eq!(
+            MetricValue::ElapsedCompute(millis_time.clone()).to_string(),
+            "11.30ms"
+        );
+
+        let seconds_time = Time::new();
+        seconds_time.add_duration(Duration::from_nanos(1_234_567_890));
+        assert_eq!(
+            MetricValue::ElapsedCompute(seconds_time.clone()).to_string(),
+            "1.23s"
+        );
+
+        // Test CurrentMemoryUsage formatting (should use size, not count)
+        let mem_gauge = Gauge::new();
+        mem_gauge.add(100 * MB as usize);
+        assert_eq!(
+            MetricValue::CurrentMemoryUsage(mem_gauge.clone()).to_string(),
+            "100.0 MB"
+        );
+
+        // Test custom Gauge formatting (should use count)
+        let custom_gauge = Gauge::new();
+        custom_gauge.add(50_000);
+        assert_eq!(
+            MetricValue::Gauge {
+                name: "custom".into(),
+                gauge: custom_gauge.clone()
+            }
+            .to_string(),
+            "50.00 K"
+        );
+
+        // Test PruningMetrics formatting
+        let pruning = PruningMetrics::new();
+        pruning.add_matched(500_000);
+        pruning.add_pruned(500_000);
+        assert_eq!(
+            MetricValue::PruningMetrics {
+                name: "test_pruning".into(),
+                pruning_metrics: pruning.clone()
+            }
+            .to_string(),
+            "1.00 M total → 500.0 K matched"
+        );
+
+        // Test RatioMetrics formatting
+        let ratio = RatioMetrics::new();
+        ratio.add_part(250_000);
+        ratio.add_total(1_000_000);
+        assert_eq!(
+            MetricValue::Ratio {
+                name: "test_ratio".into(),
+                ratio_metrics: ratio.clone()
+            }
+            .to_string(),
+            "25% (250.0 K/1.00 M)"
         );
     }
 }

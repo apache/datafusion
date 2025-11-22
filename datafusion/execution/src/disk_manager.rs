@@ -30,7 +30,7 @@ use tempfile::{Builder, NamedTempFile, TempDir};
 
 use crate::memory_pool::human_readable_size;
 
-const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
+pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
 /// Builder pattern for the [DiskManager] structure
 #[derive(Clone, Debug)]
@@ -244,6 +244,24 @@ impl DiskManager {
 
     pub fn used_disk_space(&self) -> u64 {
         self.used_disk_space.load(Ordering::Relaxed)
+    }
+
+    /// Returns the maximum temporary directory size in bytes
+    pub fn max_temp_directory_size(&self) -> u64 {
+        self.max_temp_directory_size
+    }
+
+    /// Returns the temporary directory paths
+    pub fn temp_dir_paths(&self) -> Vec<PathBuf> {
+        self.local_dirs
+            .lock()
+            .as_ref()
+            .map(|dirs| {
+                dirs.iter()
+                    .map(|temp_dir| temp_dir.path().to_path_buf())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Return true if this disk manager supports creating temporary

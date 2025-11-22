@@ -104,7 +104,6 @@ use log::{debug, warn};
 /// #[derive(Clone)]
 /// # struct ParquetSource {
 /// #    table_schema: TableSchema,
-/// #    projected_statistics: Option<Statistics>,
 /// #    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>
 /// # };
 /// # impl FileSource for ParquetSource {
@@ -113,15 +112,13 @@ use log::{debug, warn};
 /// #  fn table_schema(&self) -> &TableSchema { &self.table_schema }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
-/// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {table_schema: self.table_schema.clone(), projected_statistics: Some(statistics), schema_adapter_factory: self.schema_adapter_factory.clone()} ) }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
-/// #  fn statistics(&self) -> Result<Statistics> { Ok(self.projected_statistics.clone().expect("projected_statistics should be set")) }
 /// #  fn file_type(&self) -> &str { "parquet" }
-/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {table_schema: self.table_schema.clone(), projected_statistics: self.projected_statistics.clone(), schema_adapter_factory: Some(factory)} )) }
+/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {table_schema: self.table_schema.clone(), schema_adapter_factory: Some(factory)} )) }
 /// #  fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> { self.schema_adapter_factory.clone() }
 /// #  }
 /// # impl ParquetSource {
-/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into(), projected_statistics: None, schema_adapter_factory: None} }
+/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into(), schema_adapter_factory: None} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -192,6 +189,13 @@ pub struct FileScanConfig {
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    /// Unprojected statistics for the table (file schema + partition columns).
+    /// These are projected on-demand via `projected_stats()`.
+    ///
+    /// Note that this field is pub(crate) because accessing it directly from outside
+    /// would be incorrect if there are filters being applied, thus this should be accessed
+    /// via [`FileScanConfig::statistics`].
+    pub(crate) statistics: Statistics,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -437,10 +441,9 @@ impl FileScanConfigBuilder {
 
         let constraints = constraints.unwrap_or_default();
         let statistics = statistics.unwrap_or_else(|| {
-            Statistics::new_unknown(file_source.table_schema().file_schema())
+            Statistics::new_unknown(file_source.table_schema().table_schema())
         });
 
-        let file_source = file_source.with_statistics(statistics.clone());
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
@@ -466,6 +469,7 @@ impl FileScanConfigBuilder {
             new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
+            statistics,
         }
     }
 }
@@ -476,7 +480,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             object_store_url: config.object_store_url,
             file_source: Arc::<dyn FileSource>::clone(&config.file_source),
             file_groups: config.file_groups,
-            statistics: config.file_source.statistics().ok(),
+            statistics: Some(config.statistics),
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
             new_lines_in_values: Some(config.new_lines_in_values),
@@ -736,8 +740,21 @@ impl FileScanConfig {
         }
     }
 
-    pub fn projected_stats(&self) -> Statistics {
-        let statistics = self.file_source.statistics().unwrap();
+    /// Returns the unprojected table statistics, marking them as inexact if filters are present.
+    ///
+    /// When filters are pushed down (including pruning predicates and bloom filters),
+    /// we can't guarantee the statistics are exact because we don't know how many
+    /// rows will be filtered out.
+    pub fn statistics(&self) -> Statistics {
+        if self.file_source.filter().is_some() {
+            self.statistics.clone().to_inexact()
+        } else {
+            self.statistics.clone()
+        }
+    }
+
+    fn projected_stats(&self) -> Statistics {
+        let statistics = self.statistics();
 
         let table_cols_stats = self
             .projection_indices()
@@ -830,7 +847,7 @@ impl FileScanConfig {
             return (
                 Arc::clone(self.file_schema()),
                 self.constraints.clone(),
-                self.file_source.statistics().unwrap().clone(),
+                self.statistics().clone(),
                 self.output_ordering.clone(),
             );
         }
@@ -1064,11 +1081,7 @@ impl Debug for FileScanConfig {
         write!(f, "FileScanConfig {{")?;
         write!(f, "object_store_url={:?}, ", self.object_store_url)?;
 
-        write!(
-            f,
-            "statistics={:?}, ",
-            self.file_source.statistics().unwrap()
-        )?;
+        write!(f, "statistics={:?}, ", self.statistics())?;
 
         DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)?;
         write!(f, "}}")
@@ -1647,7 +1660,7 @@ mod tests {
             to_partition_cols(partition_cols.clone()),
         );
 
-        let source_statistics = conf.file_source.statistics().unwrap();
+        let source_statistics = conf.statistics();
         let conf_stats = conf.partition_statistics(None).unwrap();
 
         // projection should be reflected in the file source statistics
@@ -2347,24 +2360,13 @@ mod tests {
         assert!(config.constraints.is_empty());
 
         // Verify statistics are set to unknown
+        assert_eq!(config.statistics().num_rows, Precision::Absent);
+        assert_eq!(config.statistics().total_byte_size, Precision::Absent);
         assert_eq!(
-            config.file_source.statistics().unwrap().num_rows,
-            Precision::Absent
-        );
-        assert_eq!(
-            config.file_source.statistics().unwrap().total_byte_size,
-            Precision::Absent
-        );
-        assert_eq!(
-            config
-                .file_source
-                .statistics()
-                .unwrap()
-                .column_statistics
-                .len(),
+            config.statistics().column_statistics.len(),
             file_schema.fields().len()
         );
-        for stat in config.file_source.statistics().unwrap().column_statistics {
+        for stat in config.statistics().column_statistics {
             assert_eq!(stat.distinct_count, Precision::Absent);
             assert_eq!(stat.min_value, Precision::Absent);
             assert_eq!(stat.max_value, Precision::Absent);
