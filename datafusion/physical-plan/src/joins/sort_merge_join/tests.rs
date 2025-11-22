@@ -1110,6 +1110,61 @@ async fn join_right_anti_two_with_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn join_right_anti_filtered_with_mismatched_columns() -> Result<()> {
+    let left = build_table_two_cols(("a1", &vec![31, 31]), ("b1", &vec![32, 33]));
+    let right = build_table(
+        ("a2", &vec![31, 31]),
+        ("b2", &vec![32, 35]),
+        ("c2", &vec![108, 109]),
+    );
+    let on = vec![
+        (
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        ),
+        (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        ),
+    ];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b1", 0)),
+            Operator::LtEq,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+
+    let (_, batches) =
+        join_collect_with_filter(left, right, on, filter, RightAnti).await?;
+
+    let expected = [
+        "+----+----+-----+",
+        "| a2 | b2 | c2  |",
+        "+----+----+-----+",
+        "| 31 | 35 | 109 |",
+        "+----+----+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_right_anti_with_nulls() -> Result<()> {
     let left = build_table_i32_nullable(
         ("a1", &vec![Some(0), Some(1), Some(2), Some(2), Some(3)]),

@@ -245,14 +245,16 @@ async fn test_right_semi_join_1k() {
 
 #[tokio::test]
 async fn test_right_semi_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches_i32(1000, false),
-        make_staggered_batches_i32(1000, false),
-        JoinType::RightSemi,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::RightSemi,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
@@ -299,14 +301,16 @@ async fn test_right_anti_join_1k() {
 
 #[tokio::test]
 async fn test_right_anti_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches_i32(1000, false),
-        make_staggered_batches_i32(1000, false),
-        JoinType::RightAnti,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::RightAnti,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
@@ -564,26 +568,30 @@ async fn test_left_anti_join_1k_binary_filtered() {
 
 #[tokio::test]
 async fn test_right_anti_join_1k_binary() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches_binary(1000, false),
-        make_staggered_batches_binary(1000, false),
-        JoinType::RightAnti,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::RightAnti,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_anti_join_1k_binary_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches_binary(1000, false),
-        make_staggered_batches_binary(1000, false),
-        JoinType::RightAnti,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::RightAnti,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
