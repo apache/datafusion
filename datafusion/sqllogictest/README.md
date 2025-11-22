@@ -144,7 +144,7 @@ Andrew |
 
 ## Cookbook: Ignoring volatile output
 
-Sometimes parts of a result change every run (timestamps, counters, etc). To keep the rest of the snapshot checked in, replace those fragments with the `<slt:ignore>` marker inside the expected block. During validation the marker acts like a wildcard, so only the surrounding text must match.
+Sometimes parts of a result change every run (timestamps, counters, etc.). To keep the rest of the snapshot checked in, replace those fragments with the `<slt:ignore>` marker inside the expected block. During validation the marker acts like a wildcard, so only the surrounding text must match.
 
 ```text
 query TT
