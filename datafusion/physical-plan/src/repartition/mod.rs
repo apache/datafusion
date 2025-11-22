@@ -228,10 +228,10 @@ impl Debug for RepartitionExecState {
 impl RepartitionExecState {
     fn ensure_input_streams_initialized(
         &mut self,
-        input: Arc<dyn ExecutionPlan>,
-        metrics: ExecutionPlanMetricsSet,
+        input: &Arc<dyn ExecutionPlan>,
+        metrics: &ExecutionPlanMetricsSet,
         output_partitions: usize,
-        ctx: Arc<TaskContext>,
+        ctx: &Arc<TaskContext>,
     ) -> Result<()> {
         if !matches!(self, RepartitionExecState::NotInitialized) {
             return Ok(());
@@ -241,10 +241,10 @@ impl RepartitionExecState {
         let mut streams_and_metrics = Vec::with_capacity(num_input_partitions);
 
         for i in 0..num_input_partitions {
-            let metrics = RepartitionMetrics::new(i, output_partitions, &metrics);
+            let metrics = RepartitionMetrics::new(i, output_partitions, metrics);
 
             let timer = metrics.fetch_time.timer();
-            let stream = input.execute(i, Arc::clone(&ctx))?;
+            let stream = input.execute(i, Arc::clone(ctx))?;
             timer.done();
 
             streams_and_metrics.push((stream, metrics));
@@ -256,21 +256,21 @@ impl RepartitionExecState {
     #[expect(clippy::too_many_arguments)]
     fn consume_input_streams(
         &mut self,
-        input: Arc<dyn ExecutionPlan>,
-        metrics: ExecutionPlanMetricsSet,
-        partitioning: Partitioning,
+        input: &Arc<dyn ExecutionPlan>,
+        metrics: &ExecutionPlanMetricsSet,
+        partitioning: &Partitioning,
         preserve_order: bool,
-        name: String,
-        context: Arc<TaskContext>,
+        name: &str,
+        context: &Arc<TaskContext>,
         spill_manager: SpillManager,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
                 self.ensure_input_streams_initialized(
-                    Arc::clone(&input),
-                    metrics.clone(),
+                    input,
+                    metrics,
                     partitioning.partition_count(),
-                    Arc::clone(&context),
+                    context,
                 )?;
                 let RepartitionExecState::InputStreamsInitialized(value) = self else {
                     // This cannot happen, as ensure_input_streams_initialized() was just called,
@@ -854,10 +854,10 @@ impl ExecutionPlan for RepartitionExec {
         let state = Arc::clone(&self.state);
         if let Some(mut state) = state.try_lock() {
             state.ensure_input_streams_initialized(
-                Arc::clone(&input),
-                metrics.clone(),
+                &input,
+                &metrics,
                 partitioning.partition_count(),
-                Arc::clone(&context),
+                &context,
             )?;
         }
 
@@ -869,12 +869,12 @@ impl ExecutionPlan for RepartitionExec {
                 // lock mutexes
                 let mut state = state.lock();
                 let state = state.consume_input_streams(
-                    Arc::clone(&input),
-                    metrics.clone(),
-                    partitioning,
+                    &input,
+                    &metrics,
+                    &partitioning,
                     preserve_order,
-                    name.clone(),
-                    Arc::clone(&context),
+                    &name,
+                    &context,
                     spill_manager.clone(),
                 )?;
 
@@ -1106,8 +1106,7 @@ impl RepartitionExec {
         partitioning: Partitioning,
     ) -> Result<Self> {
         let preserve_order = false;
-        let cache =
-            Self::compute_properties(&input, partitioning.clone(), preserve_order);
+        let cache = Self::compute_properties(&input, partitioning, preserve_order);
         Ok(RepartitionExec {
             input,
             state: Default::default(),
@@ -2495,7 +2494,8 @@ mod test {
         // Create physical plan with order preservation
         let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?
             .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs])?;
-        let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
+        let exec = Arc::new(exec);
+        let exec = Arc::new(TestMemoryExec::update_cache(&exec));
         // Repartition into 3 partitions with order preservation
         // We expect 1 batch per output partition after repartitioning
         let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(3))?
@@ -2611,7 +2611,8 @@ mod test {
 
         // Create physical plan with hash partitioning
         let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
+        let exec = Arc::new(exec);
+        let exec = Arc::new(TestMemoryExec::update_cache(&exec));
         // Hash partition into 2 partitions by column c0
         let hash_expr = col("c0", &schema)?;
         let exec =
@@ -2695,11 +2696,11 @@ mod test {
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(TestMemoryExec::update_cache(Arc::new(
-            TestMemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
-                .unwrap()
-                .try_with_sort_information(vec![sort_exprs])
-                .unwrap(),
-        )))
+        let exec = TestMemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
+            .unwrap()
+            .try_with_sort_information(vec![sort_exprs])
+            .unwrap();
+        let exec = Arc::new(exec);
+        Arc::new(TestMemoryExec::update_cache(&exec))
     }
 }
