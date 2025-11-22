@@ -17,13 +17,15 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::cache::cache_manager::{
-    FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
+    FileMetadata, FileMetadataCache, FileMetadataCacheEntry, ListFilesCache,
 };
 use crate::cache::lru_queue::LruQueue;
 use crate::cache::CacheAccessor;
 
+use datafusion_common::instant::Instant;
 use datafusion_common::Statistics;
 
 use dashmap::DashMap;
@@ -111,27 +113,182 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
 ///
 /// Collected files metadata for listing files.
 ///
-/// Cache is not invalided until user calls [`Self::remove`] or [`Self::clear`].
+/// # Internal details
+///
+/// The `capacity` parameter controls the maximum number of entries in the cache, using a Least
+/// Recently Used eviction algorithm. When adding a new entry, if the total number of entries in
+/// the cache exceeds `capacity`, the least recently used entries are evicted until the total
+/// entries are lower than the `capacity`.
 ///
 /// [`ListFilesCache`]: crate::cache::cache_manager::ListFilesCache
 #[derive(Default)]
 pub struct DefaultListFilesCache {
-    statistics: DashMap<Path, Arc<Vec<ObjectMeta>>>,
+    state: Mutex<DefaultListFilesCacheState>,
+}
+
+impl DefaultListFilesCache {
+    pub fn new(capacity: usize, ttl: Duration) -> Self {
+        Self {
+            state: Mutex::new(DefaultListFilesCacheState::new(capacity, ttl)),
+        }
+    }
+
+    pub fn cache_limit(&self) -> usize {
+        self.state.lock().unwrap().capacity
+    }
+
+    pub fn cache_ttl(&self) -> Duration {
+        self.state.lock().unwrap().ttl
+    }
+}
+
+pub(super) const DEFAULT_LIST_FILES_CACHE_LIMIT: usize = 128 * 1024; // ~130k objects
+pub(super) const DEFAULT_LIST_FILES_CACHE_TTL: Duration = Duration::new(600, 0); // 10min
+
+pub struct DefaultListFilesCacheState {
+    lru_queue: LruQueue<Path, (Arc<Vec<ObjectMeta>>, Instant)>,
+    capacity: usize, // TODO: do "bytes" matter here, or should we stick with "entries"?
+    size: usize,
+    ttl: Duration,
+}
+
+// TODO: Do we even want to support "default" here?
+impl Default for DefaultListFilesCacheState {
+    fn default() -> Self {
+        Self {
+            lru_queue: LruQueue::new(),
+            capacity: DEFAULT_LIST_FILES_CACHE_LIMIT,
+            size: 0,
+            ttl: DEFAULT_LIST_FILES_CACHE_TTL,
+        }
+    }
+}
+
+impl DefaultListFilesCacheState {
+    fn new(capacity: usize, ttl: Duration) -> Self {
+        Self {
+            lru_queue: LruQueue::new(),
+            capacity,
+            size: 0,
+            ttl,
+        }
+    }
+
+    fn get(&mut self, key: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+        let (object_metas, expires) = self.lru_queue.get(key)?;
+
+        if Instant::now() > *expires {
+            self.remove(key);
+            None
+        } else {
+            Some(Arc::clone(object_metas))
+        }
+    }
+
+    fn contains_key(&mut self, k: &Path) -> bool {
+        let Some((_, expires)) = self.lru_queue.peek(k) else {
+            return false;
+        };
+
+        if Instant::now() > *expires {
+            self.remove(k);
+            return false;
+        }
+
+        true
+    }
+
+    fn put(
+        &mut self,
+        key: &Path,
+        value: Arc<Vec<ObjectMeta>>,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
+        let value_size = value.len();
+
+        // no point in trying to add this value to the cache if it cannot fit entirely
+        if value_size > self.capacity {
+            return None;
+        }
+
+        // if the key is already in the cache, the old value is removed
+        let expires = Instant::now() + self.ttl;
+        let old_value = self.lru_queue.put(key.clone(), (value, expires));
+        self.size += value_size;
+        if let Some((ref old_metas, _)) = old_value {
+            self.size -= old_metas.len();
+        }
+
+        self.evict_entries();
+
+        old_value.map(|v| v.0)
+    }
+
+    fn evict_entries(&mut self) {
+        while self.size > self.capacity {
+            if let Some(removed) = self.lru_queue.pop() {
+                let metas: Arc<Vec<ObjectMeta>> = removed.1 .0;
+                self.size -= metas.len();
+            } else {
+                // cache is empty while memory_used > memory_limit, cannot happen
+                debug_assert!(
+                    false,
+                    "cache is empty while memory_used > memory_limit, cannot happen"
+                );
+                return;
+            }
+        }
+    }
+
+    /// Removes an entry from the cache and returns it, if it exists.
+    fn remove(&mut self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+        if let Some((old_metas, _)) = self.lru_queue.remove(k) {
+            self.capacity -= old_metas.len();
+            Some(old_metas)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the number of entries currently cached.
+    fn len(&self) -> usize {
+        self.lru_queue.len()
+    }
+
+    /// Removes all entries from the cache.
+    fn clear(&mut self) {
+        self.lru_queue.clear();
+        self.capacity = 0;
+    }
+}
+
+impl ListFilesCache for DefaultListFilesCache {
+    fn cache_limit(&self) -> usize {
+        let state = self.state.lock().unwrap();
+        state.capacity
+    }
+
+    fn cache_ttl(&self) -> Duration {
+        let state = self.state.lock().unwrap();
+        state.ttl
+    }
+
+    fn update_cache_limit(&self, limit: usize) {
+        let mut state = self.state.lock().unwrap();
+        state.capacity = limit;
+        state.evict_entries();
+    }
 }
 
 impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
     type Extra = ObjectMeta;
 
     fn get(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.statistics.get(k).map(|x| Arc::clone(x.value()))
+        let mut state = self.state.lock().unwrap();
+        state.get(k)
     }
 
-    fn get_with_extra(
-        &self,
-        _k: &Path,
-        _e: &Self::Extra,
-    ) -> Option<Arc<Vec<ObjectMeta>>> {
-        panic!("Not supported DefaultListFilesCache get_with_extra")
+    fn get_with_extra(&self, k: &Path, _e: &Self::Extra) -> Option<Arc<Vec<ObjectMeta>>> {
+        self.get(k)
     }
 
     fn put(
@@ -139,36 +296,41 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
         key: &Path,
         value: Arc<Vec<ObjectMeta>>,
     ) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.statistics.insert(key.clone(), value)
+        let mut state = self.state.lock().unwrap();
+        state.put(key, value)
     }
 
     fn put_with_extra(
         &self,
-        _key: &Path,
-        _value: Arc<Vec<ObjectMeta>>,
+        key: &Path,
+        value: Arc<Vec<ObjectMeta>>,
         _e: &Self::Extra,
     ) -> Option<Arc<Vec<ObjectMeta>>> {
-        panic!("Not supported DefaultListFilesCache put_with_extra")
+        self.put(key, value)
     }
 
     fn remove(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.statistics.remove(k).map(|x| x.1)
+        let mut state = self.state.lock().unwrap();
+        state.remove(k)
     }
 
     fn contains_key(&self, k: &Path) -> bool {
-        self.statistics.contains_key(k)
+        let mut state = self.state.lock().unwrap();
+        state.contains_key(k)
     }
 
     fn len(&self) -> usize {
-        self.statistics.len()
+        let state = self.state.lock().unwrap();
+        state.len()
     }
 
     fn clear(&self) {
-        self.statistics.clear()
+        let mut state = self.state.lock().unwrap();
+        state.clear();
     }
 
     fn name(&self) -> String {
-        "DefaultListFilesCache".to_string()
+        String::from("DefaultListFilesCache")
     }
 }
 
