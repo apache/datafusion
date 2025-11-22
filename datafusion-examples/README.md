@@ -63,7 +63,7 @@ cargo run --example dataframe -- dataframe
 - [`dataframe-to-s3.rs`](examples/external_dependency/dataframe-to-s3.rs): Run a query using a DataFrame against a parquet file from s3 and writing back to s3
 - [`examples/dataframe/dataframe.rs`](examples/dataframe/dataframe.rs): Run a query using a DataFrame API against parquet files, csv files, and in-memory data, including multiple subqueries. Also demonstrates the various methods to write out a DataFrame to a table, parquet file, csv file, and json file.
 - [`examples/builtin_functions/date_time`](examples/builtin_functions/date_time.rs): Examples of date-time related functions and queries
-- [`examples/dataframe/default_column_values.rs`](examples/dataframe/default_column_values.rs): Implement custom default value handling for missing columns using field metadata and PhysicalExprAdapter
+- [`examples/custom_data_source/default_column_values.rs`](examples/custom_data_source/default_column_values.rs): Implement custom default value handling for missing columns using field metadata and PhysicalExprAdapter
 - [`examples/dataframe/deserialize_to_struct.rs`](examples/dataframe/deserialize_to_struct.rs): Convert query results (Arrow ArrayRefs) into Rust structs
 - [`examples/query_planning/expr_api.rs`](examples/query_planning/expr_api.rs): Create, execute, simplify, analyze and coerce `Expr`s
 - [`examples/custom_data_source/file_stream_provider.rs`](examples/custom_data_source/file_stream_provider.rs): Run a query on `FileStreamProvider` which implements `StreamProvider` for reading and writing to arbitrary stream sources / sinks.

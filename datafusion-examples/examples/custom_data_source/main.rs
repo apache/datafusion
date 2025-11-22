@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example custom_data_source -- [csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|file_stream_provider]
+//! cargo run --example custom_data_source -- [csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|default_column_values|file_stream_provider]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -30,6 +30,7 @@
 //! - `custom_datasource` — run queries against a custom datasource (TableProvider)
 //! - `custom_file_casts` — implement custom casting rules to adapt file schemas
 //! - `custom_file_format` — write data to a custom file format
+//! - `default_column_values` — implement custom default value handling for missing columns using field metadata and PhysicalExprAdapter
 //! - `file_stream_provider` — run a query on FileStreamProvider which implements StreamProvider for reading and writing to arbitrary stream sources/sinks
 
 mod csv_json_opener;
@@ -37,6 +38,7 @@ mod csv_sql_streaming;
 mod custom_datasource;
 mod custom_file_casts;
 mod custom_file_format;
+mod default_column_values;
 mod file_stream_provider;
 
 use std::str::FromStr;
@@ -49,6 +51,7 @@ enum ExampleKind {
     CustomDatasource,
     CustomFileCasts,
     CustomFileFormat,
+    DefaultColumnValues,
     FileFtreamProvider,
 }
 
@@ -60,6 +63,7 @@ impl AsRef<str> for ExampleKind {
             Self::CustomDatasource => "custom_datasource",
             Self::CustomFileCasts => "custom_file_casts",
             Self::CustomFileFormat => "custom_file_format",
+            Self::DefaultColumnValues => "default_column_values",
             Self::FileFtreamProvider => "file_stream_provider",
         }
     }
@@ -75,6 +79,7 @@ impl FromStr for ExampleKind {
             "custom_datasource" => Ok(Self::CustomDatasource),
             "custom_file_casts" => Ok(Self::CustomFileCasts),
             "custom_file_format" => Ok(Self::CustomFileFormat),
+            "default_column_values" => Ok(Self::DefaultColumnValues),
             "file_stream_provider" => Ok(Self::FileFtreamProvider),
             _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
         }
@@ -82,12 +87,13 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::CsvJsonOpener,
         Self::CsvSqlStreaming,
         Self::CustomDatasource,
         Self::CustomFileCasts,
         Self::CustomFileFormat,
+        Self::DefaultColumnValues,
         Self::FileFtreamProvider,
     ];
 
@@ -117,6 +123,9 @@ async fn main() -> Result<()> {
         ExampleKind::CustomDatasource => custom_datasource::custom_datasource().await?,
         ExampleKind::CustomFileCasts => custom_file_casts::custom_file_casts().await?,
         ExampleKind::CustomFileFormat => custom_file_format::custom_file_format().await?,
+        ExampleKind::DefaultColumnValues => {
+            default_column_values::default_column_values().await?
+        }
         ExampleKind::FileFtreamProvider => {
             file_stream_provider::file_stream_provider().await?
         }

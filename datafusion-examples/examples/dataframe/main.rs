@@ -21,16 +21,14 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example dataframe -- [dataframe|default_column_values|deserialize_to_struct]
+//! cargo run --example dataframe -- [dataframe|deserialize_to_struct]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
 //! - `dataframe` — run a query using a DataFrame API against parquet files, csv files, and in-memory data, including multiple subqueries
-//! - `default_column_values` — implement custom default value handling for missing columns using field metadata and PhysicalExprAdapter
 //! - `deserialize_to_struct` — convert query results (Arrow ArrayRefs) into Rust structs
 
 mod dataframe;
-mod default_column_values;
 mod deserialize_to_struct;
 
 use std::str::FromStr;
@@ -39,7 +37,6 @@ use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
     Dataframe,
-    DefaultColumnValues,
     DeserializeToStruct,
 }
 
@@ -47,7 +44,6 @@ impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
             Self::Dataframe => "dataframe",
-            Self::DefaultColumnValues => "default_column_values",
             Self::DeserializeToStruct => "deserialize_to_struct",
         }
     }
@@ -59,7 +55,6 @@ impl FromStr for ExampleKind {
     fn from_str(s: &str) -> Result<Self> {
         match s {
             "dataframe" => Ok(Self::Dataframe),
-            "default_column_values" => Ok(Self::DefaultColumnValues),
             "deserialize_to_struct" => Ok(Self::DeserializeToStruct),
             _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
         }
@@ -67,11 +62,7 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 3] = [
-        Self::Dataframe,
-        Self::DefaultColumnValues,
-        Self::DeserializeToStruct,
-    ];
+    const ALL: [Self; 2] = [Self::Dataframe, Self::DeserializeToStruct];
 
     const EXAMPLE_NAME: &str = "dataframe";
 
@@ -95,9 +86,6 @@ async fn main() -> Result<()> {
 
     match arg.parse::<ExampleKind>()? {
         ExampleKind::Dataframe => dataframe::dataframe_example().await?,
-        ExampleKind::DefaultColumnValues => {
-            default_column_values::default_column_values().await?
-        }
         ExampleKind::DeserializeToStruct => {
             deserialize_to_struct::deserialize_to_struct().await?
         }
