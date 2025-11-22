@@ -49,7 +49,7 @@ physical_plan
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[nth_value(multiple_ordered_table.c,Int64(1)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]], ordering_mode=Sorted
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], file_type=csv, has_header=true
 
 
@@ -69,7 +69,7 @@ physical_plan
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[nth_value(multiple_ordered_table.c,Int64(1)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]], ordering_mode=Sorted
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], file_type=csv, has_header=true
 
 query TT
@@ -88,7 +88,7 @@ physical_plan
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[nth_value(multiple_ordered_table.c,Int64(1) + Int64(100)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]], ordering_mode=Sorted
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], file_type=csv, has_header=true
 
 query II
