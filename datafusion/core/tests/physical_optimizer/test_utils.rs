@@ -636,7 +636,7 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
 
 pub fn get_optimized_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
 
     let optimized = LimitedDistinctAggregation::new()
         .optimize_plan(Arc::clone(plan), &optimizer_context)?;

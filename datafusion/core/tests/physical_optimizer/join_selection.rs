@@ -229,7 +229,7 @@ async fn test_join_with_swap() {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
         .optimize_plan(join, &optimizer_context)
         .unwrap();
@@ -293,7 +293,7 @@ async fn test_left_join_no_swap() {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
         .optimize_plan(join, &optimizer_context)
         .unwrap();
@@ -345,8 +345,7 @@ async fn test_join_with_swap_semi() {
         let original_schema = join.schema();
 
         let session_config = SessionConfig::new();
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized_join = JoinSelection::new()
             .optimize_plan(Arc::new(join), &optimizer_context)
             .unwrap();
@@ -403,8 +402,7 @@ async fn test_join_with_swap_mark() {
         let original_schema = join.schema();
 
         let session_config = SessionConfig::new();
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized_join = JoinSelection::new()
             .optimize_plan(Arc::new(join), &optimizer_context)
             .unwrap();
@@ -443,7 +441,7 @@ macro_rules! assert_optimized {
 
         let plan = Arc::new($PLAN);
         let session_config = SessionConfig::new();
-        let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized = JoinSelection::new()
             .optimize_plan(plan.clone(), &optimizer_context)
             .unwrap();
@@ -537,7 +535,7 @@ async fn test_join_no_swap() {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
         .optimize_plan(join, &optimizer_context)
         .unwrap();
@@ -588,7 +586,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
         .optimize_plan(join, &optimizer_context)
         .unwrap();
@@ -668,7 +666,7 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
         .optimize_plan(Arc::<NestedLoopJoinExec>::clone(&join), &optimizer_context)
         .unwrap();
@@ -928,7 +926,7 @@ fn check_join_partition_mode(
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
         .optimize_plan(join, &optimizer_context)
         .unwrap();
@@ -1575,7 +1573,7 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
     )?) as _;
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join_plan =
         JoinSelection::new().optimize_plan(Arc::clone(&join), &optimizer_context)?;
 

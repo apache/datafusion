@@ -176,8 +176,7 @@ impl EnforceSortingTest {
 
         // Run the actual optimizer
         let session_config = SessionConfig::from(config);
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized_physical_plan = EnforceSorting::new()
             .optimize_plan(Arc::clone(&self.plan), &optimizer_context)
             .expect("enforce_sorting failed");
@@ -2367,7 +2366,7 @@ async fn test_commutativity() -> Result<()> {
 
     let config = ConfigOptions::new();
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let rules = vec![
         Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
@@ -2377,7 +2376,7 @@ async fn test_commutativity() -> Result<()> {
         first_plan = rule.optimize_plan(first_plan, &optimizer_context)?;
     }
 
-    let optimizer_context2 = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context2 = OptimizerContext::new(session_config.clone());
     let rules = vec![
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
         Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,

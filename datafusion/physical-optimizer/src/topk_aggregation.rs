@@ -149,7 +149,7 @@ impl PhysicalOptimizerRule for TopKAggregation {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.config_options();
+        let config = context.options();
         if config.optimizer.enable_topk_aggregation {
             plan.transform_down(|plan| {
                 Ok(if let Some(plan) = TopKAggregation::transform_sort(&plan) {

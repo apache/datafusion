@@ -245,7 +245,7 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
 
     // Apply the FilterPushdown optimizer rule
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
         .optimize_plan(Arc::clone(&plan), &optimizer_context)
         .unwrap();
@@ -724,7 +724,7 @@ async fn test_topk_dynamic_filter_pushdown() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
         .optimize_plan(plan, &optimizer_context)
         .unwrap();
@@ -809,7 +809,7 @@ async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
         .optimize_plan(plan, &optimizer_context)
         .unwrap();
@@ -1055,7 +1055,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
         .optimize_plan(plan, &optimizer_context)
         .unwrap();
@@ -1285,7 +1285,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
         .optimize_plan(plan, &optimizer_context)
         .unwrap();
@@ -1484,7 +1484,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
         .optimize_plan(plan, &optimizer_context)
         .unwrap();
@@ -1658,7 +1658,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
         .optimize_plan(outer_join, &optimizer_context)
         .unwrap();
@@ -2440,7 +2440,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
     let optimizer = FilterPushdown::new_post_optimization();
-    let plan = optimizer.optimize(plan, config.options()).unwrap();
+    let plan = optimizer.optimize(plan, &**config.options()).unwrap();
 
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
@@ -2577,7 +2577,7 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
     let optimizer = FilterPushdown::new_post_optimization();
-    let plan = optimizer.optimize(plan, config.options()).unwrap();
+    let plan = optimizer.optimize(plan, &**config.options()).unwrap();
 
     insta::assert_snapshot!(
         format_plan_for_test(&plan),

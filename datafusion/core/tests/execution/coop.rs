@@ -810,8 +810,7 @@ async fn query_yields(
     task_ctx: Arc<TaskContext>,
 ) -> Result<(), Box<dyn Error>> {
     // Run plan through EnsureCooperative
-    let optimizer_context =
-        OptimizerContext::new_from_session_config(&task_ctx.session_config().clone());
+    let optimizer_context = OptimizerContext::new(task_ctx.session_config().clone());
     let optimized = EnsureCooperative::new().optimize_plan(plan, &optimizer_context)?;
 
     // Get the stream

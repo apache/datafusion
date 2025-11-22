@@ -394,7 +394,7 @@ fn create_test_schema2() -> SchemaRef {
 fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
     let sanity_checker = SanityCheckPlan::new();
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     assert_eq!(
         sanity_checker
             .optimize_plan(plan.clone(), &optimizer_context)

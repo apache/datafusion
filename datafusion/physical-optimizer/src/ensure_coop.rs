@@ -103,8 +103,7 @@ mod tests {
     async fn test_cooperative_exec_for_custom_exec() {
         let test_custom_exec = scan_partitioned(1);
         let session_config = SessionConfig::new();
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config);
         let optimized = EnsureCooperative::new()
             .optimize_plan(test_custom_exec, &optimizer_context)
             .unwrap();

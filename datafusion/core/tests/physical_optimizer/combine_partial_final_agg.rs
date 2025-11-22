@@ -48,7 +48,7 @@ macro_rules! assert_optimized {
         // run optimizer
         let optimizer = CombinePartialFinalAggregate {};
         let session_config = SessionConfig::new();
-        let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized = optimizer.optimize_plan($PLAN, &optimizer_context)?;
         // Now format correctly
         let plan = displayable(optimized.as_ref()).indent(true).to_string();

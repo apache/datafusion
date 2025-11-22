@@ -461,7 +461,7 @@ fn test_csv_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -501,7 +501,7 @@ fn test_memory_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -599,7 +599,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
     )?) as _;
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -701,7 +701,7 @@ fn test_projection_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(top_projection, &optimizer_context)?;
 
@@ -771,7 +771,7 @@ fn test_output_req_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -864,7 +864,7 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -924,7 +924,7 @@ fn test_filter_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -1029,7 +1029,7 @@ fn test_join_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -1161,7 +1161,7 @@ fn test_join_after_required_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -1241,7 +1241,7 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize_string =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
     let after_optimize_string = displayable(after_optimize_string.as_ref())
@@ -1340,7 +1340,7 @@ fn test_hash_join_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
     let after_optimize_string = displayable(after_optimize.as_ref())
@@ -1370,7 +1370,7 @@ fn test_hash_join_after_projection() -> Result<()> {
     )?);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
     let after_optimize_string = displayable(after_optimize.as_ref())
@@ -1425,7 +1425,7 @@ fn test_repartition_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -1498,7 +1498,7 @@ fn test_sort_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -1554,7 +1554,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -1601,7 +1601,7 @@ fn test_union_after_projection() -> Result<()> {
     );
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -1678,7 +1678,7 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
     )?);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
@@ -1726,7 +1726,7 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
     )?);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 

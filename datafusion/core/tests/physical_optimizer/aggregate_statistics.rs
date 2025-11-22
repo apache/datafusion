@@ -69,7 +69,7 @@ async fn assert_count_optim_success(
     let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized = AggregateStatistics::new()
         .optimize_plan(Arc::clone(&plan), &optimizer_context)?;
 
@@ -268,7 +268,7 @@ async fn test_count_inexact_stat() -> Result<()> {
     )?;
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized = AggregateStatistics::new()
         .optimize_plan(Arc::new(final_agg), &optimizer_context)?;
 
@@ -314,7 +314,7 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
     )?;
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized = AggregateStatistics::new()
         .optimize_plan(Arc::new(final_agg), &optimizer_context)?;
 

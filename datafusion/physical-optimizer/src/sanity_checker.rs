@@ -59,7 +59,7 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.config_options();
+        let config = context.options();
         plan.transform_up(|p| check_plan_sanity(p, &config.optimizer))
             .data()
     }

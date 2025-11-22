@@ -674,8 +674,7 @@ mod test {
 
         let optimizer = ProjectionPushdown::new();
         let session_config = SessionConfig::new();
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config);
         let optimized_plan =
             optimizer.optimize_plan(Arc::new(join), &optimizer_context)?;
 

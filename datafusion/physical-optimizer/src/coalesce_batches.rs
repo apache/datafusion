@@ -23,9 +23,7 @@ use crate::{OptimizerContext, PhysicalOptimizerRule};
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
-use datafusion_common::{
-    assert_eq_or_internal_err, config::ConfigOptions, DataFusionError,
-};
+use datafusion_common::{assert_eq_or_internal_err, DataFusionError};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
     async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
@@ -51,7 +49,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.config_options();
+        let config = context.options();
         if !config.execution.coalesce_batches {
             return Ok(plan);
         }

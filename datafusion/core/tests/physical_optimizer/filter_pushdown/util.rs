@@ -383,8 +383,7 @@ impl OptimizationTest {
         let input_schema = input_plan.schema();
 
         let session_config = SessionConfig::from(parquet_pushdown_config);
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let output_result = opt.optimize_plan(input_plan, &optimizer_context);
         let output = output_result
             .and_then(|plan| {

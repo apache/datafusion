@@ -52,36 +52,36 @@ use datafusion_physical_plan::ExecutionPlan;
 /// [`TaskContext`]: https://docs.rs/datafusion/latest/datafusion/execution/struct.TaskContext.html
 #[derive(Debug, Clone)]
 pub struct OptimizerContext {
-    /// Config options
-    config_options: Arc<ConfigOptions>,
-    /// Extensions
-    extensions: Arc<Extensions>,
+    /// Session configuration
+    session_config: SessionConfig,
 }
 
 impl OptimizerContext {
     /// Create a new OptimizerContext
-    pub fn new_from_session_config(session_config: &SessionConfig) -> Self {
-        Self {
-            config_options: Arc::clone(session_config.options()),
-            extensions: Arc::clone(session_config.extensions()),
-        }
+    pub fn new(session_config: SessionConfig) -> Self {
+        Self { session_config }
+    }
+
+    /// Return a reference to the session configuration
+    pub fn session_config(&self) -> &SessionConfig {
+        &self.session_config
     }
 
     /// Return a reference to the configuration options
     ///
     /// This is a convenience method that returns the [`ConfigOptions`]
     /// from the [`SessionConfig`].
-    pub fn config_options(&self) -> &ConfigOptions {
-        &self.config_options
+    pub fn options(&self) -> &Arc<ConfigOptions> {
+        self.session_config.options()
     }
 
     /// Return a reference to the extensions
-    pub fn extensions(&self) -> &Extensions {
-        &self.extensions
+    pub fn extensions(&self) -> &Arc<Extensions> {
+        self.session_config.extensions()
     }
 }
 
-/// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
+/// `PhysicalOptimizerRule` transforms one [`ExecutionPlan`] into another which
 /// computes the same results, but in a potentially more efficient way.
 ///
 /// Use [`SessionState::add_physical_optimizer_rule`] to register additional
@@ -92,13 +92,16 @@ pub trait PhysicalOptimizerRule: Debug {
     /// Rewrite `plan` to an optimized form with additional context
     ///
     /// This is the preferred method for implementing optimization rules as it
-    /// provides access to the full optimizer context including session configuration,
-    /// runtime environment, and extensions.
+    /// provides access to the full optimizer context including session configuration.
     ///
-    /// The default implementation delegates to [`optimize`](Self::optimize) for
+    /// The default implementation delegates to [`PhysicalOptimizerRule::optimize`] for
     /// backwards compatibility with existing implementations.
     ///
     /// New implementations should override this method instead of `optimize()`.
+    ///
+    /// Once [`PhysicalOptimizerRule::optimize`] is deprecated and removed, this
+    /// default implementation will be removed and all implementations will be
+    /// required to implement this method.
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -106,7 +109,7 @@ pub trait PhysicalOptimizerRule: Debug {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Default implementation: delegate to the old method for backwards compatibility
         #[allow(deprecated)]
-        self.optimize(plan, context.config_options())
+        self.optimize(plan, context.options())
     }
 
     /// Rewrite `plan` to an optimized form

@@ -162,7 +162,7 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.config_options();
+        let config = context.options();
         if config.optimizer.enable_distinct_aggregation_soft_limit {
             plan.transform_down(|plan| {
                 Ok(

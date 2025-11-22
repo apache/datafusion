@@ -490,8 +490,7 @@ impl TestConfig {
         // Add the ancillary output requirements operator at the start:
         let optimizer = OutputRequirements::new_add_mode();
         let session_config = SessionConfig::from(self.config.clone());
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let mut optimized = optimizer.optimize_plan(plan.clone(), &optimizer_context)?;
 
         // This file has 2 rules that use tree node, apply these rules to original plan consecutively
@@ -529,8 +528,7 @@ impl TestConfig {
 
         for run in optimizers_to_run {
             let session_config = SessionConfig::from(self.config.clone());
-            let optimizer_context =
-                OptimizerContext::new_from_session_config(&session_config);
+            let optimizer_context = OptimizerContext::new(session_config.clone());
             optimized = match run {
                 Run::Distribution => {
                     let optimizer = EnforceDistribution::new();
@@ -546,8 +544,7 @@ impl TestConfig {
         // Remove the ancillary output requirements operator when done:
         let optimizer = OutputRequirements::new_remove_mode();
         let session_config = SessionConfig::from(self.config.clone());
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized = optimizer.optimize_plan(optimized, &optimizer_context)?;
 
         Ok(optimized)
@@ -3382,7 +3379,7 @@ SortRequiredExec: [a@0 ASC]
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let dist_plan =
         EnforceDistribution::new().optimize_plan(physical_plan, &optimizer_context)?;
     // Since at the start of the rule ordering requirement is not satisfied
@@ -3421,7 +3418,7 @@ SortRequiredExec: [a@0 ASC]
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
     let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let dist_plan =
         EnforceDistribution::new().optimize_plan(physical_plan, &optimizer_context)?;
     // Since at the start of the rule ordering requirement is satisfied

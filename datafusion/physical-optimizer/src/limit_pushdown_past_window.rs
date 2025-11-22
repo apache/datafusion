@@ -75,7 +75,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
         original: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let config = context.config_options();
+        let config = context.options();
         if !config.optimizer.enable_window_limits {
             return Ok(original);
         }

@@ -2272,8 +2272,7 @@ impl DefaultPhysicalPlanner {
         InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
         // Create optimizer context from session state
-        let optimizer_context =
-            OptimizerContext::new_from_session_config(&session_state.config().clone());
+        let optimizer_context = OptimizerContext::new(session_state.config().clone());
 
         let mut new_plan = Arc::clone(&plan);
         for optimizer in optimizers {

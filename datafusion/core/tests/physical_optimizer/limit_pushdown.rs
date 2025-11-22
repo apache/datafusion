@@ -103,7 +103,7 @@ fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> 
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
@@ -130,7 +130,7 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
@@ -168,7 +168,7 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
@@ -202,7 +202,7 @@ fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
@@ -236,7 +236,7 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
@@ -280,7 +280,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
@@ -318,7 +318,7 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> R
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
@@ -350,7 +350,7 @@ fn merges_local_limit_with_local_limit() -> Result<()> {
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(parent_local_limit, &optimizer_context)?;
 
@@ -377,7 +377,7 @@ fn merges_global_limit_with_global_limit() -> Result<()> {
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(parent_global_limit, &optimizer_context)?;
 
@@ -404,7 +404,7 @@ fn merges_global_limit_with_local_limit() -> Result<()> {
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
@@ -431,7 +431,7 @@ fn merges_local_limit_with_global_limit() -> Result<()> {
     assert_eq!(initial, expected_initial);
 
     let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new_from_session_config(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
         LimitPushdown::new().optimize_plan(local_limit, &optimizer_context)?;
 
