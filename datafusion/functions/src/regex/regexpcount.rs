@@ -183,7 +183,7 @@ pub fn regexp_count_func(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// # Errors
 /// Returns an error if the input arrays have mismatched lengths or if the regular expression fails to compile.
-pub fn regexp_count(
+fn regexp_count(
     values: &dyn Array,
     regex_array: &dyn Datum,
     start_array: Option<&dyn Datum>,

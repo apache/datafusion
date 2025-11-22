@@ -32,6 +32,7 @@ use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
+#[derive(Copy, Clone)]
 pub(crate) enum TrimType {
     Left,
     Right,
@@ -48,7 +49,6 @@ impl Display for TrimType {
     }
 }
 
-#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn general_trim<T: OffsetSizeTrait>(
     args: &[ArrayRef],
     trim_type: TrimType,
