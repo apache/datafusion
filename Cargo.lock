@@ -2484,7 +2484,6 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-aggregate-common",
  "datafusion-physical-expr-common",
- "half",
  "hashbrown 0.14.5",
  "indexmap 2.12.0",
  "insta",
@@ -2528,6 +2527,8 @@ version = "51.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-datasource-parquet",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-expr-common",
@@ -2538,6 +2539,7 @@ dependencies = [
  "datafusion-pruning",
  "insta",
  "itertools 0.14.0",
+ "parking_lot",
  "recursive",
  "tokio",
 ]

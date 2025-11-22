@@ -288,6 +288,9 @@ pub struct ParquetSource {
     pub(crate) metadata_size_hint: Option<usize>,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
+    /// If true, read files in reverse order and reverse batches.
+    /// Used to optimize ORDER BY ... DESC on sorted data.
+    reverse_scan: bool,
 }
 
 impl ParquetSource {
@@ -308,6 +311,7 @@ impl ParquetSource {
             metadata_size_hint: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
+            reverse_scan: false,
         }
     }
 
@@ -479,6 +483,15 @@ impl ParquetSource {
             )),
         }
     }
+
+    pub fn with_reverse_scan(mut self, reverse_scan: bool) -> Self {
+        self.reverse_scan = reverse_scan;
+        self
+    }
+
+    pub fn reverse_scan(&self) -> bool {
+        self.reverse_scan
+    }
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -602,6 +615,7 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
+            reverse_scan: self.reverse_scan,
         })
     }
 
@@ -783,5 +797,88 @@ mod tests {
             ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
         // same value. but filter() call Arc::clone internally
         assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+    }
+
+    #[test]
+    fn test_reverse_scan_default_value() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+        let source = ParquetSource::new(schema);
+
+        assert!(!source.reverse_scan());
+    }
+
+    #[test]
+    fn test_reverse_scan_with_setter() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema.clone()).with_reverse_scan(true);
+        assert!(source.reverse_scan());
+
+        let source = source.with_reverse_scan(false);
+        assert!(!source.reverse_scan());
+    }
+
+    #[test]
+    fn test_reverse_scan_clone_preserves_value() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema).with_reverse_scan(true);
+        let cloned = source.clone();
+
+        assert!(cloned.reverse_scan());
+        assert_eq!(source.reverse_scan(), cloned.reverse_scan());
+    }
+
+    #[test]
+    fn test_reverse_scan_with_other_options() {
+        use arrow::datatypes::Schema;
+        use datafusion_common::config::TableParquetOptions;
+
+        let schema = Arc::new(Schema::empty());
+        let options = TableParquetOptions::default();
+
+        let source = ParquetSource::new(schema)
+            .with_table_parquet_options(options)
+            .with_metadata_size_hint(8192)
+            .with_reverse_scan(true);
+
+        assert!(source.reverse_scan());
+        assert_eq!(source.metadata_size_hint, Some(8192));
+    }
+
+    #[test]
+    fn test_reverse_scan_builder_pattern() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema)
+            .with_reverse_scan(true)
+            .with_reverse_scan(false)
+            .with_reverse_scan(true);
+
+        assert!(source.reverse_scan());
+    }
+
+    #[test]
+    fn test_reverse_scan_independent_of_predicate() {
+        use arrow::datatypes::Schema;
+        use datafusion_physical_expr::expressions::lit;
+
+        let schema = Arc::new(Schema::empty());
+        let predicate = lit(true);
+
+        let source = ParquetSource::new(schema)
+            .with_predicate(predicate)
+            .with_reverse_scan(true);
+
+        assert!(source.reverse_scan());
+        assert!(source.filter().is_some());
     }
 }
