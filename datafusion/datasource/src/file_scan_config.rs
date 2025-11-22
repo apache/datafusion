@@ -231,6 +231,7 @@ pub struct FileScanConfig {
 ///     // Build the final config
 ///     .build();
 /// # }
+/// # }
 /// ```
 #[derive(Clone)]
 pub struct FileScanConfigBuilder {
