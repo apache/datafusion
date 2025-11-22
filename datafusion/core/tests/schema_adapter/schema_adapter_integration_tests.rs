@@ -196,7 +196,7 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
 
     let config = FileScanConfigBuilder::new(store_url, file_source)
         .with_file(PartitionedFile::new(path, file_size))
-        .build()?;
+        .build();
 
     // Create a data source executor
     let exec = DataSourceExec::from_data_source(config);
@@ -252,7 +252,7 @@ async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
 
     let config = FileScanConfigBuilder::new(store_url, file_source)
         .with_file(PartitionedFile::new(path, file_size))
-        .build()?;
+        .build();
 
     // Create a data source executor
     let exec = DataSourceExec::from_data_source(config);

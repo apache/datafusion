@@ -493,8 +493,7 @@ fn test_apply_schema_adapter_with_factory() {
 
     let config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .build()
-            .unwrap();
+            .build();
 
     // Apply schema adapter to a new source
     let result_source = source.apply_schema_adapter(&config).unwrap();
@@ -538,8 +537,7 @@ fn test_apply_schema_adapter_without_factory() {
     // Create a file scan config without a schema adapter factory
     let config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .build()
-            .unwrap();
+            .build();
 
     // Apply schema adapter function - should pass through the source unchanged
     let result_source = source.apply_schema_adapter(&config).unwrap();

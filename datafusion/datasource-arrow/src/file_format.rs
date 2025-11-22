@@ -225,7 +225,7 @@ impl FileFormat for ArrowFormat {
 
         let config = FileScanConfigBuilder::from(conf)
             .with_source(source)
-            .build()?;
+            .build();
 
         Ok(DataSourceExec::from_data_source(config))
     }

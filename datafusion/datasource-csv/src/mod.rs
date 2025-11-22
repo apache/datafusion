@@ -39,7 +39,9 @@ pub fn partitioned_csv_config(
     file_groups: Vec<FileGroup>,
     file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
-    FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-        .with_file_groups(file_groups)
-        .build()
+    Ok(
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(file_groups)
+            .build(),
+    )
 }

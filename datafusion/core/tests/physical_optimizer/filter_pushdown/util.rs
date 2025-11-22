@@ -277,8 +277,7 @@ impl TestScanBuilder {
         let base_config =
             FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
                 .with_file(PartitionedFile::new("test.parquet", 123))
-                .build()
-                .unwrap();
+                .build();
         DataSourceExec::from_data_source(base_config)
     }
 }

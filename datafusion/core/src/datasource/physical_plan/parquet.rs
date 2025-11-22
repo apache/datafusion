@@ -198,8 +198,8 @@ mod tests {
                 FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
                     .with_file_group(file_group)
                     .with_projection_indices(self.projection.clone())
-                    .build()
-                    .unwrap();
+                    .unwrap()
+                    .build();
             DataSourceExec::from_data_source(base_config)
         }
 
@@ -1546,7 +1546,7 @@ mod tests {
                 Arc::new(ParquetSource::new(file_schema)),
             )
             .with_file_groups(file_groups)
-            .build()?;
+            .build();
 
             let parquet_exec = DataSourceExec::from_data_source(config);
             assert_eq!(
@@ -1665,8 +1665,8 @@ mod tests {
             .with_file(partitioned_file)
             // file has 10 cols so index 12 should be month and 13 should be day
             .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
-            .build()
-            .unwrap();
+            .unwrap()
+            .build();
 
         let parquet_exec = DataSourceExec::from_data_source(config);
         let partition_count = parquet_exec
@@ -1730,7 +1730,7 @@ mod tests {
             Arc::new(ParquetSource::new(file_schema)),
         )
         .with_file(partitioned_file)
-        .build()?;
+        .build();
 
         let parquet_exec = DataSourceExec::from_data_source(config);
 
@@ -2310,8 +2310,7 @@ mod tests {
                 extensions: None,
                 metadata_size_hint: None,
             })
-            .build()
-            .unwrap();
+            .build();
 
         let exec = DataSourceExec::from_data_source(config);
 

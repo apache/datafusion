@@ -108,7 +108,7 @@ pub fn scan_partitioned_csv(
     let config =
         FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .build()?;
+            .build();
     Ok(DataSourceExec::from_data_source(config))
 }
 

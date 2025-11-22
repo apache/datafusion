@@ -292,8 +292,7 @@ async fn execute_with_predicate(
             })
             .collect(),
     )
-    .build()
-    .unwrap();
+    .build();
     let exec = DataSourceExec::from_data_source(config);
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;

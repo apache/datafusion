@@ -87,7 +87,7 @@ fn csv_exec_sorted(
         builder = builder.with_output_ordering(vec![ordering]);
     }
 
-    let config = builder.build().unwrap();
+    let config = builder.build();
     DataSourceExec::from_data_source(config)
 }
 

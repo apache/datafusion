@@ -30,8 +30,8 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    internal_datafusion_err, ColumnStatistics, Constraints, Result, ScalarValue,
-    Statistics,
+    internal_datafusion_err, internal_err, ColumnStatistics, Constraints, Result,
+    ScalarValue, Statistics,
 };
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
@@ -236,7 +236,6 @@ pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
-    projection_indices: Option<Vec<usize>>,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
@@ -267,7 +266,6 @@ impl FileScanConfigBuilder {
             file_compression_type: None,
             new_lines_in_values: None,
             limit: None,
-            projection_indices: None,
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
@@ -301,15 +299,46 @@ impl FileScanConfigBuilder {
     /// Use [`Self::with_projection_indices`] instead. This method will be removed in a future release.
     #[deprecated(since = "51.0.0", note = "Use with_projection_indices instead")]
     pub fn with_projection(self, indices: Option<Vec<usize>>) -> Self {
-        self.with_projection_indices(indices)
+        match self.clone().with_projection_indices(indices) {
+            Ok(builder) => builder,
+            Err(e) => {
+                warn!("Failed to push down projection in FileScanConfigBuilder::with_projection: {}", e);
+                self
+            }
+        }
     }
 
     /// Set the columns on which to project the data using column indices.
     ///
     /// Indexes that are higher than the number of columns of `file_schema` refer to `table_partition_cols`.
-    pub fn with_projection_indices(mut self, indices: Option<Vec<usize>>) -> Self {
-        self.projection_indices = indices;
-        self
+    pub fn with_projection_indices(
+        mut self,
+        indices: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        let projection_exprs = indices.map(|indices| {
+            ProjectionExprs::from_indices(
+                &indices,
+                self.file_source.table_schema().table_schema(),
+            )
+        });
+        if let Some(projection_exprs) = projection_exprs {
+            let new_source = self.file_source
+                .try_pushdown_projection(&projection_exprs)
+                .map_err(|e| {
+                    internal_datafusion_err!(
+                        "Failed to push down projection in FileScanConfigBuilder::build: {e}"
+                    )
+                })?;
+            if let Some(new_source) = new_source {
+                self.file_source = new_source;
+            } else {
+                internal_err!(
+                    "FileSource {} does not support projection pushdown",
+                    self.file_source.file_type()
+                )?;
+            }
+        }
+        Ok(self)
     }
 
     /// Set the table constraints
@@ -406,12 +435,11 @@ impl FileScanConfigBuilder {
     ///
     /// # Errors
     /// Returns an error if projection pushdown fails or if schema operations fail.
-    pub fn build(self) -> Result<FileScanConfig> {
+    pub fn build(self) -> FileScanConfig {
         let Self {
             object_store_url,
-            mut file_source,
+            file_source,
             limit,
-            projection_indices,
             constraints,
             file_groups,
             statistics,
@@ -430,28 +458,7 @@ impl FileScanConfigBuilder {
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
 
-        // Convert projection indices to ProjectionExprs using the final table schema
-        // (which now includes partition columns if they were added)
-        let projection_exprs = projection_indices.map(|indices| {
-            ProjectionExprs::from_indices(
-                &indices,
-                file_source.table_schema().table_schema(),
-            )
-        });
-        if let Some(projection_exprs) = projection_exprs {
-            let new_source = file_source
-                .try_pushdown_projection(&projection_exprs)
-                .map_err(|e| {
-                    internal_datafusion_err!(
-                        "Failed to push down projection in FileScanConfigBuilder::build: {e}"
-                    )
-                })?;
-            if let Some(new_source) = new_source {
-                file_source = new_source;
-            }
-        }
-
-        Ok(FileScanConfig {
+        FileScanConfig {
             object_store_url,
             file_source,
             limit,
@@ -463,7 +470,7 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
-        })
+        }
     }
 }
 
@@ -478,7 +485,6 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             file_compression_type: Some(config.file_compression_type),
             new_lines_in_values: Some(config.new_lines_in_values),
             limit: config.limit,
-            projection_indices: None,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
@@ -669,8 +675,7 @@ impl DataSource for FileScanConfig {
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
         let source = FileScanConfigBuilder::from(self.clone())
             .with_limit(limit)
-            .build()
-            .ok()?;
+            .build();
         Some(Arc::new(source))
     }
 
@@ -1653,9 +1658,9 @@ mod tests {
             Arc::new(MockSource::new(table_schema.clone())),
         )
         .with_projection_indices(projection)
+        .unwrap()
         .with_statistics(statistics)
         .build()
-        .unwrap()
     }
 
     /// Convert partition columns from Vec<String DataType> to Vec<Field>
@@ -1693,6 +1698,7 @@ mod tests {
         let config = builder
             .with_limit(Some(1000))
             .with_projection_indices(Some(vec![0, 1]))
+            .unwrap()
             .with_statistics(Statistics::new_unknown(&file_schema))
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "test.parquet".to_string(),
@@ -1704,8 +1710,7 @@ mod tests {
             .into()])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .with_newlines_in_values(true)
-            .build()
-            .unwrap();
+            .build();
 
         // Verify the built config has all the expected values
         assert_eq!(config.object_store_url, object_store_url);
@@ -1756,8 +1761,8 @@ mod tests {
             Arc::clone(&file_source),
         )
         .with_projection_indices(Some(vec![0, 1, 2]))
-        .build()
-        .unwrap();
+        .unwrap()
+        .build();
 
         // Simulate projection being updated. Since the filter has already been pushed down,
         // the new projection won't include the filtered column.
@@ -1802,8 +1807,7 @@ mod tests {
             object_store_url.clone(),
             Arc::clone(&file_source),
         )
-        .build()
-        .unwrap();
+        .build();
 
         // Verify default values
         assert_eq!(config.object_store_url, object_store_url);
@@ -1870,18 +1874,18 @@ mod tests {
             Arc::clone(&file_source),
         )
         .with_projection_indices(Some(vec![0, 2]))
+        .unwrap()
         .with_limit(Some(10))
         .with_file(file.clone())
         .with_constraints(Constraints::default())
         .with_newlines_in_values(true)
-        .build()
-        .unwrap();
+        .build();
 
         // Create a new builder from the config
         let new_builder = FileScanConfigBuilder::from(original_config);
 
         // Build a new config from this builder
-        let new_config = new_builder.build().unwrap();
+        let new_config = new_builder.build();
 
         // Verify properties match
         let partition_cols = partition_cols.into_iter().map(Arc::new).collect::<Vec<_>>();
@@ -2114,10 +2118,10 @@ mod tests {
             ObjectStoreUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema.clone())),
         )
-        .with_projection_indices(Some(vec![0, 2])) // Only project columns 0 and 2
+        .with_projection_indices(Some(vec![0, 2]))
+        .unwrap() // Only project columns 0 and 2
         .with_file_groups(vec![file_group])
-        .build()
-        .unwrap();
+        .build();
 
         // Create a DataSourceExec from the config
         let exec = DataSourceExec::from_data_source(config);

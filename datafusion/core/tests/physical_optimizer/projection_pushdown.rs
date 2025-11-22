@@ -397,8 +397,8 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
         })
         .with_file(PartitionedFile::new("x".to_string(), 100))
         .with_projection_indices(Some(vec![0, 1, 2, 3, 4]))
-        .build()
-        .unwrap();
+        .unwrap()
+        .build();
 
     DataSourceExec::from_data_source(config)
 }
@@ -422,8 +422,8 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
         })
         .with_file(PartitionedFile::new("x".to_string(), 100))
         .with_projection_indices(Some(vec![3, 2, 1]))
-        .build()
-        .unwrap();
+        .unwrap()
+        .build();
 
     DataSourceExec::from_data_source(config)
 }
@@ -1604,8 +1604,8 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection_indices(Some(vec![0, 1, 2]))
-    .build()
-    .unwrap();
+    .unwrap()
+    .build();
 
     DataSourceExec::from_data_source(config)
 }

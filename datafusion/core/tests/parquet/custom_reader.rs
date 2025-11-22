@@ -92,8 +92,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         source,
     )
     .with_file_group(file_group)
-    .build()
-    .unwrap();
+    .build();
 
     let parquet_exec = DataSourceExec::from_data_source(base_config);
 

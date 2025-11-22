@@ -130,8 +130,7 @@ mod tests {
         let base_conf =
             FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
                 .with_file(partitioned_file)
-                .build()
-                .unwrap();
+                .build();
 
         let parquet_exec = DataSourceExec::from_data_source(base_conf);
 

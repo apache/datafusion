@@ -76,8 +76,7 @@ pub fn parquet_exec(schema: SchemaRef) -> Arc<DataSourceExec> {
         Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
-    .build()
-    .unwrap();
+    .build();
 
     DataSourceExec::from_data_source(config)
 }
@@ -93,8 +92,7 @@ pub(crate) fn parquet_exec_with_sort(
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
-    .build()
-    .unwrap();
+    .build();
 
     DataSourceExec::from_data_source(config)
 }
@@ -131,8 +129,7 @@ pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
     )
     .with_file(PartitionedFile::new("x".to_string(), file_size))
     .with_statistics(statistics)
-    .build()
-    .unwrap();
+    .build();
 
     assert_eq!(config.statistics().num_rows, Precision::Inexact(10000));
     DataSourceExec::from_data_source(config)

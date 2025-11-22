@@ -65,8 +65,7 @@ async fn multi_parquet_coercion() {
     let source = Arc::new(ParquetSource::new(file_schema.clone()));
     let conf = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
         .with_file_group(file_group)
-        .build()
-        .unwrap();
+        .build();
 
     let parquet_exec = DataSourceExec::from_data_source(conf);
 
@@ -123,8 +122,8 @@ async fn multi_parquet_coercion_projection() {
     )
     .with_file_group(file_group)
     .with_projection_indices(Some(vec![1, 0, 2]))
-    .build()
-    .unwrap();
+    .unwrap()
+    .build();
 
     let parquet_exec = DataSourceExec::from_data_source(config);
 

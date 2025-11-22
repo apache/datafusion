@@ -71,10 +71,10 @@ async fn csv_opener() -> Result<()> {
 
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
-            .with_projection_indices(Some(vec![12, 0]))
+            .with_projection_indices(Some(vec![12, 0]))?
             .with_limit(Some(5))
             .with_file(PartitionedFile::new(path.display().to_string(), 10))
-            .build()?;
+            .build();
 
     let opener =
         scan_config
@@ -133,10 +133,10 @@ async fn json_opener() -> Result<()> {
         ObjectStoreUrl::local_filesystem(),
         Arc::new(JsonSource::new(schema)),
     )
-    .with_projection_indices(Some(vec![1, 0]))
+    .with_projection_indices(Some(vec![1, 0]))?
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.to_string(), 10))
-    .build()?;
+    .build();
 
     let mut stream = FileStream::new(
         &scan_config,

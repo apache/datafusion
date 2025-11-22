@@ -585,8 +585,7 @@ mod tests {
             )
             .with_file_group(file_group)
             .with_limit(self.limit)
-            .build()
-            .unwrap();
+            .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream =
                 FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)
