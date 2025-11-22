@@ -61,7 +61,7 @@ use datafusion::prelude::{
 };
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
-    test_table_with_name,
+    test_table_with_cache_factory, test_table_with_name,
 };
 use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
@@ -2332,6 +2332,29 @@ async fn cache_test() -> Result<()> {
 
     assert_eq!(&df_results, &cached_df_results);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn cache_producer_test() -> Result<()> {
+    let df = test_table_with_cache_factory()
+        .await?
+        .select_columns(&["c2", "c3"])?
+        .limit(0, Some(1))?
+        .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
+
+    let cached_df = df.clone().cache().await?;
+
+    assert_snapshot!(
+        cached_df.clone().into_optimized_plan().unwrap(),
+        @r###"
+    CacheNode
+      Projection: aggregate_test_100.c2, aggregate_test_100.c3, CAST(CAST(aggregate_test_100.c2 AS Int64) + CAST(aggregate_test_100.c3 AS Int64) AS Int64) AS sum
+        Projection: aggregate_test_100.c2, aggregate_test_100.c3
+          Limit: skip=0, fetch=1
+            TableScan: aggregate_test_100, fetch=1
+    "###
+    );
     Ok(())
 }
 
