@@ -443,9 +443,7 @@ impl BatchPartitioner {
                     num_partitions,
                     // Distribute starting index evenly based on input partition, number of input partitions and number of partitions
                     // to avoid they all start at partition 0 and heavily skew on the lower partitions
-                    next_idx: (input_partition as f64
-                        * (num_partitions as f64 / num_input_partitions as f64))
-                        as usize
+                    next_idx: ((input_partition * num_partitions) / num_input_partitions)
                         % num_partitions,
                 }
             }
