@@ -24,16 +24,28 @@ use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use arrow::array::RecordBatch;
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_physical_expr::expressions::{Column, Literal};
+use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+use datafusion_physical_expr::ScalarFunctionExpr;
+use parquet::schema::types::{ColumnPath, SchemaDescriptor};
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -62,8 +74,12 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 pub(super) struct ParquetOpener {
     /// Execution partition index
     pub partition_index: usize,
-    /// Column indexes in `table_schema` needed by the query
-    pub projection: Arc<[usize]>,
+    /// Projection to apply to the logical file schema.
+    ///
+    /// Note that this projection may not be applied directly:
+    /// - Casts may be optimized away by reading the column into the required data type directly
+    /// - Struct access will be pushed down
+    pub projection: ProjectionExprs,
     /// Target number of rows in each output RecordBatch
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
@@ -136,13 +152,9 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
-        let projected_schema =
-            SchemaRef::from(self.logical_file_schema.project(&self.projection)?);
         let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
-        let schema_adapter = self
-            .schema_adapter_factory
-            .create(projected_schema, Arc::clone(&self.logical_file_schema));
         let mut predicate = self.predicate.clone();
+        let mut projections = self.projection.clone();
         let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let partition_fields = self.partition_fields.clone();
         let reorder_predicates = self.reorder_filters;
@@ -265,19 +277,19 @@ impl FileOpener for ParquetOpener {
             // Adapt the predicate to the physical file schema.
             // This evaluates missing columns and inserts any necessary casts.
             if let Some(expr_adapter_factory) = expr_adapter_factory {
+                let partition_values = partition_fields
+                    .iter()
+                    .cloned()
+                    .zip(partitioned_file.partition_values.clone())
+                    .collect_vec();
                 predicate = predicate
                     .map(|p| {
-                        let partition_values = partition_fields
-                            .iter()
-                            .cloned()
-                            .zip(partitioned_file.partition_values.clone())
-                            .collect_vec();
                         let expr = expr_adapter_factory
                             .create(
                                 Arc::clone(&logical_file_schema),
                                 Arc::clone(&physical_file_schema),
                             )
-                            .with_partition_values(partition_values)
+                            .with_partition_values(partition_values.clone())
                             .rewrite(p)?;
                         // After rewriting to the file schema, further simplifications may be possible.
                         // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
@@ -286,6 +298,24 @@ impl FileOpener for ParquetOpener {
                     })
                     .transpose()?;
                 predicate_file_schema = Arc::clone(&physical_file_schema);
+                // Now transform projections
+                let mut new_projections = Vec::new();
+                for projection in projections {
+                    let mut expr = expr_adapter_factory
+                        .create(
+                            Arc::clone(&logical_file_schema),
+                            Arc::clone(&physical_file_schema),
+                        )
+                        .with_partition_values(partition_values.clone())
+                        .rewrite(Arc::clone(&projection.expr))?;
+                    // After rewriting to the file schema, further simplifications may be possible.
+                    // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+                    // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
+                    expr = PhysicalExprSimplifier::new(&physical_file_schema)
+                        .simplify(expr)?;
+                    new_projections.push(ProjectionExpr::new(expr, projection.alias));
+                }
+                projections = ProjectionExprs::new(new_projections);
             }
 
             // Build predicates for this specific file
@@ -308,19 +338,14 @@ impl FileOpener for ParquetOpener {
                 .await?;
             }
 
+            let mask =
+                build_projection_mask(&projections, reader_metadata.parquet_schema())?;
+
             metadata_timer.stop();
 
             let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
                 async_file_reader,
                 reader_metadata,
-            );
-
-            let (schema_mapping, adapted_projections) =
-                schema_adapter.map_schema(&physical_file_schema)?;
-
-            let mask = ProjectionMask::roots(
-                builder.parquet_schema(),
-                adapted_projections.iter().cloned(),
             );
 
             // Filter pushdown: evaluate predicates during scan
@@ -443,7 +468,7 @@ impl FileOpener for ParquetOpener {
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
             let stream = builder
-                .with_projection(mask)
+                .with_projection(mask.mask)
                 .with_batch_size(batch_size)
                 .with_row_groups(row_group_indexes)
                 .with_metrics(arrow_reader_metrics.clone())
@@ -455,6 +480,8 @@ impl FileOpener for ParquetOpener {
                 file_metrics.predicate_cache_inner_records.clone();
             let predicate_cache_records = file_metrics.predicate_cache_records.clone();
 
+            let projector = mask.projection.make_projector(stream.schema())?;
+
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
                 b.and_then(|b| {
                     copy_arrow_reader_metrics(
@@ -462,7 +489,7 @@ impl FileOpener for ParquetOpener {
                         &predicate_cache_inner_records,
                         &predicate_cache_records,
                     );
-                    schema_mapping.map_batch(b)
+                    projector.project_batch(&b)
                 })
             });
 
@@ -494,6 +521,165 @@ fn copy_arrow_reader_metrics(
     if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
         predicate_cache_records.add(v);
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ColumnPathPlaceholder {
+    path: ColumnPath,
+}
+
+impl std::fmt::Display for ColumnPathPlaceholder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let col = self.path.parts().join(".");
+        f.write_str(&col)
+    }
+}
+
+impl PhysicalExpr for ColumnPathPlaceholder {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        unimplemented!()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let col = self.path.parts().join(".");
+        f.write_str(&col)
+    }
+
+    fn evaluate(&self, _batch: &RecordBatch) -> Result<datafusion_expr::ColumnarValue> {
+        unimplemented!()
+    }
+}
+
+struct ParquetProjection {
+    mask: ProjectionMask,
+    projection: ProjectionExprs,
+}
+
+/// Iterate through all of the expressions in this [`ProjectionExprs`] and:
+/// 1. For each column reference or struct field access find the appropriate leaf column in the Parquet schema.
+/// 2. Rewrite the column reference or struct field access to match the index that will be read out of the Parquet stream.
+/// 3. Add this column to the Parquet ProjectionMask.
+fn build_projection_mask(
+    projections: &ProjectionExprs,
+    schema: &SchemaDescriptor,
+) -> Result<ParquetProjection> {
+    let mut projections = projections.iter().cloned().collect_vec();
+    // First pass: transform the expressions *bottoms up* by replacing any columns with a column path placeholder
+    // and flattening any nested struct field access into column path placeholders.
+    for projection in projections.iter_mut() {
+        projection.expr = Arc::clone(&projection.expr)
+            .transform_up(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    let path = ColumnPath::new(vec![col.name().to_string()]);
+                    Ok(Transformed::yes(Arc::new(ColumnPathPlaceholder {
+                        path: path,
+                    })))
+                } else if let Some(func) = e.as_any().downcast_ref::<ScalarFunctionExpr>()
+                {
+                    if func.name() == "get_field" {
+                        let args = func.args();
+                        if args.len() == 2 {
+                            let input = Arc::clone(&args[0]);
+                            let field = Arc::clone(&args[1]);
+                            if let Some(lit) = field.as_any().downcast_ref::<Literal>() {
+                                if let ScalarValue::Utf8(Some(field_name))
+                                | ScalarValue::Utf8View(Some(field_name))
+                                | ScalarValue::LargeUtf8(Some(field_name)) =
+                                    lit.value()
+                                {
+                                    if let Some(path) = input
+                                        .as_any()
+                                        .downcast_ref::<ColumnPathPlaceholder>(
+                                    ) {
+                                        // Merge the paths, replace the entire expression
+                                        let mut new_path = path.path.clone();
+                                        new_path.append(vec![field_name.to_string()]);
+                                        Ok(Transformed::yes(Arc::new(
+                                            ColumnPathPlaceholder { path: new_path },
+                                        )))
+                                    } else {
+                                        Ok(Transformed::no(e))
+                                    }
+                                } else {
+                                    Ok(Transformed::no(e))
+                                }
+                            } else {
+                                Ok(Transformed::no(e))
+                            }
+                        } else {
+                            Ok(Transformed::no(e))
+                        }
+                    } else {
+                        Ok(Transformed::no(e))
+                    }
+                } else {
+                    Ok(Transformed::no(e))
+                }
+            })
+            .data()?;
+    }
+
+    // Now do another pass to collect the ColumnPath's that persisted
+    let mut column_paths = HashSet::new();
+    for projection in projections.iter() {
+        let expr = Arc::clone(&projection.expr);
+        expr.apply(|e| {
+            if let Some(path) = e.as_any().downcast_ref::<ColumnPathPlaceholder>() {
+                column_paths.insert(path.path.clone());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+
+    // Build the Parquet ProjectionMask and new columns that point to it
+    let mut path_to_expr = HashMap::new();
+    let mut leaves = Vec::new();
+    for (idx, column) in schema.columns().iter().enumerate() {
+        if column_paths.contains(column.path()) {
+            let expr = Arc::new(Column::new(&column.path().string(), leaves.len()))
+                as Arc<dyn PhysicalExpr>;
+            path_to_expr.insert(column.path(), expr);
+            leaves.push(idx);
+        }
+    }
+    let mask = ProjectionMask::leaves(schema, leaves);
+
+    // Final pass: replace all of the placeholders with new column references
+    for projection in projections.iter_mut() {
+        projection.expr = Arc::clone(&projection.expr)
+            .transform_up(|e| {
+                if let Some(path) = e.as_any().downcast_ref::<ColumnPathPlaceholder>() {
+                    let expr =
+                        Arc::clone(path_to_expr.get(&path.path).ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "Column path {} not found in file",
+                                path.path.string()
+                            )
+                        })?);
+                    Ok(Transformed::yes(expr))
+                } else {
+                    Ok(Transformed::no(e))
+                }
+            })
+            .data()?;
+    }
+    let projection = ProjectionExprs::new(projections);
+    Ok(ParquetProjection { mask, projection })
 }
 
 /// Wraps an inner RecordBatchStream and a [`FilePruner`]
@@ -653,7 +839,7 @@ impl ParquetOpener {
 /// Note: file_name is only used for error messages
 fn create_initial_plan(
     file_name: &str,
-    extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    extensions: Option<Arc<dyn Any + Send + Sync>>,
     row_group_count: usize,
 ) -> Result<ParquetAccessPlan> {
     if let Some(extensions) = extensions {
@@ -775,7 +961,8 @@ mod test {
     };
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical, PhysicalExpr,
+        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
+        projection::ProjectionExprs, PhysicalExpr,
     };
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -874,7 +1061,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0, 1]),
+                projection: ProjectionExprs::from_indices(&[0, 1], &schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -943,7 +1130,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &file_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1032,7 +1219,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &file_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1124,7 +1311,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &file_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1216,7 +1403,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &file_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1370,7 +1557,7 @@ mod test {
 
         let make_opener = |predicate| ParquetOpener {
             partition_index: 0,
-            projection: Arc::new([0, 1]),
+            projection: ProjectionExprs::from_indices(&[0, 1], &table_schema),
             batch_size: 1024,
             limit: None,
             predicate: Some(predicate),
