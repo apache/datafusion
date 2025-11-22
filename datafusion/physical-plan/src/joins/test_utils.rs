@@ -534,9 +534,11 @@ pub fn create_memory_table(
     let right_schema = right_partition[0].schema();
     let right = TestMemoryExec::try_new(&[right_partition], right_schema, None)?
         .try_with_sort_information(right_sorted)?;
+    let left = Arc::new(left);
+    let right = Arc::new(right);
     Ok((
-        Arc::new(TestMemoryExec::update_cache(Arc::new(left))),
-        Arc::new(TestMemoryExec::update_cache(Arc::new(right))),
+        Arc::new(TestMemoryExec::update_cache(&left)),
+        Arc::new(TestMemoryExec::update_cache(&right)),
     ))
 }
 

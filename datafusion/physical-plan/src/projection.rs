@@ -480,7 +480,7 @@ pub fn try_pushdown_through_join(
     join_left: &Arc<dyn ExecutionPlan>,
     join_right: &Arc<dyn ExecutionPlan>,
     join_on: JoinOnRef,
-    schema: SchemaRef,
+    schema: &SchemaRef,
     filter: Option<&JoinFilter>,
 ) -> Result<Option<JoinData>> {
     // Convert projected expressions to columns. We can not proceed if this is not possible.
@@ -493,7 +493,7 @@ pub fn try_pushdown_through_join(
 
     if !join_allows_pushdown(
         &projection_as_columns,
-        &schema,
+        schema,
         far_right_left_col_ind,
         far_left_right_col_ind,
     ) {

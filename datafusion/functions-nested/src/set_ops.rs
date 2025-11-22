@@ -327,7 +327,7 @@ fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum SetOp {
     Union,
     Intersect,
