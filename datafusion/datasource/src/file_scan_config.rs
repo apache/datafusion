@@ -112,6 +112,7 @@ use log::{debug, warn};
 /// let config = FileScanConfigBuilder::new(object_store_url, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
 ///   .with_projection_indices(Some(vec![2, 3])) // project columns 2 and 3
+///   .expect("Failed to push down projection")
 ///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
 ///   .with_file(PartitionedFile::new("file1.parquet", 1234))
 ///   // Read /tmp/file2.parquet 56 bytes and /tmp/file3.parquet 78 bytes
@@ -219,6 +220,7 @@ pub struct FileScanConfig {
 ///     .with_limit(Some(1000))
 ///     // Project only the first column
 ///     .with_projection_indices(Some(vec![0]))
+///     .expect("Failed to push down projection")
 ///     // Add a file group with two files
 ///     .with_file_group(FileGroup::new(vec![
 ///         PartitionedFile::new("data/date=2024-01-01/file1.parquet", 1024),
@@ -228,7 +230,6 @@ pub struct FileScanConfig {
 ///     .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
 ///     // Build the final config
 ///     .build();
-/// # }
 /// # }
 /// ```
 #[derive(Clone)]
