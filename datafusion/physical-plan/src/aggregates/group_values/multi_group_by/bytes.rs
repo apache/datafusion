@@ -24,9 +24,9 @@ use arrow::array::{
     GenericBinaryArray, GenericByteArray, GenericStringArray, OffsetSizeTrait,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
+use arrow::datatypes::{ArrowNativeType, ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
-use datafusion_common::{exec_datafusion_err, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
 use itertools::izip;
 use std::mem::size_of;
@@ -167,6 +167,75 @@ where
                 let new_len = self.offsets.len() + rows.len();
                 let offset = self.buffer.len();
                 self.offsets.resize(new_len, O::usize_as(offset));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn append_array_slice_inner<B>(
+        &mut self,
+        array: &ArrayRef,
+        start: usize,
+        length: usize,
+    ) -> Result<()>
+    where
+        B: ByteArrayType,
+    {
+        let array = array.as_bytes::<B>();
+
+        let offsets = array.offsets();
+        let bytes = array.value_data();
+
+        // Is the slice all nulls
+        let all_nulls: bool;
+
+        // 1. Append the nulls
+        if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+            let nulls_slice = nulls.slice(start, length);
+            all_nulls = nulls_slice.null_count() == length;
+            self.nulls.append_buffer(&nulls_slice);
+        } else {
+            all_nulls = false;
+            self.nulls.append_n(length, false);
+        }
+
+        let values_start = offsets[start].as_usize();
+        let values_end = offsets[start + length].as_usize();
+
+        // 2. Append the offsets
+
+        if all_nulls {
+            let last_offset = self.buffer.len();
+
+            // If all nulls, we can just repeat the last offset
+            self.offsets
+                .extend(std::iter::repeat_n(O::usize_as(last_offset), length));
+        } else {
+            let new_base = self.buffer.len();
+            let old_base = offsets[start].as_usize();
+
+            self.offsets.extend(
+                offsets[start + 1..start + length + 1]
+                    .iter()
+                    .map(|&offset| O::usize_as(new_base + offset.as_usize() - old_base)),
+            );
+        }
+
+        // 3. Append the bytes
+
+        // Only if not all nulls append the actual bytes
+        if !all_nulls {
+            // Note: if the array have nulls we might copy some bytes that are not used.
+
+            // Add all the bytes for the values directly to the byte buffer
+            self.buffer.append_slice(&bytes[values_start..values_end]);
+
+            if self.buffer.len() > self.max_buffer_size {
+                return exec_err!(
+                    "offset overflow, buffer size > {}",
+                    self.max_buffer_size
+                );
             }
         }
 
@@ -322,6 +391,41 @@ where
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
                 self.vectorized_append_inner::<GenericStringType<O>>(column, rows)?
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
+
+        Ok(())
+    }
+
+    fn support_append_array_slice(&self) -> bool {
+        true
+    }
+
+    fn append_array_slice(
+        &mut self,
+        column: &ArrayRef,
+        start: usize,
+        length: usize,
+    ) -> Result<()> {
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.append_array_slice_inner::<GenericBinaryType<O>>(
+                    column, start, length,
+                )?
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.append_array_slice_inner::<GenericStringType<O>>(
+                    column, start, length,
+                )?
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };
