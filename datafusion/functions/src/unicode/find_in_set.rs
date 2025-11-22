@@ -149,21 +149,21 @@ impl ScalarUDFImpl for FindInSetFunc {
                                 let string_array = str_array.as_string::<i32>();
                                 find_in_set_right_literal::<Int32Type, _>(
                                     string_array,
-                                    str_list,
+                                    &str_list,
                                 )
                             }
                             DataType::LargeUtf8 => {
                                 let string_array = str_array.as_string::<i64>();
                                 find_in_set_right_literal::<Int64Type, _>(
                                     string_array,
-                                    str_list,
+                                    &str_list,
                                 )
                             }
                             DataType::Utf8View => {
                                 let string_array = str_array.as_string_view();
                                 find_in_set_right_literal::<Int32Type, _>(
                                     string_array,
-                                    str_list,
+                                    &str_list,
                                 )
                             }
                             other => {
@@ -194,15 +194,21 @@ impl ScalarUDFImpl for FindInSetFunc {
                         let result = match str_list_array.data_type() {
                             DataType::Utf8 => {
                                 let str_list = str_list_array.as_string::<i32>();
-                                find_in_set_left_literal::<Int32Type, _>(string, str_list)
+                                find_in_set_left_literal::<Int32Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             DataType::LargeUtf8 => {
                                 let str_list = str_list_array.as_string::<i64>();
-                                find_in_set_left_literal::<Int64Type, _>(string, str_list)
+                                find_in_set_left_literal::<Int64Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             DataType::Utf8View => {
                                 let str_list = str_list_array.as_string_view();
-                                find_in_set_left_literal::<Int32Type, _>(string, str_list)
+                                find_in_set_left_literal::<Int32Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             other => {
                                 exec_err!("Unsupported data type {other:?} for function find_in_set")
@@ -216,7 +222,7 @@ impl ScalarUDFImpl for FindInSetFunc {
 
             // both inputs are arrays
             (ColumnarValue::Array(base_array), ColumnarValue::Array(exp_array)) => {
-                let res = find_in_set(base_array, exp_array)?;
+                let res = find_in_set(&base_array, &exp_array)?;
 
                 Ok(ColumnarValue::Array(res))
             }
@@ -234,7 +240,7 @@ impl ScalarUDFImpl for FindInSetFunc {
 /// Returns a value in the range of 1 to N if the string `str` is in the string list `strlist`
 /// consisting of N substrings. A string list is a string composed of substrings separated by `,`
 /// characters.
-fn find_in_set(str: ArrayRef, str_list: ArrayRef) -> Result<ArrayRef> {
+fn find_in_set(str: &ArrayRef, str_list: &ArrayRef) -> Result<ArrayRef> {
     match str.data_type() {
         DataType::Utf8 => {
             let string_array = str.as_string::<i32>();
@@ -289,10 +295,7 @@ where
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
-fn find_in_set_left_literal<'a, T, V>(
-    string: String,
-    str_list_array: V,
-) -> Result<ArrayRef>
+fn find_in_set_left_literal<'a, T, V>(string: &str, str_list_array: V) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
@@ -318,7 +321,7 @@ where
 
 fn find_in_set_right_literal<'a, T, V>(
     string_array: V,
-    str_list: Vec<&str>,
+    str_list: &[&str],
 ) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,

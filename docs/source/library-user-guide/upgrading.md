@@ -25,6 +25,87 @@
 
 You can see the current [status of the `52.0.0` release here](https://github.com/apache/datafusion/issues/18566)
 
+### Statistics handling moved from `FileSource` to `FileScanConfig`
+
+Statistics are now managed directly by `FileScanConfig` instead of being delegated to `FileSource` implementations. This simplifies the `FileSource` trait and provides more consistent statistics handling across all file formats.
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations
+
+**Breaking changes:**
+
+Two methods have been removed from the `FileSource` trait:
+
+- `with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>`
+- `statistics(&self) -> Result<Statistics>`
+
+**Migration guide:**
+
+If you have a custom `FileSource` implementation, you need to:
+
+1. Remove the `with_statistics` method implementation
+2. Remove the `statistics` method implementation
+3. Remove any internal state that was storing statistics
+
+**Before:**
+
+```rust,ignore
+#[derive(Clone)]
+struct MyCustomSource {
+    table_schema: TableSchema,
+    projected_statistics: Option<Statistics>,
+    // other fields...
+}
+
+impl FileSource for MyCustomSource {
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            table_schema: self.table_schema.clone(),
+            projected_statistics: Some(statistics),
+            // other fields...
+        })
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone().unwrap_or_else(||
+            Statistics::new_unknown(self.table_schema.file_schema())
+        ))
+    }
+
+    // other methods...
+}
+```
+
+**After:**
+
+```rust,ignore
+#[derive(Clone)]
+struct MyCustomSource {
+    table_schema: TableSchema,
+    // projected_statistics field removed
+    // other fields...
+}
+
+impl FileSource for MyCustomSource {
+    // with_statistics method removed
+    // statistics method removed
+
+    // other methods...
+}
+```
+
+**Accessing statistics:**
+
+Statistics are now accessed through `FileScanConfig` instead of `FileSource`:
+
+```diff
+- let stats = config.file_source.statistics()?;
++ let stats = config.statistics();
+```
+
+Note that `FileScanConfig::statistics()` automatically marks statistics as inexact when filters are present, ensuring correctness when filters are pushed down.
+
 ### Planner now requires explicit opt-in for WITHIN GROUP syntax
 
 The SQL planner now enforces the aggregate UDF contract more strictly: the
@@ -66,6 +147,10 @@ SELECT median(c1) IGNORE NULLS FROM table
 ```
 
 Instead of silently succeeding.
+
+### API change for `CacheAccessor` trait
+
+The remove API no longer requires a mutable instance
 
 ## DataFusion `51.0.0`
 

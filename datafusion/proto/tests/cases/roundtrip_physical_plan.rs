@@ -53,7 +53,7 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup,
-    FileScanConfigBuilder, FileSinkConfig, FileSource, ParquetSource,
+    FileScanConfigBuilder, FileSinkConfig, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
@@ -1805,8 +1805,7 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let statistics = Statistics::new_unknown(&schema);
 
-    let file_source =
-        ParquetSource::new(Arc::clone(&schema)).with_statistics(statistics.clone());
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
