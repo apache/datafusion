@@ -314,6 +314,10 @@ datafusion.optimizer.repartition_sorts true
 datafusion.optimizer.repartition_windows true
 datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
+datafusion.runtime.max_temp_directory_size 100G
+datafusion.runtime.memory_limit unlimited
+datafusion.runtime.metadata_cache_limit 50M
+datafusion.runtime.temp_directory NULL
 datafusion.sql_parser.collect_spans false
 datafusion.sql_parser.default_null_ordering nulls_max
 datafusion.sql_parser.dialect generic
@@ -436,6 +440,10 @@ datafusion.optimizer.repartition_sorts true Should DataFusion execute sorts in a
 datafusion.optimizer.repartition_windows true Should DataFusion repartition data using the partitions keys to execute window functions in parallel using the provided `target_partitions` level
 datafusion.optimizer.skip_failed_rules false When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
+datafusion.runtime.max_temp_directory_size 100G Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
+datafusion.runtime.memory_limit unlimited Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
+datafusion.runtime.metadata_cache_limit 50M Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
+datafusion.runtime.temp_directory NULL The path to the temporary file directory.
 datafusion.sql_parser.collect_spans false When set to true, the source locations relative to the original SQL query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected and recorded in the logical plan nodes.
 datafusion.sql_parser.default_null_ordering nulls_max Specifies the default null ordering for query results. There are 4 options: - `nulls_max`: Nulls appear last in ascending order. - `nulls_min`: Nulls appear first in ascending order. - `nulls_first`: Nulls always be first in any order. - `nulls_last`: Nulls always be last in any order. By default, `nulls_max` is used to follow Postgres's behavior. postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
