@@ -113,9 +113,8 @@ logical_plan
 01)Filter: table_with_map.int_field > Int64(0)
 02)--TableScan: table_with_map projection=[int_field, map_field]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: int_field@0 > 0
-03)----DataSourceExec: partitions=1, partition_sizes=[0]
+01)FilterExec: int_field@0 > 0
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
 drop table table_with_map;
@@ -233,7 +232,7 @@ SELECT map(column5, column6) FROM duplicate_keys_table;
 
 # key is a nested type
 query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[1, 2\]
-SELECT MAP([[1,2], [1,2], [NULL]], [41, 33, null]);
+SELECT MAP([[1,2], [1,2]], [41, 33]);
 
 query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[\{1:1\}\]
 SELECT MAP([Map {1:'1'}, Map {1:'1'}, Map {2:'2'}], [41, 33, null]);
@@ -544,11 +543,19 @@ SELECT (CASE WHEN 1 > 0 THEN MAP {'x': 100} ELSE MAP {'y': 200} END)['x'];
 ----
 100
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
-# ----
-# 1
+# fix accessing map with nested key
+query I
+SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
+----
+1
+
+query I
+SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {2:'b', 1:'a'}];
+----
+NULL
+
+# TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with empty map as key
+# TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with null map as key
 
 # accessing map with non-string key
 query I

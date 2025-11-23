@@ -511,7 +511,7 @@ x y [30, 40, 50]
 query error DataFusion error: type_coercion\ncaused by\nThis feature is not implemented: Unnest should be rewritten to LogicalPlan::Unnest before type coercion
 select sum(unnest(generate_series(1,10)));
 
-query error DataFusion error: Internal error: unnest on struct can only be applied at the root level of select expression
+query error DataFusion error: Internal error: Assertion failed: struct_allowed: unnest on struct can only be applied at the root level of select expression
 select arrow_typeof(unnest(column5)) from unnest_table;
 
 query T
@@ -799,7 +799,7 @@ query error DataFusion error: Error during planning: Column in SELECT must be in
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
 
 # TODO: this query should work. see issue: https://github.com/apache/datafusion/issues/12794
-query error DataFusion error: Internal error: unnest on struct can only be applied at the root level of select expression
+query error DataFusion error: Internal error: Assertion failed: struct_allowed: unnest on struct can only be applied at the root level of select expression
 select unnest(column1) c1 from nested_unnest_table
 
 query II??I??
@@ -968,7 +968,7 @@ physical_plan
 07)------------ProjectionExec: expr=[generated_id@0 as generated_id, __unnest_placeholder(make_array(range().value),depth=1)@1 as ar]
 08)--------------UnnestExec
 09)----------------ProjectionExec: expr=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as generated_id, make_array(value@0) as __unnest_placeholder(make_array(range().value))]
-10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 11)--------------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 12)----------------------LazyMemoryExec: partitions=1, batch_generators=[range: start=1, end=5, batch_size=8192]
 

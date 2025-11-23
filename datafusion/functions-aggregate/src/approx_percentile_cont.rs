@@ -164,7 +164,7 @@ impl ApproxPercentileCont {
 
     pub(crate) fn create_accumulator(
         &self,
-        args: AccumulatorArgs,
+        args: &AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
         let percentile =
             validate_percentile_expr(&args.exprs[1], "APPROX_PERCENTILE_CONT")?;
@@ -300,7 +300,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
 
     #[inline]
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(self.create_accumulator(acc_args)?))
+        Ok(Box::new(self.create_accumulator(&acc_args)?))
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -313,10 +313,6 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             );
         }
         Ok(arg_types[0].clone())
-    }
-
-    fn supports_null_handling_clause(&self) -> bool {
-        false
     }
 
     fn supports_within_group_clause(&self) -> bool {

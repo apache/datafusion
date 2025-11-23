@@ -23,7 +23,7 @@
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::DataFusionError;
 use datafusion_common::{sql_err, Diagnostic, Span};
-use sqlparser::ast::{ExprWithAlias, OrderByOptions};
+use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -259,6 +259,21 @@ impl fmt::Display for CreateExternalTable {
     }
 }
 
+/// DataFusion extension for `RESET`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResetStatement {
+    /// Reset a single configuration variable (stored as provided)
+    Variable(ObjectName),
+}
+
+impl fmt::Display for ResetStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ResetStatement::Variable(name) => write!(f, "RESET {name}"),
+        }
+    }
+}
+
 /// DataFusion SQL Statement.
 ///
 /// This can either be a [`Statement`] from [`sqlparser`] from a
@@ -276,6 +291,8 @@ pub enum Statement {
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
     Explain(ExplainStatement),
+    /// Extension: `RESET`
+    Reset(ResetStatement),
 }
 
 impl fmt::Display for Statement {
@@ -285,6 +302,7 @@ impl fmt::Display for Statement {
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
+            Statement::Reset(stmt) => write!(f, "{stmt}"),
         }
     }
 }
@@ -456,7 +474,7 @@ impl<'a> DFParser<'a> {
                 break;
             }
             if expecting_statement_delimiter {
-                return self.expected("end of statement", self.parser.peek_token());
+                return self.expected("end of statement", &self.parser.peek_token());
             }
 
             let statement = self.parse_statement()?;
@@ -470,7 +488,7 @@ impl<'a> DFParser<'a> {
     fn expected<T>(
         &self,
         expected: &str,
-        found: TokenWithSpan,
+        found: &TokenWithSpan,
     ) -> Result<T, DataFusionError> {
         let sql_parser_span = found.span;
         let span = Span::try_from_sqlparser_span(sql_parser_span);
@@ -488,11 +506,11 @@ impl<'a> DFParser<'a> {
     fn expect_token(
         &mut self,
         expected: &str,
-        token: Token,
+        token: &Token,
     ) -> Result<(), DataFusionError> {
         let next_token = self.parser.peek_token_ref();
-        if next_token.token != token {
-            self.expected(expected, next_token.clone())
+        if next_token.token != *token {
+            self.expected(expected, next_token)
         } else {
             Ok(())
         }
@@ -520,6 +538,10 @@ impl<'a> DFParser<'a> {
                     Keyword::EXPLAIN => {
                         self.parser.next_token(); // EXPLAIN
                         self.parse_explain()
+                    }
+                    Keyword::RESET => {
+                        self.parser.next_token(); // RESET
+                        self.parse_reset()
                     }
                     _ => {
                         // use sqlparser-rs parser
@@ -553,7 +575,7 @@ impl<'a> DFParser<'a> {
     /// contains any trailing, unparsed tokens.
     pub fn parse_into_expr(&mut self) -> Result<ExprWithAlias, DataFusionError> {
         let expr = self.parse_expr()?;
-        self.expect_token("end of expression", Token::EOF)?;
+        self.expect_token("end of expression", &Token::EOF)?;
         Ok(expr)
     }
 
@@ -638,7 +660,7 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return self.expected("end of statement or ;", token)?;
+                    return self.expected("end of statement or ;", &token)?;
                 }
             }
         }
@@ -675,7 +697,7 @@ impl<'a> DFParser<'a> {
                         // Unquoted namespaced keys have to conform to the syntax
                         // "<WORD>[\.<WORD>]*". If we have a key that breaks this
                         // pattern, error out:
-                        return self.expected("key name", next_token);
+                        return self.expected("key name", &next_token);
                     }
                 }
                 Ok(parts.join("."))
@@ -683,7 +705,7 @@ impl<'a> DFParser<'a> {
             Token::SingleQuotedString(s) => Ok(s),
             Token::DoubleQuotedString(s) => Ok(s),
             Token::EscapedStringLiteral(s) => Ok(s),
-            _ => self.expected("key name", next_token),
+            _ => self.expected("key name", &next_token),
         }
     }
 
@@ -702,7 +724,7 @@ impl<'a> DFParser<'a> {
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
             Token::Number(n, l) => Ok(Value::Number(n, l)),
-            _ => self.expected("string or numeric value", next_token),
+            _ => self.expected("string or numeric value", &next_token),
         }
     }
 
@@ -722,6 +744,47 @@ impl<'a> DFParser<'a> {
         }))
     }
 
+    /// Parse a SQL `RESET`
+    pub fn parse_reset(&mut self) -> Result<Statement, DataFusionError> {
+        let mut parts: Vec<String> = Vec::new();
+        let mut expecting_segment = true;
+
+        loop {
+            let next_token = self.parser.peek_token();
+            match &next_token.token {
+                Token::Word(word) => {
+                    self.parser.next_token();
+                    parts.push(word.value.clone());
+                    expecting_segment = false;
+                }
+                Token::SingleQuotedString(s)
+                | Token::DoubleQuotedString(s)
+                | Token::EscapedStringLiteral(s) => {
+                    self.parser.next_token();
+                    parts.push(s.clone());
+                    expecting_segment = false;
+                }
+                Token::Period => {
+                    self.parser.next_token();
+                    if expecting_segment || parts.is_empty() {
+                        return self.expected("configuration parameter", &next_token);
+                    }
+                    expecting_segment = true;
+                }
+                Token::EOF | Token::SemiColon => break,
+                _ => return self.expected("configuration parameter", &next_token),
+            }
+        }
+
+        if parts.is_empty() || expecting_segment {
+            return self.expected("configuration parameter", &self.parser.peek_token());
+        }
+
+        let idents: Vec<Ident> = parts.into_iter().map(Ident::new).collect();
+        let variable = ObjectName::from(idents);
+        Ok(Statement::Reset(ResetStatement::Variable(variable)))
+    }
+
     pub fn parse_explain_format(&mut self) -> Result<Option<String>, DataFusionError> {
         if !self.parser.parse_keyword(Keyword::FORMAT) {
             return Ok(None);
@@ -732,7 +795,7 @@ impl<'a> DFParser<'a> {
             Token::Word(w) => Ok(w.value),
             Token::SingleQuotedString(w) => Ok(w),
             Token::DoubleQuotedString(w) => Ok(w),
-            _ => self.expected("an explain format such as TREE", next_token),
+            _ => self.expected("an explain format such as TREE", &next_token),
         }?;
         Ok(Some(format))
     }
@@ -777,7 +840,7 @@ impl<'a> DFParser<'a> {
                 let identifier = self.parser.parse_identifier()?;
                 partitions.push(identifier.to_string());
             } else {
-                return self.expected("partition name", self.parser.peek_token());
+                return self.expected("partition name", &self.parser.peek_token());
             }
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
@@ -786,7 +849,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after partition definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }
@@ -857,7 +920,7 @@ impl<'a> DFParser<'a> {
             } else {
                 return self.expected(
                     "column name or constraint definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
             let comma = self.parser.consume_token(&Token::Comma);
@@ -867,7 +930,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after column definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }
@@ -887,7 +950,7 @@ impl<'a> DFParser<'a> {
                 } else {
                     return self.expected(
                         "constraint details after CONSTRAINT <name>",
-                        self.parser.peek_token(),
+                        &self.parser.peek_token(),
                     );
                 }
             } else if let Some(option) = self.parser.parse_optional_column_option()? {
@@ -1012,7 +1075,7 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return self.expected("end of statement or ;", token)?;
+                    return self.expected("end of statement or ;", &token)?;
                 }
             }
         }
@@ -1051,7 +1114,7 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", token),
+            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", &token),
         }
     }
 
@@ -1074,7 +1137,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after option definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }

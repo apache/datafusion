@@ -61,12 +61,9 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[]",
-        "metrics=[output_rows=3, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=Partial, gby=[]",
-        "output_bytes="
+        "metrics=[output_rows=3, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=3"
     );
 
     assert_metrics!(
@@ -75,59 +72,76 @@ async fn explain_analyze_baseline_metrics() {
         "reduction_factor=5.1% (5/99)"
     );
 
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "output_bytes="
-    );
+    {
+        let expected_batch_count_after_repartition =
+            if cfg!(not(feature = "force_hash_collisions")) {
+                "output_batches=3"
+            } else {
+                "output_batches=1"
+            };
+
+        assert_metrics!(
+            &formatted,
+            "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "RepartitionExec: partitioning=Hash([c1@0], 3), input_partitions=3",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "ProjectionExec: expr=[]",
+            "metrics=[output_rows=5, elapsed_compute=",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+
+        assert_metrics!(
+            &formatted,
+            "CoalesceBatchesExec: target_batch_size=4096",
+            "metrics=[output_rows=5, elapsed_compute",
+            "output_bytes=",
+            expected_batch_count_after_repartition
+        );
+    }
+
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "metrics=[output_rows=99, elapsed_compute="
+        "metrics=[output_rows=99, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=1"
     );
-    assert_metrics!(
-        &formatted,
-        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-        "output_bytes="
-    );
+
     assert_metrics!(
         &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
         "selectivity=99% (99/100)"
     );
-    assert_metrics!(
-        &formatted,
-        "ProjectionExec: expr=[]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(&formatted, "ProjectionExec: expr=[]", "output_bytes=");
-    assert_metrics!(
-        &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "metrics=[output_rows=5, elapsed_compute"
-    );
-    assert_metrics!(
-        &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "output_bytes="
-    );
+
     assert_metrics!(
         &formatted,
         "UnionExec",
-        "metrics=[output_rows=3, elapsed_compute="
+        "metrics=[output_rows=3, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=3"
     );
-    assert_metrics!(&formatted, "UnionExec", "output_bytes=");
+
     assert_metrics!(
         &formatted,
         "WindowAggExec",
-        "metrics=[output_rows=1, elapsed_compute="
+        "metrics=[output_rows=1, elapsed_compute=",
+        "output_bytes=",
+        "output_batches=1"
     );
-    assert_metrics!(&formatted, "WindowAggExec", "output_bytes=");
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
@@ -228,9 +242,13 @@ async fn explain_analyze_level() {
 
     for (level, needle, should_contain) in [
         (ExplainAnalyzeLevel::Summary, "spill_count", false),
+        (ExplainAnalyzeLevel::Summary, "output_batches", false),
         (ExplainAnalyzeLevel::Summary, "output_rows", true),
+        (ExplainAnalyzeLevel::Summary, "output_bytes", true),
         (ExplainAnalyzeLevel::Dev, "spill_count", true),
         (ExplainAnalyzeLevel::Dev, "output_rows", true),
+        (ExplainAnalyzeLevel::Dev, "output_bytes", true),
+        (ExplainAnalyzeLevel::Dev, "output_batches", true),
     ] {
         let plan = collect_plan(sql, level).await;
         assert_eq!(
@@ -748,7 +766,7 @@ async fn test_physical_plan_display_indent() {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     SortPreservingMergeExec: [the_min@2 DESC], fetch=10
       SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]
         ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
@@ -756,11 +774,10 @@ async fn test_physical_plan_display_indent() {
             CoalesceBatchesExec: target_batch_size=4096
               RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
                 AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
-                  CoalesceBatchesExec: target_batch_size=4096
-                    FilterExec: c12@1 < 10
-                      RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
-                        DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true
-    "###
+                  FilterExec: c12@1 < 10
+                    RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
+                      DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true
+    "
     );
 }
 
@@ -794,19 +811,17 @@ async fn test_physical_plan_display_indent_multi_children() {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     CoalesceBatchesExec: target_batch_size=4096
       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]
         CoalesceBatchesExec: target_batch_size=4096
-          RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
-            RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+          RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
         CoalesceBatchesExec: target_batch_size=4096
-          RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000
-            RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
-              ProjectionExec: expr=[c1@0 as c2]
-                DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
-    "###
+          RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=1
+            ProjectionExec: expr=[c1@0 as c2]
+              DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+    "
     );
 }
 
@@ -872,6 +887,7 @@ async fn parquet_explain_analyze() {
         &formatted,
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
     );
+    assert_contains!(&formatted, "scan_efficiency_ratio=14%");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)
@@ -997,16 +1013,14 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
       RecursiveQueryExec: name=number_series, is_distinct=false
         CoalescePartitionsExec
           ProjectionExec: expr=[id@0 as id, 1 as level]
-            CoalesceBatchesExec: target_batch_size=8192
-              FilterExec: id@0 = 1
-                RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
+            FilterExec: id@0 = 1
+              RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
         CoalescePartitionsExec
           ProjectionExec: expr=[id@0 + 1 as ns.id + Int64(1), level@1 + 1 as ns.level + Int64(1)]
-            CoalesceBatchesExec: target_batch_size=8192
-              FilterExec: id@0 < 10
-                RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
-                  WorkTableExec: name=number_series
+            FilterExec: id@0 < 10
+              RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
+                WorkTableExec: name=number_series
     "
     );
 
@@ -1137,6 +1151,27 @@ async fn nested_loop_join_selectivity() {
             &formatted,
             "NestedLoopJoinExec",
             &format!("selectivity={expected_selectivity}")
+        );
+    }
+}
+
+#[tokio::test]
+async fn explain_analyze_hash_join() {
+    let sql = "EXPLAIN ANALYZE \
+            SELECT * \
+            FROM generate_series(10) as t1(a) \
+            JOIN generate_series(20) as t2(b) \
+            ON t1.a=t2.b";
+
+    for (level, needle, should_contain) in [
+        (ExplainAnalyzeLevel::Summary, "probe_hit_rate", true),
+        (ExplainAnalyzeLevel::Summary, "avg_fanout", true),
+    ] {
+        let plan = collect_plan(sql, level).await;
+        assert_eq!(
+            plan.contains(needle),
+            should_contain,
+            "plan for level {level:?} unexpected content: {plan}"
         );
     }
 }

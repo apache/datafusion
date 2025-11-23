@@ -147,6 +147,7 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) {
             }
         },
         DFStatement::Explain(explain) => visit_statement(&explain.statement, visitor),
+        DFStatement::Reset(_) => {}
     }
 }
 

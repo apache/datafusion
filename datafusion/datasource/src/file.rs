@@ -26,9 +26,8 @@ use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use crate::schema_adapter::SchemaAdapterFactory;
-use crate::TableSchema;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, Result, Statistics};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -61,22 +60,20 @@ pub trait FileSource: Send + Sync {
     ) -> Arc<dyn FileOpener>;
     /// Any
     fn as_any(&self) -> &dyn Any;
+    /// Returns the table schema for this file source.
+    ///
+    /// This always returns the unprojected schema (the full schema of the data).
+    fn table_schema(&self) -> &crate::table_schema::TableSchema;
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
-    /// Initialize new instance with a new schema
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource>;
     /// Initialize new instance with projection information
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
-    /// Initialize new instance with projected statistics
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
     /// Returns the filter expression that will be applied during the file scan.
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         None
     }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
-    /// Return projected statistics
-    fn statistics(&self) -> Result<Statistics>;
     /// String representation of file source such as "csv", "json", "parquet"
     fn file_type(&self) -> &str;
     /// Format FileType specific information

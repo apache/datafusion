@@ -918,6 +918,118 @@ select log(2.0, null);
 ----
 NULL
 
+# power with decimals
+
+query RT
+SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
+----
+16 Decimal128(38, 0)
+
+query RT
+SELECT power(10000000000::decimal(38, 0), 2), arrow_typeof(power(10000000000::decimal(38, 0), 2));
+----
+100000000000000000000 Decimal128(38, 0)
+
+query R
+SELECT power(2.5, 4)
+----
+39
+
+query R
+SELECT power(2.5, 1)
+----
+2.5
+
+query R
+SELECT power(2.5, 0)
+----
+1
+
+# TODO: check backward compatibility for a case with base in64 and exponent float64 since the power coercion is introduced
+
+# query error Unsupported data type Decimal128\(2, 1\) for power function
+# SELECT power(2.5, 4.0)
+
+query error Arrow error: .*in integer computation is out of bounds
+SELECT power(2, 100000000000)
+
+query error Arrow error: Arithmetic overflow: Unsupported exp value
+SELECT power(2::decimal(38, 0), -5)
+
+# Expected to have `16 Decimal128(38, 0)`
+# Due to type coericion, it becomes Float -> Float -> Float
+query RT
+SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
+----
+16 Decimal128(38, 0)
+
+# Arbitrary scale
+query RT
+SELECT power(2.5::decimal(38, 3), 4), arrow_typeof(power(2.5::decimal(38, 3), 4));
+----
+39.062 Decimal128(38, 3)
+
+query RT
+SELECT power(2.5, 4.0), arrow_typeof(power(2.5, 4.0));
+----
+39 Decimal128(2, 1)
+
+query error Compute error: Cannot use non-integer exp
+SELECT power(2.5, 4.2), arrow_typeof(power(2.5, 4.2));
+
+query error Compute error: Cannot use non-integer exp: NaN
+SELECT power(2::decimal(38, 0), arrow_cast('NaN','Float64'))
+
+query error Compute error: Cannot use non-integer exp: inf
+SELECT power(2::decimal(38, 0), arrow_cast('INF','Float64'))
+
+# Floating above u32::max
+query error Compute error: Cannot use non-integer exp
+SELECT power(2::decimal(38, 0), 5000000000.1)
+
+# Integer Above u32::max
+query error Arrow error: Arithmetic overflow: Unsupported exp value
+SELECT power(2::decimal(38, 0), 5000000000)
+
+query ?T
+SELECT power(arrow_cast(2, 'Decimal32(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal32(5, 0)'), 4));
+----
+16 Decimal32(5, 0)
+
+query ?T
+SELECT power(arrow_cast(2, 'Decimal64(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal64(5, 0)'), 4));
+----
+16 Decimal64(5, 0)
+
+query RT
+SELECT power(2::decimal(76, 0), 4), arrow_typeof(power(2::decimal(76, 0), 4));
+----
+16 Decimal256(76, 0)
+
+query R
+SELECT power(2.0, null)
+----
+NULL
+
+# Array variants of power function
+query RR rowsort
+SELECT distinct c1*100000, power(c1*100000, 2) from decimal_simple;
+----
+1 1
+2 4
+3 9
+4 16
+5 25
+
+query RR rowsort
+SELECT distinct c1*100000, power(c1*100000, 2.0) from decimal_simple;
+----
+1 1
+2 4
+3 9
+4 16
+5 25
+
 # Set parse_float_as_decimal to false to test float parsing
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
@@ -941,3 +1053,30 @@ query R
 select log(100000000000000000000000000000000000::decimal(38,0))
 ----
 34
+
+# Result is decimal since argument is decimal regardless decimals-as-floats parsing
+query R
+SELECT power(10000000000::decimal(38, 0), 2);
+----
+100000000000000000000
+
+query RT
+SELECT power(10000000000::decimal(38, 0), 2),
+       arrow_typeof(power(10000000000::decimal(38, 0), 2));
+----
+100000000000000000000 Decimal128(38, 0)
+
+query R
+SELECT power(2.5, 4.0)
+----
+39.0625
+
+query R
+SELECT power(2.5, 4)
+----
+39.0625
+
+query I
+SELECT power(2, null)
+----
+NULL

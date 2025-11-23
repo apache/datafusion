@@ -276,6 +276,7 @@ impl ScalarUDFImpl for DateTruncFunc {
                     T::UNIT,
                     array,
                     granularity,
+                    tz_opt.clone(),
                 )?;
                 return Ok(ColumnarValue::Array(result));
             }
@@ -522,6 +523,7 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     tu: TimeUnit,
     array: &PrimitiveArray<T>,
     granularity: DateTruncGranularity,
+    tz_opt: Option<Arc<str>>,
 ) -> Result<ArrayRef> {
     let unit = match (tu, granularity) {
         (Second, DateTruncGranularity::Minute) => NonZeroI64::new(60),
@@ -556,7 +558,8 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
                 .iter()
                 .map(|v| *v - i64::rem_euclid(*v, unit)),
             array.nulls().cloned(),
-        );
+        )
+        .with_timezone_opt(tz_opt);
         Ok(Arc::new(array))
     } else {
         // truncate to the same or smaller unit
@@ -1093,5 +1096,177 @@ mod tests {
                 panic!("unexpected column type");
             }
         });
+    }
+
+    #[test]
+    fn test_date_trunc_fine_granularity_timezones() {
+        let cases = [
+            // Test "second" granularity
+            (
+                vec![
+                    "2020-09-08T13:42:29.190855Z",
+                    "2020-09-08T13:42:30.500000Z",
+                    "2020-09-08T13:42:31.999999Z",
+                ],
+                Some("+00".into()),
+                "second",
+                vec![
+                    "2020-09-08T13:42:29.000000Z",
+                    "2020-09-08T13:42:30.000000Z",
+                    "2020-09-08T13:42:31.000000Z",
+                ],
+            ),
+            (
+                vec![
+                    "2020-09-08T13:42:29.190855+05",
+                    "2020-09-08T13:42:30.500000+05",
+                    "2020-09-08T13:42:31.999999+05",
+                ],
+                Some("+05".into()),
+                "second",
+                vec![
+                    "2020-09-08T13:42:29.000000+05",
+                    "2020-09-08T13:42:30.000000+05",
+                    "2020-09-08T13:42:31.000000+05",
+                ],
+            ),
+            (
+                vec![
+                    "2020-09-08T13:42:29.190855Z",
+                    "2020-09-08T13:42:30.500000Z",
+                    "2020-09-08T13:42:31.999999Z",
+                ],
+                Some("Europe/Berlin".into()),
+                "second",
+                vec![
+                    "2020-09-08T13:42:29.000000Z",
+                    "2020-09-08T13:42:30.000000Z",
+                    "2020-09-08T13:42:31.000000Z",
+                ],
+            ),
+            // Test "minute" granularity
+            (
+                vec![
+                    "2020-09-08T13:42:29.190855Z",
+                    "2020-09-08T13:43:30.500000Z",
+                    "2020-09-08T13:44:31.999999Z",
+                ],
+                Some("+00".into()),
+                "minute",
+                vec![
+                    "2020-09-08T13:42:00.000000Z",
+                    "2020-09-08T13:43:00.000000Z",
+                    "2020-09-08T13:44:00.000000Z",
+                ],
+            ),
+            (
+                vec![
+                    "2020-09-08T13:42:29.190855+08",
+                    "2020-09-08T13:43:30.500000+08",
+                    "2020-09-08T13:44:31.999999+08",
+                ],
+                Some("+08".into()),
+                "minute",
+                vec![
+                    "2020-09-08T13:42:00.000000+08",
+                    "2020-09-08T13:43:00.000000+08",
+                    "2020-09-08T13:44:00.000000+08",
+                ],
+            ),
+            (
+                vec![
+                    "2020-09-08T13:42:29.190855Z",
+                    "2020-09-08T13:43:30.500000Z",
+                    "2020-09-08T13:44:31.999999Z",
+                ],
+                Some("America/Sao_Paulo".into()),
+                "minute",
+                vec![
+                    "2020-09-08T13:42:00.000000Z",
+                    "2020-09-08T13:43:00.000000Z",
+                    "2020-09-08T13:44:00.000000Z",
+                ],
+            ),
+            // Test with None (no timezone)
+            (
+                vec![
+                    "2020-09-08T13:42:29.190855Z",
+                    "2020-09-08T13:43:30.500000Z",
+                    "2020-09-08T13:44:31.999999Z",
+                ],
+                None,
+                "minute",
+                vec![
+                    "2020-09-08T13:42:00.000000Z",
+                    "2020-09-08T13:43:00.000000Z",
+                    "2020-09-08T13:44:00.000000Z",
+                ],
+            ),
+            // Test millisecond granularity
+            (
+                vec![
+                    "2020-09-08T13:42:29.190855Z",
+                    "2020-09-08T13:42:29.191999Z",
+                    "2020-09-08T13:42:29.192500Z",
+                ],
+                Some("Asia/Kolkata".into()),
+                "millisecond",
+                vec![
+                    "2020-09-08T19:12:29.190000+05:30",
+                    "2020-09-08T19:12:29.191000+05:30",
+                    "2020-09-08T19:12:29.192000+05:30",
+                ],
+            ),
+        ];
+
+        cases
+            .iter()
+            .for_each(|(original, tz_opt, granularity, expected)| {
+                let input = original
+                    .iter()
+                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                    .collect::<TimestampNanosecondArray>()
+                    .with_timezone_opt(tz_opt.clone());
+                let right = expected
+                    .iter()
+                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                    .collect::<TimestampNanosecondArray>()
+                    .with_timezone_opt(tz_opt.clone());
+                let batch_len = input.len();
+                let arg_fields = vec![
+                    Field::new("a", DataType::Utf8, false).into(),
+                    Field::new("b", input.data_type().clone(), false).into(),
+                ];
+                let args = datafusion_expr::ScalarFunctionArgs {
+                    args: vec![
+                        ColumnarValue::Scalar(ScalarValue::from(*granularity)),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    arg_fields,
+                    number_rows: batch_len,
+                    return_field: Field::new(
+                        "f",
+                        DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                        true,
+                    )
+                    .into(),
+                    config_options: Arc::new(ConfigOptions::default()),
+                };
+                let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
+                if let ColumnarValue::Array(result) = result {
+                    assert_eq!(
+                        result.data_type(),
+                        &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                        "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
+                    );
+                    let left = as_primitive_array::<TimestampNanosecondType>(&result);
+                    assert_eq!(
+                        left, &right,
+                        "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
+                    );
+                } else {
+                    panic!("unexpected column type");
+                }
+            });
     }
 }

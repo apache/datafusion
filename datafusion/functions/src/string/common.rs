@@ -48,6 +48,7 @@ impl Display for TrimType {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn general_trim<T: OffsetSizeTrait>(
     args: &[ArrayRef],
     trim_type: TrimType,
