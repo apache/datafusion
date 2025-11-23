@@ -23,7 +23,12 @@
 
 **Note:** DataFusion `52.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 
-You can see the current [status of the `52.0.0` release here](https://github.com/apache/datafusion/issues/18566)
+You can see the current [status of the `52.0.0`release here](https://github.com/apache/datafusion/issues/18566)
+
+### Removal of `pyarrow` feature
+
+The `pyarrow` feature flag has been removed. This feature has been migrated to
+the `datafusion-python` repository since version `44.0.0`.
 
 ### Statistics handling moved from `FileSource` to `FileScanConfig`
 

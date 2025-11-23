@@ -201,6 +201,7 @@ impl ScalarUDFImpl for SplitPartFunc {
 }
 
 /// impl
+#[expect(clippy::needless_pass_by_value)]
 pub fn split_part_impl<'a, StringArrType, DelimiterArrType, StringArrayLen>(
     string_array: StringArrType,
     delimiter_array: DelimiterArrType,

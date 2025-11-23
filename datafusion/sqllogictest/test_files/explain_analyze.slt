@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,5 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-set -ex
-cargo clippy --all-targets --workspace --features avro,integration-tests,extended_tests -- -D warnings
+statement ok
+set datafusion.explain.analyze_level = summary;
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM generate_series(100);
+----
+Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
+
+statement ok
+reset datafusion.explain.analyze_level;

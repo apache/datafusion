@@ -206,8 +206,8 @@ impl ExecutionPlan for AnalyzeExec {
                 show_statistics,
                 total_rows,
                 duration,
-                captured_input,
-                captured_schema,
+                &captured_input,
+                &captured_schema,
                 &metric_types,
             )
         };
@@ -225,8 +225,8 @@ fn create_output_batch(
     show_statistics: bool,
     total_rows: usize,
     duration: std::time::Duration,
-    input: Arc<dyn ExecutionPlan>,
-    schema: SchemaRef,
+    input: &Arc<dyn ExecutionPlan>,
+    schema: &SchemaRef,
     metric_types: &[MetricType],
 ) -> Result<RecordBatch> {
     let mut type_builder = StringBuilder::with_capacity(1, 1024);
@@ -262,7 +262,7 @@ fn create_output_batch(
     }
 
     RecordBatch::try_new(
-        schema,
+        Arc::clone(schema),
         vec![
             Arc::new(type_builder.finish()),
             Arc::new(plan_builder.finish()),
