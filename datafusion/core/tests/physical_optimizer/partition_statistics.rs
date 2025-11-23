@@ -878,9 +878,9 @@ mod test {
             partition_row_counts.push(total_rows);
         }
         assert_eq!(partition_row_counts.len(), 3);
-        assert_eq!(partition_row_counts[0], 2);
+        assert_eq!(partition_row_counts[0], 1);
         assert_eq!(partition_row_counts[1], 2);
-        assert_eq!(partition_row_counts[2], 0);
+        assert_eq!(partition_row_counts[2], 1);
 
         Ok(())
     }

@@ -37,7 +37,7 @@ use datafusion_datasource::schema_adapter::{
 
 use arrow::datatypes::TimeUnit;
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{DataFusionError, Statistics};
+use datafusion_common::DataFusionError;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::TableSchema;
@@ -286,7 +286,6 @@ pub struct ParquetSource {
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
-    pub(crate) projected_statistics: Option<Statistics>,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
 }
@@ -307,7 +306,6 @@ impl ParquetSource {
             schema_adapter_factory: None,
             batch_size: None,
             metadata_size_hint: None,
-            projected_statistics: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
         }
@@ -625,35 +623,12 @@ impl FileSource for ParquetSource {
         Arc::new(conf)
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> datafusion_common::Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        let statistics = statistics
-            .clone()
-            .expect("projected_statistics must be set");
-        // When filters are pushed down, we have no way of knowing the exact statistics.
-        // Note that pruning predicate is also a kind of filter pushdown.
-        // (bloom filters use `pruning_predicate` too).
-        // Because filter pushdown may happen dynamically as long as there is a predicate
-        // if we have *any* predicate applied, we can't guarantee the statistics are exact.
-        if self.filter().is_some() {
-            Ok(statistics.to_inexact())
-        } else {
-            Ok(statistics)
-        }
     }
 
     fn file_type(&self) -> &str {

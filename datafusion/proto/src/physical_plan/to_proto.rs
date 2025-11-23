@@ -530,7 +530,7 @@ pub fn serialize_file_scan_config(
 
     Ok(protobuf::FileScanExecConf {
         file_groups,
-        statistics: Some((&conf.file_source.statistics().unwrap()).into()),
+        statistics: Some((&conf.statistics()).into()),
         limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
         projection: conf
             .projection_exprs
