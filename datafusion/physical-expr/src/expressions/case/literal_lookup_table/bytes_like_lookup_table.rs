@@ -17,7 +17,7 @@
 
 use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 use arrow::array::{
-    ArrayIter, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryIter,
+    Array, ArrayIter, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryIter,
     GenericByteArray, GenericByteViewArray, TypedDictionaryArray,
 };
 use arrow::datatypes::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};

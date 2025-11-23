@@ -37,6 +37,7 @@ use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
 use indexmap::IndexMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 /// Optimization for CASE expressions with literal WHEN and THEN clauses
 ///
@@ -76,6 +77,7 @@ use std::fmt::Debug;
 pub(in super::super) struct LiteralLookupTable {
     /// The lookup table to use for evaluating the CASE expression
     lookup: Box<dyn WhenLiteralIndexMap>,
+    when_data_type: DataType,
 
     else_index: u32,
 
@@ -160,12 +162,11 @@ impl LiteralLookupTable {
 
             null_scalar
         };
+        let when_data_type = when[0].data_type();
 
         {
-            let data_type = when[0].data_type();
-
             // If not all the WHEN literals are the same data type we cannot use this optimization
-            if when.iter().any(|l| l.data_type() != data_type) {
+            if when.iter().any(|l| l.data_type() != when_data_type) {
                 return None;
             }
         }
@@ -197,6 +198,7 @@ impl LiteralLookupTable {
 
         Some(Self {
             lookup,
+            when_data_type,
             then_and_else_values,
             else_index,
         })
@@ -206,9 +208,19 @@ impl LiteralLookupTable {
         &self,
         keys_array: &ArrayRef,
     ) -> datafusion_common::Result<ArrayRef> {
+        // In case the <expr> data type is different than the WHEN literals data type
+        // we need to cast it to the WHEN literals data type
+        // TODO - avoid casting if possible
+        let keys_array_fixed_data_type = if keys_array.data_type() != &self.when_data_type
+        {
+            arrow::compute::cast(keys_array, &self.when_data_type)?
+        } else {
+            Arc::clone(keys_array)
+        };
+
         let take_indices = self
             .lookup
-            .map_to_when_indices(keys_array, self.else_index)?;
+            .map_to_when_indices(&keys_array_fixed_data_type, self.else_index)?;
 
         // Zero-copy conversion
         let take_indices = UInt32Array::from(take_indices);
