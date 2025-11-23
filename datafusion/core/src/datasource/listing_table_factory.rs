@@ -28,8 +28,6 @@ use crate::datasource::listing::{
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::DataType;
-#[cfg(test)]
-use arrow::datatypes::{Field, Schema};
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
 use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
@@ -228,6 +226,7 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
     };
 
+    use arrow::datatypes::{Field, Schema};
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{Constraints, DFSchema, TableReference};
 

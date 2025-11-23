@@ -70,7 +70,7 @@ use std::{
 use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
-use log::warn;
+use log::{debug, warn};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -1140,7 +1140,7 @@ impl Debug for FileScanConfig {
         write!(f, "FileScanConfig {{")?;
         write!(f, "object_store_url={:?}, ", self.object_store_url)?;
 
-        write!(f, "statistics={:?}, ", &self.statistics)?;
+        write!(f, "statistics={:?}, ", self.statistics())?;
 
         DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)?;
         write!(f, "}}")
@@ -1515,6 +1515,11 @@ fn get_projected_output_ordering(
 
             !statistics.is_sorted()
         }) {
+            debug!(
+                "Skipping specified output ordering {:?}. \
+                Some file groups couldn't be determined to be sorted: {:?}",
+                base_config.output_ordering[0], base_config.file_groups
+            );
             continue;
         }
 
@@ -1714,7 +1719,7 @@ mod tests {
             to_partition_cols(partition_cols.clone()),
         );
 
-        let source_statistics = &conf.statistics;
+        let source_statistics = conf.statistics();
         let conf_stats = conf.partition_statistics(None).unwrap();
 
         // projection should be reflected in the file source statistics
@@ -1724,7 +1729,7 @@ mod tests {
         assert_eq!(conf_stats.column_statistics.len(), 5);
 
         // file statics should not be modified
-        assert_eq!(*source_statistics, statistics);
+        assert_eq!(source_statistics, statistics);
         assert_eq!(source_statistics.column_statistics.len(), 3);
 
         let proj_schema = conf.projected_schema();
@@ -2414,13 +2419,13 @@ mod tests {
         assert!(config.constraints.is_empty());
 
         // Verify statistics are set to unknown
-        assert_eq!(config.statistics.num_rows, Precision::Absent);
-        assert_eq!(config.statistics.total_byte_size, Precision::Absent);
+        assert_eq!(config.statistics().num_rows, Precision::Absent);
+        assert_eq!(config.statistics().total_byte_size, Precision::Absent);
         assert_eq!(
-            config.statistics.column_statistics.len(),
+            config.statistics().column_statistics.len(),
             file_schema.fields().len()
         );
-        for stat in &config.statistics.column_statistics {
+        for stat in &config.statistics().column_statistics {
             assert_eq!(stat.distinct_count, Precision::Absent);
             assert_eq!(stat.min_value, Precision::Absent);
             assert_eq!(stat.max_value, Precision::Absent);
