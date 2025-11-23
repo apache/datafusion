@@ -115,94 +115,107 @@ pub struct WindowUDFPrivateData {
 }
 
 impl FFI_WindowUDF {
-    unsafe fn inner(&self) -> &Arc<WindowUDF> { unsafe {
-        let private_data = self.private_data as *const WindowUDFPrivateData;
-        &(*private_data).udf
-    }}
+    unsafe fn inner(&self) -> &Arc<WindowUDF> {
+        unsafe {
+            let private_data = self.private_data as *const WindowUDFPrivateData;
+            &(*private_data).udf
+        }
+    }
 }
 
 unsafe extern "C" fn partition_evaluator_fn_wrapper(
     udwf: &FFI_WindowUDF,
     args: FFI_PartitionEvaluatorArgs,
-) -> RResult<FFI_PartitionEvaluator, RString> { unsafe {
-    let inner = udwf.inner();
+) -> RResult<FFI_PartitionEvaluator, RString> {
+    unsafe {
+        let inner = udwf.inner();
 
-    let args = rresult_return!(ForeignPartitionEvaluatorArgs::try_from(args));
+        let args = rresult_return!(ForeignPartitionEvaluatorArgs::try_from(args));
 
-    let evaluator = rresult_return!(inner.partition_evaluator_factory((&args).into()));
+        let evaluator =
+            rresult_return!(inner.partition_evaluator_factory((&args).into()));
 
-    RResult::ROk(evaluator.into())
-}}
+        RResult::ROk(evaluator.into())
+    }
+}
 
 unsafe extern "C" fn field_fn_wrapper(
     udwf: &FFI_WindowUDF,
     input_fields: RVec<WrappedSchema>,
     display_name: RString,
-) -> RResult<WrappedSchema, RString> { unsafe {
-    let inner = udwf.inner();
+) -> RResult<WrappedSchema, RString> {
+    unsafe {
+        let inner = udwf.inner();
 
-    let input_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
+        let input_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
 
-    let field = rresult_return!(inner.field(WindowUDFFieldArgs::new(
-        &input_fields,
-        display_name.as_str()
-    )));
+        let field = rresult_return!(inner.field(WindowUDFFieldArgs::new(
+            &input_fields,
+            display_name.as_str()
+        )));
 
-    let schema = Arc::new(Schema::new(vec![field]));
+        let schema = Arc::new(Schema::new(vec![field]));
 
-    RResult::ROk(WrappedSchema::from(schema))
-}}
+        RResult::ROk(WrappedSchema::from(schema))
+    }
+}
 
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udwf: &FFI_WindowUDF,
     arg_types: RVec<WrappedSchema>,
-) -> RResult<RVec<WrappedSchema>, RString> { unsafe {
-    let inner = udwf.inner();
+) -> RResult<RVec<WrappedSchema>, RString> {
+    unsafe {
+        let inner = udwf.inner();
 
-    let arg_fields = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types))
-        .into_iter()
-        .map(|dt| Field::new("f", dt, false))
-        .map(Arc::new)
-        .collect::<Vec<_>>();
+        let arg_fields = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types))
+            .into_iter()
+            .map(|dt| Field::new("f", dt, false))
+            .map(Arc::new)
+            .collect::<Vec<_>>();
 
-    let return_fields = rresult_return!(fields_with_window_udf(&arg_fields, inner));
-    let return_types = return_fields
-        .into_iter()
-        .map(|f| f.data_type().to_owned())
-        .collect::<Vec<_>>();
+        let return_fields = rresult_return!(fields_with_window_udf(&arg_fields, inner));
+        let return_types = return_fields
+            .into_iter()
+            .map(|f| f.data_type().to_owned())
+            .collect::<Vec<_>>();
 
-    rresult!(vec_datatype_to_rvec_wrapped(&return_types))
-}}
-
-unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) { unsafe {
-    let private_data = Box::from_raw(udwf.private_data as *mut WindowUDFPrivateData);
-    drop(private_data);
-}}
-
-unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF { unsafe {
-    // let private_data = udf.private_data as *const WindowUDFPrivateData;
-    // let udf_data = &(*private_data);
-
-    // let private_data = Box::new(WindowUDFPrivateData {
-    //     udf: Arc::clone(&udf_data.udf),
-    // });
-    let private_data = Box::new(WindowUDFPrivateData {
-        udf: Arc::clone(udwf.inner()),
-    });
-
-    FFI_WindowUDF {
-        name: udwf.name.clone(),
-        aliases: udwf.aliases.clone(),
-        volatility: udwf.volatility.clone(),
-        partition_evaluator: partition_evaluator_fn_wrapper,
-        sort_options: udwf.sort_options.clone(),
-        coerce_types: coerce_types_fn_wrapper,
-        field: field_fn_wrapper,
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-        private_data: Box::into_raw(private_data) as *mut c_void,
+        rresult!(vec_datatype_to_rvec_wrapped(&return_types))
     }
-}}
+}
+
+unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) {
+    unsafe {
+        let private_data = Box::from_raw(udwf.private_data as *mut WindowUDFPrivateData);
+        drop(private_data);
+    }
+}
+
+unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
+    unsafe {
+        // let private_data = udf.private_data as *const WindowUDFPrivateData;
+        // let udf_data = &(*private_data);
+
+        // let private_data = Box::new(WindowUDFPrivateData {
+        //     udf: Arc::clone(&udf_data.udf),
+        // });
+        let private_data = Box::new(WindowUDFPrivateData {
+            udf: Arc::clone(udwf.inner()),
+        });
+
+        FFI_WindowUDF {
+            name: udwf.name.clone(),
+            aliases: udwf.aliases.clone(),
+            volatility: udwf.volatility.clone(),
+            partition_evaluator: partition_evaluator_fn_wrapper,
+            sort_options: udwf.sort_options.clone(),
+            coerce_types: coerce_types_fn_wrapper,
+            field: field_fn_wrapper,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            private_data: Box::into_raw(private_data) as *mut c_void,
+        }
+    }
+}
 
 impl Clone for FFI_WindowUDF {
     fn clone(&self) -> Self {

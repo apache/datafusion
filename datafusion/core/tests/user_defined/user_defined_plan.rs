@@ -515,12 +515,7 @@ impl OptimizerRule for TopKOptimizerRule {
             return Ok(Transformed::no(plan));
         };
 
-        if let LogicalPlan::Sort(Sort {
-            expr,
-            input,
-            ..
-        }) = limit.input.as_ref()
-        {
+        if let LogicalPlan::Sort(Sort { expr, input, .. }) = limit.input.as_ref() {
             if expr.len() == 1 {
                 // we found a sort with a single sort expr, replace with a a TopK
                 return Ok(Transformed::yes(LogicalPlan::Extension(Extension {

@@ -249,12 +249,7 @@ fn populate_partition_values<'a>(
     partition_values: &mut HashMap<&'a str, PartitionValue>,
     filter: &'a Expr,
 ) {
-    if let Expr::BinaryExpr(BinaryExpr {
-        left,
-        op,
-        right,
-    }) = filter
-    {
+    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = filter {
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(Column { name, .. }), Expr::Literal(val, _))

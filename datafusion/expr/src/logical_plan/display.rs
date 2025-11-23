@@ -443,17 +443,14 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 })
             }
             LogicalPlan::Filter(Filter {
-                predicate: expr,
-                ..
+                predicate: expr, ..
             }) => {
                 json!({
                     "Node Type": "Filter",
                     "Condition": format!("{}", expr)
                 })
             }
-            LogicalPlan::Window(Window {
-                window_expr, ..
-            }) => {
+            LogicalPlan::Window(Window { window_expr, .. }) => {
                 json!({
                     "Node Type": "WindowAggr",
                     "Expressions": expr_vec_fmt!(window_expr)
@@ -534,11 +531,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     })
                 }
             },
-            LogicalPlan::Limit(Limit {
-                skip,
-                fetch,
-                ..
-            }) => {
+            LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
                 let mut object = serde_json::json!(
                     {
                         "Node Type": "Limit",

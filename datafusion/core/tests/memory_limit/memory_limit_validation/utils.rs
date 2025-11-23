@@ -40,7 +40,7 @@ use datafusion_execution::{
 async fn measure_max_rss<F, Fut, T>(f: F) -> (T, usize)
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = T>,
+    Fut: Future<Output = T>,
 {
     // Initialize system information
     let mut system = System::new_all();

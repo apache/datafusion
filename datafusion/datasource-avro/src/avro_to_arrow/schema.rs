@@ -248,15 +248,9 @@ fn default_field_name(dt: &DataType) -> &str {
 fn external_props(schema: &AvroSchema) -> HashMap<String, String> {
     let mut props = HashMap::new();
     match &schema {
-        AvroSchema::Record(RecordSchema {
-            doc: Some(doc), ..
-        })
-        | AvroSchema::Enum(EnumSchema {
-            doc: Some(doc), ..
-        })
-        | AvroSchema::Fixed(FixedSchema {
-            doc: Some(doc), ..
-        }) => {
+        AvroSchema::Record(RecordSchema { doc: Some(doc), .. })
+        | AvroSchema::Enum(EnumSchema { doc: Some(doc), .. })
+        | AvroSchema::Fixed(FixedSchema { doc: Some(doc), .. }) => {
             props.insert("avro::doc".to_string(), doc.clone());
         }
         _ => {}

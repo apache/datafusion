@@ -384,7 +384,9 @@ mod tests {
                     if cfg!(windows) { "USERPROFILE" } else { "HOME" },
                     home_path.to_str().unwrap(),
                 ),
-                None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+                None => {
+                    env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                }
             }
         }
     }

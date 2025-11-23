@@ -783,7 +783,8 @@ mod test {
 
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch() {
-        let batch = unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
+        let batch =
+            unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
         test_evaluate_selection(
             &batch,
             &BooleanArray::from(vec![true; 10]),
@@ -794,40 +795,32 @@ mod test {
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_false_selection(
     ) {
-        let batch = unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
-        test_evaluate_selection_error(
-            &batch,
-            &BooleanArray::from(vec![false; 20]),
-        );
+        let batch =
+            unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
+        test_evaluate_selection_error(&batch, &BooleanArray::from(vec![false; 20]));
     }
 
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_true_selection(
     ) {
-        let batch = unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
-        test_evaluate_selection_error(
-            &batch,
-            &BooleanArray::from(vec![true; 20]),
-        );
+        let batch =
+            unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
+        test_evaluate_selection_error(&batch, &BooleanArray::from(vec![true; 20]));
     }
 
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_false_selection(
     ) {
-        let batch = unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
-        test_evaluate_selection_error(
-            &batch,
-            &BooleanArray::from(vec![false; 5]),
-        );
+        let batch =
+            unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
+        test_evaluate_selection_error(&batch, &BooleanArray::from(vec![false; 5]));
     }
 
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_true_selection(
     ) {
-        let batch = unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
-        test_evaluate_selection_error(
-            &batch,
-            &BooleanArray::from(vec![true; 5]),
-        );
+        let batch =
+            unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) };
+        test_evaluate_selection_error(&batch, &BooleanArray::from(vec![true; 5]));
     }
 }

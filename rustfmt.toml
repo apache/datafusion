@@ -16,6 +16,7 @@
 # under the License.
 
 edition = "2021"
+style_edition = "2021"
 max_width = 90
 
 # ignore generated files
