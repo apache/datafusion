@@ -79,7 +79,6 @@ parquet_encryption = [
     "datafusion-common/parquet_encryption",
     "datafusion-datasource-parquet/parquet_encryption",
 ]
-pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
     "datafusion-functions/regex_expressions",
 ]

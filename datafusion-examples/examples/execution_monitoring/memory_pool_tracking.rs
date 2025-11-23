@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! This example demonstrates how to use TrackConsumersPool for memory tracking and debugging.
 //!
 //! The TrackConsumersPool provides enhanced error messages that show the top memory consumers
@@ -24,11 +26,12 @@
 //!
 //! * [`automatic_usage_example`]: Shows how to use RuntimeEnvBuilder to automatically enable memory tracking
 
+use datafusion::error::Result;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Demonstrates TrackConsumersPool for memory tracking and debugging with enhanced error messages
+pub async fn mem_pool_tracking() -> Result<()> {
     println!("=== DataFusion Memory Pool Tracking Example ===\n");
 
     // Example 1: Automatic Usage with RuntimeEnvBuilder
@@ -41,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// This shows the recommended way to use TrackConsumersPool through RuntimeEnvBuilder,
 /// which automatically creates a TrackConsumersPool with sensible defaults.
-async fn automatic_usage_example() -> datafusion::error::Result<()> {
+async fn automatic_usage_example() -> Result<()> {
     println!("Example 1: Automatic Usage with RuntimeEnvBuilder");
     println!("------------------------------------------------");
 

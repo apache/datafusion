@@ -626,7 +626,7 @@ impl AggregateExec {
     fn execute_typed(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
         // no group by at all
         if self.group_by.expr.is_empty() {
@@ -741,6 +741,7 @@ impl AggregateExec {
         } else {
             input_partitioning.clone()
         };
+
         // TODO: Emission type and boundedness information can be enhanced here
         let emission_type = if *input_order_mode == InputOrderMode::Linear {
             EmissionType::Final
@@ -760,7 +761,7 @@ impl AggregateExec {
         &self.input_order_mode
     }
 
-    fn statistics_inner(&self, child_statistics: Statistics) -> Result<Statistics> {
+    fn statistics_inner(&self, child_statistics: &Statistics) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
@@ -1019,7 +1020,7 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, context)
+        self.execute_typed(partition, &context)
             .map(|stream| stream.into())
     }
 
@@ -1032,7 +1033,8 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.statistics_inner(self.input().partition_statistics(partition)?)
+        let child_statistics = self.input().partition_statistics(partition)?;
+        self.statistics_inner(&child_statistics)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -2219,7 +2221,7 @@ mod tests {
                 Arc::clone(&input_schema),
             )?);
 
-            let stream = partial_aggregate.execute_typed(0, Arc::clone(&task_ctx))?;
+            let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
 
             // ensure that we really got the version we wanted
             match version {
