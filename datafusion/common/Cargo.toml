@@ -48,7 +48,6 @@ parquet_encryption = [
     "parquet/encryption",
     "dep:hex",
 ]
-pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
 parquet = ["dep:parquet"]
@@ -56,7 +55,7 @@ sql = ["sqlparser"]
 
 [dependencies]
 ahash = { workspace = true }
-apache-avro = { version = "0.20", default-features = false, features = [
+apache-avro = { workspace = true, features = [
     "bzip",
     "snappy",
     "xz",
@@ -74,7 +73,6 @@ log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
-pyo3 = { version = "0.26", optional = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true, optional = true }
 tokio = { workspace = true }

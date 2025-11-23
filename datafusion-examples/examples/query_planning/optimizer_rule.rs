@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
@@ -37,8 +39,7 @@ use std::sync::Arc;
 ///
 /// See [analyzer_rule.rs] for an example of AnalyzerRules, which are for
 /// changing plan semantics.
-#[tokio::main]
-pub async fn main() -> Result<()> {
+pub async fn optimizer_rule() -> Result<()> {
     // DataFusion includes many built in OptimizerRules for tasks such as outer
     // to inner join conversion and constant folding.
     //

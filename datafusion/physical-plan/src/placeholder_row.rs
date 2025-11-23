@@ -30,7 +30,7 @@ use crate::{
 
 use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -154,13 +154,11 @@ impl ExecutionPlan for PlaceholderRowExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start PlaceholderRowExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        if partition >= self.partitions {
-            return internal_err!(
-                "PlaceholderRowExec invalid partition {} (expected less than {})",
-                partition,
-                self.partitions
-            );
-        }
+        assert_or_internal_err!(
+            partition < self.partitions,
+            "PlaceholderRowExec invalid partition {partition} (expected less than {})",
+            self.partitions
+        );
 
         let ms = MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)?;
         Ok(Box::pin(cooperative(ms)))

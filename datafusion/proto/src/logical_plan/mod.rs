@@ -37,8 +37,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    context, internal_datafusion_err, internal_err, not_impl_err, plan_err, Result,
-    TableReference, ToDFSchema,
+    assert_or_internal_err, context, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err, DataFusionError, Result, TableReference, ToDFSchema,
 };
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
@@ -776,11 +776,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 builder.build()
             }
             LogicalPlanType::Union(union) => {
-                if union.inputs.len() < 2 {
-                    return internal_err!(
-                        "Protobuf deserialization error, Union was require at least two input."
-                    );
-                }
+                assert_or_internal_err!(
+                    union.inputs.len() >= 2,
+                    "Protobuf deserialization error, Union requires at least two inputs."
+                );
                 let (first, rest) = union.inputs.split_first().unwrap();
                 let mut builder = LogicalPlanBuilder::from(
                     first.try_into_logical_plan(ctx, extension_codec)?,

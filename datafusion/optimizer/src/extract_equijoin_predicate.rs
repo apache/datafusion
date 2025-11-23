@@ -19,7 +19,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, DFSchema};
+use datafusion_common::{assert_or_internal_err, DFSchema, DataFusionError};
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
@@ -223,13 +223,12 @@ fn split_op_and_other_join_predicates(
     right_schema: &DFSchema,
     operator: Operator,
 ) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
-    if !matches!(operator, Operator::Eq | Operator::IsNotDistinctFrom) {
-        return internal_err!(
-            "split_op_and_other_join_predicates only supports 'Eq' or 'IsNotDistinctFrom' operators, \
-            but received: {:?}",
-            operator
-        );
-    }
+    assert_or_internal_err!(
+        matches!(operator, Operator::Eq | Operator::IsNotDistinctFrom),
+        "split_op_and_other_join_predicates only supports 'Eq' or 'IsNotDistinctFrom' operators, \
+        but received: {:?}",
+        operator
+    );
 
     let exprs = split_conjunction_owned(filter);
 

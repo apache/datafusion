@@ -238,7 +238,9 @@ mod tests {
     use arrow::array::{Float64Array, Int32Array, IntervalMonthDayNanoArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{internal_datafusion_err, internal_err, Result};
+    use datafusion_common::{
+        assert_eq_or_internal_err, internal_datafusion_err, internal_err, Result,
+    };
 
     use super::*;
     fn run_make_interval_month_day_nano(arrs: Vec<ArrayRef>) -> Result<ArrayRef> {
@@ -533,33 +535,32 @@ mod tests {
                     .ok_or_else(|| {
                         internal_datafusion_err!("expected IntervalMonthDayNanoArray")
                     })?;
-                if arr.len() != number_rows {
-                    return internal_err!(
-                        "expected array length {number_rows}, got {}",
-                        arr.len()
-                    );
-                }
+                assert_eq_or_internal_err!(
+                    arr.len(),
+                    number_rows,
+                    "expected array length {number_rows}"
+                );
                 for i in 0..number_rows {
                     let iv = arr.value(i);
-                    if (iv.months, iv.days, iv.nanoseconds) != (0, 0, 0) {
-                        return internal_err!(
-                            "row {i}: expected (0,0,0), got ({},{},{})",
-                            iv.months,
-                            iv.days,
-                            iv.nanoseconds
-                        );
-                    }
-                }
-            }
-            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(iv))) => {
-                if (iv.months, iv.days, iv.nanoseconds) != (0, 0, 0) {
-                    return internal_err!(
-                        "expected scalar 0s, got ({},{},{})",
+                    assert_eq_or_internal_err!(
+                        (iv.months, iv.days, iv.nanoseconds),
+                        (0, 0, 0),
+                        "row {i}: expected (0,0,0), got ({},{},{})",
                         iv.months,
                         iv.days,
                         iv.nanoseconds
                     );
                 }
+            }
+            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(iv))) => {
+                assert_eq_or_internal_err!(
+                    (iv.months, iv.days, iv.nanoseconds),
+                    (0, 0, 0),
+                    "expected scalar 0s, got ({},{},{})",
+                    iv.months,
+                    iv.days,
+                    iv.nanoseconds
+                );
             }
             other => {
                 return internal_err!(

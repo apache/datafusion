@@ -17,7 +17,7 @@
 
 use super::{Column, Literal};
 use crate::expressions::case::ResultState::{Complete, Empty, Partial};
-use crate::expressions::try_cast;
+use crate::expressions::{lit, try_cast};
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
@@ -30,16 +30,17 @@ use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, DataFusionError, HashMap, HashSet,
-    Result, ScalarValue,
+    assert_or_internal_err, exec_err, internal_datafusion_err, internal_err,
+    DataFusionError, HashMap, HashSet, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::datum::compare_with_eq;
-use itertools::Itertools;
 use std::borrow::Cow;
-use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
+
+use datafusion_physical_expr_common::datum::compare_with_eq;
+use itertools::Itertools;
+use std::fmt::{Debug, Formatter};
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -517,9 +518,10 @@ impl PartialResultIndex {
             return internal_err!("Partial result index exceeds limit");
         };
 
-        if index == NONE_VALUE {
-            return internal_err!("Partial result index exceeds limit");
-        }
+        assert_or_internal_err!(
+            index != NONE_VALUE,
+            "Partial result index exceeds limit"
+        );
 
         Ok(Self { index })
     }
@@ -663,9 +665,10 @@ impl ResultBuilder {
         row_indices: &ArrayRef,
         row_values: ArrayData,
     ) -> Result<()> {
-        if row_indices.null_count() != 0 {
-            return internal_err!("Row indices must not contain nulls");
-        }
+        assert_or_internal_err!(
+            row_indices.null_count() == 0,
+            "Row indices must not contain nulls"
+        );
 
         match &mut self.state {
             Empty => {
@@ -692,9 +695,11 @@ impl ResultBuilder {
                     // `case_when_with_expr` and `case_when_no_expr`, already ensure that
                     // they only calculate a value for each row at most once.
                     #[cfg(debug_assertions)]
-                    if !indices[*row_ix as usize].is_none() {
-                        return internal_err!("Duplicate value for row {}", *row_ix);
-                    }
+                    assert_or_internal_err!(
+                        indices[*row_ix as usize].is_none(),
+                        "Duplicate value for row {}",
+                        *row_ix
+                    );
 
                     indices[*row_ix as usize] = array_index;
                 }
@@ -861,12 +866,13 @@ impl CaseBody {
         // Since each when expression is tested against the base expression using the equality
         // operator, null base values can never match any when expression. `x = NULL` is falsy,
         // for all possible values of `x`.
-        if base_values.null_count() > 0 {
+        let base_null_count = base_values.logical_null_count();
+        if base_null_count > 0 {
             // Use `is_not_null` since this is a cheap clone of the null buffer from 'base_value'.
             // We already checked there are nulls, so we can be sure a new buffer will not be
             // created.
             let base_not_nulls = is_not_null(base_values.as_ref())?;
-            let base_all_null = base_values.null_count() == remainder_batch.num_rows();
+            let base_all_null = base_null_count == remainder_batch.num_rows();
 
             // If there is an else expression, use that as the default value for the null rows
             // Otherwise the default `null` value from the result builder will be used.
@@ -1282,16 +1288,62 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        // this expression is nullable if any of the input expressions are nullable
-        let then_nullable = self
+        let nullable_then = self
             .body
             .when_then_expr
             .iter()
-            .map(|(_, t)| t.nullable(input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        if then_nullable.contains(&true) {
-            Ok(true)
+            .filter_map(|(w, t)| {
+                let is_nullable = match t.nullable(input_schema) {
+                    // Pass on error determining nullability verbatim
+                    Err(e) => return Some(Err(e)),
+                    Ok(n) => n,
+                };
+
+                // Branches with a then expression that is not nullable do not impact the
+                // nullability of the case expression.
+                if !is_nullable {
+                    return None;
+                }
+
+                // For case-with-expression assume all 'then' expressions are reachable
+                if self.body.expr.is_some() {
+                    return Some(Ok(()));
+                }
+
+                // For branches with a nullable 'then' expression, try to determine
+                // if the 'then' expression is ever reachable in the situation where
+                // it would evaluate to null.
+
+                // Replace the `then` expression with `NULL` in the `when` expression
+                let with_null = match replace_with_null(w, t.as_ref(), input_schema) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(e) => e,
+                };
+
+                // Try to const evaluate the modified `when` expression.
+                let predicate_result = match evaluate_predicate(&with_null) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(b) => b,
+                };
+
+                match predicate_result {
+                    // Evaluation was inconclusive or true, so the 'then' expression is reachable
+                    None | Some(true) => Some(Ok(())),
+                    // Evaluation proves the branch will never be taken.
+                    // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                    Some(false) => None,
+                }
+            })
+            .next();
+
+        if let Some(nullable_then) = nullable_then {
+            // There is at least one reachable nullable 'then' expression, so the case
+            // expression itself is nullable.
+            // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+            nullable_then.map(|_| true)
         } else if let Some(e) = &self.body.else_expr {
+            // There are no reachable nullable 'then' expressions, so all we still need to
+            // check is the 'else' expression's nullability.
             e.nullable(input_schema)
         } else {
             // CASE produces NULL if there is no `else` expr
@@ -1394,6 +1446,51 @@ impl PhysicalExpr for CaseExpr {
     }
 }
 
+/// Attempts to const evaluate the given `predicate`.
+/// Returns:
+/// - `Some(true)` if the predicate evaluates to a truthy value.
+/// - `Some(false)` if the predicate evaluates to a falsy value.
+/// - `None` if the predicate could not be evaluated.
+fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<Option<bool>> {
+    // Create a dummy record with no columns and one row
+    let batch = RecordBatch::try_new_with_options(
+        Arc::new(Schema::empty()),
+        vec![],
+        &RecordBatchOptions::new().with_row_count(Some(1)),
+    )?;
+
+    // Evaluate the predicate and interpret the result as a boolean
+    let result = match predicate.evaluate(&batch) {
+        // An error during evaluation means we couldn't const evaluate the predicate, so return `None`
+        Err(_) => None,
+        Ok(ColumnarValue::Array(array)) => Some(
+            ScalarValue::try_from_array(array.as_ref(), 0)?
+                .cast_to(&DataType::Boolean)?,
+        ),
+        Ok(ColumnarValue::Scalar(scalar)) => Some(scalar.cast_to(&DataType::Boolean)?),
+    };
+    Ok(result.map(|v| matches!(v, ScalarValue::Boolean(Some(true)))))
+}
+
+fn replace_with_null(
+    expr: &Arc<dyn PhysicalExpr>,
+    expr_to_replace: &dyn PhysicalExpr,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    let with_null = Arc::clone(expr)
+        .transform_down(|e| {
+            if e.as_ref().dyn_eq(expr_to_replace) {
+                let data_type = e.data_type(input_schema)?;
+                let null_literal = lit(ScalarValue::try_new_null(&data_type)?);
+                Ok(Transformed::yes(null_literal))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        })?
+        .data;
+    Ok(with_null)
+}
+
 /// Create a CASE expression
 pub fn case(
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -1407,7 +1504,8 @@ pub fn case(
 mod tests {
     use super::*;
 
-    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
+    use crate::expressions;
+    use crate::expressions::{binary, cast, col, is_not_null, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
@@ -1415,7 +1513,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
-    use datafusion_expr::Operator;
+    use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
@@ -1442,6 +1540,84 @@ mod tests {
         let result = as_int32_array(&result)?;
 
         let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![0u8, 1u8, 2u8, 3u8]);
+        let values = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 END
+        let when1 = lit("foo");
+        let then1 = lit(123i32);
+        let when2 = lit("bar");
+        let then2 = lit(456i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_all_null_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![2u8, 2u8, 2u8, 2u8]);
+        let values = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 END
+        let when1 = lit("foo");
+        let then1 = lit(123i32);
+        let when2 = lit("bar");
+        let then2 = lit(456i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![None, None, None, None]);
 
         assert_eq!(expected, result);
 
@@ -2291,5 +2467,183 @@ mod tests {
         assert_eq!(merged.value(1), "B");
         assert!(merged.is_valid(2));
         assert_eq!(merged.value(2), "C");
+    }
+
+    fn when_then_else(
+        when: &Arc<dyn PhysicalExpr>,
+        then: &Arc<dyn PhysicalExpr>,
+        els: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let case = CaseExpr::try_new(
+            None,
+            vec![(Arc::clone(when), Arc::clone(then))],
+            Some(Arc::clone(els)),
+        )?;
+        Ok(Arc::new(case))
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_nullable_column() -> Result<()> {
+        case_expression_nullability(true)
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_not_nullable_column() -> Result<()> {
+        case_expression_nullability(false)
+    }
+
+    fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
+        let schema =
+            Schema::new(vec![Field::new("foo", DataType::Int32, col_is_nullable)]);
+
+        let foo = col("foo", &schema)?;
+        let foo_is_not_null = is_not_null(Arc::clone(&foo))?;
+        let foo_is_null = expressions::is_null(Arc::clone(&foo))?;
+        let not_foo_is_null = expressions::not(Arc::clone(&foo_is_null))?;
+        let zero = lit(0);
+        let foo_eq_zero =
+            binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?;
+
+        assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&foo_eq_zero, &foo, &zero)?, &schema);
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::And,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::And,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::Or,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?,
+                    Operator::Or,
+                    Arc::clone(&foo_is_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&zero),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    Operator::Or,
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&foo),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        Ok(())
+    }
+
+    fn assert_not_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(!expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullability(expr: Arc<dyn PhysicalExpr>, schema: &Schema, nullable: bool) {
+        if nullable {
+            assert_nullable(expr, schema);
+        } else {
+            assert_not_nullable(expr, schema);
+        }
     }
 }

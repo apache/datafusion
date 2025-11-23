@@ -31,11 +31,6 @@ SELECT crc32('Spark');
 1557323817
 
 query I
-SELECT crc32(NULL);
-----
-NULL
-
-query I
 SELECT crc32('');
 ----
 0
@@ -45,32 +40,48 @@ SELECT crc32(arrow_cast('', 'Binary'));
 ----
 0
 
-# Test with LargeUtf8 (using CAST to ensure type)
+# Test with different types
+query I
+SELECT crc32(NULL);
+----
+NULL
+
 query I
 SELECT crc32(arrow_cast('Spark', 'LargeUtf8'));
 ----
 1557323817
 
-# Test with Utf8View (using CAST to ensure type)
 query I
 SELECT crc32(arrow_cast('Spark', 'Utf8View'));
 ----
 1557323817
 
-# Test with different binary types
+query I
+SELECT crc32(arrow_cast('Spark', 'Utf8'));
+----
+1557323817
+
 query I
 SELECT crc32(arrow_cast('Spark', 'Binary'));
 ----
 1557323817
 
-# Test with LargeBinary
+query I
+SELECT crc32(arrow_cast(arrow_cast('Spark', 'Binary'), 'FixedSizeBinary(5)'));
+----
+1557323817
+
 query I
 SELECT crc32(arrow_cast('Spark', 'LargeBinary'));
 ----
 1557323817
 
-# Test with BinaryView
 query I
 SELECT crc32(arrow_cast('Spark', 'BinaryView'));
 ----
 1557323817
+
+# Upstream arrow-rs issue: https://github.com/apache/arrow-rs/issues/8841
+# This should succeed after we receive the fix
+query error Arrow error: Compute error: Internal Error: Cannot cast BinaryView to BinaryArray of expected type
+select crc32(arrow_cast(null, 'Dictionary(Int32, Utf8)'))

@@ -217,7 +217,7 @@ impl DigestAlgorithm {
 
     fn digest_utf8_array_impl<'a, StringArrType>(
         self,
-        input_value: StringArrType,
+        input_value: &StringArrType,
     ) -> ArrayRef
     where
         StringArrType: StringArrayType<'a>,
@@ -248,7 +248,7 @@ impl DigestAlgorithm {
 
     fn digest_binary_array_impl<'a, BinaryArrType>(
         self,
-        input_value: BinaryArrType,
+        input_value: &BinaryArrType,
     ) -> ArrayRef
     where
         BinaryArrType: BinaryArrayType<'a>,
@@ -286,22 +286,22 @@ pub fn digest_process(
         ColumnarValue::Array(a) => {
             let output = match a.data_type() {
                 DataType::Utf8View => {
-                    digest_algorithm.digest_utf8_array_impl(a.as_string_view())
+                    digest_algorithm.digest_utf8_array_impl(&a.as_string_view())
                 }
                 DataType::Utf8 => {
-                    digest_algorithm.digest_utf8_array_impl(a.as_string::<i32>())
+                    digest_algorithm.digest_utf8_array_impl(&a.as_string::<i32>())
                 }
                 DataType::LargeUtf8 => {
-                    digest_algorithm.digest_utf8_array_impl(a.as_string::<i64>())
+                    digest_algorithm.digest_utf8_array_impl(&a.as_string::<i64>())
                 }
                 DataType::Binary => {
-                    digest_algorithm.digest_binary_array_impl(a.as_binary::<i32>())
+                    digest_algorithm.digest_binary_array_impl(&a.as_binary::<i32>())
                 }
                 DataType::LargeBinary => {
-                    digest_algorithm.digest_binary_array_impl(a.as_binary::<i64>())
+                    digest_algorithm.digest_binary_array_impl(&a.as_binary::<i64>())
                 }
                 DataType::BinaryView => {
-                    digest_algorithm.digest_binary_array_impl(a.as_binary_view())
+                    digest_algorithm.digest_binary_array_impl(&a.as_binary_view())
                 }
                 other => {
                     return exec_err!(

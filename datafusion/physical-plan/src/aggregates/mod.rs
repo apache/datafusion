@@ -44,7 +44,10 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints, DataFusionError,
+    Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
@@ -492,9 +495,13 @@ impl AggregateExec {
         schema: SchemaRef,
     ) -> Result<Self> {
         // Make sure arguments are consistent in size
-        if aggr_expr.len() != filter_expr.len() {
-            return internal_err!("Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match", aggr_expr, filter_expr);
-        }
+        assert_eq_or_internal_err!(
+            aggr_expr.len(),
+            filter_expr.len(),
+            "Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match",
+            aggr_expr,
+            filter_expr
+        );
 
         let input_eq_properties = input.equivalence_properties();
         // Get GROUP BY expressions:
@@ -619,7 +626,7 @@ impl AggregateExec {
     fn execute_typed(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
         // no group by at all
         if self.group_by.expr.is_empty() {
@@ -754,7 +761,7 @@ impl AggregateExec {
         &self.input_order_mode
     }
 
-    fn statistics_inner(&self, child_statistics: Statistics) -> Result<Statistics> {
+    fn statistics_inner(&self, child_statistics: &Statistics) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
@@ -1013,7 +1020,7 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, context)
+        self.execute_typed(partition, &context)
             .map(|stream| stream.into())
     }
 
@@ -1026,7 +1033,8 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.statistics_inner(self.input().partition_statistics(partition)?)
+        let child_statistics = self.input().partition_statistics(partition)?;
+        self.statistics_inner(&child_statistics)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -2213,7 +2221,7 @@ mod tests {
                 Arc::clone(&input_schema),
             )?);
 
-            let stream = partial_aggregate.execute_typed(0, Arc::clone(&task_ctx))?;
+            let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
 
             // ensure that we really got the version we wanted
             match version {

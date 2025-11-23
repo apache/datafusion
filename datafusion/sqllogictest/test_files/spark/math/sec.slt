@@ -23,5 +23,23 @@
 
 ## Original Query: SELECT sec(0);
 ## PySpark 3.5.5 Result: {'SEC(0)': 1.0, 'typeof(SEC(0))': 'double', 'typeof(0)': 'int'}
-#query
-#SELECT sec(0::int);
+query R
+SELECT sec(0::int);
+----
+1
+
+query R
+SELECT sec(a) FROM (VALUES (0::INT), (1::INT), (-1::INT), (null)) AS t(a);
+----
+1
+1.850815717680926
+1.850815717680926
+NULL
+
+query R
+SELECT sec(a) FROM (VALUES (pi()), (3 * pi()/2), (pi()/2) , (arrow_cast('NAN','Float32'))) AS t(a);
+----
+-1
+-5443746451065123
+16331239353195370
+NaN
