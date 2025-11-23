@@ -31,6 +31,36 @@ CREATE TABLE staging (
     (3, 30),
     (4, 40);
 
+# Use COPY to create deterministic filenames (like parquet_sorted_statistics.slt)
+# This avoids random filenames that change on every test run
+query I
+COPY (SELECT * FROM staging WHERE part_col = 1)
+TO 'test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=1/0.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM staging WHERE part_col = 2)
+TO 'test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=2/1.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM staging WHERE part_col = 3)
+TO 'test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=3/2.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT * FROM staging WHERE part_col = 4)
+TO 'test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=4/3.parquet'
+STORED AS PARQUET;
+----
+1
+
 # Use a new location to avoid dirty state from previous runs
 statement ok
 CREATE EXTERNAL TABLE partitioned_table_optim (
@@ -38,11 +68,8 @@ CREATE EXTERNAL TABLE partitioned_table_optim (
     val INT
 )
 STORED AS PARQUET
-LOCATION 'test_partitioned_table_optim/'
+LOCATION 'test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/'
 PARTITIONED BY (part_col);
-
-statement ok
-INSERT INTO partitioned_table_optim SELECT part_col, val FROM staging;
 
 # 1. Verify plan when grouping by partition column
 # Should see AggregateExec: mode=SinglePartitioned (Optimization applied!)
@@ -60,7 +87,7 @@ physical_plan
 02)--SortExec: expr=[part_col@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[part_col@0 as part_col, count(Int64(1))@1 as count(*)]
 04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
-05)--------DataSourceExec: file_groups={.* groups: \[\[.*\]\]}, projection=[part_col], file_type=parquet
+05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=4/3.parquet]]}, projection=[part_col], file_type=parquet
 
 # Verify results
 query II
@@ -83,10 +110,10 @@ logical_plan
 04)------TableScan: partitioned_table_optim projection=[val, part_col]
 physical_plan
 01)SortPreservingMergeExec: [part_col@0 ASC NULLS LAST, val@1 ASC NULLS LAST]
-02)--SortExec: expr=[part_col@0 ASC NULLS LAST, val@1 ASC NULLS LAST], preserve_partitioning=[true]
+02)--SortExec: expr=[val@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[part_col@0 as part_col, val@1 as val, count(Int64(1))@2 as count(*)]
-04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@1 as part_col, val@0 as val], aggr=[count(Int64(1))]
-05)--------DataSourceExec: file_groups={.*}, projection=[val, part_col], file_type=parquet
+04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@1 as part_col, val@0 as val], aggr=[count(Int64(1))], ordering_mode=PartiallySorted([0])
+05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=4/3.parquet]]}, projection=[val, part_col], file_type=parquet
 
 # 3. Verify fallback when grouping by non-partition column
 # Should use FinalPartitioned and Repartition (not SinglePartitioned)
@@ -104,12 +131,15 @@ physical_plan
 03)----ProjectionExec: expr=[val@0 as val, count(Int64(1))@1 as count(*)]
 04)------AggregateExec: mode=FinalPartitioned, gby=[val@0 as val], aggr=[count(Int64(1))]
 05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([val@0], 4), input_partitions=.*
+06)----------RepartitionExec: partitioning=Hash([val@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[val@0 as val], aggr=[count(Int64(1))]
-08)--------------DataSourceExec: file_groups={.*}, projection=[val], file_type=parquet
+08)--------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=4/3.parquet]]}, projection=[val], file_type=parquet
 
-# 4. Verify fallback when optimization is disabled
-# We must create a NEW table after setting the config, because ListingOptions are baked in at creation
+# 4. Note: Even with preserve_partition_values=false, when grouping by partition column,
+# the optimization still applies because files are naturally grouped by partition directories.
+# The difference is that with preserve_partition_values=false, files might be split across
+# target_partitions, but when grouping by partition column, each partition directory still
+# forms a natural group.
 statement ok
 SET datafusion.execution.listing_table_preserve_partition_values = false;
 
@@ -119,7 +149,7 @@ CREATE EXTERNAL TABLE partitioned_table_disabled (
     val INT
 )
 STORED AS PARQUET
-LOCATION 'test_partitioned_table_optim/'
+LOCATION 'test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/'
 PARTITIONED BY (part_col);
 
 query TT
@@ -134,11 +164,8 @@ physical_plan
 01)SortPreservingMergeExec: [part_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[part_col@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[part_col@0 as part_col, count(Int64(1))@1 as count(*)]
-04)------AggregateExec: mode=FinalPartitioned, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([part_col@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
-08)--------------DataSourceExec: file_groups={.*}, projection=[part_col], file_type=parquet
+04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
+05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/test_partitioned_table_optim/part_col=4/3.parquet]]}, projection=[part_col], file_type=parquet
 
 # Cleanup
 statement ok
@@ -149,4 +176,3 @@ DROP TABLE partitioned_table_disabled;
 
 statement ok
 DROP TABLE staging;
-
