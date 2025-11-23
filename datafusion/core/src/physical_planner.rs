@@ -838,22 +838,6 @@ impl DefaultPhysicalPlanner {
                         false
                     };
 
-                let target_partitions = session_state.config().target_partitions();
-                let child_partition_count = initial_aggr
-                    .properties()
-                    .output_partitioning()
-                    .partition_count();
-                let effective_partition_count = if key_partition_on_group {
-                    child_partition_count.max(2)
-                } else {
-                    child_partition_count
-                };
-                // Hash repartitioning is only helpful if we have grouping keys, the session
-                // allows repartitioning, and there is more than one target partition.
-                let hash_repartition_enabled = !groups.is_empty()
-                    && target_partitions > 1
-                    && session_state.config().repartition_aggregations();
-
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
                 // into a LAST_VALUE with the reverse ordering requirement.
@@ -869,12 +853,18 @@ impl DefaultPhysicalPlanner {
                 let requires_single_partition =
                     groups.expr().is_empty() || has_ordered_aggregate;
 
-                // Two independent ways to keep the final stage parallel:
-                //   1. The scan is already KeyPartitioned on the grouping keys, producing
-                //      multiple partitions that can run independently.
-                //   2. We are allowed to insert a hash repartition before the final stage.
+                // Determine if we can use parallel final aggregation:
+                //   1. The scan is already KeyPartitioned on the grouping keys with >1 partitions
+                //   2. We are allowed to insert a hash repartition before the final stage
+                let child_partition_count = initial_aggr
+                    .properties()
+                    .output_partitioning()
+                    .partition_count();
                 let key_partition_supports_parallel =
-                    key_partition_on_group && effective_partition_count > 1;
+                    key_partition_on_group && child_partition_count > 1;
+                let hash_repartition_enabled = !groups.is_empty()
+                    && session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_aggregations();
                 let use_partitioned_final = !requires_single_partition
                     && (key_partition_supports_parallel || hash_repartition_enabled);
                 let next_partition_mode = if use_partitioned_final {
