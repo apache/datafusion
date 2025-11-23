@@ -357,12 +357,12 @@ select arrow_cast(make_array(1, 2, 3), 'List(Int64)');
 query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'List(Int64)'));
 ----
-List(nullable Int64)
+List(Int64)
 
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'), 'List(List(Int64))'));
 ----
-List(nullable List(nullable Int64))
+List(List(Int64))
 
 ## LargeList
 
@@ -380,12 +380,12 @@ select arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)');
 query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'));
 ----
-LargeList(nullable Int64)
+LargeList(Int64)
 
 query T
 select arrow_typeof(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'));
 ----
-LargeList(nullable LargeList(nullable Int64))
+LargeList(LargeList(Int64))
 
 ## FixedSizeList
 
@@ -417,7 +417,7 @@ select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)');
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 'FixedSizeList(3, Int64)'));
 ----
-FixedSizeList(3 x nullable Int64)
+FixedSizeList(3 x Int64)
 
 query ?
 select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');

@@ -263,3 +263,20 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+
+## Temporary arrow-rs patch until 57.1.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.1.0" }
