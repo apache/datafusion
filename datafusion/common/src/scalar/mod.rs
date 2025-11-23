@@ -5208,12 +5208,15 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::cast::{as_list_array, as_map_array, as_struct_array};
+    use crate::cast::{
+        as_large_list_view_array, as_list_array, as_map_array, as_struct_array,
+    };
     use crate::test_util::batches_to_string;
     use arrow::array::{
-        FixedSizeListBuilder, Int32Builder, LargeListBuilder, ListBuilder, MapBuilder,
-        NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveBuilder, RecordBatch,
-        StringBuilder, StringDictionaryBuilder, StructBuilder, UnionBuilder,
+        FixedSizeListBuilder, Int32Builder, LargeListBuilder, LargeListViewBuilder,
+        ListBuilder, ListViewBuilder, MapBuilder, NullArray, NullBufferBuilder,
+        OffsetSizeTrait, PrimitiveBuilder, RecordBatch, StringBuilder,
+        StringDictionaryBuilder, StructBuilder, UnionBuilder,
     };
     use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
@@ -5399,6 +5402,28 @@ mod tests {
         ]);
 
         assert_eq!(&arr, actual_list_arr);
+
+        // TODO: no function or associated item named `from_iter_primitive` found for struct `GenericListViewArray`
+        // // ListView
+        // let arr =
+        //     ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+        //         Some(1),
+        //         None,
+        //         Some(2),
+        //     ])]);
+        //
+        // let sv = ScalarValue::List(Arc::new(arr));
+        // let actual_arr = sv
+        //     .to_array_of_size(2)
+        //     .expect("Failed to convert to array of size");
+        // let actual_list_arr = actual_arr.as_list_view::<i32>();
+        //
+        // let arr = ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        //     Some(vec![Some(1), None, Some(2)]),
+        //     Some(vec![Some(1), None, Some(2)]),
+        // ]);
+        //
+        // assert_eq!(&arr, actual_list_arr);
     }
 
     #[test]
@@ -5614,13 +5639,13 @@ mod tests {
 
     #[test]
     fn iter_to_array_primitive_test() {
+        // List
         // List[[1,2,3]], List[null], List[[4,5]]
         let scalars = build_list::<i32>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
             Some(vec![Some(4), Some(5)]),
         ]);
-
         let array = ScalarValue::iter_to_array(scalars).unwrap();
         let list_array = as_list_array(&array).unwrap();
         // List[[1,2,3], null, [4,5]]
@@ -5631,6 +5656,8 @@ mod tests {
         ]);
         assert_eq!(list_array, &expected);
 
+        // LargeList
+        // List[[1,2,3]], List[null], List[[4,5]]
         let scalars = build_list::<i64>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
@@ -5638,13 +5665,50 @@ mod tests {
         ]);
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
-        let list_array = as_large_list_array(&array).unwrap();
+        let large_list_array = as_large_list_array(&array).unwrap();
         let expected = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
             Some(vec![Some(4), Some(5)]),
         ]);
-        assert_eq!(list_array, &expected);
+        assert_eq!(large_list_array, &expected);
+
+        // TODO: no function or associated item named `from_iter_primitive` found for struct `GenericListViewArray`
+        // // ListView
+        // // List[[1,2,3]], List[null], List[[4,5]]
+        // let scalars = build_list::<i32>(vec![
+        //     Some(vec![Some(1), Some(2), Some(3)]),
+        //     None,
+        //     Some(vec![Some(4), Some(5)]),
+        // ]);
+        //
+        // let array = ScalarValue::iter_to_array(scalars).unwrap();
+        // let list_view_array = as_list_view_array(&array).unwrap();
+        // // List[[1,2,3], null, [4,5]]
+        // let expected = ListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![
+        //     Some(vec![Some(1), Some(2), Some(3)]),
+        //     None,
+        //     Some(vec![Some(4), Some(5)]),
+        // ]);
+        // assert_eq!(list_view_array, &expected);
+        //
+        // // LargeListView
+        // // List[[1,2,3]], List[null], List[[4,5]]
+        // let scalars = build_list::<i64>(vec![
+        //     Some(vec![Some(1), Some(2), Some(3)]),
+        //     None,
+        //     Some(vec![Some(4), Some(5)]),
+        // ]);
+        //
+        // let array = ScalarValue::iter_to_array(scalars).unwrap();
+        // let large_list_view_array = as_large_list_view_array(&array).unwrap();
+        // // List[[1,2,3], null, [4,5]]
+        // let expected = LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![
+        //     Some(vec![Some(1), Some(2), Some(3)]),
+        //     None,
+        //     Some(vec![Some(4), Some(5)]),
+        // ]);
+        // assert_eq!(large_list_view_array, &expected);
     }
 
     #[test]
@@ -5686,12 +5750,21 @@ mod tests {
                 Some(vec![None, Some(5)]),
             ]));
 
+        // TODO: this is NOT fixed size list array
         let fsl_array: ArrayRef =
             Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
                 Some(vec![Some(0), Some(1), Some(2)]),
                 None,
                 Some(vec![Some(3), None, Some(5)]),
             ]));
+
+        // TODO: no function or associated item named `from_iter_primitive` found for struct `GenericListViewArray`
+        // let list_view_array: ArrayRef =
+        //     Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        //         Some(vec![Some(0), Some(1), Some(2)]),
+        //         None,
+        //         Some(vec![None, Some(5)]),
+        //     ]));
 
         for arr in [list_array, fsl_array] {
             for i in 0..arr.len() {
@@ -6267,6 +6340,41 @@ mod tests {
             ),
         ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        // TODO: no function or associated item named `from_iter_primitive` found for struct `GenericListViewArray`
+        // let a = ScalarValue::ListView(Arc::new(ListViewArray::from_iter_primitive::<
+        //     Int64Type,
+        //     _,
+        //     _,
+        // >(vec![Some(vec![
+        //     None,
+        //     Some(2),
+        //     Some(3),
+        // ])])));
+        // let b = ScalarValue::ListView(Arc::new(ListViewArray::from_iter_primitive::<
+        //     Int64Type,
+        //     _,
+        //     _,
+        // >(vec![Some(vec![
+        //     Some(1),
+        //     Some(2),
+        //     Some(3),
+        // ])])));
+        // assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+        //
+        // let a =
+        //     ScalarValue::LargeListView(Arc::new(
+        //         LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(
+        //             vec![None, Some(2), Some(3)],
+        //         )]),
+        //     ));
+        // let b =
+        //     ScalarValue::LargeListView(Arc::new(
+        //         LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(
+        //             vec![Some(1), Some(2), Some(3)],
+        //         )]),
+        //     ));
+        // assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 
     #[test]
@@ -6616,6 +6724,32 @@ mod tests {
         );
         assert_eq!(expected, scalar);
         assert!(expected.is_null());
+
+        // TODO: arrow-data support: ListView, upstream issue later
+        //  entered unreachable code: ListView(nullable Int32)
+        // // Test for ListView
+        // let data_type = &DataType::ListView(Arc::clone(&inner_field));
+        // let scalar: ScalarValue = data_type.try_into().unwrap();
+        // let expected = ScalarValue::ListView(
+        //     new_null_array(data_type, 1)
+        //         .as_list_view::<i32>()
+        //         .to_owned()
+        //         .into(),
+        // );
+        // assert_eq!(expected, scalar);
+        // assert!(expected.is_null());
+        //
+        // // Test for LargeListView
+        // let data_type = &DataType::LargeListView(Arc::clone(&inner_field));
+        // let scalar: ScalarValue = data_type.try_into().unwrap();
+        // let expected = ScalarValue::LargeListView(
+        //     new_null_array(data_type, 1)
+        //         .as_list_view::<i64>()
+        //         .to_owned()
+        //         .into(),
+        // );
+        // assert_eq!(expected, scalar);
+        // assert!(expected.is_null());
     }
 
     #[test]
@@ -7326,6 +7460,35 @@ mod tests {
                 builder.append(true);
                 Arc::new(builder.finish())
             },
+            // TODO: https://github.com/apache/arrow-rs/pull/8645
+            // // list view array
+            // {
+            //     let values_builder = StringBuilder::new();
+            //     let mut builder = ListViewBuilder::new(values_builder);
+            //     // [A, B]
+            //     builder.values().append_value("A");
+            //     builder.values().append_value("B");
+            //     builder.append(true);
+            //     // [ ] (empty list)
+            //     builder.append(true);
+            //     // Null
+            //     builder.append(false);
+            //     Arc::new(builder.finish())
+            // },
+            // // large list view array
+            // {
+            //     let values_builder = StringBuilder::new();
+            //     let mut builder = LargeListViewBuilder::new(values_builder);
+            //     // [A, B]
+            //     builder.values().append_value("A");
+            //     builder.values().append_value("B");
+            //     builder.append(true);
+            //     // [ ] (empty list)
+            //     builder.append(true);
+            //     // Null
+            //     builder.append(false);
+            //     Arc::new(builder.finish())
+            // },
             // map
             {
                 let string_builder = StringBuilder::new();
@@ -7823,6 +7986,40 @@ mod tests {
             },
             DataType::LargeList(Arc::new(Field::new("element", DataType::Int64, true))),
         );
+        // TODO: https://github.com/apache/arrow-rs/pull/8735
+        // CastError("Casting from ListView(nullable Int32, field: 'element') to ListView(nullable Int64, field: 'element')
+        // check_scalar_cast(
+        //     {
+        //         let element_field =
+        //             Arc::new(Field::new("element", DataType::Int32, true));
+        //
+        //         let mut builder =
+        //             ListViewBuilder::new(Int32Builder::new()).with_field(element_field);
+        //         builder.append_value([Some(1)]);
+        //         builder.append(true);
+        //
+        //         ScalarValue::ListView(Arc::new(builder.finish()))
+        //     },
+        //     DataType::ListView(Arc::new(Field::new("element", DataType::Int64, true))),
+        // );
+        // check_scalar_cast(
+        //     {
+        //         let element_field =
+        //             Arc::new(Field::new("element", DataType::Int32, true));
+        //
+        //         let mut builder = LargeListViewBuilder::new(Int32Builder::new())
+        //             .with_field(element_field);
+        //         builder.append_value([Some(1)]);
+        //         builder.append(true);
+        //
+        //         ScalarValue::LargeListView(Arc::new(builder.finish()))
+        //     },
+        //     DataType::LargeListView(Arc::new(Field::new(
+        //         "element",
+        //         DataType::Int64,
+        //         true,
+        //     ))),
+        // );
     }
 
     // mimics how casting work on scalar values by `casting` `scalar` to `desired_type`
@@ -8972,6 +9169,11 @@ mod tests {
                 42,
             ))
             .unwrap(),
+            // upstream issue https://github.com/apache/arrow-rs/issues/8904
+            // ScalarValue::try_new_null(&DataType::ListView(Arc::clone(&field_ref)))
+            //     .unwrap(),
+            // ScalarValue::try_new_null(&DataType::LargeListView(Arc::clone(&field_ref)))
+            //     .unwrap(),
             ScalarValue::try_new_null(&DataType::Struct(
                 vec![Arc::clone(&field_ref)].into(),
             ))
@@ -9060,6 +9262,17 @@ mod tests {
             ScalarValue::List(arr) => {
                 assert_eq!(arr.len(), 1);
                 assert_eq!(arr.value_length(0), 0); // empty list
+            }
+            _ => panic!("Expected List"),
+        }
+
+        let list_result =
+            ScalarValue::new_default(&DataType::ListView(Arc::new(list_field.clone())))
+                .unwrap();
+        match list_result {
+            ScalarValue::ListView(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert_eq!(arr.value_size(0), 0); // empty list
             }
             _ => panic!("Expected List"),
         }
@@ -9172,6 +9385,14 @@ mod tests {
             )))),
             None
         );
+        assert_eq!(
+            ScalarValue::min(&DataType::ListView(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
+            None
+        );
     }
 
     #[test]
@@ -9246,6 +9467,14 @@ mod tests {
                 DataType::Int32,
                 true
             )]))),
+            None
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::ListView(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
             None
         );
     }
