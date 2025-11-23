@@ -3046,6 +3046,16 @@ mod tests {
     }
 
     #[test]
+    fn iter_test_extension_config() {
+        let mut extension = Extensions::new();
+        extension.insert(TestExtensionConfig::default());
+        let table_config = TableOptions::new().with_extensions(extension);
+        let extensions = table_config.extensions.iter().collect::<Vec<_>>();
+        assert_eq!(extensions.len(), 1);
+        assert_eq!(extensions[0].0, TestExtensionConfig::PREFIX);
+    }
+
+    #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::CSV);
