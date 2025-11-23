@@ -107,7 +107,7 @@ fn bench_push_down_filter(c: &mut Criterion) {
     let plan = BenchmarkPlan { plan, config };
     let optimizer = FilterPushdown::new();
     let session_config = SessionConfig::from(plan.config.clone());
-    let optimizer_context = OptimizerContext::new(&session_config);
+    let optimizer_context = OptimizerContext::new(session_config);
 
     c.bench_function("push_down_filter", |b| {
         b.iter(|| {
