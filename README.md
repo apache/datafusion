@@ -132,7 +132,6 @@ Optional features:
 - `avro`: support for reading the [Apache Avro] format
 - `backtrace`: include backtrace information in error messages
 - `parquet_encryption`: support for using [Parquet Modular Encryption]
-- `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
 
 [apache avro]: https://avro.apache.org/
