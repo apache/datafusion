@@ -326,13 +326,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         }
     }
 
-    fn _tree_print(
-        &self,
-        idx: usize,
-        prefix: String,
-        is_tail: bool,
-        output: &mut String,
-    ) {
+    fn _tree_print(&self, idx: usize, prefix: &str, is_tail: bool, output: &mut String) {
         if let Some(Some(hi)) = self.heap.get(idx) {
             let connector = if idx != 0 {
                 if is_tail {
@@ -357,10 +351,10 @@ impl<VAL: ValueType> TopKHeap<VAL> {
             let right_exists = right_idx < self.len;
 
             if left_exists {
-                self._tree_print(left_idx, child_prefix.clone(), !right_exists, output);
+                self._tree_print(left_idx, &child_prefix, !right_exists, output);
             }
             if right_exists {
-                self._tree_print(right_idx, child_prefix, true, output);
+                self._tree_print(right_idx, &child_prefix, true, output);
             }
         }
     }
@@ -370,7 +364,7 @@ impl<VAL: ValueType> Display for TopKHeap<VAL> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut output = String::new();
         if !self.heap.is_empty() {
-            self._tree_print(0, String::new(), true, &mut output);
+            self._tree_print(0, "", true, &mut output);
         }
         write!(f, "{output}")
     }

@@ -155,16 +155,16 @@ impl PhysicalExpr for NotExpr {
         match (parent, children[0]) {
             (Bernoulli(parent), Bernoulli(child)) => {
                 let parent_range = parent.range();
-                let result = if parent_range == Interval::CERTAINLY_TRUE {
-                    if child.range() == Interval::CERTAINLY_TRUE {
+                let result = if parent_range == Interval::TRUE {
+                    if child.range() == Interval::TRUE {
                         None
                     } else {
                         Some(vec![Distribution::new_bernoulli(ScalarValue::new_zero(
                             &child.data_type(),
                         )?)?])
                     }
-                } else if parent_range == Interval::CERTAINLY_FALSE {
-                    if child.range() == Interval::CERTAINLY_FALSE {
+                } else if parent_range == Interval::FALSE {
+                    if child.range() == Interval::FALSE {
                         None
                     } else {
                         Some(vec![Distribution::new_bernoulli(ScalarValue::new_one(

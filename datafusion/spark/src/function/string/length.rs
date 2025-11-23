@@ -98,33 +98,33 @@ fn spark_length(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            character_length::<_>(string_array)
+            character_length::<_>(&string_array)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            character_length::<_>(string_array)
+            character_length::<_>(&string_array)
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
-            character_length::<_>(string_array)
+            character_length::<_>(&string_array)
         }
         DataType::Binary => {
             let binary_array = args[0].as_binary::<i32>();
-            byte_length::<_>(binary_array)
+            byte_length::<_>(&binary_array)
         }
         DataType::LargeBinary => {
             let binary_array = args[0].as_binary::<i64>();
-            byte_length::<_>(binary_array)
+            byte_length::<_>(&binary_array)
         }
         DataType::BinaryView => {
             let binary_array = args[0].as_binary_view();
-            byte_length::<_>(binary_array)
+            byte_length::<_>(&binary_array)
         }
         other => exec_err!("Unsupported data type {other:?} for function `length`"),
     }
 }
 
-fn character_length<'a, V>(array: V) -> datafusion_common::Result<ArrayRef>
+fn character_length<'a, V>(array: &V) -> datafusion_common::Result<ArrayRef>
 where
     V: StringArrayType<'a>,
 {
@@ -169,7 +169,7 @@ where
     Ok(Arc::new(array))
 }
 
-fn byte_length<'a, V>(array: V) -> datafusion_common::Result<ArrayRef>
+fn byte_length<'a, V>(array: &V) -> datafusion_common::Result<ArrayRef>
 where
     V: BinaryArrayType<'a>,
 {

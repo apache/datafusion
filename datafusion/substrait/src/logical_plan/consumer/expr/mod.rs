@@ -221,7 +221,7 @@ mod tests {
         // Just registering a single function (index 0) so that the plan
         // does not throw a "function not found" error.
         let mut extensions = Extensions::default();
-        extensions.register_function("count".to_string());
+        extensions.register_function("count");
         consumer.extensions = &extensions;
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
@@ -248,7 +248,7 @@ mod tests {
         let mut consumer = test_consumer();
 
         let mut extensions = Extensions::default();
-        extensions.register_function("count".to_string());
+        extensions.register_function("count");
         consumer.extensions = &extensions;
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
