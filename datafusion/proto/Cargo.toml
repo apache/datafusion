@@ -85,3 +85,6 @@ datafusion-functions-window-common = { workspace = true }
 doc-comment = { workspace = true }
 pretty_assertions = "1.4"
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints.clippy]
+collapsible_if = "allow"

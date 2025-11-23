@@ -91,30 +91,30 @@ struct ProviderPrivateData {
 }
 
 impl FFI_SchemaProvider {
-    unsafe fn inner(&self) -> &Arc<dyn SchemaProvider + Send> {
+    unsafe fn inner(&self) -> &Arc<dyn SchemaProvider + Send> { unsafe {
         let private_data = self.private_data as *const ProviderPrivateData;
         &(*private_data).provider
-    }
+    }}
 
-    unsafe fn runtime(&self) -> Option<Handle> {
+    unsafe fn runtime(&self) -> Option<Handle> { unsafe {
         let private_data = self.private_data as *const ProviderPrivateData;
         (*private_data).runtime.clone()
-    }
+    }}
 }
 
 unsafe extern "C" fn table_names_fn_wrapper(
     provider: &FFI_SchemaProvider,
-) -> RVec<RString> {
+) -> RVec<RString> { unsafe {
     let provider = provider.inner();
 
     let table_names = provider.table_names();
     table_names.into_iter().map(|s| s.into()).collect()
-}
+}}
 
 unsafe extern "C" fn table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
-) -> FfiFuture<RResult<ROption<FFI_TableProvider>, RString>> {
+) -> FfiFuture<RResult<ROption<FFI_TableProvider>, RString>> { unsafe {
     let runtime = provider.runtime();
     let provider = Arc::clone(provider.inner());
 
@@ -126,13 +126,13 @@ unsafe extern "C" fn table_fn_wrapper(
         RResult::ROk(table)
     }
     .into_ffi()
-}
+}}
 
 unsafe extern "C" fn register_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
     table: FFI_TableProvider,
-) -> RResult<ROption<FFI_TableProvider>, RString> {
+) -> RResult<ROption<FFI_TableProvider>, RString> { unsafe {
     let runtime = provider.runtime();
     let provider = provider.inner();
 
@@ -142,12 +142,12 @@ unsafe extern "C" fn register_table_fn_wrapper(
         .map(|t| FFI_TableProvider::new(t, true, runtime));
 
     RResult::ROk(returned_table.into())
-}
+}}
 
 unsafe extern "C" fn deregister_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
-) -> RResult<ROption<FFI_TableProvider>, RString> {
+) -> RResult<ROption<FFI_TableProvider>, RString> { unsafe {
     let runtime = provider.runtime();
     let provider = provider.inner();
 
@@ -155,23 +155,23 @@ unsafe extern "C" fn deregister_table_fn_wrapper(
         .map(|t| FFI_TableProvider::new(t, true, runtime));
 
     RResult::ROk(returned_table.into())
-}
+}}
 
 unsafe extern "C" fn table_exist_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
-) -> bool {
+) -> bool { unsafe {
     provider.inner().table_exist(name.as_str())
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SchemaProvider) {
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SchemaProvider) { unsafe {
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
     drop(private_data);
-}
+}}
 
 unsafe extern "C" fn clone_fn_wrapper(
     provider: &FFI_SchemaProvider,
-) -> FFI_SchemaProvider {
+) -> FFI_SchemaProvider { unsafe {
     let old_private_data = provider.private_data as *const ProviderPrivateData;
     let runtime = (*old_private_data).runtime.clone();
 
@@ -192,7 +192,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         deregister_table: deregister_table_fn_wrapper,
         table_exist: table_exist_fn_wrapper,
     }
-}
+}}
 
 impl Drop for FFI_SchemaProvider {
     fn drop(&mut self) {

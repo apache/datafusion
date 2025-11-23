@@ -78,16 +78,16 @@ pub struct ExecutionPlanPrivateData {
 
 unsafe extern "C" fn properties_fn_wrapper(
     plan: &FFI_ExecutionPlan,
-) -> FFI_PlanProperties {
+) -> FFI_PlanProperties { unsafe {
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
 
     plan.properties().into()
-}
+}}
 
 unsafe extern "C" fn children_fn_wrapper(
     plan: &FFI_ExecutionPlan,
-) -> RVec<FFI_ExecutionPlan> {
+) -> RVec<FFI_ExecutionPlan> { unsafe {
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
     let ctx = &(*private_data).context;
@@ -102,12 +102,12 @@ unsafe extern "C" fn children_fn_wrapper(
         .collect();
 
     children.into()
-}
+}}
 
 unsafe extern "C" fn execute_fn_wrapper(
     plan: &FFI_ExecutionPlan,
     partition: usize,
-) -> RResult<FFI_RecordBatchStream, RString> {
+) -> RResult<FFI_RecordBatchStream, RString> { unsafe {
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
     let ctx = &(*private_data).context;
@@ -116,21 +116,21 @@ unsafe extern "C" fn execute_fn_wrapper(
     rresult!(plan
         .execute(partition, Arc::clone(ctx))
         .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime)))
-}
+}}
 
-unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
+unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString { unsafe {
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
 
     plan.name().into()
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
+unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) { unsafe {
     let private_data = Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
     drop(private_data);
-}
+}}
 
-unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan {
+unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan { unsafe {
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan_data = &(*private_data);
 
@@ -139,7 +139,7 @@ unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_Execution
         Arc::clone(&plan_data.context),
         plan_data.runtime.clone(),
     )
-}
+}}
 
 impl Clone for FFI_ExecutionPlan {
     fn clone(&self) -> Self {

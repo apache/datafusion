@@ -278,7 +278,7 @@ impl PhysicalExpr for BinaryExpr {
         let result_type = self.data_type(input_schema)?;
 
         // If the left-hand side is an array and the right-hand side is a non-null scalar, try the optimized kernel.
-        if let (ColumnarValue::Array(array), ColumnarValue::Scalar(ref scalar)) =
+        if let (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) =
             (&lhs, &rhs)
         {
             if !scalar.is_null() {

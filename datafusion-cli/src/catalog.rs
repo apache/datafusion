@@ -359,10 +359,12 @@ mod tests {
         } else {
             "/home/user"
         };
-        env::set_var(
-            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-            test_home_path,
-        );
+        unsafe {
+            env::set_var(
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                test_home_path,
+            )
+        };
         let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
         let expected = PathBuf::from(test_home_path)
             .join("Code")
@@ -376,12 +378,14 @@ mod tests {
             .to_string();
         let actual = substitute_tilde(input.to_string());
         assert_eq!(actual, expected);
-        match original_home {
-            Some(home_path) => env::set_var(
-                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-                home_path.to_str().unwrap(),
-            ),
-            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+        unsafe {
+            match original_home {
+                Some(home_path) => env::set_var(
+                    if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                    home_path.to_str().unwrap(),
+                ),
+                None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+            }
         }
     }
 }

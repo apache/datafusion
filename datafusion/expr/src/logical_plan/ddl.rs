@@ -132,7 +132,7 @@ impl DdlStatement {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
                     DdlStatement::CreateExternalTable(CreateExternalTable {
-                        ref name,
+                        name,
                         constraints,
                         ..
                     }) => {

@@ -126,7 +126,7 @@ pub struct ScalarUDFPrivateData {
 unsafe extern "C" fn return_type_fn_wrapper(
     udf: &FFI_ScalarUDF,
     arg_types: RVec<WrappedSchema>,
-) -> RResult<WrappedSchema, RString> {
+) -> RResult<WrappedSchema, RString> { unsafe {
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf = &(*private_data).udf;
 
@@ -138,12 +138,12 @@ unsafe extern "C" fn return_type_fn_wrapper(
         .map(WrappedSchema);
 
     rresult!(return_type)
-}
+}}
 
 unsafe extern "C" fn return_field_from_args_fn_wrapper(
     udf: &FFI_ScalarUDF,
     args: FFI_ReturnFieldArgs,
-) -> RResult<WrappedSchema, RString> {
+) -> RResult<WrappedSchema, RString> { unsafe {
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf = &(*private_data).udf;
 
@@ -156,12 +156,12 @@ unsafe extern "C" fn return_field_from_args_fn_wrapper(
         .map(WrappedSchema);
 
     rresult!(return_type)
-}
+}}
 
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udf: &FFI_ScalarUDF,
     arg_types: RVec<WrappedSchema>,
-) -> RResult<RVec<WrappedSchema>, RString> {
+) -> RResult<RVec<WrappedSchema>, RString> { unsafe {
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf = &(*private_data).udf;
 
@@ -170,7 +170,7 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
     let return_types = rresult_return!(data_types_with_scalar_udf(&arg_types, udf));
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
-}
+}}
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
     udf: &FFI_ScalarUDF,
@@ -178,7 +178,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
     arg_fields: RVec<WrappedSchema>,
     number_rows: usize,
     return_field: WrappedSchema,
-) -> RResult<WrappedArray, RString> {
+) -> RResult<WrappedArray, RString> { unsafe {
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf = &(*private_data).udf;
 
@@ -222,19 +222,19 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         array: result_array,
         schema: WrappedSchema(result_schema),
     })
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(udf: &mut FFI_ScalarUDF) {
+unsafe extern "C" fn release_fn_wrapper(udf: &mut FFI_ScalarUDF) { unsafe {
     let private_data = Box::from_raw(udf.private_data as *mut ScalarUDFPrivateData);
     drop(private_data);
-}
+}}
 
-unsafe extern "C" fn clone_fn_wrapper(udf: &FFI_ScalarUDF) -> FFI_ScalarUDF {
+unsafe extern "C" fn clone_fn_wrapper(udf: &FFI_ScalarUDF) -> FFI_ScalarUDF { unsafe {
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf_data = &(*private_data);
 
     Arc::clone(&udf_data.udf).into()
-}
+}}
 
 impl Clone for FFI_ScalarUDF {
     fn clone(&self) -> Self {

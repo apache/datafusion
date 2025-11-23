@@ -136,7 +136,7 @@ fn make_lazy_exec_with_range(
     };
 
     // Instantiate the generator with the batch and limit
-    let gen = RangeBatchGenerator {
+    let batch_gen = RangeBatchGenerator {
         schema: Arc::clone(&schema),
         boundedness,
         value_range: range,
@@ -145,7 +145,7 @@ fn make_lazy_exec_with_range(
     };
 
     // Wrap the generator in a trait object behind Arc<RwLock<_>>
-    let generator: Arc<RwLock<dyn LazyBatchGenerator>> = Arc::new(RwLock::new(gen));
+    let generator: Arc<RwLock<dyn LazyBatchGenerator>> = Arc::new(RwLock::new(batch_gen));
 
     // Create a LazyMemoryExec with one partition using our generator
     let mut exec = LazyMemoryExec::try_new(schema, vec![generator]).unwrap();

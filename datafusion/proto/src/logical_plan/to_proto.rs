@@ -307,16 +307,16 @@ pub fn serialize_expr(
         }
         Expr::WindowFunction(window_fun) => {
             let expr::WindowFunction {
-                ref fun,
+                fun,
                 params:
                     expr::WindowFunctionParams {
-                        ref args,
-                        ref partition_by,
-                        ref order_by,
-                        ref window_frame,
-                        ref null_treatment,
-                        ref distinct,
-                        ref filter,
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                        distinct,
+                        filter,
                     },
             } = window_fun.as_ref();
             let mut buf = Vec::new();
@@ -361,14 +361,14 @@ pub fn serialize_expr(
             }
         }
         Expr::AggregateFunction(expr::AggregateFunction {
-            ref func,
+            func,
             params:
                 AggregateFunctionParams {
-                    ref args,
-                    ref distinct,
-                    ref filter,
-                    ref order_by,
-                    ref null_treatment,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
                 },
         }) => {
             let mut buf = Vec::new();

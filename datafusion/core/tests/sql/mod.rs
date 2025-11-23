@@ -335,7 +335,7 @@ async fn nyc() -> Result<()> {
     match &optimized_plan {
         LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
             LogicalPlan::TableScan(TableScan {
-                ref projected_schema,
+                projected_schema,
                 ..
             }) => {
                 assert_eq!(2, projected_schema.fields().len());

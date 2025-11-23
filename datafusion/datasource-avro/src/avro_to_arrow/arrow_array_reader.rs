@@ -753,7 +753,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                             .collect::<BinaryArray>(),
                     )
                         as ArrayRef,
-                    DataType::FixedSizeBinary(ref size) => {
+                    DataType::FixedSizeBinary(size) => {
                         Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                             rows.iter().map(|row| {
                                 let maybe_value = self.field_lookup(&field_path, row);
@@ -762,9 +762,9 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                             *size,
                         )?) as ArrayRef
                     }
-                    DataType::List(ref list_field) => {
+                    DataType::List(list_field) => {
                         match list_field.data_type() {
-                            DataType::Dictionary(ref key_ty, _) => {
+                            DataType::Dictionary(key_ty, _) => {
                                 self.build_wrapped_list_array(rows, &field_path, key_ty)?
                             }
                             _ => {
@@ -784,7 +784,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                             }
                         }
                     }
-                    DataType::Dictionary(ref key_ty, ref val_ty) => self
+                    DataType::Dictionary(key_ty, val_ty) => self
                         .build_string_dictionary_array(
                             rows,
                             &field_path,

@@ -115,16 +115,16 @@ pub struct WindowUDFPrivateData {
 }
 
 impl FFI_WindowUDF {
-    unsafe fn inner(&self) -> &Arc<WindowUDF> {
+    unsafe fn inner(&self) -> &Arc<WindowUDF> { unsafe {
         let private_data = self.private_data as *const WindowUDFPrivateData;
         &(*private_data).udf
-    }
+    }}
 }
 
 unsafe extern "C" fn partition_evaluator_fn_wrapper(
     udwf: &FFI_WindowUDF,
     args: FFI_PartitionEvaluatorArgs,
-) -> RResult<FFI_PartitionEvaluator, RString> {
+) -> RResult<FFI_PartitionEvaluator, RString> { unsafe {
     let inner = udwf.inner();
 
     let args = rresult_return!(ForeignPartitionEvaluatorArgs::try_from(args));
@@ -132,13 +132,13 @@ unsafe extern "C" fn partition_evaluator_fn_wrapper(
     let evaluator = rresult_return!(inner.partition_evaluator_factory((&args).into()));
 
     RResult::ROk(evaluator.into())
-}
+}}
 
 unsafe extern "C" fn field_fn_wrapper(
     udwf: &FFI_WindowUDF,
     input_fields: RVec<WrappedSchema>,
     display_name: RString,
-) -> RResult<WrappedSchema, RString> {
+) -> RResult<WrappedSchema, RString> { unsafe {
     let inner = udwf.inner();
 
     let input_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
@@ -151,12 +151,12 @@ unsafe extern "C" fn field_fn_wrapper(
     let schema = Arc::new(Schema::new(vec![field]));
 
     RResult::ROk(WrappedSchema::from(schema))
-}
+}}
 
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udwf: &FFI_WindowUDF,
     arg_types: RVec<WrappedSchema>,
-) -> RResult<RVec<WrappedSchema>, RString> {
+) -> RResult<RVec<WrappedSchema>, RString> { unsafe {
     let inner = udwf.inner();
 
     let arg_fields = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types))
@@ -172,14 +172,14 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
         .collect::<Vec<_>>();
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) {
+unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) { unsafe {
     let private_data = Box::from_raw(udwf.private_data as *mut WindowUDFPrivateData);
     drop(private_data);
-}
+}}
 
-unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
+unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF { unsafe {
     // let private_data = udf.private_data as *const WindowUDFPrivateData;
     // let udf_data = &(*private_data);
 
@@ -202,7 +202,7 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         release: release_fn_wrapper,
         private_data: Box::into_raw(private_data) as *mut c_void,
     }
-}
+}}
 
 impl Clone for FFI_WindowUDF {
     fn clone(&self) -> Self {

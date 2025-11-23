@@ -69,29 +69,29 @@ struct ProviderPrivateData {
 }
 
 impl FFI_CatalogProviderList {
-    unsafe fn inner(&self) -> &Arc<dyn CatalogProviderList + Send> {
+    unsafe fn inner(&self) -> &Arc<dyn CatalogProviderList + Send> { unsafe {
         let private_data = self.private_data as *const ProviderPrivateData;
         &(*private_data).provider
-    }
+    }}
 
-    unsafe fn runtime(&self) -> Option<Handle> {
+    unsafe fn runtime(&self) -> Option<Handle> { unsafe {
         let private_data = self.private_data as *const ProviderPrivateData;
         (*private_data).runtime.clone()
-    }
+    }}
 }
 
 unsafe extern "C" fn catalog_names_fn_wrapper(
     provider: &FFI_CatalogProviderList,
-) -> RVec<RString> {
+) -> RVec<RString> { unsafe {
     let names = provider.inner().catalog_names();
     names.into_iter().map(|s| s.into()).collect()
-}
+}}
 
 unsafe extern "C" fn register_catalog_fn_wrapper(
     provider: &FFI_CatalogProviderList,
     name: RString,
     catalog: &FFI_CatalogProvider,
-) -> ROption<FFI_CatalogProvider> {
+) -> ROption<FFI_CatalogProvider> { unsafe {
     let runtime = provider.runtime();
     let provider = provider.inner();
     let catalog = Arc::new(ForeignCatalogProvider::from(catalog));
@@ -100,28 +100,28 @@ unsafe extern "C" fn register_catalog_fn_wrapper(
         .register_catalog(name.into(), catalog)
         .map(|catalog| FFI_CatalogProvider::new(catalog, runtime))
         .into()
-}
+}}
 
 unsafe extern "C" fn catalog_fn_wrapper(
     provider: &FFI_CatalogProviderList,
     name: RString,
-) -> ROption<FFI_CatalogProvider> {
+) -> ROption<FFI_CatalogProvider> { unsafe {
     let runtime = provider.runtime();
     let provider = provider.inner();
     provider
         .catalog(name.as_str())
         .map(|catalog| FFI_CatalogProvider::new(catalog, runtime))
         .into()
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_CatalogProviderList) {
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_CatalogProviderList) { unsafe {
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
     drop(private_data);
-}
+}}
 
 unsafe extern "C" fn clone_fn_wrapper(
     provider: &FFI_CatalogProviderList,
-) -> FFI_CatalogProviderList {
+) -> FFI_CatalogProviderList { unsafe {
     let old_private_data = provider.private_data as *const ProviderPrivateData;
     let runtime = (*old_private_data).runtime.clone();
 
@@ -139,7 +139,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         version: super::version,
         private_data,
     }
-}
+}}
 
 impl Drop for FFI_CatalogProviderList {
     fn drop(&mut self) {

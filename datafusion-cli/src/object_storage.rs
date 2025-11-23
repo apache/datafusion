@@ -586,8 +586,10 @@ mod tests {
 
         let location = "s3://bucket/path/FAKE/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
-        std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
-        std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", "data/aws.credentials");
+        unsafe {
+            std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
+            std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", "data/aws.credentials");
+        }
 
         // No options
         let table_url = ListingTableUrl::parse(location)?;
@@ -746,7 +748,7 @@ mod tests {
         let expected_region = "eu-central-1";
         let location = "s3://test-bucket/path/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
-        std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
+        unsafe { std::env::set_var("AWS_CONFIG_FILE", "data/aws.config") };
 
         let table_url = ListingTableUrl::parse(location)?;
         let aws_options = AwsOptions {

@@ -1230,7 +1230,7 @@ mod tests {
     ) -> Result<()> {
         let schema = csv_schema();
         let generator = CsvBatchGenerator::new(batch_size, line_count);
-        let mut deserializer = csv_deserializer(batch_size, &schema);
+        let mut deserializer = csv_deserializer(batch_size, &schema.clone());
 
         for data in generator {
             deserializer.digest(data);
@@ -1346,7 +1346,7 @@ mod tests {
     fn csv_deserializer(
         batch_size: usize,
         schema: &Arc<Schema>,
-    ) -> impl BatchDeserializer<Bytes> {
+    ) -> impl BatchDeserializer<Bytes> + use<> {
         let decoder = ReaderBuilder::new(schema.clone())
             .with_batch_size(batch_size)
             .build_decoder();

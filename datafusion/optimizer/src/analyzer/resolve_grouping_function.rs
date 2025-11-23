@@ -150,7 +150,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 fn is_grouping_function(expr: &Expr) -> bool {
     // TODO: Do something better than name here should grouping be a built
     // in expression?
-    matches!(expr, Expr::AggregateFunction(AggregateFunction { ref func, .. }) if func.name() == "grouping")
+    matches!(expr, Expr::AggregateFunction(AggregateFunction { func, .. }) if func.name() == "grouping")
 }
 
 fn contains_grouping_function(exprs: &[Expr]) -> bool {

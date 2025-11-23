@@ -76,3 +76,6 @@ insta-cmd = "0.6.0"
 rstest = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio"] }
+
+[lints.clippy]
+collapsible_if = "allow"

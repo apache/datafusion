@@ -155,16 +155,16 @@ pub struct AggregateUDFPrivateData {
 }
 
 impl FFI_AggregateUDF {
-    unsafe fn inner(&self) -> &Arc<AggregateUDF> {
+    unsafe fn inner(&self) -> &Arc<AggregateUDF> { unsafe {
         let private_data = self.private_data as *const AggregateUDFPrivateData;
         &(*private_data).udaf
-    }
+    }}
 }
 
 unsafe extern "C" fn return_field_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     arg_fields: RVec<WrappedSchema>,
-) -> RResult<WrappedSchema, RString> {
+) -> RResult<WrappedSchema, RString> { unsafe {
     let udaf = udaf.inner();
 
     let arg_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&arg_fields));
@@ -177,12 +177,12 @@ unsafe extern "C" fn return_field_fn_wrapper(
         .map(WrappedSchema);
 
     rresult!(return_field)
-}
+}}
 
 unsafe extern "C" fn accumulator_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     args: FFI_AccumulatorArgs,
-) -> RResult<FFI_Accumulator, RString> {
+) -> RResult<FFI_Accumulator, RString> { unsafe {
     let udaf = udaf.inner();
 
     let accumulator_args = &rresult_return!(ForeignAccumulatorArgs::try_from(args));
@@ -190,12 +190,12 @@ unsafe extern "C" fn accumulator_fn_wrapper(
     rresult!(udaf
         .accumulator(accumulator_args.into())
         .map(FFI_Accumulator::from))
-}
+}}
 
 unsafe extern "C" fn create_sliding_accumulator_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     args: FFI_AccumulatorArgs,
-) -> RResult<FFI_Accumulator, RString> {
+) -> RResult<FFI_Accumulator, RString> { unsafe {
     let udaf = udaf.inner();
 
     let accumulator_args = &rresult_return!(ForeignAccumulatorArgs::try_from(args));
@@ -203,12 +203,12 @@ unsafe extern "C" fn create_sliding_accumulator_fn_wrapper(
     rresult!(udaf
         .create_sliding_accumulator(accumulator_args.into())
         .map(FFI_Accumulator::from))
-}
+}}
 
 unsafe extern "C" fn create_groups_accumulator_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     args: FFI_AccumulatorArgs,
-) -> RResult<FFI_GroupsAccumulator, RString> {
+) -> RResult<FFI_GroupsAccumulator, RString> { unsafe {
     let udaf = udaf.inner();
 
     let accumulator_args = &rresult_return!(ForeignAccumulatorArgs::try_from(args));
@@ -216,12 +216,12 @@ unsafe extern "C" fn create_groups_accumulator_fn_wrapper(
     rresult!(udaf
         .create_groups_accumulator(accumulator_args.into())
         .map(FFI_GroupsAccumulator::from))
-}
+}}
 
 unsafe extern "C" fn groups_accumulator_supported_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     args: FFI_AccumulatorArgs,
-) -> bool {
+) -> bool { unsafe {
     let udaf = udaf.inner();
 
     ForeignAccumulatorArgs::try_from(args)
@@ -230,12 +230,12 @@ unsafe extern "C" fn groups_accumulator_supported_fn_wrapper(
             log::warn!("Unable to parse accumulator args. {e}");
             false
         })
-}
+}}
 
 unsafe extern "C" fn with_beneficial_ordering_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     beneficial_ordering: bool,
-) -> RResult<ROption<FFI_AggregateUDF>, RString> {
+) -> RResult<ROption<FFI_AggregateUDF>, RString> { unsafe {
     let udaf = udaf.inner().as_ref().clone();
 
     let result = rresult_return!(udaf.with_beneficial_ordering(beneficial_ordering));
@@ -246,7 +246,7 @@ unsafe extern "C" fn with_beneficial_ordering_fn_wrapper(
     .map(|func| FFI_AggregateUDF::from(Arc::new(func)));
 
     RResult::ROk(result.into())
-}
+}}
 
 unsafe extern "C" fn state_fields_fn_wrapper(
     udaf: &FFI_AggregateUDF,
@@ -255,7 +255,7 @@ unsafe extern "C" fn state_fields_fn_wrapper(
     return_field: WrappedSchema,
     ordering_fields: RVec<RVec<u8>>,
     is_distinct: bool,
-) -> RResult<RVec<RVec<u8>>, RString> {
+) -> RResult<RVec<RVec<u8>>, RString> { unsafe {
     let udaf = udaf.inner();
 
     let input_fields = &rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
@@ -291,18 +291,18 @@ unsafe extern "C" fn state_fields_fn_wrapper(
     .collect();
 
     RResult::ROk(state_fields)
-}
+}}
 
 unsafe extern "C" fn order_sensitivity_fn_wrapper(
     udaf: &FFI_AggregateUDF,
-) -> FFI_AggregateOrderSensitivity {
+) -> FFI_AggregateOrderSensitivity { unsafe {
     udaf.inner().order_sensitivity().into()
-}
+}}
 
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     arg_types: RVec<WrappedSchema>,
-) -> RResult<RVec<WrappedSchema>, RString> {
+) -> RResult<RVec<WrappedSchema>, RString> { unsafe {
     let udaf = udaf.inner();
 
     let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
@@ -318,16 +318,16 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
         .collect::<Vec<_>>();
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(udaf: &mut FFI_AggregateUDF) {
+unsafe extern "C" fn release_fn_wrapper(udaf: &mut FFI_AggregateUDF) { unsafe {
     let private_data = Box::from_raw(udaf.private_data as *mut AggregateUDFPrivateData);
     drop(private_data);
-}
+}}
 
-unsafe extern "C" fn clone_fn_wrapper(udaf: &FFI_AggregateUDF) -> FFI_AggregateUDF {
+unsafe extern "C" fn clone_fn_wrapper(udaf: &FFI_AggregateUDF) -> FFI_AggregateUDF { unsafe {
     Arc::clone(udaf.inner()).into()
-}
+}}
 
 impl Clone for FFI_AggregateUDF {
     fn clone(&self) -> Self {

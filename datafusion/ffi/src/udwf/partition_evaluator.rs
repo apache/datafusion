@@ -86,22 +86,22 @@ pub struct PartitionEvaluatorPrivateData {
 }
 
 impl FFI_PartitionEvaluator {
-    unsafe fn inner_mut(&mut self) -> &mut Box<dyn PartitionEvaluator + 'static> {
+    unsafe fn inner_mut(&mut self) -> &mut Box<dyn PartitionEvaluator + 'static> { unsafe {
         let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
         &mut (*private_data).evaluator
-    }
+    }}
 
-    unsafe fn inner(&self) -> &(dyn PartitionEvaluator + 'static) {
+    unsafe fn inner(&self) -> &(dyn PartitionEvaluator + 'static) { unsafe {
         let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
         (*private_data).evaluator.as_ref()
-    }
+    }}
 }
 
 unsafe extern "C" fn evaluate_all_fn_wrapper(
     evaluator: &mut FFI_PartitionEvaluator,
     values: RVec<WrappedArray>,
     num_rows: usize,
-) -> RResult<WrappedArray, RString> {
+) -> RResult<WrappedArray, RString> { unsafe {
     let inner = evaluator.inner_mut();
 
     let values_arrays = values
@@ -115,13 +115,13 @@ unsafe extern "C" fn evaluate_all_fn_wrapper(
         .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
 
     rresult!(return_array)
-}
+}}
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     evaluator: &mut FFI_PartitionEvaluator,
     values: RVec<WrappedArray>,
     range: FFI_Range,
-) -> RResult<RVec<u8>, RString> {
+) -> RResult<RVec<u8>, RString> { unsafe {
     let inner = evaluator.inner_mut();
 
     let values_arrays = values
@@ -137,13 +137,13 @@ unsafe extern "C" fn evaluate_fn_wrapper(
         rresult_return!((&scalar_result).try_into());
 
     RResult::ROk(proto_result.encode_to_vec().into())
-}
+}}
 
 unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
     evaluator: &FFI_PartitionEvaluator,
     num_rows: usize,
     ranks_in_partition: RVec<FFI_Range>,
-) -> RResult<WrappedArray, RString> {
+) -> RResult<WrappedArray, RString> { unsafe {
     let inner = evaluator.inner();
 
     let ranks_in_partition = ranks_in_partition
@@ -156,24 +156,24 @@ unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
         .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
 
     rresult!(return_array)
-}
+}}
 
 unsafe extern "C" fn get_range_fn_wrapper(
     evaluator: &FFI_PartitionEvaluator,
     idx: usize,
     n_rows: usize,
-) -> RResult<FFI_Range, RString> {
+) -> RResult<FFI_Range, RString> { unsafe {
     let inner = evaluator.inner();
     let range = inner.get_range(idx, n_rows).map(FFI_Range::from);
 
     rresult!(range)
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) {
+unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) { unsafe {
     let private_data =
         Box::from_raw(evaluator.private_data as *mut PartitionEvaluatorPrivateData);
     drop(private_data);
-}
+}}
 
 impl From<Box<dyn PartitionEvaluator>> for FFI_PartitionEvaluator {
     fn from(evaluator: Box<dyn PartitionEvaluator>) -> Self {

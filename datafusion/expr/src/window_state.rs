@@ -170,7 +170,7 @@ impl WindowFrameContext {
             // comparison of rows.
             WindowFrameContext::Range {
                 window_frame,
-                ref mut state,
+                state,
             } => state.calculate_range(
                 window_frame,
                 last_range,
@@ -183,7 +183,7 @@ impl WindowFrameContext {
             // or position of NULLs do not impact inequality.
             WindowFrameContext::Groups {
                 window_frame,
-                ref mut state,
+                state,
             } => state.calculate_range(window_frame, range_columns, length, idx),
         }
     }

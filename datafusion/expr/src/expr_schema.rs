@@ -206,9 +206,9 @@ impl ExprSchemable for Expr {
                 Ok(subquery.subquery.schema().field(0).data_type().clone())
             }
             Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ref op,
+                left,
+                right,
+                op,
             }) => BinaryTypeCoercer::new(
                 &left.get_type(schema)?,
                 op,
@@ -404,8 +404,8 @@ impl ExprSchemable for Expr {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
             Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
+                left,
+                right,
                 ..
             }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
             Expr::Like(Like { expr, pattern, .. })
@@ -548,9 +548,9 @@ impl ExprSchemable for Expr {
                 Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
             }
             Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ref op,
+                left,
+                right,
+                op,
             }) => {
                 let (lhs_type, lhs_nullable) = left.data_type_and_nullable(schema)?;
                 let (rhs_type, rhs_nullable) = right.data_type_and_nullable(schema)?;

@@ -97,16 +97,16 @@ pub struct GroupsAccumulatorPrivateData {
 
 impl FFI_GroupsAccumulator {
     #[inline]
-    unsafe fn inner_mut(&mut self) -> &mut Box<dyn GroupsAccumulator> {
+    unsafe fn inner_mut(&mut self) -> &mut Box<dyn GroupsAccumulator> { unsafe {
         let private_data = self.private_data as *mut GroupsAccumulatorPrivateData;
         &mut (*private_data).accumulator
-    }
+    }}
 
     #[inline]
-    unsafe fn inner(&self) -> &dyn GroupsAccumulator {
+    unsafe fn inner(&self) -> &dyn GroupsAccumulator { unsafe {
         let private_data = self.private_data as *const GroupsAccumulatorPrivateData;
         (*private_data).accumulator.deref()
-    }
+    }}
 }
 
 fn process_values(values: RVec<WrappedArray>) -> Result<Vec<Arc<dyn Array>>> {
@@ -134,7 +134,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     group_indices: RVec<usize>,
     opt_filter: ROption<WrappedArray>,
     total_num_groups: usize,
-) -> RResult<(), RString> {
+) -> RResult<(), RString> { unsafe {
     let accumulator = accumulator.inner_mut();
     let values = rresult_return!(process_values(values));
     let group_indices: Vec<usize> = group_indices.into_iter().collect();
@@ -146,28 +146,28 @@ unsafe extern "C" fn update_batch_fn_wrapper(
         opt_filter.as_ref(),
         total_num_groups
     ))
-}
+}}
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
-) -> RResult<WrappedArray, RString> {
+) -> RResult<WrappedArray, RString> { unsafe {
     let accumulator = accumulator.inner_mut();
 
     let result = rresult_return!(accumulator.evaluate(emit_to.into()));
 
     rresult!(WrappedArray::try_from(&result))
-}
+}}
 
-unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_GroupsAccumulator) -> usize {
+unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_GroupsAccumulator) -> usize { unsafe {
     let accumulator = accumulator.inner();
     accumulator.size()
-}
+}}
 
 unsafe extern "C" fn state_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
-) -> RResult<RVec<WrappedArray>, RString> {
+) -> RResult<RVec<WrappedArray>, RString> { unsafe {
     let accumulator = accumulator.inner_mut();
 
     let state = rresult_return!(accumulator.state(emit_to.into()));
@@ -175,7 +175,7 @@ unsafe extern "C" fn state_fn_wrapper(
         .into_iter()
         .map(|arr| WrappedArray::try_from(&arr).map_err(DataFusionError::from))
         .collect::<Result<RVec<_>>>())
-}
+}}
 
 unsafe extern "C" fn merge_batch_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
@@ -183,7 +183,7 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     group_indices: RVec<usize>,
     opt_filter: ROption<WrappedArray>,
     total_num_groups: usize,
-) -> RResult<(), RString> {
+) -> RResult<(), RString> { unsafe {
     let accumulator = accumulator.inner_mut();
     let values = rresult_return!(process_values(values));
     let group_indices: Vec<usize> = group_indices.into_iter().collect();
@@ -195,13 +195,13 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
         opt_filter.as_ref(),
         total_num_groups
     ))
-}
+}}
 
 unsafe extern "C" fn convert_to_state_fn_wrapper(
     accumulator: &FFI_GroupsAccumulator,
     values: RVec<WrappedArray>,
     opt_filter: ROption<WrappedArray>,
-) -> RResult<RVec<WrappedArray>, RString> {
+) -> RResult<RVec<WrappedArray>, RString> { unsafe {
     let accumulator = accumulator.inner();
     let values = rresult_return!(process_values(values));
     let opt_filter = rresult_return!(process_opt_filter(opt_filter));
@@ -212,13 +212,13 @@ unsafe extern "C" fn convert_to_state_fn_wrapper(
         .iter()
         .map(|arr| WrappedArray::try_from(arr).map_err(DataFusionError::from))
         .collect::<Result<RVec<_>>>())
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator) {
+unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator) { unsafe {
     let private_data =
         Box::from_raw(accumulator.private_data as *mut GroupsAccumulatorPrivateData);
     drop(private_data);
-}
+}}
 
 impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
     fn from(accumulator: Box<dyn GroupsAccumulator>) -> Self {

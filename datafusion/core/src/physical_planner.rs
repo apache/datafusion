@@ -601,8 +601,8 @@ impl DefaultPhysicalPlanner {
                 let get_sort_keys = |expr: &Expr| match expr {
                     Expr::WindowFunction(window_fun) => {
                         let WindowFunctionParams {
-                            ref partition_by,
-                            ref order_by,
+                            partition_by,
+                            order_by,
                             ..
                         } = &window_fun.as_ref().params;
                         generate_sort_key(partition_by, order_by)
@@ -612,8 +612,8 @@ impl DefaultPhysicalPlanner {
                         match &**expr {
                             Expr::WindowFunction(window_fun) => {
                                 let WindowFunctionParams {
-                                    ref partition_by,
-                                    ref order_by,
+                                    partition_by,
+                                    order_by,
                                     ..
                                 } = &window_fun.as_ref().params;
                                 generate_sort_key(partition_by, order_by)

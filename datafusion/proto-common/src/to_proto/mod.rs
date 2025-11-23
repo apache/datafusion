@@ -1018,11 +1018,11 @@ fn encode_scalar_nested_value(
         ))
     })?;
 
-    let gen = IpcDataGenerator {};
+    let ipc_gen = IpcDataGenerator {};
     let mut dict_tracker = DictionaryTracker::new(false);
     let write_options = IpcWriteOptions::default();
     let mut compression_context = CompressionContext::default();
-    let (encoded_dictionaries, encoded_message) = gen
+    let (encoded_dictionaries, encoded_message) = ipc_gen
         .encode(
             &batch,
             &mut dict_tracker,
