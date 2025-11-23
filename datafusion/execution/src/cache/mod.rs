@@ -36,7 +36,7 @@ pub trait CacheAccessor<K, V>: Send + Sync {
     /// Put value into cache. Returns the old value associated with the key if there was one.
     fn put_with_extra(&self, key: &K, value: V, e: &Self::Extra) -> Option<V>;
     /// Remove an entry from the cache, returning value if they existed in the map.
-    fn remove(&mut self, k: &K) -> Option<V>;
+    fn remove(&self, k: &K) -> Option<V>;
     /// Check if the cache contains a specific key.
     fn contains_key(&self, k: &K) -> bool;
     /// Fetch the total number of cache entries.
