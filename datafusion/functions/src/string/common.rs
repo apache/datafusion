@@ -32,6 +32,7 @@ use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
+#[derive(Copy, Clone)]
 pub(crate) enum TrimType {
     Left,
     Right,
