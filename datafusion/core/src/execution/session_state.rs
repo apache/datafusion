@@ -2079,7 +2079,7 @@ pub(crate) struct PreparedPlan {
 }
 
 /// A [`CacheFactory`] can be registered via [`SessionState`]
-/// to create a custom logical plan for caching.
+/// to create a custom logical plan for [`crate::dataframe::DataFrame::cache`].
 /// Additionally, a custom [`crate::physical_planner::ExtensionPlanner`]/[`QueryPlanner`]
 /// may need to be implemented to handle such plans.
 pub trait CacheFactory: Debug + Send + Sync {
