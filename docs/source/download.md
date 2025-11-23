@@ -19,19 +19,25 @@
 
 # Download
 
-While DataFusion is also distributed via the Rust [crates.io] package manager as a convenience, the
+Most users use DataFusion as a library in their Rust projects by adding it as a dependency
+in their `Cargo.toml` file and downloading it from the Rust [crates.io] package registry.
+
+For example:
+
+```toml
+[dependencies]
+datafusion = "41.0.0"
+```
+
+While DataFusion is distributed via [crates.io] as a convenience, the
 official Apache DataFusion releases are provided as source artifacts.
 
 [crates.io]: https://crates.io/crates/datafusion
 
 ## Releases
 
-The latest source release is [41.0.0][source-link] ([asc][asc-link],
-[sha512][sha512-link]).
-
-[source-link]: https://www.apache.org/dyn/closer.lua/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz?action=download
-[asc-link]: https://downloads.apache.org/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz.asc
-[sha512-link]: https://downloads.apache.org/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz.sha512
+You can find the latest releases, signatures and checksums on
+the [ASF Release Page](https://dist.apache.org/repos/dist/release/datafusion)
 
 For previous releases, please check the [archive](https://archive.apache.org/dist/datafusion/).
 
@@ -40,8 +46,10 @@ For releases earlier than 37.0.0, please check [Arrow's archive](https://archive
 ## Notes
 
 - When downloading a release, please verify the OpenPGP compatible signature (or failing that, check the SHA-512); these should be fetched from the main Apache site.
-- The KEYS file contains the public keys used for signing release. It is recommended that (when possible) a web of trust is used to confirm the identity of these keys.
-- Please download the [KEYS](https://downloads.apache.org/datafusion/KEYS) as well as the .asc signature files.
+- The [KEYS] file contains the public keys used for signing release. It is recommended that (when possible) a web of trust is used to confirm the identity of these keys.
+- Please download the [KEYS] file as well as the .asc signature files.
+
+[keys]: https://downloads.apache.org/datafusion/KEYS
 
 ### To verify the signature of the release artifact
 

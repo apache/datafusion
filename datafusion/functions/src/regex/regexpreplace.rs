@@ -382,6 +382,7 @@ where
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn _regexp_replace_early_abort<T: ArrayAccessor>(
     input_array: T,
     sz: usize,

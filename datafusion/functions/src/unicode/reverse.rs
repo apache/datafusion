@@ -108,14 +108,14 @@ impl ScalarUDFImpl for ReverseFunc {
 /// The implementation uses UTF-8 code points as characters
 pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].data_type() == &Utf8View {
-        reverse_impl::<T, _>(args[0].as_string_view())
+        reverse_impl::<T, _>(&args[0].as_string_view())
     } else {
-        reverse_impl::<T, _>(args[0].as_string::<T>())
+        reverse_impl::<T, _>(&args[0].as_string::<T>())
     }
 }
 
 fn reverse_impl<'a, T: OffsetSizeTrait, V: StringArrayType<'a>>(
-    string_array: V,
+    string_array: &V,
 ) -> Result<ArrayRef> {
     let mut builder = GenericStringBuilder::<T>::with_capacity(string_array.len(), 1024);
 

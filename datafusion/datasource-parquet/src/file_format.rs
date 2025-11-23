@@ -32,6 +32,7 @@ use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::{
     get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
+use datafusion_datasource::TableSchema;
 
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
@@ -459,7 +460,12 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint = Some(metadata);
         }
 
-        let mut source = ParquetSource::new(self.options.clone());
+        let table_schema = TableSchema::new(
+            Arc::clone(conf.file_schema()),
+            conf.table_partition_cols().clone(),
+        );
+        let mut source = ParquetSource::new(table_schema)
+            .with_table_parquet_options(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -501,8 +507,11 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(ParquetSource::default())
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+        Arc::new(
+            ParquetSource::new(table_schema)
+                .with_table_parquet_options(self.options.clone()),
+        )
     }
 }
 
@@ -1063,6 +1072,7 @@ pub async fn fetch_statistics(
     since = "50.0.0",
     note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
@@ -1491,7 +1501,7 @@ fn spawn_parquet_parallel_serialization_task(
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
-    parallel_options: ParallelParquetWriterOptions,
+    parallel_options: Arc<ParallelParquetWriterOptions>,
     pool: Arc<dyn MemoryPool>,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
@@ -1662,7 +1672,7 @@ async fn output_single_parquet_file_parallelized(
         serialize_tx,
         Arc::clone(&output_schema),
         Arc::clone(&arc_props),
-        parallel_options,
+        parallel_options.into(),
         Arc::clone(&pool),
     );
     let parquet_meta_data = concatenate_parallel_row_groups(

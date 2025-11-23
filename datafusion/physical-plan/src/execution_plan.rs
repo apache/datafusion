@@ -47,7 +47,10 @@ use crate::stream::RecordBatchStreamAdapter;
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, Constraints, DataFusionError, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, exec_err, Constraints,
+    DataFusionError, Result,
+};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -484,13 +487,12 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         if let Some(idx) = partition {
             // Validate partition index
             let partition_count = self.properties().partitioning.partition_count();
-            if idx >= partition_count {
-                return internal_err!(
-                    "Invalid partition index: {}, the partition count is {}",
-                    idx,
-                    partition_count
-                );
-            }
+            assert_or_internal_err!(
+                idx < partition_count,
+                "Invalid partition index: {}, the partition count is {}",
+                idx,
+                partition_count
+            );
         }
         Ok(Statistics::new_unknown(&self.schema()))
     }
@@ -1082,15 +1084,15 @@ impl PlanProperties {
 macro_rules! check_len {
     ($target:expr, $func_name:ident, $expected_len:expr) => {
         let actual_len = $target.$func_name().len();
-        if actual_len != $expected_len {
-            return internal_err!(
-                "{}::{} returned Vec with incorrect size: {} != {}",
-                $target.name(),
-                stringify!($func_name),
-                actual_len,
-                $expected_len
-            );
-        }
+        assert_eq_or_internal_err!(
+            actual_len,
+            $expected_len,
+            "{}::{} returned Vec with incorrect size: {} != {}",
+            $target.name(),
+            stringify!($func_name),
+            actual_len,
+            $expected_len
+        );
     };
 }
 
@@ -1116,6 +1118,7 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
 ///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+#[expect(clippy::needless_pass_by_value)]
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
     plan.properties().evaluation_type == EvaluationType::Eager
 }
@@ -1127,9 +1130,12 @@ pub fn with_new_children_if_necessary(
     children: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let old_children = plan.children();
-    if children.len() != old_children.len() {
-        internal_err!("Wrong number of children")
-    } else if children.is_empty()
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "Wrong number of children"
+    );
+    if children.is_empty()
         || children
             .iter()
             .zip(old_children.iter())
@@ -1167,6 +1173,10 @@ pub async fn collect(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1231,6 +1241,10 @@ pub async fn collect_partitioned(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1262,6 +1276,10 @@ pub fn execute_stream_partitioned(
 /// violate the `not null` constraints specified in the `sink_schema`. If there are
 /// such columns, it wraps the resulting stream to enforce the `not null` constraints
 /// by invoking the [`check_not_null_constraints`] function on each batch of the stream.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_input_stream(
     input: Arc<dyn ExecutionPlan>,
     sink_schema: SchemaRef,

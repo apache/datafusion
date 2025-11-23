@@ -60,11 +60,14 @@ use crate::schema_equivalence::schema_satisfied_by;
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
+use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::TableReference;
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, TableReference,
+};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
@@ -347,11 +350,11 @@ impl DefaultPhysicalPlanner {
             .flatten()
             .collect::<Vec<_>>();
         // Ideally this never happens if we have a valid LogicalPlan tree
-        if outputs.len() != 1 {
-            return internal_err!(
-                "Failed to convert LogicalPlan to ExecutionPlan: More than one root detected"
-            );
-        }
+        assert_eq_or_internal_err!(
+            outputs.len(),
+            1,
+            "Failed to convert LogicalPlan to ExecutionPlan: More than one root detected"
+        );
         let plan = outputs.pop().unwrap();
         Ok(plan)
     }
@@ -496,7 +499,7 @@ impl DefaultPhysicalPlanner {
                 output_schema,
             }) => {
                 let output_schema = Arc::clone(output_schema.inner());
-                self.plan_describe(Arc::clone(schema), output_schema)?
+                self.plan_describe(&Arc::clone(schema), output_schema)?
             }
 
             // 1 Child
@@ -588,9 +591,10 @@ impl DefaultPhysicalPlanner {
                 }
             }
             LogicalPlan::Window(Window { window_expr, .. }) => {
-                if window_expr.is_empty() {
-                    return internal_err!("Impossibly got empty window expression");
-                }
+                assert_or_internal_err!(
+                    !window_expr.is_empty(),
+                    "Impossibly got empty window expression"
+                );
 
                 let input_exec = children.one()?;
 
@@ -850,6 +854,7 @@ impl DefaultPhysicalPlanner {
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
                         FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
+                            .with_batch_size(session_state.config().batch_size())?
                     }
                     PlanAsyncExpr::Async(
                         async_map,
@@ -868,6 +873,7 @@ impl DefaultPhysicalPlanner {
                         .with_projection(Some(
                             (0..input.schema().fields().len()).collect(),
                         ))?
+                        .with_batch_size(session_state.config().batch_size())?
                     }
                     _ => {
                         return internal_err!(
@@ -1752,11 +1758,11 @@ fn qualify_join_schema_sides(
     let join_fields = join_schema.fields();
 
     // Validate lengths
-    if join_fields.len() != left_fields.len() + right_fields.len() {
-        return internal_err!(
-            "Join schema field count must match left and right field count."
-        );
-    }
+    assert_eq_or_internal_err!(
+        join_fields.len(),
+        left_fields.len() + right_fields.len(),
+        "Join schema field count must match left and right field count."
+    );
 
     // Validate field names match
     for (i, (field, expected)) in join_fields
@@ -1764,14 +1770,12 @@ fn qualify_join_schema_sides(
         .zip(left_fields.iter().chain(right_fields.iter()))
         .enumerate()
     {
-        if field.name() != expected.name() {
-            return internal_err!(
-                "Field name mismatch at index {}: expected '{}', found '{}'",
-                i,
-                expected.name(),
-                field.name()
-            );
-        }
+        assert_eq_or_internal_err!(
+            field.name(),
+            expected.name(),
+            "Field name mismatch at index {}",
+            i
+        );
     }
 
     // qualify sides
@@ -2243,6 +2247,7 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
+    #[expect(clippy::needless_pass_by_value)]
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -2277,7 +2282,7 @@ impl DefaultPhysicalPlanner {
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
             OptimizationInvariantChecker::new(optimizer)
-                .check(&new_plan, before_schema)?;
+                .check(&new_plan, &before_schema)?;
 
             debug!(
                 "Optimized physical plan by {}:\n{}\n",
@@ -2310,7 +2315,7 @@ impl DefaultPhysicalPlanner {
     // return an record_batch which describes a table's schema.
     fn plan_describe(
         &self,
-        table_schema: Arc<Schema>,
+        table_schema: &Arc<Schema>,
         output_schema: Arc<Schema>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut column_names = StringBuilder::new();
@@ -2513,10 +2518,12 @@ impl<'a> OptimizationInvariantChecker<'a> {
     pub fn check(
         &mut self,
         plan: &Arc<dyn ExecutionPlan>,
-        previous_schema: Arc<Schema>,
+        previous_schema: &Arc<Schema>,
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
-        if self.rule.schema_check() && plan.schema() != previous_schema {
+        if self.rule.schema_check()
+            && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
+        {
             internal_err!("PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
                 self.rule.name(),
                 previous_schema,
@@ -2530,6 +2537,38 @@ impl<'a> OptimizationInvariantChecker<'a> {
 
         Ok(())
     }
+}
+
+/// Checks if the change from `old` schema to `new` is allowed or not.
+///
+/// The current implementation only allows nullability of individual fields to change
+/// from 'nullable' to 'not nullable'. This can happen due to physical expressions knowing
+/// more about their null-ness than their logical counterparts.
+/// This change is allowed because for any field the non-nullable domain `F` is a strict subset
+/// of the nullable domain `F ∪ { NULL }`. A physical schema that guarantees a stricter subset
+/// of values will not violate any assumptions made based on the less strict schema.
+fn is_allowed_schema_change(old: &Schema, new: &Schema) -> bool {
+    if new.metadata != old.metadata {
+        return false;
+    }
+
+    if new.fields.len() != old.fields.len() {
+        return false;
+    }
+
+    let new_fields = new.fields.iter().map(|f| f.as_ref());
+    let old_fields = old.fields.iter().map(|f| f.as_ref());
+    old_fields
+        .zip(new_fields)
+        .all(|(old, new)| is_allowed_field_change(old, new))
+}
+
+fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> bool {
+    new_field.name() == old_field.name()
+        && new_field.data_type() == old_field.data_type()
+        && new_field.metadata() == old_field.metadata()
+        && (new_field.is_nullable() == old_field.is_nullable()
+            || !new_field.is_nullable())
 }
 
 impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
@@ -3706,20 +3745,20 @@ digraph {
 
         // Test: check should pass with same schema
         let equal_schema = ok_plan.schema();
-        OptimizationInvariantChecker::new(&rule).check(&ok_plan, equal_schema)?;
+        OptimizationInvariantChecker::new(&rule).check(&ok_plan, &equal_schema)?;
 
         // Test: should fail with schema changed
         let different_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&ok_plan, different_schema)
+            .check(&ok_plan, &different_schema)
             .unwrap_err();
         assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
 
         // Test: should fail when extension node fails it's own invariant check
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&failing_node, ok_plan.schema())
+            .check(&failing_node, &ok_plan.schema())
             .unwrap_err();
         assert!(expected_err
             .to_string()
@@ -3732,7 +3771,7 @@ digraph {
             Arc::clone(&child),
         ])?;
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&invalid_plan, ok_plan.schema())
+            .check(&invalid_plan, &ok_plan.schema())
             .unwrap_err();
         assert!(expected_err
             .to_string()

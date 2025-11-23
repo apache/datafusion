@@ -104,13 +104,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Create a placeholder expression
-    /// This is the same as Postgres's prepare statement syntax in which a placeholder starts with `$` sign and then
-    /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
+    /// Both named (`$foo`) and positional (`$1`, `$2`, ...) placeholder styles are supported.
     fn create_placeholder_expr(
         param: String,
         param_data_types: &[FieldRef],
     ) -> Result<Expr> {
-        // Parse the placeholder as a number because it is the only support from sqlparser and postgres
+        // Try to parse the placeholder as a number. If the placeholder does not have a valid
+        // positional value, assume we have a named placeholder.
         let index = param[1..].parse::<usize>();
         let idx = match index {
             Ok(0) => {
@@ -123,12 +123,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return if param_data_types.is_empty() {
                     Ok(Expr::Placeholder(Placeholder::new_with_field(param, None)))
                 } else {
-                    // when PREPARE Statement, param_data_types length is always 0
-                    plan_err!("Invalid placeholder, not a number: {param}")
+                    // FIXME: This branch is shared by params from PREPARE and CREATE FUNCTION, but
+                    // only CREATE FUNCTION currently supports named params. For now, we rewrite
+                    // these to positional params.
+                    let named_param_pos = param_data_types
+                        .iter()
+                        .position(|v| v.name() == &param[1..]);
+                    match named_param_pos {
+                        Some(pos) => Ok(Expr::Placeholder(Placeholder::new_with_field(
+                            format!("${}", pos + 1),
+                            param_data_types.get(pos).cloned(),
+                        ))),
+                        None => plan_err!("Unknown placeholder: {param}"),
+                    }
                 };
             }
         };
         // Check if the placeholder is in the parameter list
+        // FIXME: In the CREATE FUNCTION branch, param_type = None should raise an error
         let param_type = param_data_types.get(idx);
         // Data type of the parameter
         debug!("type of param {param} param_data_types[idx]: {param_type:?}");

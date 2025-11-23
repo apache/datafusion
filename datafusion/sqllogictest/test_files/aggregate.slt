@@ -129,6 +129,16 @@ CREATE TABLE group_median_table_nullable (
 # Error tests
 #######
 
+statement error DataFusion error: Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
+SELECT SUM(c2) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+
+# WITHIN GROUP rejected for non-ordered-set UDAF
+# MIN does not implement ordered-set semantics (`supports_within_group_clause()`),
+# so the planner should reject the WITHIN GROUP syntax.
+statement error DataFusion error: Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
+SELECT MIN(c) WITHIN GROUP (ORDER BY c) FROM (VALUES (1),(2)) as t(c);
+
+
 # https://github.com/apache/datafusion/issues/3353
 statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
@@ -491,6 +501,12 @@ SELECT bit_xor(distinct c5 % 2) FROM aggregate_test_100
 ----
 -2
 
+# edge case for null accumulator state fields
+query ???I
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL), approx_distinct(NULL) from aggregate_test_100
+----
+NULL NULL NULL 0
+
 # csv_query_covariance_1
 query R
 SELECT covar_pop(c2, c12) FROM aggregate_test_100
@@ -590,6 +606,70 @@ select corr(f, b)
 from data
 ----
 1
+
+# group correlation_query_with_nans_f32
+query IR
+select id, corr(f, b)
+from values
+    (1, 1, 'nan'::float),
+    (2, 'nan'::float, 1),
+    (3, 'nan'::float, null),
+    (4, null, 'nan'::float),
+    (5, 'nan'::float, 'nan'::float),
+    (5, 1, 1),
+    (5, 2, 2),
+    (6, 'nan'::float, 'nan'::float) t(id, f, b)
+group by id
+order by id
+----
+1 NULL
+2 NULL
+3 NULL
+4 NULL
+5 NaN
+6 NaN
+
+# correlation_query_with_nans_f32
+query RR
+with data as (
+    select 'nan'::float as f, 'nan'::float as b
+)
+select corr(f, b), corr('nan'::float, 'nan'::float)
+from data
+----
+NaN NaN
+
+# group correlation_query_with_nans_f64
+query IR
+select id, corr(f, b)
+from values
+    (1, 1, 'nan'::double),
+    (2, 'nan'::double, 1),
+    (3, 'nan'::double, null),
+    (4, null, 'nan'::float),
+    (5, 'nan'::double, 'nan'::double),
+    (5, 1, 1),
+    (5, 2, 2),
+    (6, 'nan'::double, 'nan'::double) t(id, f, b)
+group by id
+order by id
+----
+1 NULL
+2 NULL
+3 NULL
+4 NULL
+5 NaN
+6 NaN
+
+# correlation_query_with_nans_f64
+query RR
+with data as (
+    select 'nan'::double as f, 'nan'::double as b
+)
+select corr(f, b), corr('nan'::double, 'nan'::double)
+from data
+----
+NaN NaN
 
 # csv_query_variance_1
 query R
@@ -837,6 +917,13 @@ SELECT approx_median(distinct col_i8) FROM median_table
 
 statement error DataFusion error: This feature is not implemented: APPROX_MEDIAN\(DISTINCT\) aggregations are not available
 SELECT approx_median(col_i8), approx_median(distinct col_i8) FROM median_table
+
+# null handling clauses not supported
+query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS are not permitted for median
+SELECT median(c2) IGNORE NULLS FROM aggregate_test_100
+
+query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS are not permitted for median
+SELECT median(c2) RESPECT NULLS FROM aggregate_test_100
 
 # median_i16
 query I
@@ -1180,10 +1267,9 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
-10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -4537,6 +4623,16 @@ SELECT max(column1), max(column2), max(column3), max(column4) FROM d;
 ----
 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs
 
+query ????
+SELECT avg(column1), avg(column2), avg(column3), avg(column4) FROM d;
+----
+0 days 0 hours 0 mins 6 secs 0 days 0 hours 0 mins 0.012 secs 0 days 0 hours 0 mins 0.000018 secs 0 days 0 hours 0 mins 0.000000024 secs
+
+query ????
+SELECT sum(column1), sum(column2), sum(column3), sum(column4) FROM d;
+----
+0 days 0 hours 0 mins 12 secs 0 days 0 hours 0 mins 0.024 secs 0 days 0 hours 0 mins 0.000036 secs 0 days 0 hours 0 mins 0.000000048 secs
+
 # GROUP BY follows a different code path
 query ????I
 SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5;
@@ -4547,6 +4643,16 @@ query ????I
 SELECT max(column1), max(column2), max(column3), max(column4), column5 FROM d GROUP BY column5;
 ----
 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs 1
+
+query ????I
+SELECT avg(column1), avg(column2), avg(column3), avg(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 6 secs 0 days 0 hours 0 mins 0.012 secs 0 days 0 hours 0 mins 0.000018 secs 0 days 0 hours 0 mins 0.000000024 secs 1
+
+query ????I
+SELECT sum(column1), sum(column2), sum(column3), sum(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 12 secs 0 days 0 hours 0 mins 0.024 secs 0 days 0 hours 0 mins 0.000036 secs 0 days 0 hours 0 mins 0.000000048 secs 1
 
 statement ok
 INSERT INTO d VALUES
@@ -4562,6 +4668,16 @@ query ????I
 SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
 ----
 0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.001 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000002 secs 1
+
+query ????I
+SELECT avg(column1), avg(column2), avg(column3), avg(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 3 secs 0 days 0 hours 0 mins 0.008 secs 0 days 0 hours 0 mins 0.000012 secs 0 days 0 hours 0 mins 0.000000014 secs 1
+
+query ????I
+SELECT sum(column1), sum(column2), sum(column3), sum(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 15 secs 0 days 0 hours 0 mins 0.034 secs 0 days 0 hours 0 mins 0.000048 secs 0 days 0 hours 0 mins 0.000000058 secs 1
 
 statement ok
 drop table d;
@@ -6023,10 +6139,9 @@ physical_plan
 07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
 08)--------------CoalescePartitionsExec
 09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
-10)------------------CoalesceBatchesExec: target_batch_size=8192
-11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+10)------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c3 order by c3 limit 4;
@@ -7085,7 +7200,7 @@ physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 DESC NULLS FIRST]]
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[last_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 ASC NULLS LAST]]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c3], output_orderings=[[c1@0 ASC NULLS LAST], [c3@1 ASC NULLS LAST]], file_type=csv, has_header=true
 
 # test last to first
@@ -7099,7 +7214,7 @@ physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[last_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 ASC NULLS LAST]]
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 DESC NULLS FIRST]]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], file_type=csv, has_header=true
 
 # test building plan with aggreagte sum
@@ -7134,10 +7249,15 @@ statement ok
 drop table employee_csv;
 
 # test null literal handling in supported aggregate functions
-query I??III?T
+query I??????T
 select count(null), min(null), max(null), bit_and(NULL), bit_or(NULL), bit_xor(NULL), nth_value(NULL, 1), string_agg(NULL, ',');
 ----
 0 NULL NULL NULL NULL NULL NULL NULL
+
+query TTT
+SELECT arrow_typeof(bit_and(NULL)), arrow_typeof(bit_or(NULL)), arrow_typeof(bit_xor(NULL))
+----
+Null Null Null
 
 statement ok
 create table having_test(v1 int, v2 int)
@@ -7166,14 +7286,12 @@ logical_plan
 03)----Aggregate: groupBy=[[having_test.v1, having_test.v2]], aggr=[[max(having_test.v1)]]
 04)------TableScan: having_test projection=[v1, v2]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
-03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
+02)--AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query error
@@ -7851,17 +7969,15 @@ VALUES
 ----
 x 1
 
-query ?
+query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-----
-[a, a, c, d]
 
-query ?
+
+query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
 SELECT array_agg(DISTINCT a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-----
-[a, c, d]
+
 
 query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
 SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)

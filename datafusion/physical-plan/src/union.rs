@@ -45,7 +45,9 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_datafusion_err, internal_err, Result};
+use datafusion_common::{
+    assert_or_internal_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties, PhysicalExpr};
 
@@ -410,11 +412,10 @@ pub struct InterleaveExec {
 impl InterleaveExec {
     /// Create a new InterleaveExec
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
-        if !can_interleave(inputs.iter()) {
-            return internal_err!(
-                "Not all InterleaveExec children have a consistent hash partitioning"
-            );
-        }
+        assert_or_internal_err!(
+            can_interleave(inputs.iter()),
+            "Not all InterleaveExec children have a consistent hash partitioning"
+        );
         let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
             inputs,
@@ -485,11 +486,10 @@ impl ExecutionPlan for InterleaveExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // New children are no longer interleavable, which might be a bug of optimization rewrite.
-        if !can_interleave(children.iter()) {
-            return internal_err!(
-                "Can not create InterleaveExec: new children can not be interleaved"
-            );
-        }
+        assert_or_internal_err!(
+            can_interleave(children.iter()),
+            "Can not create InterleaveExec: new children can not be interleaved"
+        );
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 
@@ -699,7 +699,7 @@ impl Stream for CombinedRecordBatchStream {
 
 fn col_stats_union(
     mut left: ColumnStatistics,
-    right: ColumnStatistics,
+    right: &ColumnStatistics,
 ) -> ColumnStatistics {
     left.distinct_count = Precision::Absent;
     left.min_value = left.min_value.min(&right.min_value);
@@ -711,12 +711,18 @@ fn col_stats_union(
 }
 
 fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
-    left.num_rows = left.num_rows.add(&right.num_rows);
-    left.total_byte_size = left.total_byte_size.add(&right.total_byte_size);
+    let Statistics {
+        num_rows: right_num_rows,
+        total_byte_size: right_total_bytes,
+        column_statistics: right_column_statistics,
+        ..
+    } = right;
+    left.num_rows = left.num_rows.add(&right_num_rows);
+    left.total_byte_size = left.total_byte_size.add(&right_total_bytes);
     left.column_statistics = left
         .column_statistics
         .into_iter()
-        .zip(right.column_statistics)
+        .zip(right_column_statistics.iter())
         .map(|(a, b)| col_stats_union(a, b))
         .collect::<Vec<_>>();
     left
@@ -926,14 +932,14 @@ mod tests {
             let first_orderings = convert_to_orderings(first_child_orderings);
             let second_orderings = convert_to_orderings(second_child_orderings);
             let union_expected_orderings = convert_to_orderings(union_orderings);
-            let child1 = Arc::new(TestMemoryExec::update_cache(Arc::new(
-                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .try_with_sort_information(first_orderings)?,
-            )));
-            let child2 = Arc::new(TestMemoryExec::update_cache(Arc::new(
-                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .try_with_sort_information(second_orderings)?,
-            )));
+            let child1_exec = TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
+                .try_with_sort_information(first_orderings)?;
+            let child1 = Arc::new(child1_exec);
+            let child1 = Arc::new(TestMemoryExec::update_cache(&child1));
+            let child2_exec = TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
+                .try_with_sort_information(second_orderings)?;
+            let child2 = Arc::new(child2_exec);
+            let child2 = Arc::new(TestMemoryExec::update_cache(&child2));
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_orderings(union_expected_orderings);

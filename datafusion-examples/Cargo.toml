@@ -29,6 +29,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -39,10 +42,6 @@ path = "examples/external_dependency/dataframe-to-s3.rs"
 [[example]]
 name = "query_aws_s3"
 path = "examples/external_dependency/query-aws-s3.rs"
-
-[[example]]
-name = "custom_file_casts"
-path = "examples/custom_file_casts.rs"
 
 [dev-dependencies]
 arrow = { workspace = true }

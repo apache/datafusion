@@ -59,10 +59,10 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, NullEquality, ParamValues, Result, ScalarValue, Spans,
-    TableReference, UnnestOptions,
+    aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError,
+    Dependency, FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues,
+    Result, ScalarValue, Spans, TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -965,13 +965,13 @@ impl LogicalPlan {
             }
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
                 let old_expr_len = skip.iter().chain(fetch.iter()).count();
-                if old_expr_len != expr.len() {
-                    return internal_err!(
-                        "Invalid number of new Limit expressions: expected {}, got {}",
-                        old_expr_len,
-                        expr.len()
-                    );
-                }
+                assert_eq_or_internal_err!(
+                    old_expr_len,
+                    expr.len(),
+                    "Invalid number of new Limit expressions: expected {}, got {}",
+                    old_expr_len,
+                    expr.len()
+                );
                 // `LogicalPlan::expressions()` returns in [skip, fetch] order, so we can pop from the end.
                 let new_fetch = fetch.as_ref().and_then(|_| expr.pop());
                 let new_skip = skip.as_ref().and_then(|_| expr.pop());
@@ -1158,9 +1158,11 @@ impl LogicalPlan {
     #[inline]
     #[expect(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
     fn assert_no_expressions(&self, expr: Vec<Expr>) -> Result<()> {
-        if !expr.is_empty() {
-            return internal_err!("{self:?} should have no exprs, got {:?}", expr);
-        }
+        assert_or_internal_err!(
+            expr.is_empty(),
+            "{self:?} should have no exprs, got {:?}",
+            expr
+        );
         Ok(())
     }
 
@@ -1168,33 +1170,35 @@ impl LogicalPlan {
     #[inline]
     #[expect(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
     fn assert_no_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<()> {
-        if !inputs.is_empty() {
-            return internal_err!("{self:?} should have no inputs, got: {:?}", inputs);
-        }
+        assert_or_internal_err!(
+            inputs.is_empty(),
+            "{self:?} should have no inputs, got: {:?}",
+            inputs
+        );
         Ok(())
     }
 
     /// Helper for [Self::with_new_exprs] to use when exactly one expression is expected.
     #[inline]
     fn only_expr(&self, mut expr: Vec<Expr>) -> Result<Expr> {
-        if expr.len() != 1 {
-            return internal_err!(
-                "{self:?} should have exactly one expr, got {:?}",
-                expr
-            );
-        }
+        assert_eq_or_internal_err!(
+            expr.len(),
+            1,
+            "{self:?} should have exactly one expr, got {:?}",
+            &expr
+        );
         Ok(expr.remove(0))
     }
 
     /// Helper for [Self::with_new_exprs] to use when exactly one input is expected.
     #[inline]
     fn only_input(&self, mut inputs: Vec<LogicalPlan>) -> Result<LogicalPlan> {
-        if inputs.len() != 1 {
-            return internal_err!(
-                "{self:?} should have exactly one input, got {:?}",
-                inputs
-            );
-        }
+        assert_eq_or_internal_err!(
+            inputs.len(),
+            1,
+            "{self:?} should have exactly one input, got {:?}",
+            &inputs
+        );
         Ok(inputs.remove(0))
     }
 
@@ -1204,12 +1208,12 @@ impl LogicalPlan {
         &self,
         mut inputs: Vec<LogicalPlan>,
     ) -> Result<(LogicalPlan, LogicalPlan)> {
-        if inputs.len() != 2 {
-            return internal_err!(
-                "{self:?} should have exactly two inputs, got {:?}",
-                inputs
-            );
-        }
+        assert_eq_or_internal_err!(
+            inputs.len(),
+            2,
+            "{self:?} should have exactly two inputs, got {:?}",
+            &inputs
+        );
         let right = inputs.remove(1);
         let left = inputs.remove(0);
         Ok((left, right))
@@ -1471,9 +1475,28 @@ impl LogicalPlan {
                     // Preserve name to avoid breaking column references to this expression
                     Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
                 }
-            })
+            })?
+            .map_data(|plan| plan.update_schema_data_type())
         })
         .map(|res| res.data)
+    }
+
+    /// Recompute schema fields' data type after replacing params, ensuring fields data type can be
+    /// updated according to the new parameters.
+    ///
+    /// Unlike `recompute_schema()`, this method rebuilds VALUES plans entirely to properly infer
+    /// types types from literal values after placeholder substitution.
+    fn update_schema_data_type(self) -> Result<LogicalPlan> {
+        match self {
+            // Build `LogicalPlan::Values` from the values for type inference.
+            // We can't use `recompute_schema` because it skips recomputing for
+            // `LogicalPlan::Values`.
+            LogicalPlan::Values(Values { values, schema: _ }) => {
+                LogicalPlanBuilder::values(values)?.build()
+            }
+            // other plans can just use `recompute_schema` directly.
+            plan => plan.recompute_schema(),
+        }
     }
 
     /// Walk the logical plan, find any `Placeholder` tokens, and return a set of their names.
@@ -3481,6 +3504,7 @@ impl Aggregate {
     ///
     /// This method should only be called when you are absolutely sure that the schema being
     /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
@@ -4247,6 +4271,7 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
+    use crate::select_expr::SelectExpr;
     use crate::test::function_stub::{count, count_udaf};
     use crate::{
         binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
@@ -4823,6 +4848,35 @@ mod tests {
             .clone()
             .with_param_values(param_values)
             .expect_err("prepared field metadata mismatch unexpectedly succeeded");
+    }
+
+    #[test]
+    fn test_replace_placeholder_empty_relation_valid_schema() {
+        // SELECT $1, $2;
+        let plan = LogicalPlanBuilder::empty(false)
+            .project(vec![
+                SelectExpr::from(placeholder("$1")),
+                SelectExpr::from(placeholder("$2")),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // original
+        assert_snapshot!(plan.display_indent_schema(), @r"
+        Projection: $1, $2 [$1:Null;N, $2:Null;N]
+          EmptyRelation: rows=0 []
+        ");
+
+        let plan = plan
+            .with_param_values(vec![ScalarValue::from(1i32), ScalarValue::from("s")])
+            .unwrap();
+
+        // replaced
+        assert_snapshot!(plan.display_indent_schema(), @r#"
+        Projection: Int32(1) AS $1, Utf8("s") AS $2 [$1:Int32, $2:Utf8]
+          EmptyRelation: rows=0 []
+        "#);
     }
 
     #[test]
