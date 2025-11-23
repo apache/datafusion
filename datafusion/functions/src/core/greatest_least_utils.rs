@@ -18,7 +18,9 @@
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_or_internal_err, plan_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use std::sync::Arc;
@@ -50,12 +52,11 @@ fn keep_array<Op: GreatestLeastOperator>(
 pub(super) fn execute_conditional<Op: GreatestLeastOperator>(
     args: &[ColumnarValue],
 ) -> Result<ColumnarValue> {
-    if args.is_empty() {
-        return internal_err!(
-            "{} was called with no arguments. It requires at least 1.",
-            Op::NAME
-        );
-    }
+    assert_or_internal_err!(
+        !args.is_empty(),
+        "{} was called with no arguments. It requires at least 1.",
+        Op::NAME
+    );
 
     // Some engines (e.g. SQL Server) allow greatest/least with single arg, it's a noop
     if args.len() == 1 {

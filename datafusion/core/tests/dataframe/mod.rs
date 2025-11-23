@@ -3135,19 +3135,18 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
 ) -> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
-        @r#"
+        @r"
     AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
-      SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-        CoalescePartitionsExec
-          AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
-            UnionExec
-              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+      SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+          UnionExec
+            DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+            SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
               DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
-    "#);
+    ");
     Ok(())
 }
 
-#[ignore] // See https://github.com/apache/datafusion/issues/18380
 #[tokio::test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
 async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true(
@@ -3163,52 +3162,6 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
               DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
     "#);
-
-    // 💥 Doesn't pass, and generates this plan:
-    //
-    // AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
-    //   SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-    //     SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
-    //       AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
-    //         UnionExec
-    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
-    //           DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
-    //
-    //
-    // === Excerpt from the verbose explain ===
-    //
-    // +------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    // | plan_type                                                  | plan                                                                                                                                                                                                                                                                                                                                        |
-    // +------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    // | initial_physical_plan                                      | AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                                  |
-    // |                                                            |   AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                              |
-    // |                                                            |     UnionExec                                                                                                                                                                                                                                                                                                                               |
-    // |                                                            |       DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet                                                                                                                               |
-    // |                                                            |       SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                                                                                                                                                   |
-    // |                                                            |         DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                                                                                                                                                    |
-    // ...
-    // | physical_plan after EnforceDistribution                    | OutputRequirementExec: order_by=[], dist_by=Unspecified                                                                                                                                                                                                                                                                                     |
-    // |                                                            |   AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                                |
-    // |                                                            |     SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                                                                                                                                                     |
-    // |                                                            |       CoalescePartitionsExec                                                                                                                                                                                                                                                                                                                |
-    // |                                                            |         AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                        |
-    // |                                                            |           UnionExec                                                                                                                                                                                                                                                                                                                         |
-    // |                                                            |             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet                                                                                                                         |
-    // |                                                            |             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]                                                                                                                                                                                                                                                             |
-    // |                                                            |               DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                                                                                                                                              |
-    // |                                                            |                                                                                                                                                                                                                                                                                                                                             |
-    // | physical_plan after CombinePartialFinalAggregate           | SAME TEXT AS ABOVE
-    // |                                                            |                                                                                                                                                                                                                                                                                                                                             |
-    // | physical_plan after EnforceSorting                         | OutputRequirementExec: order_by=[], dist_by=Unspecified                                                                                                                                                                                                                                                                                     |
-    // |                                                            |   AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted                                                                                                                                                                                                                                                                |
-    // |                                                            |     SortPreservingMergeExec: [id@0 ASC NULLS LAST]                                                                                                                                                                                                                                                                                          |
-    // |                                                            |       SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]                                                                                                                                                                                                                                                                    |
-    // |                                                            |         AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]                                                                                                                                                                                                                                                                              |
-    // |                                                            |           UnionExec                                                                                                                                                                                                                                                                                                                         |
-    // |                                                            |             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet                                                                                                                         |
-    // |                                                            |             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet                                                                                                                                                                |
-    // ...
-    // +------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
     Ok(())
 }

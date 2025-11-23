@@ -1066,6 +1066,213 @@ SELECT '2' NOT IN ('a','b',NULL,1)
 ----
 NULL
 
+# ========================================================================
+# Comprehensive IN LIST tests with NULL handling
+# These tests validate SQL three-valued logic for IN operations
+# ========================================================================
+
+# test_in_list_null_literals
+# NULL IN (any_list) should always return NULL per SQL three-valued logic
+
+query B
+SELECT NULL IN (1, 1)
+----
+NULL
+
+query B
+SELECT NULL IN (NULL, 1)
+----
+NULL
+
+query B
+SELECT NULL IN (NULL, NULL)
+----
+NULL
+
+# test_in_list_with_columns
+# Create test table for column-based IN LIST tests
+
+statement ok
+CREATE OR REPLACE TABLE in_list_test(b INT) AS VALUES (1), (2), (3), (4), (NULL);
+
+# Test: b IN (1, 2) with various values
+
+query B
+SELECT b IN (1, 2) FROM in_list_test WHERE b = 1;
+----
+true
+
+query IB
+SELECT b, b IN (1, 2) FROM in_list_test WHERE b IN (1, 2) ORDER BY b;
+----
+1 true
+2 true
+
+query IB
+SELECT b, b IN (1, 2) FROM in_list_test WHERE b IN (3, 4) ORDER BY b;
+----
+3 false
+4 false
+
+query B
+SELECT b IN (1, 2) FROM in_list_test WHERE b = 1;
+----
+true
+
+query B
+SELECT b IN (1, 2) FROM in_list_test WHERE b = 3;
+----
+false
+
+query B
+SELECT b IN (1, 2) FROM in_list_test WHERE b IS NULL;
+----
+NULL
+
+# Test: b IN (NULL, 1) - list contains NULL
+
+query B
+SELECT b IN (NULL, 1) FROM in_list_test WHERE b = 1;
+----
+true
+
+query B
+SELECT b IN (NULL, 1) FROM in_list_test WHERE b = 2;
+----
+NULL
+
+query B
+SELECT b IN (NULL, 1) FROM in_list_test WHERE b IS NULL;
+----
+NULL
+
+# Test: b IN (NULL, NULL) - list contains only NULLs
+
+query B
+SELECT b IN (NULL, NULL) FROM in_list_test WHERE b = 1;
+----
+NULL
+
+query B
+SELECT b IN (NULL, NULL) FROM in_list_test WHERE b IS NULL;
+----
+NULL
+
+# Test: literal IN (list_with_column) - column appears in the list
+
+statement ok
+CREATE OR REPLACE TABLE in_list_col_test(b INT) AS VALUES (1), (3), (NULL);
+
+query B
+SELECT 1 IN (2, b) FROM in_list_col_test WHERE b = 1;
+----
+true
+
+query B
+SELECT 1 IN (2, b) FROM in_list_col_test WHERE b = 3;
+----
+false
+
+query B
+SELECT 1 IN (2, b) FROM in_list_col_test WHERE b IS NULL;
+----
+NULL
+
+# Test: b IN (1, b) - column references itself in list
+
+query B
+SELECT b IN (1, b) FROM in_list_col_test WHERE b = 1;
+----
+true
+
+query B
+SELECT b IN (1, b) FROM in_list_col_test WHERE b = 3;
+----
+true
+
+query B
+SELECT b IN (1, b) FROM in_list_col_test WHERE b IS NULL;
+----
+NULL
+
+# test_in_list_tuples
+# Test tuple/row-wise IN comparisons using struct syntax
+# Note: Using arrow_cast for precise type control
+
+# (NULL, NULL) IN ((1, 2)) => FALSE
+query B
+SELECT struct(arrow_cast(NULL, 'Int32'), arrow_cast(NULL, 'Int32')) IN (struct(1, 2))
+----
+false
+
+# (NULL, NULL) IN ((NULL, 1)) => FALSE
+query B
+SELECT struct(arrow_cast(NULL, 'Int32'), arrow_cast(NULL, 'Int32')) IN (struct(arrow_cast(NULL, 'Int32'), 1))
+----
+false
+
+# (NULL, NULL) IN ((NULL, NULL)) => TRUE (exact match)
+query B
+SELECT struct(arrow_cast(NULL, 'Int32'), arrow_cast(NULL, 'Int32')) IN (struct(arrow_cast(NULL, 'Int32'), arrow_cast(NULL, 'Int32')))
+----
+true
+
+# (NULL, 1) IN ((1, 2)) => FALSE
+query B
+SELECT struct(arrow_cast(NULL, 'Int32'), 1) IN (struct(1, 2))
+----
+false
+
+# (NULL, 1) IN ((NULL, 1)) => TRUE (exact match)
+query B
+SELECT struct(arrow_cast(NULL, 'Int32'), 1) IN (struct(arrow_cast(NULL, 'Int32'), 1))
+----
+true
+
+# (NULL, 1) IN ((NULL, NULL)) => FALSE
+query B
+SELECT struct(arrow_cast(NULL, 'Int32'), 1) IN (struct(arrow_cast(NULL, 'Int32'), arrow_cast(NULL, 'Int32')))
+----
+false
+
+# (1, 2) IN ((1, 2)) => TRUE
+query B
+SELECT struct(1, 2) IN (struct(1, 2))
+----
+true
+
+# (1, 3) IN ((1, 2)) => FALSE
+query B
+SELECT struct(1, 3) IN (struct(1, 2))
+----
+false
+
+# (4, 4) IN ((1, 2)) => FALSE
+query B
+SELECT struct(4, 4) IN (struct(1, 2))
+----
+false
+
+# (1, 1) IN ((NULL, 1)) => FALSE
+query B
+SELECT struct(1, 1) IN (struct(NULL, 1))
+----
+false
+
+# (1, 1) IN ((NULL, NULL)) => FALSE
+query B
+SELECT struct(1, 1) IN (struct(NULL, NULL))
+----
+false
+
+# Cleanup test tables
+
+statement ok
+DROP TABLE in_list_test;
+
+statement ok
+DROP TABLE in_list_col_test;
+
 query T
 SELECT encode('tom','base64');
 ----

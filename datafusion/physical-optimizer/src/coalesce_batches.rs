@@ -23,7 +23,9 @@ use crate::PhysicalOptimizerRule;
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
-use datafusion_common::{config::ConfigOptions, internal_err};
+use datafusion_common::{
+    assert_eq_or_internal_err, config::ConfigOptions, DataFusionError,
+};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
     async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
@@ -76,11 +78,11 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             } else if let Some(async_exec) = plan_any.downcast_ref::<AsyncFuncExec>() {
                 // Coalesce inputs to async functions to reduce number of async function invocations
                 let children = async_exec.children();
-                if children.len() != 1 {
-                    return internal_err!(
-                        "Expected AsyncFuncExec to have exactly one child"
-                    );
-                }
+                assert_eq_or_internal_err!(
+                    children.len(),
+                    1,
+                    "Expected AsyncFuncExec to have exactly one child"
+                );
 
                 let coalesce_exec = Arc::new(CoalesceBatchesExec::new(
                     Arc::clone(children[0]),

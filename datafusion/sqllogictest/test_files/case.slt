@@ -683,3 +683,23 @@ FROM (
 10 10 100
 -20 20 200
 NULL 30 300
+
+# Case-with-expression that was incorrectly classified as not-nullable, but evaluates to null
+query I
+SELECT CASE 0 WHEN 0 THEN NULL WHEN SUM(1) + COUNT(*) THEN 10 ELSE 20 END
+----
+NULL
+
+query TT
+EXPLAIN SELECT CASE WHEN CASE WHEN a IS NOT NULL THEN a ELSE 1 END IS NOT NULL THEN a ELSE 1 END FROM (
+    VALUES (10), (20), (30)
+  ) t(a);
+----
+logical_plan
+01)Projection: t.a AS CASE WHEN CASE WHEN t.a IS NOT NULL THEN t.a ELSE Int64(1) END IS NOT NULL THEN t.a ELSE Int64(1) END
+02)--SubqueryAlias: t
+03)----Projection: column1 AS a
+04)------Values: (Int64(10)), (Int64(20)), (Int64(30))
+physical_plan
+01)ProjectionExec: expr=[column1@0 as CASE WHEN CASE WHEN t.a IS NOT NULL THEN t.a ELSE Int64(1) END IS NOT NULL THEN t.a ELSE Int64(1) END]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]

@@ -23,7 +23,7 @@ use crate::{
 use arrow::array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -148,9 +148,11 @@ impl ExecutionPlan for AsyncFuncExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return internal_err!("AsyncFuncExec wrong number of children");
-        }
+        assert_eq_or_internal_err!(
+            children.len(),
+            1,
+            "AsyncFuncExec wrong number of children"
+        );
         Ok(Arc::new(AsyncFuncExec::try_new(
             self.async_exprs.clone(),
             Arc::clone(&children[0]),

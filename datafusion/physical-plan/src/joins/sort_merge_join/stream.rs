@@ -1559,26 +1559,32 @@ impl SortMergeJoinStream {
                 null_joined_batch.num_rows(),
             );
 
-            let columns = if !matches!(self.join_type, JoinType::Right) {
-                let mut left_columns = null_joined_batch
-                    .columns()
-                    .iter()
-                    .take(right_columns_length)
-                    .cloned()
-                    .collect::<Vec<_>>();
+            let columns = match self.join_type {
+                JoinType::Right => {
+                    // The first columns are the right columns.
+                    let left_columns = null_joined_batch
+                        .columns()
+                        .iter()
+                        .skip(right_columns_length)
+                        .cloned()
+                        .collect::<Vec<_>>();
 
-                left_columns.extend(right_columns);
-                left_columns
-            } else {
-                let left_columns = null_joined_batch
-                    .columns()
-                    .iter()
-                    .skip(left_columns_length)
-                    .cloned()
-                    .collect::<Vec<_>>();
+                    right_columns.extend(left_columns);
+                    right_columns
+                }
+                JoinType::Left | JoinType::LeftMark | JoinType::RightMark => {
+                    // The first columns are the left columns.
+                    let mut left_columns = null_joined_batch
+                        .columns()
+                        .iter()
+                        .take(left_columns_length)
+                        .cloned()
+                        .collect::<Vec<_>>();
 
-                right_columns.extend(left_columns);
-                right_columns
+                    left_columns.extend(right_columns);
+                    left_columns
+                }
+                _ => exec_err!("Did not expect join type {}", self.join_type)?,
             };
 
             // Push the streamed/buffered batch joined nulls to the output

@@ -46,8 +46,10 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
-use datafusion_common::{internal_err, ColumnStatistics, HashMap};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    assert_or_internal_err, internal_err, ColumnStatistics, DataFusionError, HashMap,
+};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -407,7 +409,6 @@ pub struct BatchPartitioner {
 
 enum BatchPartitionerState {
     Hash {
-        random_state: ahash::RandomState,
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
         hash_buffer: Vec<u64>,
@@ -417,6 +418,11 @@ enum BatchPartitionerState {
         next_idx: usize,
     },
 }
+
+/// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
+/// executions and runs.
+pub const REPARTITION_RANDOM_STATE: ahash::RandomState =
+    ahash::RandomState::with_seeds(0, 0, 0, 0);
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
@@ -433,8 +439,6 @@ impl BatchPartitioner {
             Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
                 exprs,
                 num_partitions,
-                // Use fixed random hash
-                random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
@@ -482,7 +486,6 @@ impl BatchPartitioner {
                     Box::new(std::iter::once(Ok((idx, batch))))
                 }
                 BatchPartitionerState::Hash {
-                    random_state,
                     exprs,
                     num_partitions: partitions,
                     hash_buffer,
@@ -496,7 +499,7 @@ impl BatchPartitioner {
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(&arrays, random_state, hash_buffer)?;
+                    create_hashes(&arrays, &REPARTITION_RANDOM_STATE, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| Vec::with_capacity(batch.num_rows()))
@@ -976,13 +979,12 @@ impl ExecutionPlan for RepartitionExec {
                 return Ok(Statistics::new_unknown(&self.schema()));
             }
 
-            if partition >= partition_count {
-                return internal_err!(
-                    "RepartitionExec invalid partition {} (expected less than {})",
-                    partition,
-                    self.partitioning().partition_count()
-                );
-            }
+            assert_or_internal_err!(
+                partition < partition_count,
+                "RepartitionExec invalid partition {} (expected less than {})",
+                partition,
+                partition_count
+            );
 
             let mut stats = self.input.partition_statistics(None)?;
 

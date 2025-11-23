@@ -664,20 +664,12 @@ async fn test_union_inputs_different_sorted7() -> Result<()> {
     // Union has unnecessarily fine ordering below it. We should be able to replace them with absolutely necessary ordering.
     let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
     assert_snapshot!(test.run(), @r"
-    Input Plan:
+    Input / Optimized Plan:
     SortPreservingMergeExec: [nullable_col@0 ASC]
       UnionExec
         SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
         SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-
-    Optimized Plan:
-    SortPreservingMergeExec: [nullable_col@0 ASC]
-      UnionExec
-        SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-        SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
     ");
     // Union preserves the inputs ordering, and we should not change any of the SortExecs under UnionExec
