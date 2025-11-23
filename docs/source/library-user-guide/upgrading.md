@@ -157,8 +157,6 @@ Instead of silently succeeding.
 
 The remove API no longer requires a mutable instance
 
-> > > > > > > apache/main
-
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0
