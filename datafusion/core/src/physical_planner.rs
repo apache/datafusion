@@ -847,9 +847,6 @@ impl DefaultPhysicalPlanner {
                 let has_ordered_aggregate = updated_aggregates
                     .iter()
                     .any(|agg| !agg.order_bys().is_empty());
-
-                // Ordered aggregations (e.g. LAST_VALUE ORDER BY …) and global aggregates must
-                // remain single-partition to preserve semantics.
                 let requires_single_partition =
                     groups.expr().is_empty() || has_ordered_aggregate;
 
