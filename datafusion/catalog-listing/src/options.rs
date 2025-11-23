@@ -95,6 +95,12 @@ impl ListingOptions {
     pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
         self = self.with_target_partitions(config.target_partitions());
         self = self.with_collect_stat(config.collect_statistics());
+        if !self.table_partition_cols.is_empty() {
+            self.preserve_partition_values = config
+                .options()
+                .execution
+                .listing_table_preserve_partition_values;
+        }
         self
     }
 

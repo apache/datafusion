@@ -58,11 +58,10 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 return Ok(Transformed::no(plan));
             };
 
-            if agg_exec.mode() == &AggregateMode::FinalPartitioned {
-                return Ok(Transformed::no(plan));
-            }
-
-            if agg_exec.mode() != &AggregateMode::Final {
+            if !matches!(
+                agg_exec.mode(),
+                AggregateMode::Final | AggregateMode::FinalPartitioned
+            ) {
                 return Ok(Transformed::no(plan));
             }
 
@@ -86,7 +85,11 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                         input_agg_exec.filter_expr(),
                     ),
                 ) {
-                let mode = AggregateMode::Single;
+                let mode = if agg_exec.mode() == &AggregateMode::Final {
+                    AggregateMode::Single
+                } else {
+                    AggregateMode::SinglePartitioned
+                };
                 AggregateExec::try_new(
                     mode,
                     input_agg_exec.group_expr().clone(),

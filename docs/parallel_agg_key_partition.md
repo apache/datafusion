@@ -69,7 +69,7 @@ Hive DDL (PARTITIONED BY …)
 FileGroup::split_by_partition_values()
         ↓
 FileScanConfig::key_partition_exprs()
-   ↓
+        ↓
 ExecutionPlanProperties::output_partitioning()
    = Partitioning::KeyPartitioned([exprs], #groups)
 ```

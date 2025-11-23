@@ -272,3 +272,8 @@ name = "dataframe"
 [[bench]]
 harness = false
 name = "spm"
+
+[[bench]]
+harness = false
+name = "hive_partitioned"
+required-features = ["parquet"]
