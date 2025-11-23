@@ -1524,6 +1524,14 @@ impl Extensions {
         let e = self.0.get_mut(T::PREFIX)?;
         e.0.as_any_mut().downcast_mut()
     }
+
+    /// Iterates all the config extension entries yielding their prefix and their
+    /// [ExtensionOptions] implementation.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &Box<dyn ExtensionOptions>)> {
+        self.0.iter().map(|(k, v)| (*k, &v.0))
+    }
 }
 
 #[derive(Debug)]
