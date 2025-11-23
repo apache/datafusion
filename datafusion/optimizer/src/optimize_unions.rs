@@ -118,7 +118,7 @@ fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
                     LogicalPlan::Projection(
                         Projection::try_new_with_schema(
                             expr.clone(),
-                            Arc::new(plan.clone()),
+                            Arc::new(plan),
                             Arc::clone(&schema),
                         )
                         .unwrap(),
