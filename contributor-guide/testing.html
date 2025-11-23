@@ -418,18 +418,30 @@ the Rust standard <a class="reference external" href="https://doc.rust-lang.org/
 </div>
 <section id="unit-tests">
 <h2>Unit tests<a class="headerlink" href="#unit-tests" title="Link to this heading">#</a></h2>
-<p>Tests for code in an individual module are defined in the same source file with a <code class="docutils literal notranslate"><span class="pre">test</span></code> module, following Rust convention.
-The <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/common/src/test_util.rs">test_util</a> module provides useful macros to write unit tests effectively, such as <code class="docutils literal notranslate"><span class="pre">assert_batches_sorted_eq</span></code> and <code class="docutils literal notranslate"><span class="pre">assert_batches_eq</span></code> for RecordBatches and <code class="docutils literal notranslate"><span class="pre">assert_contains</span></code> / <code class="docutils literal notranslate"><span class="pre">assert_not_contains</span></code> which are used extensively in the codebase.</p>
+<p>Tests for code in an individual module are defined in the same source file with a <code class="docutils literal notranslate"><span class="pre">test</span></code> module, following Rust convention.</p>
+<p>For example, to run tests in the <code class="docutils literal notranslate"><span class="pre">datafusion</span></code> crate:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion
+</pre></div>
+</div>
+<p>The <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/common/src/test_util.rs">test_util</a> module provides useful macros to write unit tests effectively, such as <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/macro.assert_batches_sorted_eq.html"><code class="docutils literal notranslate"><span class="pre">assert_batches_sorted_eq</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/macro.assert_batches_eq.html"><code class="docutils literal notranslate"><span class="pre">assert_batches_eq</span></code></a> for RecordBatches and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/macro.assert_contains.html"><code class="docutils literal notranslate"><span class="pre">assert_contains</span></code></a> / <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/macro.assert_not_contains.html"><code class="docutils literal notranslate"><span class="pre">assert_not_contains</span></code></a> which are used extensively in the codebase.</p>
 </section>
 <section id="sqllogictests-tests">
 <h2>sqllogictests Tests<a class="headerlink" href="#sqllogictests-tests" title="Link to this heading">#</a></h2>
-<p>DataFusion’s SQL implementation is tested using <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest">sqllogictest</a> which are run like other tests using <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span></code>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code> tests may be less convenient for new contributors who are familiar with writing <code class="docutils literal notranslate"><span class="pre">.rs</span></code> tests as they require learning another tool. However, <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span> <span class="pre">--</span> <span class="pre">--complete</span></code>.</p>
+<p>DataFusion’s SQL implementation is tested using <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest">sqllogictest</a>. You can run these tests with commands like:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="c1"># Run all tests</span>
+cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests
+<span class="c1"># Run a specific test file</span>
+cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests<span class="w"> </span>--<span class="w"> </span>aggregate.slt
+<span class="c1"># Run and update expected outputs</span>
+cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests<span class="w"> </span>--<span class="w"> </span>--complete
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code> may be less convenient for new contributors who are familiar with writing <code class="docutils literal notranslate"><span class="pre">.rs</span></code> tests as they require learning another tool. However, <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated.</p>
 <p>Like similar systems such as <a class="reference external" href="https://duckdb.org/dev/testing">DuckDB</a>, DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.</p>
 <p>DataFusion has integrated <a class="reference external" href="https://sqlite.org/sqllogictest/doc/trunk/about.wiki">sqlite’s test suite</a> as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite">README</a> file for instructions.</p>
 </section>
-<section id="snapshot-testing">
-<h2>Snapshot testing<a class="headerlink" href="#snapshot-testing" title="Link to this heading">#</a></h2>
+<section id="snapshot-testing-cargo-insta">
+<h2>Snapshot testing (<code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">insta</span></code>)<a class="headerlink" href="#snapshot-testing-cargo-insta" title="Link to this heading">#</a></h2>
 <p><a class="reference external" href="https://github.com/mitsuhiko/insta">Insta</a> is used for snapshot testing. Snapshots are generated
 and compared on each test run. If the output changes, tests will fail.</p>
 <p>To review the changes, you can use Insta CLI:</p>
@@ -452,7 +464,7 @@ locally by following the <a class="reference external" href="https://github.com/
 <h2>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Link to this heading">#</a></h2>
 <p>There are several public interface tests for the DataFusion library in the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
 <p>You can run these tests individually using <code class="docutils literal notranslate"><span class="pre">cargo</span></code> as normal command such as</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_exec
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_integration
 </pre></div>
 </div>
 </section>
@@ -577,7 +589,7 @@ tested in the same way using the <a class="reference external" href="https://doc
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#unit-tests">Unit tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sqllogictests-tests">sqllogictests Tests</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#snapshot-testing">Snapshot testing</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#snapshot-testing-cargo-insta">Snapshot testing (<code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">insta</span></code>)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#extended-tests">Extended Tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rust-integration-tests">Rust Integration Tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sql-fuzz-testing">SQL “Fuzz” testing</a></li>
