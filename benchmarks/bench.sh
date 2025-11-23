@@ -43,12 +43,6 @@ DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
-HIVE_MICRO_BUCKET_COUNT=${HIVE_MICRO_BUCKET_COUNT:-8}
-HIVE_MICRO_ITERATIONS=${HIVE_MICRO_ITERATIONS:-5}
-HIVE_MICRO_TARGET_PARTITIONS=${HIVE_MICRO_TARGET_PARTITIONS:-8}
-HIVE_MICRO_TPCH_DIR=${HIVE_MICRO_TPCH_DIR:-$DATA_DIR/tpch_sf10}
-HIVE_MICRO_DATA_DIR=${HIVE_MICRO_DATA_DIR:-$DATA_DIR/hive_micro_sf10}
-HIVE_MICRO_LIMIT=${HIVE_MICRO_LIMIT:-}
 
 usage() {
     echo "
@@ -233,9 +227,6 @@ main() {
                     ;;
                 clickbench_extended)
                     data_clickbench_1
-                    ;;
-                hive_micro)
-                    data_hive_micro
                     ;;
                 imdb)
                     data_imdb
@@ -427,9 +418,6 @@ main() {
                 clickbench_extended)
                     run_clickbench_extended
                     ;;
-                hive_micro)
-                    run_hive_micro
-                    ;;
                 imdb)
                     run_imdb
                     ;;
@@ -601,31 +589,6 @@ data_tpch() {
     fi
 }
 
-# Builds the hive_micro dataset from TPCH data
-data_hive_micro() {
-    local tpch_dir="${HIVE_MICRO_TPCH_DIR}"
-    local hive_dir="${HIVE_MICRO_DATA_DIR}"
-    local bucket_count="${HIVE_MICRO_BUCKET_COUNT}"
-    local limit="${HIVE_MICRO_LIMIT}"
-
-    if [ ! -d "${tpch_dir}/lineitem" ]; then
-        echo "TPCH data not found at ${tpch_dir}. Run './bench.sh data tpch10' first."
-        exit 1
-    fi
-
-    echo "Building hive_micro dataset in ${hive_dir} from ${tpch_dir}"
-    rm -rf "${hive_dir}"
-    mkdir -p "$(dirname "${hive_dir}")"
-
-    pushd "${SCRIPT_DIR}" > /dev/null
-    local cmd=($CARGO_COMMAND --bin hive_micro -- setup --tpch-dir "${tpch_dir}" --hive-dir "${hive_dir}" --bucket-count "${bucket_count}")
-    if [ -n "${limit}" ]; then
-        cmd+=(--limit "${limit}")
-    fi
-    debug_run "${cmd[@]}"
-    popd > /dev/null
-}
-
 # Runs the tpch benchmark
 run_tpch() {
     SCALE_FACTOR=$1
@@ -733,27 +696,6 @@ run_clickbench_1() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
-}
-
-# Runs the hive_micro benchmark
-run_hive_micro() {
-    local hive_dir="${HIVE_MICRO_DATA_DIR}"
-    local bucket_count="${HIVE_MICRO_BUCKET_COUNT}"
-    local iterations="${HIVE_MICRO_ITERATIONS}"
-    local target_partitions="${HIVE_MICRO_TARGET_PARTITIONS}"
-
-    RESULTS_FILE="${RESULTS_DIR}/hive_micro.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running hive_micro benchmark (dataset: ${hive_dir})..."
-
-    pushd "${SCRIPT_DIR}" > /dev/null
-    local cmd=($CARGO_COMMAND --bin hive_micro -- run --hive-dir "${hive_dir}" --bucket-count "${bucket_count}" --iterations "${iterations}" --target-partitions "${target_partitions}" --output "${RESULTS_FILE}")
-    if [ -n "${HIVE_MICRO_EXPLAIN_DIR}" ]; then
-        mkdir -p "${HIVE_MICRO_EXPLAIN_DIR}"
-        cmd+=(--explain "${HIVE_MICRO_EXPLAIN_DIR}")
-    fi
-    debug_run "${cmd[@]}"
-    popd > /dev/null
 }
 
  # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
