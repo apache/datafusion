@@ -64,7 +64,6 @@ use datafusion_physical_expr::{
     ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
-use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -96,6 +95,7 @@ pub struct FilterExec {
 
 impl FilterExec {
     /// Create a FilterExec on an input
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
         input: Arc<dyn ExecutionPlan>,
@@ -205,12 +205,12 @@ impl FilterExec {
 
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity (either default, or estimated) to input statistics.
     fn statistics_helper(
-        schema: SchemaRef,
+        schema: &SchemaRef,
         input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
     ) -> Result<Statistics> {
-        if !check_support(predicate, &schema) {
+        if !check_support(predicate, schema) {
             let selectivity = default_selectivity as f64 / 100.0;
             let mut stats = input_stats.to_inexact();
             stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
@@ -222,12 +222,10 @@ impl FilterExec {
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
-        let input_analysis_ctx = AnalysisContext::try_from_statistics(
-            &schema,
-            &input_stats.column_statistics,
-        )?;
+        let input_analysis_ctx =
+            AnalysisContext::try_from_statistics(schema, &input_stats.column_statistics)?;
 
-        let analysis_ctx = analyze(predicate, input_analysis_ctx, &schema)?;
+        let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
@@ -284,8 +282,9 @@ impl FilterExec {
     ) -> Result<PlanProperties> {
         // Combine the equal predicates with the input equivalence properties
         // to construct the equivalence properties:
+        let schema = input.schema();
         let stats = Self::statistics_helper(
-            input.schema(),
+            &schema,
             input.partition_statistics(None)?,
             predicate,
             default_selectivity,
@@ -321,11 +320,6 @@ impl FilterExec {
             let out_schema = project_schema(schema, Some(projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
-            if let Some(repaired) =
-                rebuild_key_partitioning(input.output_partitioning(), &projection_mapping)
-            {
-                output_partitioning = repaired;
-            }
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
 
@@ -335,23 +329,6 @@ impl FilterExec {
             input.pipeline_behavior(),
             input.boundedness(),
         ))
-    }
-}
-
-fn rebuild_key_partitioning(
-    input_partitioning: &Partitioning,
-    mapping: &ProjectionMapping,
-) -> Option<Partitioning> {
-    if let Partitioning::KeyPartitioned(exprs, part) = input_partitioning {
-        let mut mapped_exprs = Vec::with_capacity(exprs.len());
-        for expr in exprs {
-            let targets = mapping.get(expr)?;
-            let (target_expr, _) = targets.first();
-            mapped_exprs.push(Arc::clone(target_expr));
-        }
-        Some(Partitioning::KeyPartitioned(mapped_exprs, *part))
-    } else {
-        None
     }
 }
 
@@ -466,8 +443,9 @@ impl ExecutionPlan for FilterExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
+        let schema = self.schema();
         let stats = Self::statistics_helper(
-            self.schema(),
+            &schema,
             input_stats,
             self.predicate(),
             self.default_selectivity,

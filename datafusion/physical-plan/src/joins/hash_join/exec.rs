@@ -1087,7 +1087,7 @@ impl ExecutionPlan for HashJoinExec {
             self.left(),
             self.right(),
             self.on(),
-            self.schema(),
+            &self.schema(),
             self.filter(),
         )? {
             Ok(Some(Arc::new(HashJoinExec::try_new(

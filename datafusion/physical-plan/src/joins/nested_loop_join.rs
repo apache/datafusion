@@ -586,7 +586,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             self.left(),
             self.right(),
             &[],
-            self.schema(),
+            &self.schema(),
             self.filter(),
         )? {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(

@@ -50,7 +50,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 // Re-exported from datafusion-physical-expr for backwards compatibility
@@ -175,14 +174,9 @@ impl ProjectionExec {
         let input_eq_properties = input.equivalence_properties();
         let eq_properties = input_eq_properties.project(projection_mapping, schema);
         // Calculate output partitioning, which needs to respect aliases:
-        let input_partitioning = input.output_partitioning();
-        let mut output_partitioning =
-            input_partitioning.project(projection_mapping, input_eq_properties);
-        if let Some(repaired) =
-            rebuild_key_partitioning(input_partitioning, projection_mapping)
-        {
-            output_partitioning = repaired;
-        }
+        let output_partitioning = input
+            .output_partitioning()
+            .project(projection_mapping, input_eq_properties);
 
         Ok(PlanProperties::new(
             eq_properties,
@@ -354,23 +348,6 @@ impl ExecutionPlan for ProjectionExec {
     }
 }
 
-fn rebuild_key_partitioning(
-    input_partitioning: &Partitioning,
-    mapping: &ProjectionMapping,
-) -> Option<Partitioning> {
-    if let Partitioning::KeyPartitioned(exprs, part) = input_partitioning {
-        let mut mapped_exprs = Vec::with_capacity(exprs.len());
-        for expr in exprs {
-            let targets = mapping.get(expr)?;
-            let (target_expr, _) = targets.first();
-            mapped_exprs.push(Arc::clone(target_expr));
-        }
-        Some(Partitioning::KeyPartitioned(mapped_exprs, *part))
-    } else {
-        None
-    }
-}
-
 impl ProjectionStream {
     /// Create a new projection stream
     fn new(
@@ -503,7 +480,7 @@ pub fn try_pushdown_through_join(
     join_left: &Arc<dyn ExecutionPlan>,
     join_right: &Arc<dyn ExecutionPlan>,
     join_on: JoinOnRef,
-    schema: SchemaRef,
+    schema: &SchemaRef,
     filter: Option<&JoinFilter>,
 ) -> Result<Option<JoinData>> {
     // Convert projected expressions to columns. We can not proceed if this is not possible.
@@ -516,7 +493,7 @@ pub fn try_pushdown_through_join(
 
     if !join_allows_pushdown(
         &projection_as_columns,
-        &schema,
+        schema,
         far_right_left_col_ind,
         far_left_right_col_ind,
     ) {
