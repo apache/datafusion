@@ -28,6 +28,7 @@ use std::cmp::Ordering;
 use std::mem::size_of_val;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+use datafusion::common::tree_node::Transformed;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
@@ -1279,7 +1280,9 @@ async fn roundtrip_values_with_scalar_function() -> Result<()> {
     let actual = substrait_roundtrip(&plan, &ctx).await?;
 
     let strip_aliases_from_values = |plan: &LogicalPlan| -> LogicalPlan {
-        plan.map_expressions(|expr| Ok(expr.unalias()))
+        plan.clone()
+            .map_expressions(|expr| Ok(Transformed::yes(expr.unalias())))
+            .map(|t| t.data)
             .unwrap_or_else(|_| plan.clone())
     };
 
