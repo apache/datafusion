@@ -20,6 +20,7 @@
 use crate::{FileRange, PartitionedFile};
 use datafusion_common::{ScalarValue, Statistics};
 use itertools::Itertools;
+use log::{debug, warn};
 use std::cmp::{min, Ordering};
 use std::collections::{BinaryHeap, HashMap};
 use std::iter::repeat_with;
@@ -450,6 +451,10 @@ impl FileGroup {
 
         for file in self.files {
             if file.partition_values.is_empty() {
+                debug!(
+                    "File {:?} has no partition values, will fall back to single group",
+                    file.path(),
+                );
                 fallback.push(file);
                 continue;
             }
@@ -460,6 +465,12 @@ impl FileGroup {
         }
 
         if !fallback.is_empty() {
+            debug!(
+                "Mixed partitioned/non-partitioned files detected ({} partitioned, {} non-partitioned), \
+                 falling back to single file group",
+                groups.values().map(|v| v.len()).sum::<usize>(),
+                fallback.len()
+            );
             for mut files in groups.into_values() {
                 fallback.append(&mut files);
             }
@@ -481,12 +492,15 @@ impl FileGroup {
     /// Returns the unique set of partition values represented by this group,
     /// if and only if all files share the same values.
     pub fn unique_partition_values(&self) -> Option<&[ScalarValue]> {
-        let mut iter = self.files.iter();
-        let first = iter.next()?;
+        if self.files.is_empty() {
+            return None;
+        }
+        let first = &self.files[0];
         if first.partition_values.is_empty() {
             return None;
         }
-        for file in iter {
+        // Only iterate remaining files if we have partitions
+        for file in &self.files[1..] {
             if file.partition_values != first.partition_values {
                 return None;
             }
@@ -568,6 +582,12 @@ fn compare_partition_keys(left: &[ScalarValue], right: &[ScalarValue]) -> Orderi
             Some(Ordering::Greater) => return Ordering::Greater,
             Some(Ordering::Equal) => continue,
             None => {
+                warn!(
+                    "Partition values '{:?}' and '{:?}' are not directly comparable. \
+                     Using string comparison as fallback. This may produce unexpected ordering \
+                     for numeric partition columns containing NULL values.",
+                    l, r
+                );
                 let ord = l.to_string().cmp(&r.to_string());
                 if ord != Ordering::Equal {
                     return ord;

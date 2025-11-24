@@ -800,40 +800,40 @@ impl DefaultPhysicalPlanner {
                 )?);
 
                 let grouping_input_exprs = groups.input_exprs();
+                let output_partitioning = initial_aggr.properties().output_partitioning();
                 let key_partition_on_group =
                     if groups.is_single() && !groups.expr().is_empty() {
-                        match initial_aggr.properties().output_partitioning() {
-                            Partitioning::KeyPartitioned(partition_exprs, _) => {
-                                let normalize_label = |label: String| -> String {
-                                    label
+                        if let Partitioning::KeyPartitioned(ref partition_exprs, _) =
+                            output_partitioning
+                        {
+                            partition_exprs.iter().all(|part_expr| {
+                                if let Some(part_col) =
+                                    part_expr.as_any().downcast_ref::<Column>()
+                                {
+                                    let part_name = part_col
+                                        .name()
                                         .split('@')
                                         .next()
-                                        .unwrap_or(label.as_str())
-                                        .to_string()
-                                };
-                                let label_for = |expr: &Arc<dyn PhysicalExpr>| {
-                                    let raw_label = expr
-                                        .as_any()
-                                        .downcast_ref::<Column>()
-                                        .map(|col| col.name().to_string())
-                                        .unwrap_or_else(|| expr.to_string());
-                                    normalize_label(raw_label)
-                                };
-                                let partition_labels: Vec<_> = partition_exprs
-                                    .iter()
-                                    .map(|expr| label_for(expr))
-                                    .collect();
-                                let group_labels: Vec<_> = grouping_input_exprs
-                                    .iter()
-                                    .map(|expr| label_for(expr))
-                                    .collect();
-                                partition_labels.iter().all(|label| {
-                                    group_labels
-                                        .iter()
-                                        .any(|group_label| group_label == label)
-                                })
-                            }
-                            _ => false,
+                                        .unwrap_or(part_col.name());
+                                    grouping_input_exprs.iter().any(|group_expr| {
+                                        group_expr
+                                            .as_any()
+                                            .downcast_ref::<Column>()
+                                            .map_or(false, |group_col| {
+                                                let group_name = group_col
+                                                    .name()
+                                                    .split('@')
+                                                    .next()
+                                                    .unwrap_or(group_col.name());
+                                                group_name == part_name
+                                            })
+                                    })
+                                } else {
+                                    false
+                                }
+                            })
+                        } else {
+                            false
                         }
                     } else {
                         false
@@ -854,10 +854,7 @@ impl DefaultPhysicalPlanner {
                 // Determine if we can use parallel final aggregation:
                 //   1. The scan is already KeyPartitioned on the grouping keys with >1 partitions
                 //   2. We are allowed to insert a hash repartition before the final stage
-                let child_partition_count = initial_aggr
-                    .properties()
-                    .output_partitioning()
-                    .partition_count();
+                let child_partition_count = output_partitioning.partition_count();
                 let key_partition_supports_parallel =
                     key_partition_on_group && child_partition_count > 1;
                 let hash_repartition_enabled = !groups.is_empty()

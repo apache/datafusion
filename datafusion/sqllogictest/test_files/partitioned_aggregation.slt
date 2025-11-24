@@ -22,6 +22,9 @@ statement ok
 SET datafusion.execution.target_partitions = 4;
 
 statement ok
+SET datafusion.execution.listing_table_preserve_partition_values = true;
+
+statement ok
 CREATE TABLE staging (
     part_col INT,
     val INT
@@ -132,11 +135,9 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[val@0 as val], aggr=[count(Int64(1))]
 08)--------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[val], file_type=parquet
 
-# 4. Note: Even with preserve_partition_values=false, when grouping by partition column,
-# the optimization still applies because files are naturally grouped by partition directories.
-# The difference is that with preserve_partition_values=false, files might be split across
-# target_partitions, but when grouping by partition column, each partition directory still
-# forms a natural group.
+# 4. With preserve_partition_values=false (the default), files are distributed across
+# target_partitions without preserving partition boundaries, so the optimization does NOT apply.
+# The query will use standard hash repartitioning for aggregation.
 statement ok
 SET datafusion.execution.listing_table_preserve_partition_values = false;
 
@@ -161,8 +162,11 @@ physical_plan
 01)SortPreservingMergeExec: [part_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[part_col@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[part_col@0 as part_col, count(Int64(1))@1 as count(*)]
-04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
-05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[part_col], file_type=parquet
+04)------AggregateExec: mode=FinalPartitioned, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([part_col@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
+08)--------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[part_col], file_type=parquet
 
 # Cleanup
 statement ok

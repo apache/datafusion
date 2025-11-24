@@ -47,6 +47,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::ExecutionPlan;
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
+use log::debug;
 use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::HashMap;
@@ -458,6 +459,7 @@ impl TableProvider for ListingTable {
 
         let output_ordering = self.try_create_output_ordering(state.execution_props())?;
         if !self.options.preserve_partition_values {
+            // Split file groups by statistics to optimize sorted scans
             match state
                 .config_options()
                 .execution
@@ -486,6 +488,11 @@ impl TableProvider for ListingTable {
                 }
                 None => {} // no ordering required
             };
+        } else {
+            debug!(
+                "Skipping statistics-based file splitting because preserve_partition_values is enabled. \
+                 File groups will respect partition boundaries instead of sort statistics."
+            );
         }
 
         let Some(object_store_url) =
@@ -662,7 +669,7 @@ impl ListingTable {
 
         let target_partitions = self.options.target_partitions.max(1);
         let file_groups = if self.options.preserve_partition_values {
-            file_group.clone().split_by_partition_values()
+            file_group.split_by_partition_values()
         } else {
             file_group.split_files(target_partitions)
         };

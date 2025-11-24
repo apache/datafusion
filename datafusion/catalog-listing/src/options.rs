@@ -214,9 +214,6 @@ impl ListingOptions {
         table_partition_cols: Vec<(String, DataType)>,
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
-        if !self.table_partition_cols.is_empty() {
-            self.preserve_partition_values = true;
-        }
         self
     }
 

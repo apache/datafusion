@@ -65,6 +65,7 @@ use datafusion_physical_plan::{
 use std::{
     any::Any, borrow::Cow, collections::HashMap, collections::HashSet, fmt::Debug,
     fmt::Formatter, fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
+    sync::OnceLock,
 };
 
 use datafusion_physical_expr::equivalence::project_orderings;
@@ -200,6 +201,9 @@ pub struct FileScanConfig {
     pub(crate) statistics: Statistics,
     /// Preserve partition column value boundaries when forming file groups.
     pub preserve_partition_values: bool,
+    /// Cached result of key_partition_exprs computation to avoid repeated work
+    #[allow(clippy::type_complexity)]
+    key_partition_exprs_cache: OnceLock<Option<Vec<Arc<dyn PhysicalExpr>>>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -484,6 +488,7 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             preserve_partition_values,
+            key_partition_exprs_cache: OnceLock::new(),
         }
     }
 }
@@ -762,6 +767,24 @@ impl FileScanConfig {
     }
 
     fn key_partition_exprs(&self) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
+        if !self.preserve_partition_values {
+            return None;
+        }
+        let result = self
+            .key_partition_exprs_cache
+            .get_or_init(|| self.compute_key_partition_exprs())
+            .clone();
+
+        if result.is_some() {
+            debug!(
+                "KeyPartitioned optimization enabled for {} file groups",
+                self.file_groups.len()
+            );
+        }
+        result
+    }
+
+    fn compute_key_partition_exprs(&self) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
         if self.file_groups.is_empty() {
             return None;
         }
@@ -772,15 +795,23 @@ impl FileScanConfig {
         let mut seen = HashSet::with_capacity(self.file_groups.len());
         for group in &self.file_groups {
             let values = group.unique_partition_values()?;
-            if !seen.insert(values.to_vec()) {
+            if !seen.insert(values) {
                 return None;
             }
         }
         let schema = self.file_source.table_schema().table_schema();
         let mut exprs = Vec::with_capacity(partition_fields.len());
         for field in partition_fields {
-            if let Ok(column) = Column::new_with_schema(field.name(), schema) {
-                exprs.push(Arc::new(column) as Arc<dyn PhysicalExpr>);
+            match Column::new_with_schema(field.name(), schema) {
+                Ok(column) => exprs.push(Arc::new(column) as Arc<dyn PhysicalExpr>),
+                Err(e) => {
+                    debug!(
+                        "Partition column '{}' not found in schema, disabling KeyPartitioned optimization: {}",
+                        field.name(),
+                        e
+                    );
+                    return None;
+                }
             }
         }
         if exprs.is_empty() {

@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_preserve_partition_values_enabled_by_default() {
+    async fn test_preserve_partition_values_disabled_by_default() {
         let dir = tempfile::tempdir().unwrap();
         let factory = ListingTableFactory::new();
         let context = SessionContext::new();
@@ -574,22 +574,22 @@ mod tests {
             .as_any()
             .downcast_ref::<ListingTable>()
             .unwrap();
-        assert!(listing_table.options().preserve_partition_values);
+        assert!(!listing_table.options().preserve_partition_values);
     }
 
     #[tokio::test]
-    async fn test_preserve_partition_values_can_be_disabled() {
+    async fn test_preserve_partition_values_can_be_enabled() {
         let dir = tempfile::tempdir().unwrap();
         let factory = ListingTableFactory::new();
         let mut config = SessionConfig::new();
         config
             .options_mut()
             .execution
-            .listing_table_preserve_partition_values = false;
+            .listing_table_preserve_partition_values = true;
         let context = SessionContext::new_with_config(config);
         let state = context.state();
         assert!(
-            !state
+            state
                 .config_options()
                 .execution
                 .listing_table_preserve_partition_values
@@ -601,6 +601,6 @@ mod tests {
             .as_any()
             .downcast_ref::<ListingTable>()
             .unwrap();
-        assert!(!listing_table.options().preserve_partition_values);
+        assert!(listing_table.options().preserve_partition_values);
     }
 }
