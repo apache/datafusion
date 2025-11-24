@@ -1277,7 +1277,7 @@ async fn roundtrip_values_with_scalar_function() -> Result<()> {
 
     let actual = substrait_roundtrip(&plan, &ctx).await?;
 
-    let normalize = |plan: &LogicalPlan| match plan {
+    let strip_aliases_from_values = |plan: &LogicalPlan| match plan {
         LogicalPlan::Values(values_plan) => {
             let rows = values_plan
                 .values
@@ -1300,8 +1300,8 @@ async fn roundtrip_values_with_scalar_function() -> Result<()> {
         other => other.clone(),
     };
 
-    let normalized_expected = normalize(&expected);
-    let normalized_actual = normalize(&actual);
+    let normalized_expected = strip_aliases_from_values(&expected);
+    let normalized_actual = strip_aliases_from_values(&actual);
 
     assert_eq!(
         format!("{normalized_expected}"),
