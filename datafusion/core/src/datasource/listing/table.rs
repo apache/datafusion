@@ -1318,10 +1318,10 @@ mod tests {
                 .map(|f| f.path().to_string())
                 .collect::<Vec<_>>(),
             vec![
-                "bucket/test/pid=1/file1".to_string(),
-                "bucket/test/pid=1/file2".to_string(),
-                "bucket/test/pid=2/file3".to_string(),
-                "bucket/test/pid=2/file4".to_string(),
+                "bucket/test/pid=1/file1",
+                "bucket/test/pid=1/file2",
+                "bucket/test/pid=2/file3",
+                "bucket/test/pid=2/file4",
             ]
         );
 

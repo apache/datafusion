@@ -447,7 +447,7 @@ impl FileGroup {
         }
 
         let mut groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-        let mut fallback: Vec<PartitionedFile> = Vec::new();
+        let mut has_unpartitioned = false;
 
         for file in self.files {
             if file.partition_values.is_empty() {
@@ -455,30 +455,25 @@ impl FileGroup {
                     "File {:?} has no partition values, will fall back to single group",
                     file.path(),
                 );
-                fallback.push(file);
-                continue;
+                has_unpartitioned = true;
+                groups.entry(vec![]).or_default().push(file);
+            } else {
+                groups
+                    .entry(file.partition_values.clone())
+                    .or_default()
+                    .push(file);
             }
-            groups
-                .entry(file.partition_values.clone())
-                .or_default()
-                .push(file);
         }
 
-        if !fallback.is_empty() {
+        if has_unpartitioned && groups.len() > 1 {
             debug!(
-                "Mixed partitioned/non-partitioned files detected ({} partitioned, {} non-partitioned), \
-                 falling back to single file group",
-                groups.values().map(|v| v.len()).sum::<usize>(),
-                fallback.len()
+                "Mixed partitioned/non-partitioned files detected, falling back to single file group"
             );
-            for mut files in groups.into_values() {
-                fallback.append(&mut files);
-            }
-            return vec![FileGroup::new(fallback)];
-        }
-
-        if groups.is_empty() {
-            return vec![FileGroup::new(vec![])];
+            let all_files = groups
+                .into_values()
+                .flatten()
+                .collect();
+            return vec![FileGroup::new(all_files)];
         }
 
         let mut entries: Vec<_> = groups.into_iter().collect();
@@ -492,20 +487,19 @@ impl FileGroup {
     /// Returns the unique set of partition values represented by this group,
     /// if and only if all files share the same values.
     pub fn unique_partition_values(&self) -> Option<&[ScalarValue]> {
-        if self.files.is_empty() {
-            return None;
-        }
-        let first = &self.files[0];
+        let first = self.files.first()?;
         if first.partition_values.is_empty() {
             return None;
         }
-        // Only iterate remaining files if we have partitions
-        for file in &self.files[1..] {
-            if file.partition_values != first.partition_values {
-                return None;
-            }
+
+        if self.files[1..]
+            .iter()
+            .all(|file| file.partition_values == first.partition_values)
+        {
+            Some(&first.partition_values)
+        } else {
+            None
         }
-        Some(&first.partition_values)
     }
 
     /// Partition the list of files into `n` groups
@@ -582,12 +576,6 @@ fn compare_partition_keys(left: &[ScalarValue], right: &[ScalarValue]) -> Orderi
             Some(Ordering::Greater) => return Ordering::Greater,
             Some(Ordering::Equal) => continue,
             None => {
-                warn!(
-                    "Partition values '{:?}' and '{:?}' are not directly comparable. \
-                     Using string comparison as fallback. This may produce unexpected ordering \
-                     for numeric partition columns containing NULL values.",
-                    l, r
-                );
                 let ord = l.to_string().cmp(&r.to_string());
                 if ord != Ordering::Equal {
                     return ord;

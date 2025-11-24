@@ -801,36 +801,26 @@ impl DefaultPhysicalPlanner {
 
                 let grouping_input_exprs = groups.input_exprs();
                 let output_partitioning = initial_aggr.properties().output_partitioning();
+
+                // Check if the data is partitioned on the grouping columns.
+                // If all partition columns are present in the GROUP BY, we can avoid repartitioning.
                 let key_partition_on_group =
                     if groups.is_single() && !groups.expr().is_empty() {
                         if let Partitioning::KeyPartitioned(ref partition_exprs, _) =
                             output_partitioning
                         {
+                            // All partition columns must be present in the GROUP BY
                             partition_exprs.iter().all(|part_expr| {
-                                if let Some(part_col) =
-                                    part_expr.as_any().downcast_ref::<Column>()
-                                {
-                                    let part_name = part_col
-                                        .name()
-                                        .split('@')
-                                        .next()
-                                        .unwrap_or(part_col.name());
-                                    grouping_input_exprs.iter().any(|group_expr| {
-                                        group_expr
-                                            .as_any()
-                                            .downcast_ref::<Column>()
-                                            .map_or(false, |group_col| {
-                                                let group_name = group_col
-                                                    .name()
-                                                    .split('@')
-                                                    .next()
-                                                    .unwrap_or(group_col.name());
-                                                group_name == part_name
-                                            })
-                                    })
-                                } else {
-                                    false
-                                }
+                                let Some(part_col) = part_expr.as_any().downcast_ref::<Column>() else {
+                                    return false;
+                                };
+
+                                grouping_input_exprs.iter().any(|group_expr| {
+                                    group_expr
+                                        .as_any()
+                                        .downcast_ref::<Column>()
+                                        .map_or(false, |group_col| group_col.name() == part_col.name())
+                                })
                             })
                         } else {
                             false

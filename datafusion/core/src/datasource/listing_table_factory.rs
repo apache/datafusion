@@ -133,15 +133,11 @@ impl TableProviderFactory for ListingTableFactory {
 
         options = options.with_table_partition_cols(table_partition_cols);
         if !cmd.table_partition_cols.is_empty() {
-            if session_state
+            let preserve = session_state
                 .config_options()
                 .execution
-                .listing_table_preserve_partition_values
-            {
-                options = options.with_preserve_partition_values(true);
-            } else {
-                options = options.with_preserve_partition_values(false);
-            }
+                .listing_table_preserve_partition_values;
+            options = options.with_preserve_partition_values(preserve);
         }
         options
             .validate_partitions(session_state, &table_path)

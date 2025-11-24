@@ -594,11 +594,9 @@ config_namespace! {
         /// Should a `ListingTable` created through the `ListingTableFactory` keep files that share
         /// the same partition column values in the same execution partition when `PARTITIONED BY`
         /// columns are declared. Defaults to false to avoid overhead on non-partitioned tables.
-        ///
-        /// When enabled for Hive-style partitioned tables, allows partition-aware aggregations that
-        /// eliminate hash repartitioning when grouping by partition columns. This optimization works
-        /// best with moderate partition counts (10-100 partitions) and large partitions (>500K rows).
-        /// With many small partitions (500+), task scheduling overhead may outweigh shuffle savings.
+        /// Optmization is beest with moderate partition counts (10-100 partitions) and large partitions
+        /// (>500K rows). With many small partitions (500+), task scheduling overhead may outweigh shuffle
+        /// savings.
         pub listing_table_preserve_partition_values: bool, default = false
 
         /// Should DataFusion support recursive CTEs

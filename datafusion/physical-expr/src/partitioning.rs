@@ -202,44 +202,18 @@ impl Partitioning {
                     fast_match
                 }
                 Partitioning::KeyPartitioned(partition_exprs, _) => {
-                    let eq_groups = eq_properties.eq_group();
+                    // KeyPartitioned satisfies HashPartitioned if all partition columns
+                    // are present in the required hash columns
                     if partition_exprs.iter().all(|partition_expr| {
-                        required_exprs.iter().any(|required| {
-                            let fast_match = physical_exprs_equal(
-                                &[Arc::clone(required)],
-                                &[Arc::clone(partition_expr)],
-                            );
-                            if fast_match {
-                                return true;
-                            }
-                            if !eq_groups.is_empty() {
-                                let normalized_req =
-                                    eq_groups.normalize_expr(Arc::clone(required));
-                                let normalized_part =
-                                    eq_groups.normalize_expr(Arc::clone(partition_expr));
-                                if physical_exprs_equal(
-                                    &[normalized_req],
-                                    &[normalized_part],
-                                ) {
-                                    return true;
-                                }
-                            }
-                            // fall back to comparing normalized labels
-                            match (
-                                normalize_partition_label(required),
-                                normalize_partition_label(partition_expr),
-                            ) {
-                                (Some(req_label), Some(part_label)) => {
-                                    req_label == part_label
-                                }
-                                _ => false,
-                            }
-                        })
+                        exprs_match_with_equivalence(
+                            partition_expr,
+                            required_exprs,
+                            eq_properties,
+                        )
                     }) {
                         true
                     } else {
-                        // As a last resort, try comparing entire sets of labels so
-                        // we can accept cases where we fail to normalize individual expressions.
+                        // As a last resort, try comparing entire sets of labels
                         partition_labels_subset(required_exprs, partition_exprs)
                     }
                 }
@@ -281,6 +255,37 @@ impl Partitioning {
             self.clone()
         }
     }
+}
+
+/// Check if an expression matches any expression in a list, using equivalence properties.
+fn exprs_match_with_equivalence(
+    expr: &Arc<dyn PhysicalExpr>,
+    candidates: &[Arc<dyn PhysicalExpr>],
+    eq_properties: &EquivalenceProperties,
+) -> bool {
+    let eq_groups = eq_properties.eq_group();
+
+    candidates.iter().any(|candidate| {
+        if physical_exprs_equal(&[Arc::clone(candidate)], &[Arc::clone(expr)]) {
+            return true;
+        }
+
+        if !eq_groups.is_empty() {
+            let normalized_candidate = eq_groups.normalize_expr(Arc::clone(candidate));
+            let normalized_expr = eq_groups.normalize_expr(Arc::clone(expr));
+            if physical_exprs_equal(&[normalized_candidate], &[normalized_expr]) {
+                return true;
+            }
+        }
+
+        match (
+            normalize_partition_label(candidate),
+            normalize_partition_label(expr),
+        ) {
+            (Some(candidate_label), Some(expr_label)) => candidate_label == expr_label,
+            _ => false,
+        }
+    })
 }
 
 fn normalize_partition_label(expr: &Arc<dyn PhysicalExpr>) -> Option<String> {
