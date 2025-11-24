@@ -329,8 +329,7 @@ impl ScalarUDFImpl for StringToArray {
     }
 }
 
-/// Array_to_string SQL function
-pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!("array_to_string expects two or three arguments");
     }

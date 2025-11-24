@@ -352,8 +352,7 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 }
 
-/// Array_concat/Array_cat SQL function
-pub(crate) fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("array_concat expects at least one argument");
     }
@@ -453,8 +452,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 // Kernel functions
 
-/// Array_append SQL function
-pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, values] = take_function_args("array_append", args)?;
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
@@ -464,8 +462,7 @@ pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Array_prepend SQL function
-pub(crate) fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values, array] = take_function_args("array_prepend", args)?;
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),

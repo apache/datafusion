@@ -418,7 +418,7 @@ fn general_replace<O: OffsetSizeTrait>(
     )?))
 }
 
-pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to] = take_function_args("array_replace", args)?;
 
     // replace at most one occurrence for each element
@@ -437,7 +437,7 @@ pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to, max] = take_function_args("array_replace_n", args)?;
 
     // replace the specified number of occurrences
@@ -458,7 +458,7 @@ pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to] = take_function_args("array_replace_all", args)?;
 
     // replace all occurrences (up to "i64::MAX")

@@ -4623,6 +4623,16 @@ SELECT max(column1), max(column2), max(column3), max(column4) FROM d;
 ----
 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs
 
+query ????
+SELECT avg(column1), avg(column2), avg(column3), avg(column4) FROM d;
+----
+0 days 0 hours 0 mins 6 secs 0 days 0 hours 0 mins 0.012 secs 0 days 0 hours 0 mins 0.000018 secs 0 days 0 hours 0 mins 0.000000024 secs
+
+query ????
+SELECT sum(column1), sum(column2), sum(column3), sum(column4) FROM d;
+----
+0 days 0 hours 0 mins 12 secs 0 days 0 hours 0 mins 0.024 secs 0 days 0 hours 0 mins 0.000036 secs 0 days 0 hours 0 mins 0.000000048 secs
+
 # GROUP BY follows a different code path
 query ????I
 SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5;
@@ -4633,6 +4643,16 @@ query ????I
 SELECT max(column1), max(column2), max(column3), max(column4), column5 FROM d GROUP BY column5;
 ----
 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs 1
+
+query ????I
+SELECT avg(column1), avg(column2), avg(column3), avg(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 6 secs 0 days 0 hours 0 mins 0.012 secs 0 days 0 hours 0 mins 0.000018 secs 0 days 0 hours 0 mins 0.000000024 secs 1
+
+query ????I
+SELECT sum(column1), sum(column2), sum(column3), sum(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 12 secs 0 days 0 hours 0 mins 0.024 secs 0 days 0 hours 0 mins 0.000036 secs 0 days 0 hours 0 mins 0.000000048 secs 1
 
 statement ok
 INSERT INTO d VALUES
@@ -4648,6 +4668,16 @@ query ????I
 SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
 ----
 0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.001 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000002 secs 1
+
+query ????I
+SELECT avg(column1), avg(column2), avg(column3), avg(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 3 secs 0 days 0 hours 0 mins 0.008 secs 0 days 0 hours 0 mins 0.000012 secs 0 days 0 hours 0 mins 0.000000014 secs 1
+
+query ????I
+SELECT sum(column1), sum(column2), sum(column3), sum(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 15 secs 0 days 0 hours 0 mins 0.034 secs 0 days 0 hours 0 mins 0.000048 secs 0 days 0 hours 0 mins 0.000000058 secs 1
 
 statement ok
 drop table d;
