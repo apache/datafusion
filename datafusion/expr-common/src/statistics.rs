@@ -26,7 +26,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::rounding::alter_fp_rounding_mode;
 use datafusion_common::{
     assert_eq_or_internal_err, assert_ne_or_internal_err, assert_or_internal_err,
-    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, Result, ScalarValue,
 };
 
 /// This object defines probabilistic distributions that encode uncertain

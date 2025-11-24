@@ -768,10 +768,10 @@ impl DataFusionErrorBuilder {
 macro_rules! unwrap_or_internal_err {
     ($Value: ident) => {
         $Value.ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            $crate::error::_internal_datafusion_err!(
                 "{} should not be None",
                 stringify!($Value)
-            ))
+            )
         })?
     };
 }
@@ -789,19 +789,19 @@ macro_rules! unwrap_or_internal_err {
 macro_rules! assert_or_internal_err {
     ($cond:expr) => {
         if !$cond {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {}",
                 stringify!($cond)
-            )));
+            ));
         }
     };
     ($cond:expr, $($arg:tt)+) => {
         if !$cond {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {}: {}",
                 stringify!($cond),
                 format!($($arg)+)
-            )));
+            ));
         }
     };
 }
@@ -821,27 +821,27 @@ macro_rules! assert_eq_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val
-            )));
+            ));
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val,
                 format!($($arg)+)
-            )));
+            ));
         }
     }};
 }
@@ -861,27 +861,27 @@ macro_rules! assert_ne_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val
-            )));
+            ));
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val,
                 format!($($arg)+)
-            )));
+            ));
         }
     }};
 }
