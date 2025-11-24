@@ -110,18 +110,6 @@ fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>> {
         .collect())
 }
 
-/// This is a variant of `powerset` that clones elements instead of returning references.
-/// Useful when owned values are needed (e.g., for Substrait conversion).
-pub fn powerset_cloned<T: Clone>(slice: &[T]) -> Result<Vec<Vec<T>>> {
-    if slice.len() >= 64 {
-        return plan_err!("The size of the set must be less than 64");
-    }
-
-    Ok(powerset_indices(slice.len())
-        .map(|indices| indices.iter().map(|&idx| slice[idx].clone()).collect())
-        .collect())
-}
-
 /// check the number of expressions contained in the grouping_set
 fn check_grouping_set_size_limit(size: usize) -> Result<()> {
     let max_grouping_set_size = 65535;
