@@ -45,6 +45,11 @@ pub struct ListingOptions {
     /// Group files to avoid that the number of partitions exceeds
     /// this limit
     pub target_partitions: usize,
+    /// Preserve the partition column value boundaries when forming file groups.
+    /// When true, files that share the same partition column values are kept in
+    /// the same execution partition, allowing downstream operators to rely on
+    /// those columns being constant per partition.
+    pub preserve_partition_values: bool,
     /// Optional pre-known sort order(s). Must be `SortExpr`s.
     ///
     /// DataFusion may take advantage of this ordering to omit sorts
@@ -77,6 +82,7 @@ impl ListingOptions {
             table_partition_cols: vec![],
             collect_stat: false,
             target_partitions: 1,
+            preserve_partition_values: false,
             file_sort_order: vec![],
         }
     }
@@ -89,6 +95,12 @@ impl ListingOptions {
     pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
         self = self.with_target_partitions(config.target_partitions());
         self = self.with_collect_stat(config.collect_statistics());
+        if !self.table_partition_cols.is_empty() {
+            self.preserve_partition_values = config
+                .options()
+                .execution
+                .listing_table_preserve_partition_values;
+        }
         self
     }
 
@@ -236,6 +248,14 @@ impl ListingOptions {
     /// ```
     pub fn with_target_partitions(mut self, target_partitions: usize) -> Self {
         self.target_partitions = target_partitions;
+        self
+    }
+
+    /// Control whether files that share the same partition column values should
+    /// remain in the same execution partition. Defaults to `false`, but is
+    /// automatically enabled when partition columns are provided.
+    pub fn with_preserve_partition_values(mut self, preserve: bool) -> Self {
+        self.preserve_partition_values = preserve;
         self
     }
 

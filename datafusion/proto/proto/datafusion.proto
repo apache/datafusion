@@ -1024,6 +1024,7 @@ message FileScanExecConf {
 
   datafusion_common.Constraints constraints = 11;
   optional uint64 batch_size = 12;
+  bool preserve_partition_values = 13;
 }
 
 message ParquetScanExecNode {
@@ -1265,6 +1266,11 @@ message PhysicalHashRepartition {
   uint64 partition_count = 2;
 }
 
+message PhysicalKeyPartition {
+  repeated PhysicalExprNode key_expr = 1;
+  uint64 partition_count = 2;
+}
+
 message RepartitionExecNode{
   PhysicalPlanNode input = 1;
   // oneof partition_method {
@@ -1280,6 +1286,7 @@ message Partitioning {
     uint64 round_robin = 1;
     PhysicalHashRepartition hash = 2;
     uint64 unknown = 3;
+    PhysicalKeyPartition key = 4;
   }
 }
 

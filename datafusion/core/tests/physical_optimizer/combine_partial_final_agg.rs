@@ -105,6 +105,26 @@ fn final_aggregate_exec(
     )
 }
 
+fn final_partitioned_aggregate_exec(
+    input: Arc<dyn ExecutionPlan>,
+    group_by: PhysicalGroupBy,
+    aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let n_aggr = aggr_expr.len();
+    Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            group_by,
+            aggr_expr,
+            vec![None; n_aggr],
+            input,
+            schema,
+        )
+        .unwrap(),
+    )
+}
+
 fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap())
 }
@@ -269,6 +289,65 @@ fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
         plan,
         @ r"
     AggregateExec: mode=Single, gby=[c@2 as c], aggr=[], lim=[5]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+#[test]
+fn aggregations_final_partitioned_combined() -> datafusion_common::Result<()> {
+    let schema = schema();
+    let aggr_expr = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
+
+    let plan = final_partitioned_aggregate_exec(
+        partial_aggregate_exec(
+            parquet_exec(schema),
+            PhysicalGroupBy::default(),
+            aggr_expr.clone(),
+        ),
+        PhysicalGroupBy::default(),
+        aggr_expr,
+    );
+    // should combine the Partial/FinalPartitioned AggregateExecs to the SinglePartitioned AggregateExec
+    assert_optimized!(
+        plan,
+        @ "
+    AggregateExec: mode=SinglePartitioned, gby=[], aggr=[COUNT(1)]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+#[test]
+fn aggregations_final_partitioned_with_group_combined() -> datafusion_common::Result<()> {
+    let schema = schema();
+    let aggr_expr = vec![
+        AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("Sum(b)")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("c", &schema)?, "c".to_string())];
+
+    let partial_group_by = PhysicalGroupBy::new_single(groups);
+    let partial_agg =
+        partial_aggregate_exec(parquet_exec(schema), partial_group_by, aggr_expr.clone());
+
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("c", &partial_agg.schema())?, "c".to_string())];
+    let final_group_by = PhysicalGroupBy::new_single(groups);
+
+    let plan = final_partitioned_aggregate_exec(partial_agg, final_group_by, aggr_expr);
+    // should combine the Partial/FinalPartitioned AggregateExecs to the SinglePartitioned AggregateExec
+    assert_optimized!(
+        plan,
+        @ r"
+    AggregateExec: mode=SinglePartitioned, gby=[c@2 as c], aggr=[Sum(b)]
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
     "
     );

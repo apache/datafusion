@@ -5949,6 +5949,9 @@ impl serde::Serialize for FileScanExecConf {
         if self.batch_size.is_some() {
             len += 1;
         }
+        if self.preserve_partition_values {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileScanExecConf", len)?;
         if !self.file_groups.is_empty() {
             struct_ser.serialize_field("fileGroups", &self.file_groups)?;
@@ -5982,6 +5985,9 @@ impl serde::Serialize for FileScanExecConf {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("batchSize", ToString::to_string(&v).as_str())?;
         }
+        if self.preserve_partition_values {
+            struct_ser.serialize_field("preservePartitionValues", &self.preserve_partition_values)?;
+        }
         struct_ser.end()
     }
 }
@@ -6007,6 +6013,8 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             "constraints",
             "batch_size",
             "batchSize",
+            "preserve_partition_values",
+            "preservePartitionValues",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6021,6 +6029,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             OutputOrdering,
             Constraints,
             BatchSize,
+            PreservePartitionValues,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6052,6 +6061,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             "outputOrdering" | "output_ordering" => Ok(GeneratedField::OutputOrdering),
                             "constraints" => Ok(GeneratedField::Constraints),
                             "batchSize" | "batch_size" => Ok(GeneratedField::BatchSize),
+                            "preservePartitionValues" | "preserve_partition_values" => Ok(GeneratedField::PreservePartitionValues),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6081,6 +6091,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                 let mut output_ordering__ = None;
                 let mut constraints__ = None;
                 let mut batch_size__ = None;
+                let mut preserve_partition_values__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FileGroups => {
@@ -6148,6 +6159,12 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::PreservePartitionValues => {
+                            if preserve_partition_values__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preservePartitionValues"));
+                            }
+                            preserve_partition_values__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(FileScanExecConf {
@@ -6161,6 +6178,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                     output_ordering: output_ordering__.unwrap_or_default(),
                     constraints: constraints__,
                     batch_size: batch_size__,
+                    preserve_partition_values: preserve_partition_values__.unwrap_or_default(),
                 })
             }
         }
@@ -14695,6 +14713,9 @@ impl serde::Serialize for Partitioning {
                     #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("unknown", ToString::to_string(&v).as_str())?;
                 }
+                partitioning::PartitionMethod::Key(v) => {
+                    struct_ser.serialize_field("key", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -14711,6 +14732,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
             "roundRobin",
             "hash",
             "unknown",
+            "key",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -14718,6 +14740,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
             RoundRobin,
             Hash,
             Unknown,
+            Key,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14742,6 +14765,7 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
                             "roundRobin" | "round_robin" => Ok(GeneratedField::RoundRobin),
                             "hash" => Ok(GeneratedField::Hash),
                             "unknown" => Ok(GeneratedField::Unknown),
+                            "key" => Ok(GeneratedField::Key),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14782,6 +14806,13 @@ impl<'de> serde::Deserialize<'de> for Partitioning {
                                 return Err(serde::de::Error::duplicate_field("unknown"));
                             }
                             partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| partitioning::PartitionMethod::Unknown(x.0));
+                        }
+                        GeneratedField::Key => {
+                            if partition_method__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("key"));
+                            }
+                            partition_method__ = map_.next_value::<::std::option::Option<_>>()?.map(partitioning::PartitionMethod::Key)
+;
                         }
                     }
                 }
@@ -16675,6 +16706,120 @@ impl<'de> serde::Deserialize<'de> for PhysicalIsNull {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalIsNull", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalKeyPartition {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.key_expr.is_empty() {
+            len += 1;
+        }
+        if self.partition_count != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalKeyPartition", len)?;
+        if !self.key_expr.is_empty() {
+            struct_ser.serialize_field("keyExpr", &self.key_expr)?;
+        }
+        if self.partition_count != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("partitionCount", ToString::to_string(&self.partition_count).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalKeyPartition {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "key_expr",
+            "keyExpr",
+            "partition_count",
+            "partitionCount",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            KeyExpr,
+            PartitionCount,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "keyExpr" | "key_expr" => Ok(GeneratedField::KeyExpr),
+                            "partitionCount" | "partition_count" => Ok(GeneratedField::PartitionCount),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalKeyPartition;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalKeyPartition")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalKeyPartition, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut key_expr__ = None;
+                let mut partition_count__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::KeyExpr => {
+                            if key_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("keyExpr"));
+                            }
+                            key_expr__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PartitionCount => {
+                            if partition_count__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionCount"));
+                            }
+                            partition_count__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(PhysicalKeyPartition {
+                    key_expr: key_expr__.unwrap_or_default(),
+                    partition_count: partition_count__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalKeyPartition", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalLikeExprNode {

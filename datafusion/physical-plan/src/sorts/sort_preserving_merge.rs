@@ -1469,6 +1469,7 @@ mod tests {
         let &partition_count = match properties.output_partitioning() {
             Partitioning::RoundRobinBatch(partitions) => partitions,
             Partitioning::Hash(_, partitions) => partitions,
+            Partitioning::KeyPartitioned(_, partitions) => partitions,
             Partitioning::UnknownPartitioning(partitions) => partitions,
         };
         let source = CongestedExec {

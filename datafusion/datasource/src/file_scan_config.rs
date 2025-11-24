@@ -47,7 +47,9 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{split_conjunction, EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{
+    split_conjunction, AcrossPartitions, ConstExpr, EquivalenceProperties, Partitioning,
+};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -61,8 +63,9 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
 };
 use std::{
-    any::Any, borrow::Cow, collections::HashMap, fmt::Debug, fmt::Formatter,
-    fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
+    any::Any, borrow::Cow, collections::HashMap, collections::HashSet, fmt::Debug,
+    fmt::Formatter, fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
+    sync::OnceLock,
 };
 
 use datafusion_physical_expr::equivalence::project_orderings;
@@ -196,6 +199,11 @@ pub struct FileScanConfig {
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].
     pub(crate) statistics: Statistics,
+    /// Preserve partition column value boundaries when forming file groups.
+    pub preserve_partition_values: bool,
+    /// Cached result of key_partition_exprs computation to avoid repeated work
+    #[allow(clippy::type_complexity)]
+    key_partition_exprs_cache: OnceLock<Option<Vec<Arc<dyn PhysicalExpr>>>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -265,6 +273,7 @@ pub struct FileScanConfigBuilder {
     new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    preserve_partition_values: bool,
 }
 
 impl FileScanConfigBuilder {
@@ -291,6 +300,7 @@ impl FileScanConfigBuilder {
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
+            preserve_partition_values: false,
         }
     }
 
@@ -419,6 +429,12 @@ impl FileScanConfigBuilder {
         self
     }
 
+    /// Preserve partition boundaries when forming execution groups.
+    pub fn with_preserve_partition_values(mut self, preserve: bool) -> Self {
+        self.preserve_partition_values = preserve;
+        self
+    }
+
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -437,6 +453,7 @@ impl FileScanConfigBuilder {
             new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
+            preserve_partition_values,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -470,6 +487,8 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
+            preserve_partition_values,
+            key_partition_exprs_cache: OnceLock::new(),
         }
     }
 }
@@ -491,6 +510,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
+            preserve_partition_values: config.preserve_partition_values,
         }
     }
 }
@@ -563,6 +583,9 @@ impl DataSource for FileScanConfig {
         repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
     ) -> Result<Option<Arc<dyn DataSource>>> {
+        if self.preserve_partition_values {
+            return Ok(None);
+        }
         let source = self.file_source.repartitioned(
             target_partitions,
             repartition_file_min_size,
@@ -574,7 +597,11 @@ impl DataSource for FileScanConfig {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.file_groups.len())
+        if let Some(exprs) = self.key_partition_exprs() {
+            Partitioning::KeyPartitioned(exprs, self.file_groups.len())
+        } else {
+            Partitioning::UnknownPartitioning(self.file_groups.len())
+        }
     }
 
     fn eq_properties(&self) -> EquivalenceProperties {
@@ -593,6 +620,14 @@ impl DataSource for FileScanConfig {
                     #[cfg(debug_assertions)]
                     panic!("Failed to add filter equivalence info: {e}");
                 }
+            }
+        }
+        if let Some(exprs) = self.key_partition_exprs() {
+            let const_exprs = exprs
+                .into_iter()
+                .map(|expr| ConstExpr::new(expr, AcrossPartitions::Heterogeneous));
+            if let Err(e) = eq_properties.add_constants(const_exprs) {
+                warn!("Failed to add partition constants: {e}");
             }
         }
         eq_properties
@@ -729,6 +764,61 @@ impl FileScanConfig {
     /// Get the table partition columns
     pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
         self.file_source.table_schema().table_partition_cols()
+    }
+
+    fn key_partition_exprs(&self) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
+        if !self.preserve_partition_values {
+            return None;
+        }
+        let result = self
+            .key_partition_exprs_cache
+            .get_or_init(|| self.compute_key_partition_exprs())
+            .clone();
+
+        if result.is_some() {
+            debug!(
+                "KeyPartitioned optimization enabled for {} file groups",
+                self.file_groups.len()
+            );
+        }
+        result
+    }
+
+    fn compute_key_partition_exprs(&self) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
+        if self.file_groups.is_empty() {
+            return None;
+        }
+        let partition_fields = self.table_partition_cols();
+        if partition_fields.is_empty() {
+            return None;
+        }
+        let mut seen = HashSet::with_capacity(self.file_groups.len());
+        for group in &self.file_groups {
+            let values = group.unique_partition_values()?;
+            if !seen.insert(values) {
+                return None;
+            }
+        }
+        let schema = self.file_source.table_schema().table_schema();
+        let mut exprs = Vec::with_capacity(partition_fields.len());
+        for field in partition_fields {
+            match Column::new_with_schema(field.name(), schema) {
+                Ok(column) => exprs.push(Arc::new(column) as Arc<dyn PhysicalExpr>),
+                Err(e) => {
+                    debug!(
+                        "Partition column '{}' not found in schema, disabling KeyPartitioned optimization: {}",
+                        field.name(),
+                        e
+                    );
+                    return None;
+                }
+            }
+        }
+        if exprs.is_empty() {
+            None
+        } else {
+            Some(exprs)
+        }
     }
 
     fn projection_indices(&self) -> Vec<usize> {

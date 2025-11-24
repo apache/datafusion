@@ -132,7 +132,13 @@ impl TableProviderFactory for ListingTableFactory {
         };
 
         options = options.with_table_partition_cols(table_partition_cols);
-
+        if !cmd.table_partition_cols.is_empty() {
+            let preserve = session_state
+                .config_options()
+                .execution
+                .listing_table_preserve_partition_values;
+            options = options.with_preserve_partition_values(preserve);
+        }
         options
             .validate_partitions(session_state, &table_path)
             .await?;
@@ -216,6 +222,7 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
     };
 
+    use arrow::datatypes::{Field, Schema};
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{Constraints, DFSchema, TableReference};
 
@@ -518,5 +525,78 @@ mod tests {
 
         let listing_options = listing_table.options();
         assert!(listing_options.table_partition_cols.is_empty());
+    }
+
+    fn partitioned_table_cmd(
+        location: &Path,
+        schema: Arc<DFSchema>,
+    ) -> CreateExternalTable {
+        CreateExternalTable {
+            name: TableReference::bare("fact"),
+            location: location.to_str().unwrap().to_string(),
+            file_type: "parquet".to_string(),
+            schema,
+            table_partition_cols: vec!["bucket".to_string()],
+            if_not_exists: false,
+            or_replace: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        }
+    }
+
+    fn value_and_partition_schema() -> Arc<DFSchema> {
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int64, true),
+            Field::new("bucket", DataType::Int64, true),
+        ]));
+        Arc::new(arrow_schema.to_dfschema().unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_preserve_partition_values_disabled_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let cmd = partitioned_table_cmd(dir.path(), value_and_partition_schema());
+
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+        assert!(!listing_table.options().preserve_partition_values);
+    }
+
+    #[tokio::test]
+    async fn test_preserve_partition_values_can_be_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = ListingTableFactory::new();
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .execution
+            .listing_table_preserve_partition_values = true;
+        let context = SessionContext::new_with_config(config);
+        let state = context.state();
+        assert!(
+            state
+                .config_options()
+                .execution
+                .listing_table_preserve_partition_values
+        );
+        let cmd = partitioned_table_cmd(dir.path(), value_and_partition_schema());
+
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+        assert!(listing_table.options().preserve_partition_values);
     }
 }
