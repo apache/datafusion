@@ -1121,7 +1121,7 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
+        let err = check().unwrap_err().strip_backtrace();
         assert_snapshot!(
             err.to_string(),
             @r"
@@ -1144,7 +1144,7 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
+        let err = check().unwrap_err().strip_backtrace();
         assert_snapshot!(
             err.to_string(),
             @r"
@@ -1168,7 +1168,7 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
+        let err = check().unwrap_err().strip_backtrace();
         assert_snapshot!(
             err.to_string(),
             @r"
@@ -1185,7 +1185,7 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
+        let err = check().unwrap_err().strip_backtrace();
         assert_snapshot!(
             err.to_string(),
             @r"
@@ -1202,7 +1202,7 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
+        let err = check().unwrap_err().strip_backtrace();
         assert_snapshot!(
             err.to_string(),
             @r"
