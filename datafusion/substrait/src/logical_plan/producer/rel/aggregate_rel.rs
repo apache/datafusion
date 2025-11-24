@@ -94,13 +94,13 @@ pub fn to_substrait_groupings(
             Expr::GroupingSet(gs) => match gs {
                 GroupingSet::Cube(set) => {
                     // Generate power set of grouping expressions
-                    let cube_sets = powerset_cloned(set)?;
+                    let cube_sets = powerset(set)?;
                     cube_sets
                         .iter()
                         .map(|set| {
                             parse_flat_grouping_exprs(
                                 producer,
-                                set,
+                                &set.iter().map(|v| (*v).clone()).collect::<Vec<_>>(),
                                 schema,
                                 &mut ref_group_exprs,
                             )
