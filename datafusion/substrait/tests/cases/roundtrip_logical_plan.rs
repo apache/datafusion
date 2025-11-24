@@ -1271,6 +1271,7 @@ async fn roundtrip_values_no_columns() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_values_with_scalar_function() -> Result<()> {
     let ctx = create_context().await?;
+    //  datafusion::functions_nested::map::map;
     let expr = map(vec![lit("a")], vec![lit(1)]);
     let plan = LogicalPlanBuilder::values(vec![vec![expr]])?.build()?;
     let expected = ctx.state().optimize(&plan)?;
