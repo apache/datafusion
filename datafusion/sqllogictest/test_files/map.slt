@@ -232,7 +232,7 @@ SELECT map(column5, column6) FROM duplicate_keys_table;
 
 # key is a nested type
 query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[1, 2\]
-SELECT MAP([[1,2], [1,2], [NULL]], [41, 33, null]);
+SELECT MAP([[1,2], [1,2]], [41, 33]);
 
 query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[\{1:1\}\]
 SELECT MAP([Map {1:'1'}, Map {1:'1'}, Map {2:'2'}], [41, 33, null]);

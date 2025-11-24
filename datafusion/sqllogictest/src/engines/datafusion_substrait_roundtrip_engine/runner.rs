@@ -18,6 +18,7 @@
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
+use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::datafusion_engine::Result;
 use crate::engines::output::{DFColumnType, DFOutput};
 use crate::{convert_batches, convert_schema_to_types, DFSqlLogicTestError};
@@ -39,6 +40,7 @@ pub struct DataFusionSubstraitRoundTrip {
     ctx: SessionContext,
     relative_path: PathBuf,
     pb: ProgressBar,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 }
 
 impl DataFusionSubstraitRoundTrip {
@@ -47,6 +49,20 @@ impl DataFusionSubstraitRoundTrip {
             ctx,
             relative_path,
             pb,
+            currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
+        }
+    }
+
+    /// Add a tracker that will track the currently executed SQL statement.
+    ///
+    /// This is useful for logging and debugging purposes.
+    pub fn with_currently_executing_sql_tracker(
+        self,
+        currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    ) -> Self {
+        Self {
+            currently_executing_sql_tracker,
+            ..self
         }
     }
 
@@ -81,9 +97,13 @@ impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
             );
         }
 
+        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
+
         let start = Instant::now();
         let result = run_query_substrait_round_trip(&self.ctx, sql).await;
         let duration = start.elapsed();
+
+        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
         if duration.gt(&Duration::from_millis(500)) {
             self.update_slow_count();
