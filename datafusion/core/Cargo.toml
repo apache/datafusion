@@ -142,7 +142,7 @@ datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true, optional = true }
-flate2 = { version = "1.1.4", optional = true }
+flate2 = { version = "1.1.5", optional = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
