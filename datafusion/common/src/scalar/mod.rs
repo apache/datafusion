@@ -21,6 +21,8 @@ mod cache;
 mod consts;
 mod struct_builder;
 
+use arrow::buffer::MutableBuffer;
+use arrow::buffer::NullBuffer;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
@@ -3055,7 +3057,19 @@ impl ScalarValue {
                     )
                     .unwrap(),
                 ),
-                None => Arc::new(FixedSizeBinaryArray::new_null(*s, size)),
+                None => {
+                    // TODO: Replace with FixedSizeBinaryArray::new_null once a fix for
+                    // https://github.com/apache/arrow-rs/issues/8900 is in the used arrow-rs
+                    // version.
+                    let capacity_in_bytes =
+                        s.to_usize().unwrap().checked_mul(size).unwrap();
+                    Arc::new(FixedSizeBinaryArray::try_new(
+                        *s,
+                        // MutableBuffer::new_null is in bits.
+                        MutableBuffer::new_null(capacity_in_bytes * 8).into(),
+                        Some(NullBuffer::new_null(size)),
+                    )?)
+                }
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
@@ -5312,6 +5326,18 @@ mod tests {
             .expect("Failed to convert to empty array");
 
         assert_eq!(empty_array.len(), 0);
+    }
+
+    /// See https://github.com/apache/datafusion/issues/18870
+    #[test]
+    fn test_to_array_of_size_for_none_fsb() {
+        let sv = ScalarValue::FixedSizeBinary(5, None);
+        let result = sv
+            .to_array_of_size(2)
+            .expect("Failed to convert to array of size");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(result.as_fixed_size_binary().values().len(), 10);
     }
 
     #[test]
