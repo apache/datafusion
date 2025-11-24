@@ -103,7 +103,7 @@ the example in `FFI_TableProvider`.
 
 ## Memory Management
 
-One of the advantages of Rust the ownership model, which means programmers
+One of the advantages of Rust is the ownership model, which means programmers
 _usually_ do not need to worry about memory management. When interacting with
 foreign code, this is not necessarily true. If you review the structures in
 this crate, you will find that many of them implement the `Drop` trait and
