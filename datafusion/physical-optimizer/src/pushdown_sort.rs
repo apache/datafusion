@@ -31,13 +31,10 @@
 //! - Reordering files in multi-file scans
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
-};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_plan::joins::SortMergeJoinExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -245,121 +242,7 @@ fn try_pushdown_sort(
         return data_source_exec.try_pushdown_sort(required_ordering);
     }
 
-    // Check if we can satisfy the requirement by reversing the current ordering
-    if can_satisfy_by_reversing(plan, required_ordering)? {
-        // Recursively reverse the plan
-        let reversed_plan = <Arc<dyn ExecutionPlan> as Clone>::clone(plan)
-            .rewrite(&mut ReverseRewriter)
-            .unwrap()
-            .data;
-        return Ok(Some(reversed_plan));
-    }
-
     Ok(None)
-}
-
-/// Check if a plan's current ordering can be reversed to satisfy the required ordering
-fn can_satisfy_by_reversing(
-    plan: &Arc<dyn ExecutionPlan>,
-    required_ordering: &[PhysicalSortExpr],
-) -> Result<bool> {
-    // Build reversed equivalence properties
-    let reversed_eq_properties = {
-        let mut new = plan.properties().equivalence_properties().clone();
-        new.clear_orderings();
-
-        let reversed_orderings = plan
-            .equivalence_properties()
-            .oeq_class()
-            .iter()
-            .map(|ordering| {
-                ordering
-                    .iter()
-                    .map(|expr| expr.reverse())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        new.add_orderings(reversed_orderings);
-        new
-    };
-
-    reversed_eq_properties.ordering_satisfy(required_ordering.to_vec())
-}
-
-// A TreeNodeRewriter that attempts to reverse an execution plan node.
-// It cuts short if it encounters any operators that don't preserve their children's ordering,
-// or if an operator has a required input ordering (which would prevent us from reversing the order
-// of its inputs).
-struct ReverseRewriter;
-
-impl TreeNodeRewriter for ReverseRewriter {
-    type Node = Arc<dyn ExecutionPlan>;
-
-    fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-        // Handle SortMergeJoinExec specially
-        if let Some(sort_merge_join) = node.as_any().downcast_ref::<SortMergeJoinExec>() {
-            let sort_options = sort_merge_join
-                .sort_options
-                .iter()
-                .cloned()
-                .map(|sort| !sort)
-                .collect();
-            let exec = SortMergeJoinExec::try_new(
-                Arc::clone(&sort_merge_join.left),
-                Arc::clone(&sort_merge_join.right),
-                sort_merge_join.on.clone(),
-                sort_merge_join.filter.clone(),
-                sort_merge_join.join_type,
-                sort_options,
-                sort_merge_join.null_equality,
-            )?;
-            return Ok(Transformed::yes(Arc::new(exec)));
-        }
-
-        // Check if the node has a required input ordering
-        let has_required_input_ordering = node
-            .required_input_ordering()
-            .into_iter()
-            .any(|x| x.is_some());
-
-        // Check if any children's ordering is not maintained
-        let does_not_maintain_ordering = node.maintains_input_order().contains(&false);
-
-        // Stop recursion if we can't safely reverse
-        if has_required_input_ordering || does_not_maintain_ordering {
-            return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
-        }
-
-        // Try to reverse the node using the new trait
-        if let Some(data_source_exec) = node.as_any().downcast_ref::<DataSourceExec>() {
-            // Get the current output ordering
-            if let Some(current_ordering) = node.output_ordering() {
-                // Reverse the required ordering
-                let reversed_ordering = reverse_sort_exprs(current_ordering);
-
-                // Try to push down the reversed ordering
-                if let Some(reversed_exec) =
-                    data_source_exec.try_pushdown_sort(&reversed_ordering)?
-                {
-                    return Ok(Transformed::yes(reversed_exec));
-                }
-            }
-        }
-
-        Ok(Transformed::no(node))
-    }
-}
-
-/// Reverse a list of sort expressions
-pub fn reverse_sort_exprs(exprs: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
-    exprs
-        .iter()
-        .map(|expr| PhysicalSortExpr {
-            expr: Arc::clone(&expr.expr),
-            options: !expr.options,
-        })
-        .collect()
 }
 
 #[cfg(test)]
