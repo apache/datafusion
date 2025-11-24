@@ -93,9 +93,6 @@ pub struct FFI_GroupsAccumulator {
     pub library_marker_id: extern "C" fn() -> usize,
 }
 
-unsafe impl Send for FFI_GroupsAccumulator {}
-unsafe impl Sync for FFI_GroupsAccumulator {}
-
 pub struct GroupsAccumulatorPrivateData {
     pub accumulator: Box<dyn GroupsAccumulator>,
 }

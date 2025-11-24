@@ -222,9 +222,6 @@ pub struct ForeignAccumulator {
     accumulator: FFI_Accumulator,
 }
 
-unsafe impl Send for ForeignAccumulator {}
-unsafe impl Sync for ForeignAccumulator {}
-
 impl From<FFI_Accumulator> for Box<dyn Accumulator> {
     fn from(mut accumulator: FFI_Accumulator) -> Self {
         if (accumulator.library_marker_id)() == crate::get_library_marker_id() {

@@ -224,9 +224,6 @@ pub struct ForeignPartitionEvaluator {
     evaluator: FFI_PartitionEvaluator,
 }
 
-unsafe impl Send for ForeignPartitionEvaluator {}
-unsafe impl Sync for ForeignPartitionEvaluator {}
-
 impl From<FFI_PartitionEvaluator> for Box<dyn PartitionEvaluator> {
     fn from(mut evaluator: FFI_PartitionEvaluator) -> Self {
         if (evaluator.library_marker_id)() == crate::get_library_marker_id() {
