@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::displayable;
@@ -32,8 +34,7 @@ use datafusion::prelude::*;
 /// physical plan:
 /// - Via the combined `create_physical_plan` API.
 /// - Utilizing the analyzer, optimizer, and query planner APIs separately.
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn planner_api() -> Result<()> {
     // Set up a DataFusion context and load a Parquet file
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();

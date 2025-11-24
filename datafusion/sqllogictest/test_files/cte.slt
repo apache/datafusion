@@ -117,10 +117,9 @@ physical_plan
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[id@0 + 1 as id]
-06)------CoalesceBatchesExec: target_batch_size=8192
-07)--------FilterExec: id@0 < 10
-08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)------------WorkTableExec: name=nodes
+06)------FilterExec: id@0 < 10
+07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)----------WorkTableExec: name=nodes
 
 # setup
 statement ok
@@ -162,10 +161,9 @@ physical_plan
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/balance.csv]]}, projection=[time, name, account_balance], file_type=csv, has_header=true
 04)----CoalescePartitionsExec
 05)------ProjectionExec: expr=[time@0 + 1 as time, name@1 as name, account_balance@2 + 10 as account_balance]
-06)--------CoalesceBatchesExec: target_batch_size=2
-07)----------FilterExec: time@0 < 10
-08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)--------------WorkTableExec: name=balances
+06)--------FilterExec: time@0 < 10
+07)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)------------WorkTableExec: name=balances
 
 # recursive CTE with static term derived from table works
 # note that this is run with batch size set to 2. This should produce multiple batches per iteration since the input
@@ -734,12 +732,11 @@ physical_plan
 04)--ProjectionExec: expr=[2 as val]
 05)----CrossJoinExec
 06)------CoalescePartitionsExec
-07)--------CoalesceBatchesExec: target_batch_size=8182
-08)----------FilterExec: val@0 < 2
-09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)--------------WorkTableExec: name=recursive_cte
-11)------ProjectionExec: expr=[2 as val]
-12)--------PlaceholderRowExec
+07)--------FilterExec: val@0 < 2
+08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------------WorkTableExec: name=recursive_cte
+10)------ProjectionExec: expr=[2 as val]
+11)--------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
@@ -964,10 +961,9 @@ physical_plan
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
-06)------CoalesceBatchesExec: target_batch_size=8182
-07)--------FilterExec: n@0 < 10
-08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)------------WorkTableExec: name=numbers
+06)------FilterExec: n@0 < 10
+07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)----------WorkTableExec: name=numbers
 
 query TT
 explain WITH RECURSIVE numbers AS (
@@ -990,10 +986,9 @@ physical_plan
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
-06)------CoalesceBatchesExec: target_batch_size=8182
-07)--------FilterExec: n@0 < 10
-08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)------------WorkTableExec: name=numbers
+06)------FilterExec: n@0 < 10
+07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)----------WorkTableExec: name=numbers
 
 # Test for issue #16998: SortExec shares DynamicFilterPhysicalExpr across multiple executions
 query II

@@ -37,7 +37,6 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
@@ -79,7 +78,6 @@ pub struct JsonSource {
     table_schema: datafusion_datasource::TableSchema,
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -90,7 +88,6 @@ impl JsonSource {
             table_schema: table_schema.into(),
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            projected_statistics: None,
             schema_adapter_factory: None,
         }
     }
@@ -133,25 +130,12 @@ impl FileSource for JsonSource {
         Arc::new(conf)
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set to call"))
     }
 
     fn file_type(&self) -> &str {

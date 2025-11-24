@@ -30,7 +30,7 @@ use tempfile::{Builder, NamedTempFile, TempDir};
 
 use crate::memory_pool::human_readable_size;
 
-const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
+pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
 /// Builder pattern for the [DiskManager] structure
 #[derive(Clone, Debug)]
@@ -79,7 +79,7 @@ impl DiskManagerBuilder {
                 used_disk_space: Arc::new(AtomicU64::new(0)),
             }),
             DiskManagerMode::Directories(conf_dirs) => {
-                let local_dirs = create_local_dirs(conf_dirs)?;
+                let local_dirs = create_local_dirs(&conf_dirs)?;
                 debug!(
                     "Created local dirs {local_dirs:?} as DataFusion working directory"
                 );
@@ -188,7 +188,7 @@ impl DiskManager {
                 used_disk_space: Arc::new(AtomicU64::new(0)),
             })),
             DiskManagerConfig::NewSpecified(conf_dirs) => {
-                let local_dirs = create_local_dirs(conf_dirs)?;
+                let local_dirs = create_local_dirs(&conf_dirs)?;
                 debug!(
                     "Created local dirs {local_dirs:?} as DataFusion working directory"
                 );
@@ -244,6 +244,24 @@ impl DiskManager {
 
     pub fn used_disk_space(&self) -> u64 {
         self.used_disk_space.load(Ordering::Relaxed)
+    }
+
+    /// Returns the maximum temporary directory size in bytes
+    pub fn max_temp_directory_size(&self) -> u64 {
+        self.max_temp_directory_size
+    }
+
+    /// Returns the temporary directory paths
+    pub fn temp_dir_paths(&self) -> Vec<PathBuf> {
+        self.local_dirs
+            .lock()
+            .as_ref()
+            .map(|dirs| {
+                dirs.iter()
+                    .map(|temp_dir| temp_dir.path().to_path_buf())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Return true if this disk manager supports creating temporary
@@ -408,7 +426,7 @@ impl Drop for RefCountedTempFile {
 }
 
 /// Setup local dirs by creating one new dir in each of the given dirs
-fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<Arc<TempDir>>> {
+fn create_local_dirs(local_dirs: &[PathBuf]) -> Result<Vec<Arc<TempDir>>> {
     local_dirs
         .iter()
         .map(|root| {
