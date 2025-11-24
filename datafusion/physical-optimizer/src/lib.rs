@@ -42,7 +42,7 @@ pub mod optimizer;
 pub mod output_requirements;
 pub mod projection_pushdown;
 pub use datafusion_pruning as pruning;
-mod reverse_order;
+mod pushdown_sort;
 pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;

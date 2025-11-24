@@ -33,6 +33,7 @@ use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, Pushe
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use object_store::ObjectStore;
 
 /// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
@@ -124,6 +125,29 @@ pub trait FileSource: Send + Sync {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to create a new FileSource that can produce data in the specified sort order.
+    ///
+    /// This allows file format implementations to optimize based on the required sort order.
+    /// For example:
+    /// - ParquetSource can reverse scan direction
+    /// - Future implementations might reorder row groups or use native indexes
+    ///
+    /// # Arguments
+    /// * `order` - The desired output ordering
+    ///
+    /// # Returns
+    /// * `Ok(Some(source))` - Created a source that can satisfy the ordering
+    /// * `Ok(None)` - Cannot optimize for this ordering
+    /// * `Err(e)` - Error occurred
+    ///
+    /// Default implementation returns `Ok(None)`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        Ok(None)
     }
 
     /// Set optional schema adapter factory.

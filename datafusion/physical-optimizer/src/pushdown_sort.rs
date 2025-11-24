@@ -15,17 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Sort Pushdown Optimization
+//!
+//! This optimizer attempts to push sort requirements down to data sources that can
+//! satisfy them natively, avoiding expensive sort operations.
+//!
+//! Currently supported optimizations:
+//! - **Reverse scan**: If a data source naturally produces data in DESC order and
+//!   we need ASC (or vice versa), we can reverse the scan direction instead of
+//!   adding a SortExec node.
+//!
+//! Future optimizations could include:
+//! - Reordering row groups in Parquet files
+//! - Leveraging native indexes
+//! - Reordering files in multi-file scans
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::Result;
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::source::{DataSource, DataSourceExec};
-use datafusion_datasource_parquet::source::ParquetSource;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::joins::SortMergeJoinExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -33,29 +44,34 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
 
-/// A PhysicalOptimizerRule that attempts to reverse a SortExec's input if doing so would make the
-/// input ordering compatible with the SortExec's required output ordering.
-/// It also removes unnecessary sorts when the input already satisfies the required ordering.
+/// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources
+/// that can natively handle them (e.g., by reversing scan direction).
+///
+/// This optimization:
+/// 1. Detects SortExec nodes that require a specific ordering
+/// 2. Checks if the input can satisfy the ordering by reversing its scan direction
+/// 3. Pushes the sort requirement down to the data source when possible
+/// 4. Removes unnecessary sort operations when the input already satisfies the requirement
 #[derive(Debug, Clone, Default)]
-pub struct ReverseOrder;
+pub struct PushdownSort;
 
-impl ReverseOrder {
+impl PushdownSort {
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl PhysicalOptimizerRule for ReverseOrder {
+impl PhysicalOptimizerRule for PushdownSort {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Check if reverse scan optimization is enabled
-        let enable_reverse_scan = config.execution.parquet.enable_reverse_scan;
+        // Check if sort pushdown optimization is enabled
+        let enable_sort_pushdown = config.execution.parquet.enable_sort_pushdown;
 
         // Return early if not enabled
-        if !enable_reverse_scan {
+        if !enable_sort_pushdown {
             return Ok(plan);
         }
 
@@ -76,76 +92,53 @@ impl PhysicalOptimizerRule for ReverseOrder {
                 None => return Ok(Transformed::no(plan)),
             };
 
-            let sort_input: Arc<dyn ExecutionPlan> = Arc::clone(sort_exec.input());
-
-            // First, check if the sort is already satisfied by input ordering
-            if let Some(_input_ordering) = sort_input.output_ordering() {
-                let input_eq_properties = sort_input.equivalence_properties();
-
-                // Check if input already satisfies the sort requirement
-                if input_eq_properties.ordering_satisfy(sort_exec.expr().clone())? {
-                    return remove_unnecessary_sort(sort_exec, sort_input);
-                }
-            }
-
-            // If not satisfied, try to reverse the input
-            let reversed_eq_properties = {
-                let mut new = sort_input.properties().equivalence_properties().clone();
-                new.clear_orderings();
-
-                // Build reversed sort exprs for each ordering class
-                let reversed_orderings = sort_input
-                    .equivalence_properties()
-                    .oeq_class()
-                    .iter()
-                    .map(|ordering| {
-                        ordering
-                            .iter()
-                            .map(|expr| expr.reverse())
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-
-                new.add_orderings(reversed_orderings);
-                new
-            };
-
-            match reversed_eq_properties.ordering_satisfy(sort_exec.expr().clone())? {
-                true => {
-                    // Reverse the input and then remove the sort
-                    let reversed_input =
-                        sort_input.rewrite(&mut ReverseRewriter).unwrap().data;
-
-                    // After reversing, check if we can remove the sort
-                    if reversed_input
-                        .equivalence_properties()
-                        .ordering_satisfy(sort_exec.expr().clone())?
-                    {
-                        remove_unnecessary_sort(sort_exec, reversed_input)
-                    } else {
-                        // Keep the sort but with reversed input
-                        Ok(Transformed::yes(Arc::new(
-                            SortExec::new(sort_exec.expr().clone(), reversed_input)
-                                .with_fetch(sort_exec.fetch())
-                                .with_preserve_partitioning(
-                                    sort_exec.preserve_partitioning(),
-                                ),
-                        )))
-                    }
-                }
-                false => Ok(Transformed::no(plan)),
-            }
+            optimize_sort(sort_exec)
         })
         .data()
     }
 
     fn name(&self) -> &str {
-        "ReverseOrder"
+        "PushdownSort"
     }
 
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Optimize a SortExec by potentially pushing the sort down to the data source
+fn optimize_sort(sort_exec: &SortExec) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let sort_input = Arc::clone(sort_exec.input());
+    let required_ordering = sort_exec.expr();
+
+    // First, check if the sort is already satisfied by input ordering
+    if let Some(_input_ordering) = sort_input.output_ordering() {
+        let input_eq_properties = sort_input.equivalence_properties();
+
+        if input_eq_properties.ordering_satisfy(required_ordering.clone())? {
+            return remove_unnecessary_sort(sort_exec, sort_input);
+        }
+    }
+
+    // Try to push the sort requirement down to the data source
+    if let Some(optimized_input) = try_pushdown_sort(&sort_input, required_ordering)? {
+        // Verify that the optimized input satisfies the required ordering
+        if optimized_input
+            .equivalence_properties()
+            .ordering_satisfy(required_ordering.clone())?
+        {
+            return remove_unnecessary_sort(sort_exec, optimized_input);
+        }
+
+        // If not fully satisfied, keep the sort but with optimized input
+        return Ok(Transformed::yes(Arc::new(
+            SortExec::new(required_ordering.clone(), optimized_input)
+                .with_fetch(sort_exec.fetch())
+                .with_preserve_partitioning(sort_exec.preserve_partitioning()),
+        )));
+    }
+
+    Ok(Transformed::no(Arc::new(sort_exec.clone())))
 }
 
 /// Handle the GlobalLimitExec -> SortExec pattern
@@ -154,11 +147,12 @@ fn optimize_limit_sort(
     sort_exec: &SortExec,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let sort_input = Arc::clone(sort_exec.input());
+    let required_ordering = sort_exec.expr();
 
     // Check if input is already sorted
     if let Some(_input_ordering) = sort_input.output_ordering() {
         let input_eq_properties = sort_input.equivalence_properties();
-        if input_eq_properties.ordering_satisfy(sort_exec.expr().clone())? {
+        if input_eq_properties.ordering_satisfy(required_ordering.clone())? {
             // Input is already sorted correctly, remove sort and keep limit
             return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
                 sort_input,
@@ -168,63 +162,30 @@ fn optimize_limit_sort(
         }
     }
 
-    // Check if we can reverse the input to satisfy the sort
-    let reversed_eq_properties = {
-        let mut new = sort_input.properties().equivalence_properties().clone();
-        new.clear_orderings();
-
-        let reversed_orderings = sort_input
+    // Try to push down the sort requirement
+    if let Some(optimized_input) = try_pushdown_sort(&sort_input, required_ordering)? {
+        if optimized_input
             .equivalence_properties()
-            .oeq_class()
-            .iter()
-            .map(|ordering| {
-                ordering
-                    .iter()
-                    .map(|expr| expr.reverse())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        new.add_orderings(reversed_orderings);
-        new
-    };
-
-    if reversed_eq_properties.ordering_satisfy(sort_exec.expr().clone())? {
-        // Can reverse! Apply reversal
-        let reversed_input = sort_input.rewrite(&mut ReverseRewriter).unwrap().data;
-
-        // Check if reversed input satisfies the sort requirement
-        if reversed_input
-            .equivalence_properties()
-            .ordering_satisfy(sort_exec.expr().clone())?
+            .ordering_satisfy(required_ordering.clone())?
         {
-            // Check if this is a single-partition DataSourceExec with reverse_scan enabled
-            // In that case, the limit is already handled internally by ReversedParquetStreamWithLimit
-            if is_single_partition_reverse_scan_datasource(&reversed_input) {
-                let total_fetch = limit_exec.skip() + limit_exec.fetch().unwrap_or(0);
+            // Successfully pushed down sort, now handle the limit
+            let total_fetch = limit_exec.skip() + limit_exec.fetch().unwrap_or(0);
 
-                if let Some(with_fetch) = reversed_input.with_fetch(Some(total_fetch)) {
-                    if limit_exec.skip() > 0 {
-                        return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
-                            with_fetch,
-                            limit_exec.skip(),
-                            limit_exec.fetch(),
-                        ))));
-                    } else {
-                        return Ok(Transformed::yes(with_fetch));
-                    }
+            // Try to push limit down as well if the source supports it
+            if let Some(with_fetch) = optimized_input.with_fetch(Some(total_fetch)) {
+                if limit_exec.skip() > 0 {
+                    return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+                        with_fetch,
+                        limit_exec.skip(),
+                        limit_exec.fetch(),
+                    ))));
+                } else {
+                    return Ok(Transformed::yes(with_fetch));
                 }
-
-                return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
-                    reversed_input,
-                    limit_exec.skip(),
-                    limit_exec.fetch(),
-                ))));
             }
 
-            // Otherwise, remove sort but keep limit with reversed input
             return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
-                reversed_input,
+                optimized_input,
                 limit_exec.skip(),
                 limit_exec.fetch(),
             ))));
@@ -237,31 +198,6 @@ fn optimize_limit_sort(
         limit_exec.skip(),
         limit_exec.fetch(),
     ))))
-}
-
-/// Check if the plan is a single-partition DataSourceExec with reverse_scan enabled
-fn is_single_partition_reverse_scan_datasource(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    // Only optimize for single partition
-    if plan.output_partitioning().partition_count() != 1 {
-        return false;
-    }
-
-    if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-        if let Some(scan_config) = data_source_exec
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-        {
-            if let Some(parquet_source) = scan_config
-                .file_source
-                .as_any()
-                .downcast_ref::<ParquetSource>()
-            {
-                return parquet_source.reverse_scan();
-            }
-        }
-    }
-    false
 }
 
 /// Remove unnecessary sort based on the logic from EnforceSorting::analyze_immediate_sort_removal
@@ -282,17 +218,10 @@ fn remove_unnecessary_sort(
         if let Some(fetch) = sort_exec.fetch() {
             // If the sort has a fetch, add a limit instead
             if sort_input.output_partitioning().partition_count() == 1 {
-                // Check if this is a reverse scan DataSourceExec
-                // If so, the limit is already handled internally
-                if is_single_partition_reverse_scan_datasource(&sort_input) {
-                    if let Some(fetch) = sort_exec.fetch() {
-                        if let Some(with_fetch) = sort_input.with_fetch(Some(fetch)) {
-                            return Ok(Transformed::yes(with_fetch));
-                        }
-                    }
-                    return Ok(Transformed::yes(sort_input));
+                // Try to push the limit down to the source
+                if let Some(with_fetch) = sort_input.with_fetch(Some(fetch)) {
+                    return Ok(Transformed::yes(with_fetch));
                 }
-
                 Arc::new(GlobalLimitExec::new(sort_input, 0, Some(fetch)))
                     as Arc<dyn ExecutionPlan>
             } else {
@@ -304,6 +233,58 @@ fn remove_unnecessary_sort(
     };
 
     Ok(Transformed::yes(new_plan))
+}
+
+/// Try to push down a sort requirement to an execution plan
+fn try_pushdown_sort(
+    plan: &Arc<dyn ExecutionPlan>,
+    required_ordering: &[PhysicalSortExpr],
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // Check if the plan can natively handle the sort requirement
+    if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+        return data_source_exec.try_pushdown_sort(required_ordering);
+    }
+
+    // Check if we can satisfy the requirement by reversing the current ordering
+    if can_satisfy_by_reversing(plan, required_ordering)? {
+        // Recursively reverse the plan
+        let reversed_plan = <Arc<dyn ExecutionPlan> as Clone>::clone(plan)
+            .rewrite(&mut ReverseRewriter)
+            .unwrap()
+            .data;
+        return Ok(Some(reversed_plan));
+    }
+
+    Ok(None)
+}
+
+/// Check if a plan's current ordering can be reversed to satisfy the required ordering
+fn can_satisfy_by_reversing(
+    plan: &Arc<dyn ExecutionPlan>,
+    required_ordering: &[PhysicalSortExpr],
+) -> Result<bool> {
+    // Build reversed equivalence properties
+    let reversed_eq_properties = {
+        let mut new = plan.properties().equivalence_properties().clone();
+        new.clear_orderings();
+
+        let reversed_orderings = plan
+            .equivalence_properties()
+            .oeq_class()
+            .iter()
+            .map(|ordering| {
+                ordering
+                    .iter()
+                    .map(|expr| expr.reverse())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        new.add_orderings(reversed_orderings);
+        new
+    };
+
+    reversed_eq_properties.ordering_satisfy(required_ordering.to_vec())
 }
 
 // A TreeNodeRewriter that attempts to reverse an execution plan node.
@@ -350,99 +331,23 @@ impl TreeNodeRewriter for ReverseRewriter {
             return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
         }
 
-        // Try to reverse the node
-        match node.to_reversed_exec() {
-            Some(reversed_exec) => Ok(Transformed::yes(reversed_exec)),
-            None => Ok(Transformed::no(node)),
-        }
-    }
-}
+        // Try to reverse the node using the new trait
+        if let Some(data_source_exec) = node.as_any().downcast_ref::<DataSourceExec>() {
+            // Get the current output ordering
+            if let Some(current_ordering) = node.output_ordering() {
+                // Reverse the required ordering
+                let reversed_ordering = reverse_sort_exprs(current_ordering);
 
-/// Convenience extension trait for custom execution plans that want to implement
-/// pushdown reverse.
-pub trait PushdownReverse: ExecutionPlan {
-    type Target: ExecutionPlan;
-
-    fn pushdown_reverse(&self) -> Option<Self::Target>;
-}
-
-/// Not all ExecutionPlan types are inherently reversible.
-pub trait ToReversedExec {
-    fn to_reversed_exec(&self) -> Option<Arc<dyn ExecutionPlan>>;
-}
-
-impl ToReversedExec for Arc<dyn ExecutionPlan> {
-    fn to_reversed_exec(&self) -> Option<Arc<dyn ExecutionPlan>> {
-        if let Some(data_source_exec) = self.as_any().downcast_ref::<DataSourceExec>() {
-            data_source_exec
-                .pushdown_reverse()
-                .map(|val| Arc::new(val) as _)
-        } else {
-            None
-        }
-    }
-}
-
-impl PushdownReverse for DataSourceExec {
-    type Target = DataSourceExec;
-
-    fn pushdown_reverse(&self) -> Option<Self::Target> {
-        if let Some(scan_config) =
-            self.data_source().as_any().downcast_ref::<FileScanConfig>()
-        {
-            if let Some(parquet_source) = scan_config
-                .file_source
-                .as_any()
-                .downcast_ref::<ParquetSource>()
-            {
-                let mut cfg = scan_config.clone();
-
-                // Reverse file groups
-                cfg.file_groups = cfg
-                    .file_groups
-                    .into_iter()
-                    .map(|group| {
-                        let mut files = group.into_inner();
-                        files.reverse();
-                        files.into()
-                    })
-                    .collect();
-
-                // Reverse output ordering
-                cfg.output_ordering.iter_mut().for_each(|group| {
-                    *group = LexOrdering::new(reverse_sort_exprs(group)).unwrap()
-                });
-
-                let mut reverse_parquet_source =
-                    ParquetSource::new(parquet_source.table_schema().clone())
-                        .with_metadata_size_hint(
-                            parquet_source
-                                .table_parquet_options()
-                                .global
-                                .metadata_size_hint
-                                .unwrap_or(512 * 1024),
-                        )
-                        .with_reverse_scan(true);
-
-                if let Some(predicate) = parquet_source.filter() {
-                    reverse_parquet_source =
-                        reverse_parquet_source.with_predicate(predicate);
+                // Try to push down the reversed ordering
+                if let Some(reversed_exec) =
+                    data_source_exec.try_pushdown_sort(&reversed_ordering)?
+                {
+                    return Ok(Transformed::yes(reversed_exec));
                 }
-
-                let cfg = FileScanConfigBuilder::from(cfg.clone())
-                    .with_source(Arc::<dyn FileSource>::from(reverse_parquet_source))
-                    .with_statistics(
-                        cfg.clone()
-                            .partition_statistics(None)
-                            .unwrap_or_default()
-                            .clone(),
-                    )
-                    .build();
-
-                return Some(DataSourceExec::new(Arc::new(cfg)));
             }
         }
-        None
+
+        Ok(Transformed::no(node))
     }
 }
 
@@ -465,6 +370,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::Partitioning;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::memory::LazyMemoryExec;
     use datafusion_physical_plan::repartition::RepartitionExec;
@@ -589,7 +495,7 @@ mod tests {
         let lex_ordering = LexOrdering::new(sort_expr).unwrap();
         let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // The optimizer should either remove the sort or keep it if it can't verify the ordering
@@ -635,7 +541,7 @@ mod tests {
             SortExec::new(lex_ordering, repartitioned).with_preserve_partitioning(false),
         );
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // Verify: Should be replaced with SortPreservingMergeExec
@@ -674,7 +580,7 @@ mod tests {
         let sort_exec =
             Arc::new(SortExec::new(lex_ordering, lazy_exec).with_fetch(Some(10)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // Should optimize to either GlobalLimitExec or keep as TopK (SortExec with fetch)
@@ -721,7 +627,7 @@ mod tests {
                 .with_preserve_partitioning(true), // preserve partitions
         );
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // Verify: Should be replaced with LocalLimitExec for multi-partition
@@ -769,7 +675,7 @@ mod tests {
         let lex_ordering = LexOrdering::new(sort_expr).unwrap();
         let sort_exec = Arc::new(SortExec::new(lex_ordering, unsorted_exec));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // Verify: SortExec should still be present since input is not sorted
@@ -817,7 +723,7 @@ mod tests {
         let lex_ordering = LexOrdering::new(asc_sort_expr).unwrap();
         let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // The optimizer may or may not be able to reverse LazyMemoryExec
@@ -856,7 +762,7 @@ mod tests {
         // Add second unnecessary sort on top
         let outer_sort = Arc::new(SortExec::new(lex_ordering, inner_sort));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(outer_sort, &config)?;
 
         // Verify: At least one sort should be removed
@@ -888,7 +794,7 @@ mod tests {
             vec![Arc::new(RwLock::new(generator))],
         )?);
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(Arc::clone(&lazy_exec) as _, &config)?;
 
         // Verify: Plan should be unchanged
@@ -915,16 +821,16 @@ mod tests {
     #[test]
     fn test_optimizer_properties() {
         // Test basic optimizer properties
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
 
-        assert_eq!(optimizer.name(), "ReverseOrder");
+        assert_eq!(optimizer.name(), "PushdownSort");
         assert!(optimizer.schema_check());
     }
 
     #[test]
     fn test_reverse_order_clone() {
         // Test that optimizer can be cloned
-        let optimizer1 = ReverseOrder;
+        let optimizer1 = PushdownSort;
         let optimizer2 = optimizer1.clone();
 
         assert_eq!(optimizer1.name(), optimizer2.name());
@@ -950,7 +856,7 @@ mod tests {
         let lex_ordering = LexOrdering::new(sort_expr).unwrap();
         let sort_exec = Arc::new(SortExec::new(lex_ordering, empty_exec));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // EmptyExec has no output ordering, so sort should remain
@@ -991,7 +897,7 @@ mod tests {
         let lex_ordering = LexOrdering::new(sort_expr).unwrap();
         let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // Verify the optimizer returns a valid plan (may or may not optimize depending on
@@ -1042,7 +948,7 @@ mod tests {
         // Wrap with GlobalLimitExec
         let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 0, Some(5)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(limit_exec, &config)?;
 
         // Verify: The plan should be optimized
@@ -1091,7 +997,7 @@ mod tests {
         // GlobalLimitExec with skip = 2, fetch = 5
         let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 2, Some(5)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(limit_exec, &config)?;
 
         // When skip > 0, GlobalLimitExec should be preserved to handle the skip
@@ -1130,7 +1036,7 @@ mod tests {
         // GlobalLimitExec with no fetch (None)
         let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 0, None));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(limit_exec, &config)?;
 
         // Should still produce a valid plan
@@ -1164,7 +1070,7 @@ mod tests {
         let sort_exec =
             Arc::new(SortExec::new(lex_ordering, lazy_exec).with_fetch(Some(3)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // Verify fetch is preserved
@@ -1202,7 +1108,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(lex_ordering, lazy_exec));
         let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 0, Some(10)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(limit_exec, &config)?;
 
         // Note: LazyMemoryExec may not report its ordering in a way that triggers
@@ -1259,7 +1165,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(lex_ordering, unsorted_exec));
         let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 0, Some(5)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(limit_exec, &config)?;
 
         // Sort should remain since input is not sorted
@@ -1307,7 +1213,7 @@ mod tests {
         let sort_exec =
             Arc::new(SortExec::new(lex_ordering, repartitioned).with_fetch(Some(5)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // Multi-partition case should not use the single-partition optimization
@@ -1344,7 +1250,7 @@ mod tests {
         // skip = 3, fetch = 7, total should be 10
         let limit_exec = Arc::new(GlobalLimitExec::new(sort_exec, 3, Some(7)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(limit_exec, &config)?;
 
         // The optimization should handle the combined skip + fetch correctly
@@ -1385,7 +1291,7 @@ mod tests {
         let outer_sort = Arc::new(SortExec::new(lex_ordering, inner_limit));
         let outer_limit = Arc::new(GlobalLimitExec::new(outer_sort, 0, Some(10)));
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(outer_limit, &config)?;
 
         // Should optimize both layers
@@ -1428,7 +1334,7 @@ mod tests {
                 .with_preserve_partitioning(true),
         );
 
-        let optimizer = ReverseOrder;
+        let optimizer = PushdownSort;
         let result = optimizer.optimize(sort_exec, &config)?;
 
         // With preserve_partitioning=true and multiple partitions,

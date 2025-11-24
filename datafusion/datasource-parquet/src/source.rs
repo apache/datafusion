@@ -55,6 +55,7 @@ use datafusion_physical_plan::DisplayFormatType;
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use itertools::Itertools;
 use object_store::ObjectStore;
 #[cfg(feature = "parquet_encryption")]
@@ -779,6 +780,33 @@ impl FileSource for ParquetSource {
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        // Note: We ignore the specific `order` parameter here because the decision
+        // about whether we can reverse is made at the FileScanConfig level.
+        // This method simply creates a new ParquetSource with reverse_scan=true,
+        // and the FileScanConfig will reverse both the file list and the declared ordering.
+
+        let new_source = ParquetSource::new(self.table_schema().clone())
+            .with_metadata_size_hint(
+                self.table_parquet_options()
+                    .global
+                    .metadata_size_hint
+                    .unwrap_or(512 * 1024),
+            )
+            .with_reverse_scan(true);
+
+        let new_source = if let Some(predicate) = self.filter() {
+            new_source.with_predicate(predicate)
+        } else {
+            new_source
+        };
+
+        Ok(Some(Arc::new(new_source)))
     }
 }
 

@@ -37,7 +37,7 @@ use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
-use crate::reverse_order::ReverseOrder;
+use crate::pushdown_sort::PushdownSort;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_physical_plan::ExecutionPlan;
@@ -148,7 +148,7 @@ impl PhysicalOptimizer {
             Arc::new(ProjectionPushdown::new()),
             // ReverseOrder: Detect DESC sorts that can use reverse scan
             // This marks reverse_scan=true on DataSourceExec
-            Arc::new(ReverseOrder::new()),
+            Arc::new(PushdownSort::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

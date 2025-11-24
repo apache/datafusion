@@ -837,12 +837,14 @@ config_namespace! {
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
 
-        /// Enable reverse scan optimization for ORDER BY ... DESC queries
-        /// on sorted Parquet files. When enabled, row groups and batches
-        /// are read in reverse order to eliminate sort operations.
+        /// Enable sort pushdown optimization for sorted Parquet files.
+        /// Currently, this optimization only has reverse order support.
+        /// When a query requires ordering that can be satisfied by reversing
+        /// the file's natural ordering, row groups and batches are read in
+        /// reverse order to eliminate sort operations.
         /// Note: This buffers one row group at a time (typically ~128MB).
         /// Default: true
-        pub enable_reverse_scan: bool, default = true
+        pub enable_sort_pushdown: bool, default = true
     }
 }
 

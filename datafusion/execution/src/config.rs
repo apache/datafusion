@@ -391,7 +391,7 @@ impl SessionConfig {
 
     /// Enable reverse scan optimization for Parquet files
     pub fn with_parquet_reverse_scan(mut self, enabled: bool) -> Self {
-        self.options_mut().execution.parquet.enable_reverse_scan = enabled;
+        self.options_mut().execution.parquet.enable_sort_pushdown = enabled;
         self
     }
 

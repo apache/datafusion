@@ -800,7 +800,7 @@ pub struct ParquetOptions {
     pub skip_arrow_metadata: bool,
     /// default = true
     #[prost(bool, tag = "34")]
-    pub enable_reverse_scan: bool,
+    pub enable_sort_pushdown: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]
